@@ -33,34 +33,46 @@ class MemNavTrainer(BaseTrainer):
         mg_loss = (fwd["noise_mg"] - noise).square().mean()
         action_loss = 0.5 * ng_loss + 0.5 * mg_loss
 
-        # --- retrieval CE: target = k_goal (seen) / null (unseen) ---
+        # --- retrieval: multi-positive InfoNCE over real frames + a null slot ---
+        # A goal view co-observes a CONTIGUOUS band of history frames, so retrieval
+        # has MANY positives (thresholded from covis_curve), not a single index.
+        # pos/neg masks are over real frames [0..L-1]; the extra null column is a
+        # positive for NOVEL goals (no real match) and a negative for REVISIT goals.
         logits = fwd["ret_logits"]                               # [B, L+1] (last = null)
-        is_seen = inputs["batch_is_seen"].to(dev).bool()         # [B]
-        null_idx = logits.shape[1] - 1
-        ret_target = inputs["batch_retrieval_target"].to(dev).clone()
-        ret_target = torch.where(is_seen, ret_target, ret_target.new_full((), null_idx))
-        retrieval_loss = F.cross_entropy(logits, ret_target)
+        pos_real = inputs["batch_pos_mask"].to(dev).bool()       # [B, L]
+        neg_real = inputs["batch_neg_mask"].to(dev).bool()       # [B, L]
+        null_pos = inputs["batch_null_pos"].to(dev).bool()       # [B]
+        pos_full = torch.cat([pos_real, null_pos[:, None]], 1)   # [B, L+1]
+        neg_full = torch.cat([neg_real, (~null_pos)[:, None]], 1)
+        valid = pos_full | neg_full                              # ignore-band frames excluded from both
+        NEG_INF = torch.finfo(logits.dtype).min
+        lse_all = logits.masked_fill(~valid, NEG_INF).logsumexp(-1)     # denom: over pos ∪ neg
+        lse_pos = logits.masked_fill(~pos_full, NEG_INF).logsumexp(-1)  # numer: over positives
+        # -log( Σ_pos e^s / Σ_{pos∪neg} e^s ). Every sample has ≥1 positive by
+        # construction (revisit → real positive; novel → null positive).
+        retrieval_loss = (lse_all - lse_pos).mean()
 
-        # --- aux pose (x,y,θ): MSE on SEEN samples only (revisit is the active branch) ---
+        # --- aux pose (x,y,θ): MSE on REVISIT samples only (relocalization branch) ---
         gt_pose = inputs["batch_goal_rel_pose"].to(dev)          # [B,3]
-        seen_f = is_seen.float()
+        revisit = (~null_pos).float()                            # 1 = goal is in memory
         per = (fwd["aux_pose"] - gt_pose).square().mean(-1)      # [B]
-        aux_loss = (per * seen_f).sum() / seen_f.sum().clamp(min=1.0)
+        aux_loss = (per * revisit).sum() / revisit.sum().clamp(min=1.0)
 
         loss = action_loss + self.w_retr * retrieval_loss + self.w_aux * aux_loss
 
         with torch.no_grad():
-            ret_acc = (logits.argmax(-1) == ret_target).float().mean()
-            # --- gate seen/unseen separation + seen-only retrieval match acc (key diagnostics) ---
-            gate = fwd["revisit_gate"]                            # [B] P(some real match): want HIGH seen / LOW unseen
-            ns = seen_f.sum().clamp(min=1.0)
-            nu = (1.0 - seen_f).sum().clamp(min=1.0)
-            gate_seen = (gate * seen_f).sum() / ns                # → 1 (visited)
-            gate_unseen = (gate * (1.0 - seen_f)).sum() / nu      # → 0 (unseen)
+            pred = logits.argmax(-1)                              # [B] over [0..L] (incl null)
+            correct = pos_full.gather(1, pred[:, None]).squeeze(1).float()  # predicted a positive slot
+            ret_acc = correct.mean()
+            # --- gate revisit/novel separation + per-mode match acc (key diagnostics) ---
+            gate = fwd["revisit_gate"]                            # [B] P(some real match): HIGH revisit / LOW novel
+            ns = revisit.sum().clamp(min=1.0)
+            nu = (1.0 - revisit).sum().clamp(min=1.0)
+            gate_seen = (gate * revisit).sum() / ns               # → 1 (visited)
+            gate_unseen = (gate * (1.0 - revisit)).sum() / nu     # → 0 (novel)
             gate_sep = gate_seen - gate_unseen                    # → large +  (the separation)
-            correct = (logits.argmax(-1) == ret_target).float()
-            seen_match = (correct * seen_f).sum() / ns            # found the right frame (seen)
-            unseen_null = (correct * (1.0 - seen_f)).sum() / nu   # correctly chose null (unseen)
+            seen_match = (correct * revisit).sum() / ns           # found a real match (revisit)
+            unseen_null = (correct * (1.0 - revisit)).sum() / nu  # correctly chose null (novel)
         outputs = dict(loss=loss, action_loss=action_loss, ng_loss=ng_loss, mg_loss=mg_loss,
                        retrieval_loss=retrieval_loss, aux_loss=aux_loss, ret_acc=ret_acc,
                        gate_seen=gate_seen, gate_unseen=gate_unseen, gate_sep=gate_sep,

@@ -283,7 +283,14 @@ class MemNavNet(nn.Module):
         readouts the trainable head consumes.
         """
         dev = self.device
-        goal_cls = batch["batch_goal_cls"].to(dev)
+        # goal_cls: real goal images (goal_{j}.jpg) have no cached CLS, so compute it
+        # from the goal image via the frozen context-free DINO trunk (same space as the
+        # cached per-frame dino_cls). Fall back to a provided batch_goal_cls (old path /
+        # smoke tests where the goal is a trajectory frame).
+        if batch.get("batch_goal_cls") is not None:
+            goal_cls = batch["batch_goal_cls"].to(dev)
+        else:
+            goal_cls = self.lingbot.dino(batch["batch_goal_image"].to(dev))["cls"]  # [B, D']
         mem_cls = batch["batch_mem_cls"].to(dev)
         mem_mask = batch["batch_mem_mask"].to(dev)
         # (trainable) retrieval — match index + gate + logits
@@ -365,6 +372,12 @@ class MemNavPolicy(PreTrainedModel):
         lingbot_kwargs = {}
         if il.get('lingbot_repo'):    lingbot_kwargs['lingbot_repo'] = il['lingbot_repo']
         if il.get('lingbot_weights'): lingbot_kwargs['weights'] = il['lingbot_weights']
+        # memory-partition geometry — MUST match the precompute + dataset (mp3d: 32/8/2048).
+        # LingBotStream sets kv_cache_sliding_window=window, so window here == the precompute
+        # --kv_cache_sliding_window; max_frame_num sizes the 3D-RoPE table (long 3leg episodes).
+        if il.get('window_size') is not None:   lingbot_kwargs['window'] = il['window_size']
+        if il.get('num_scale') is not None:     lingbot_kwargs['num_scale'] = il['num_scale']
+        if il.get('max_frame_num') is not None: lingbot_kwargs['max_frame_num'] = il['max_frame_num']
         self.core = MemNavNet(
             token_dim=il['token_dim'], heads=il['heads'], predict_size=il['predict_size'],
             temporal_depth=il['temporal_depth'], num_diffusion_iters=il.get('num_diffusion_iters', 10),

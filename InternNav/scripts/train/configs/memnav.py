@@ -52,6 +52,7 @@ memnav_exp_cfg = ExpCfg(
     ),
     il=IlCfg(
         epochs=1000,
+        max_steps=-1,
         batch_size=8,
         lr=1e-4,
         num_workers=4,

@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=memnav_mp3d
-#SBATCH --output=/scratch/lg154/Research/Nav/InternNav/logs/train_memnav/mp3d-%j.out
-#SBATCH --error=/scratch/lg154/Research/Nav/InternNav/logs/train_memnav/mp3d-%j.err
+#SBATCH --output=/scratch/%u/Research/Nav/InternNav/logs/train_memnav/mp3d-%j.out
+#SBATCH --error=/scratch/%u/Research/Nav/InternNav/logs/train_memnav/mp3d-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
@@ -38,36 +38,42 @@
 #   NAME=memnav_mp3d
 #   BATCH_SIZE=4
 #   EPOCHS=1
+#   MAX_STEPS=-1              (-1 means use EPOCHS)
 #   NUM_WORKERS=4
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
+#   REPO_ROOT=/scratch/$USER/Research/Nav/InternNav
 #
 # Submit:
 #   sbatch InternNav/scripts/train_memnav/train_memnav_mp3d.sbatch
-#   NAME=memnav_mp3d_smoke BATCH_SIZE=2 EPOCHS=1 NUM_WORKERS=0 MEMNAV_REPORT_TO=none \
+#   NAME=memnav_mp3d_smoke BATCH_SIZE=2 MAX_STEPS=10 NUM_WORKERS=0 MEMNAV_REPORT_TO=none \
 #       sbatch --export=ALL InternNav/scripts/train_memnav/train_memnav_mp3d.sbatch
 set -euo pipefail
 
-mkdir -p /scratch/lg154/Research/Nav/InternNav/logs/train_memnav
+export REPO_ROOT=${REPO_ROOT:-/scratch/${USER}/Research/Nav/InternNav}
+export LOG_DIR=${LOG_DIR:-${REPO_ROOT}/logs/train_memnav}
+export IMG=${IMG:-/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf}
+export BASE_SIF=${BASE_SIF:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}
+export CONDA_SH=${CONDA_SH:-/scratch/lg154/miniconda3/etc/profile.d/conda.sh}
+export CONDA_ENV=${CONDA_ENV:-/scratch/lg154/conda-envs/memnav}
 
-IMG=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
-BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
-REPO_ROOT=/scratch/lg154/Research/Nav/InternNav
+mkdir -p "${LOG_DIR}"
 
 # in-container overlay path (frames) + host feature tree (caches)
-export MEMNAV_ROOT_DIR=/mp3d_revisit_v0/vln_n1/traj_data
-export MEMNAV_FEATURE_ROOT=/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data
-export LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
-export LINGBOT_WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
+export MEMNAV_ROOT_DIR=${MEMNAV_ROOT_DIR:-/mp3d_revisit_v0/vln_n1/traj_data}
+export MEMNAV_FEATURE_ROOT=${MEMNAV_FEATURE_ROOT:-/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data}
+export LINGBOT_REPO=${LINGBOT_REPO:-/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map}
+export LINGBOT_WEIGHTS=${LINGBOT_WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
 
 # memory-partition geometry — MUST match the precompute
-export MEMNAV_WINDOW=32
-export MEMNAV_NUM_SCALE=8
-export MEMNAV_MAX_FRAME_NUM=2048
+export MEMNAV_WINDOW=${MEMNAV_WINDOW:-32}
+export MEMNAV_NUM_SCALE=${MEMNAV_NUM_SCALE:-8}
+export MEMNAV_MAX_FRAME_NUM=${MEMNAV_MAX_FRAME_NUM:-2048}
 
 # training knobs
 export NAME=${NAME:-memnav_mp3d}
 export BATCH_SIZE=${BATCH_SIZE:-4}
 export EPOCHS=${EPOCHS:-1}
+export MAX_STEPS=${MAX_STEPS:--1}
 export NUM_WORKERS=${NUM_WORKERS:-4}
 export MEMNAV_REPORT_TO=${MEMNAV_REPORT_TO:-wandb}
 export WANDB_PROJECT=${WANDB_PROJECT:-memnav}
@@ -79,6 +85,7 @@ nvidia-smi -L || true
 apptainer exec --nv \
     --overlay "${IMG}:ro" \
     -B /scratch/lg154 \
+    -B "/scratch/${USER}" \
     "${BASE_SIF}" \
     bash -c '
         set -euo pipefail
@@ -86,11 +93,11 @@ apptainer exec --nv \
         [[ -d "${MEMNAV_FEATURE_ROOT}" ]] || { echo "ABORT: feature tree missing ${MEMNAV_FEATURE_ROOT}"; exit 1; }
         [[ -f "${LINGBOT_WEIGHTS}" ]]     || { echo "ABORT: weights missing ${LINGBOT_WEIGHTS}"; exit 1; }
 
-        source /scratch/lg154/miniconda3/etc/profile.d/conda.sh
-        conda activate /scratch/lg154/conda-envs/memnav
-        cd '"${REPO_ROOT}"'
+        source "${CONDA_SH}"
+        conda activate "${CONDA_ENV}"
+        cd "${REPO_ROOT}"
 
-        export PYTHONPATH="'"${REPO_ROOT}"'/src/diffusion-policy:${PYTHONPATH:-}"
+        export PYTHONPATH="${REPO_ROOT}/src/diffusion-policy:${PYTHONPATH:-}"
 
         # per-job scratch (isolated TMP/XDG/wandb so concurrent jobs do not collide)
         JOB_TMP_ROOT="/tmp/${USER}/memnav_${SLURM_JOB_ID:-$$}"
@@ -119,7 +126,7 @@ apptainer exec --nv \
         echo "===== TRAIN ENV CHECK ====="
         which python; python -V
         python -c "import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available())"
-        echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} wk=${NUM_WORKERS}"
+        echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} max_steps=${MAX_STEPS} wk=${NUM_WORKERS}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"
@@ -130,6 +137,7 @@ apptainer exec --nv \
             --batch-size "${BATCH_SIZE}" \
             --num-workers "${NUM_WORKERS}" \
             --epochs "${EPOCHS}" \
+            --max-steps "${MAX_STEPS}" \
             --root-dir "${MEMNAV_ROOT_DIR}"
     '
 

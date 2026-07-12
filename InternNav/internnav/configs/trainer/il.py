@@ -15,6 +15,7 @@ class FilterFailure(BaseModel, extra='allow'):
 
 class IlCfg(BaseModel, extra='allow'):
     epochs: Optional[int]
+    max_steps: int = -1
     batch_size: Optional[int] = None
     lr: Optional[float]
     num_workers: Optional[int]

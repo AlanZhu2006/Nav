@@ -55,6 +55,7 @@ class TrainCfg(BaseModel):
     batch_size: Optional[int] = None
     num_workers: Optional[int] = None
     epochs: Optional[int] = None
+    max_steps: Optional[int] = None
     lr: Optional[float] = None
     root_dir: Optional[str] = None
     dataset_navdp: Optional[str] = None
@@ -69,7 +70,7 @@ class TrainCfg(BaseModel):
 def _apply_overrides(exp_cfg, cli: 'TrainCfg') -> None:
     """Apply non-None CLI overrides onto exp_cfg in place."""
     il_fields = {
-        'batch_size', 'num_workers', 'epochs', 'lr',
+        'batch_size', 'num_workers', 'epochs', 'max_steps', 'lr',
         'root_dir', 'dataset_navdp', 'ckpt_to_load', 'load_from_ckpt',
     }
     exp_fields = {'torch_gpu_ids', 'seed'}
@@ -325,6 +326,7 @@ def main(config, model_class, model_config_class):
             lr_scheduler_type='cosine',
             logging_steps=10.0,
             num_train_epochs=config.il.epochs,
+            max_steps=config.il.max_steps,
             save_strategy='epoch',# no
             save_steps=config.il.save_interval_epochs,
             save_total_limit=8,

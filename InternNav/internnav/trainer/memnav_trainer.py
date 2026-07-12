@@ -42,8 +42,13 @@ class MemNavTrainer(BaseTrainer):
         pos_real = inputs["batch_pos_mask"].to(dev).bool()       # [B, L]
         neg_real = inputs["batch_neg_mask"].to(dev).bool()       # [B, L]
         null_pos = inputs["batch_null_pos"].to(dev).bool()       # [B]
+        semantic_revisit = inputs["batch_is_revisit"].to(dev).bool()
+        if not torch.equal(null_pos, ~semantic_revisit):
+            raise ValueError("null targets must be the inverse of metadata revisit labels")
         pos_full = torch.cat([pos_real, null_pos[:, None]], 1)   # [B, L+1]
-        neg_full = torch.cat([neg_real, (~null_pos)[:, None]], 1)
+        neg_full = torch.cat([neg_real, semantic_revisit[:, None]], 1)
+        if not pos_full.any(-1).all():
+            raise ValueError("every retrieval sample must contain at least one positive")
         valid = pos_full | neg_full                              # ignore-band frames excluded from both
         NEG_INF = torch.finfo(logits.dtype).min
         lse_all = logits.masked_fill(~valid, NEG_INF).logsumexp(-1)     # denom: over pos ∪ neg
@@ -54,7 +59,7 @@ class MemNavTrainer(BaseTrainer):
 
         # --- aux pose (x,y,θ): MSE on REVISIT samples only (relocalization branch) ---
         gt_pose = inputs["batch_goal_rel_pose"].to(dev)          # [B,3]
-        revisit = (~null_pos).float()                            # 1 = goal is in memory
+        revisit = semantic_revisit.float()                       # 1 = metadata says goal is in memory
         per = (fwd["aux_pose"] - gt_pose).square().mean(-1)      # [B]
         aux_loss = (per * revisit).sum() / revisit.sum().clamp(min=1.0)
 

@@ -60,15 +60,16 @@ per-episode thresholds recorded in the meta:
   * positive : ``covis >= covis_pos_hi``  AND index ``>= anchor_margin``
   * negative : ``covis <= covis_pos_lo``  AND index ``>= anchor_margin``
   * ignore   : the band in between, and all frames ``< anchor_margin`` (the stream
-    cannot ``goal_append`` a match that recent → masked out of the loss entirely).
-  * a **revisit** goal has >=1 positive → the ``null`` candidate is a negative;
-    a **novel** goal (curve all below ``pos_lo``) has no positive → ``null`` is the
-    sole positive (drives the revisit gate toward 0).
+    cannot ``goal_append`` a match that early → masked out of the loss entirely).
+  * ``goal.kind`` is the semantic truth: **revisit** makes ``null`` negative and
+    **novel** makes it the sole positive. A revisit with no frame above ``pos_hi``
+    is skipped; it must never be silently relabeled as novel.
 
 We keep only goals with ``k >= num_scale + window`` so the scale / history / window
 regions stay disjoint.
 """
 
+from collections import Counter
 import json
 import os
 
@@ -76,6 +77,7 @@ import numpy as np
 import torch
 
 from internnav.dataset.navdp_dataset_lerobot import NavDP_Base_Datset
+from internnav.dataset.memnav_labels import build_retrieval_label
 
 
 class MemNav_Dataset(NavDP_Base_Datset):
@@ -149,8 +151,9 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.trajectory_feature_path = []  # lingbot_cache.npz
         self.trajectory_rgb_dir = []       # raw rgb frames dir (window recompute)
         # flat (episode, goal) sample index — one entry per goal B/C/... with a
-        # precomputed multi-positive retrieval label (see _build_goal_label).
+        # precomputed multi-positive retrieval label (see build_retrieval_label).
         self.samples = []
+        self.label_stats = Counter()
 
         for group_dir in sorted(p for p in os.listdir(root_dirs)):
             group_path = os.path.join(root_dirs, group_dir)
@@ -201,9 +204,11 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.repeat = max(1, int(repeat))
         n_traj = len(self.trajectory_dirs)
         n_samp = len(self.samples)
-        n_rev = sum(1 for s in self.samples if not s['null_pos'])
+        n_rev = sum(1 for s in self.samples if s['goal_kind'] == 'revisit')
         print(f"[MemNav_Dataset] {n_samp} goal-samples across {n_traj} episodes under "
               f"{root_dirs} (revisit={n_rev}, novel={n_samp - n_rev}, repeat={self.repeat})")
+        if self.label_stats:
+            print(f"[MemNav_Dataset] skipped goal labels: {dict(self.label_stats)}")
         if n_samp == 0:
             raise RuntimeError(
                 f"No goal-samples found under {root_dirs}. Need '{self.feature_filename}' "
@@ -246,13 +251,15 @@ class MemNav_Dataset(NavDP_Base_Datset):
             goal_step = leg_end - 1
             if goal_step <= k:                          # need >=1 frame of forward motion
                 continue
-            idx = np.arange(curve.shape[0])
-            valid = idx >= amargin
-            pos_mask = valid & (curve >= pos_hi)        # [k+1] bool
-            neg_mask = valid & (curve <= pos_lo)
-            null_pos = not bool(pos_mask.any())         # novel goal -> null is the positive
+            label, skip_reason = build_retrieval_label(
+                curve, g.get('kind'), pos_hi, pos_lo, amargin)
+            if label is None:
+                self.label_stats[skip_reason] += 1
+                continue
             out.append(dict(goal_j=j, k=k, goal_step=goal_step, goal_img_path=goal_img_path,
-                            pos_mask=pos_mask, neg_mask=neg_mask, null_pos=null_pos))
+                            goal_kind=g.get('kind'), pos_mask=label.pos_mask,
+                            neg_mask=label.neg_mask, candidate_mask=label.candidate_mask,
+                            null_pos=label.null_pos))
         return out
 
     def __len__(self):
@@ -325,6 +332,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
         # multi-positive label over mem_cls[0..k] (aligned index i <-> frame i).
         pos_mask = s['pos_mask'][: k + 1]
         neg_mask = s['neg_mask'][: k + 1]
+        candidate_mask = s['candidate_mask'][: k + 1]
 
         # --- action segment: forward path current(k) -> goal(goal_step) ---
         seg = extrinsics[k : goal_step + 1].copy()         # seg[0] == current frame k
@@ -342,8 +350,9 @@ class MemNav_Dataset(NavDP_Base_Datset):
             # multi-positive retrieval label (over real frames [0..k]) + null flag
             'pos_mask': torch.from_numpy(np.ascontiguousarray(pos_mask)),    # [k+1] bool
             'neg_mask': torch.from_numpy(np.ascontiguousarray(neg_mask)),    # [k+1] bool
+            'candidate_mask': torch.from_numpy(np.ascontiguousarray(candidate_mask)),
             'null_pos': torch.tensor(bool(s['null_pos'])),                   # scalar bool
-            'is_revisit': torch.tensor(float(not s['null_pos']), dtype=torch.float32),
+            'is_revisit': torch.tensor(float(s['goal_kind'] == 'revisit'), dtype=torch.float32),
             'pred_actions': torch.tensor(pred_actions, dtype=torch.float32),
             'goal_rel_pose': torch.tensor(goal_rel_pose, dtype=torch.float32),   # aux pose GT
             # raw images for the on-the-fly dense DINO + GCT window-forward.
@@ -364,8 +373,9 @@ class MemNav_Dataset(NavDP_Base_Datset):
 
 def memnav_collate_fn(batch):
     """Stack light tensors; pad variable-length mem_cls + retrieval masks; keep
-    pointers as lists. Padded frames are False in mem_mask/pos_mask/neg_mask so
-    they drop out of both the attention scores and the retrieval loss."""
+    pointers as lists. ``mem_mask`` is the structural retrieval-candidate mask:
+    early unreconstructable frames and padding are False. Label ignore-band frames
+    remain retrieval candidates but are absent from pos_mask/neg_mask."""
     B = len(batch)
     D = batch[0]['mem_cls'].shape[-1]
     lengths = [b['mem_cls'].shape[0] for b in batch]
@@ -378,7 +388,7 @@ def memnav_collate_fn(batch):
     for i, b in enumerate(batch):
         Li = lengths[i]
         mem_cls[i, :Li] = b['mem_cls']
-        mem_mask[i, :Li] = True
+        mem_mask[i, :Li] = b['candidate_mask']
         pos_mask[i, :Li] = b['pos_mask']
         neg_mask[i, :Li] = b['neg_mask']
 
@@ -416,7 +426,7 @@ if __name__ == "__main__":
     n_rev = 0
     for i in range(args.n):
         s = ds[i]
-        rev = not bool(s['null_pos'].item())
+        rev = bool(s['is_revisit'].item())
         n_rev += rev
         k = s['cur_step']
         T_mem = s['mem_cls'].shape[0]

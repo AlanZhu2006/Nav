@@ -19,51 +19,13 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from transformers import PretrainedConfig, PreTrainedModel
 
 from internnav.model.basemodel.memnav.lingbot_stream import LingBotStream
+from internnav.model.basemodel.memnav.retrieval import RetrievalHead
 from internnav.model.encoder.navdp_backbone import (
     LearnablePositionalEncoding,
     NavDP_ImageGoal_Backbone,
     SinusoidalPosEmb,
     TokenCompressor,
 )
-
-
-# --------------------------------------------------------------------------- #
-# (2.retrieval) Target-image retrieval over dino_cls — trainable, supervised
-# --------------------------------------------------------------------------- #
-class RetrievalHead(nn.Module):
-    """goal_cls vs mem_cls (history CLS) → (match_idx, revisit_gate, logits).
-
-    A learnable projection + temperature in a matching space, plus a **learnable
-    null** candidate so an *unseen* goal (no real match) lands on null → low gate.
-      - match_idx    : argmax real frame (discrete; drives LingBotStream.goal_append)
-      - revisit_gate : 1 − P(null)  (differentiable; blends (2) vs (3))
-      - logits       : [B, L+1] (last = null) for the retrieval-CE loss
-                       (target = k_goal for seen, = L (null) for unseen)
-    """
-
-    def __init__(self, dino_dim=1024, proj_dim=256, temp_init=0.07):
-        super().__init__()
-        self.proj_goal = nn.Linear(dino_dim, proj_dim)
-        self.proj_mem = nn.Linear(dino_dim, proj_dim)
-        self.null_key = nn.Parameter(torch.randn(proj_dim) * 0.02)
-        self.log_temp = nn.Parameter(torch.tensor(float(np.log(temp_init))))
-
-    def forward(self, goal_cls, mem_cls, mem_mask):
-        """goal_cls [B,D'], mem_cls [B,L,D'], mem_mask [B,L] bool."""
-        gq = F.normalize(self.proj_goal(goal_cls), dim=-1)        # [B,d]
-        mk = F.normalize(self.proj_mem(mem_cls), dim=-1)          # [B,L,d]
-        nk = F.normalize(self.null_key, dim=-1)                   # [d]
-        temp = self.log_temp.exp().clamp(0.01, 1.0)
-
-        scores = (gq.unsqueeze(1) * mk).sum(-1) / temp           # [B,L]
-        scores = scores.masked_fill(~mem_mask, float("-inf"))    # ignore padding
-        null = (gq * nk).sum(-1, keepdim=True) / temp            # [B,1]
-        logits = torch.cat([scores, null], dim=1)               # [B,L+1] (last = null)
-
-        prob = logits.softmax(-1)
-        revisit_gate = 1.0 - prob[:, -1]                         # P(some real match)
-        match_idx = scores.argmax(-1)                           # best real frame
-        return match_idx, revisit_gate, logits
 
 
 # --------------------------------------------------------------------------- #
@@ -314,7 +276,10 @@ class MemNavNet(nn.Module):
                 dfeat = self.lingbot.depth_feature(cur_agg, win_img[-1:][None], psi)  # [Pf, Cd]
                 cur_pose = self.lingbot.camera_pose(ck, cv, k, cur_agg)[-1]         # [9] current abs pose
                 # (2) revisit: goal_append at the matched frame (clamped valid) -> goal abs pose
-                m = int(match_idx[b].clamp(lo, k - 1).item())
+                # Frame k is a valid match: goal_append recomputes the window ending
+                # at k, then streams the goal at k+1. Keep the execution candidate
+                # set identical to the retrieval head's supervised candidate set.
+                m = int(match_idx[b].clamp(lo, k).item())
                 mw = self.lingbot.load_images([os.path.join(rgb_dir, f"{i}.jpg")
                                                for i in range(m - W + 1, m + 1)]).to(dev)
                 _, goal_agg = self.lingbot.goal_append(goal_img, cache, m, mw, return_agg=True)

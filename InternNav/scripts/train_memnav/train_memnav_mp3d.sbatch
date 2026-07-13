@@ -69,6 +69,11 @@ export MEMNAV_WINDOW=${MEMNAV_WINDOW:-32}
 export MEMNAV_NUM_SCALE=${MEMNAV_NUM_SCALE:-8}
 export MEMNAV_MAX_FRAME_NUM=${MEMNAV_MAX_FRAME_NUM:-4096}
 export MEMNAV_STRICT_FEATURE_COVERAGE=${MEMNAV_STRICT_FEATURE_COVERAGE:-1}
+export MEMNAV_SAMPLING_MODE=${MEMNAV_SAMPLING_MODE:-random_leg}
+export MEMNAV_ADD_GOAL_A=${MEMNAV_ADD_GOAL_A:-1}
+export MEMNAV_GLIMPSE_POS=${MEMNAV_GLIMPSE_POS:-14}
+export MEMNAV_GLIMPSE_NEG=${MEMNAV_GLIMPSE_NEG:-83}
+export MEMNAV_GOAL_SLACK=${MEMNAV_GOAL_SLACK:-4}
 
 # training knobs
 export NAME=${NAME:-memnav_mp3d}
@@ -131,6 +136,7 @@ apptainer exec --nv \
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE}"
+        echo "sampling=${MEMNAV_SAMPLING_MODE} goalA=${MEMNAV_ADD_GOAL_A} glimpse=${MEMNAV_GLIMPSE_POS}/${MEMNAV_GLIMPSE_NEG} slack=${MEMNAV_GOAL_SLACK}"
 
         exec python scripts/train/train.py \
             --name "${NAME}" \

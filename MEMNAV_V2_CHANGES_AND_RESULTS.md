@@ -1,8 +1,8 @@
 # MemNav v2 修改与结果记录
 
-> 更新时间：2026-07-13  
-> 分支：`fix/memnav-precompute-coverage`
-> 本文对应代码基线：`d6f719a`（本文档提交之前）
+> 更新时间：2026-07-14
+> 分支：`feat/align-lg-dataloader`
+> 本文对应代码基线：`d18e9e1`（本文档提交之前）
 > HPC 动态状态快照：2026-07-13 07:33（HPC 日志时间）
 
 ## 1. 结论摘要
@@ -11,8 +11,8 @@
 
 目前可以确认：
 
-- scenes 0-53 的 `pt1` 原始数据包结构完整，但旧 feature tree 只覆盖 1919/1944 个 episode；旧实验实际使用 2746 个 goal sample，完整缓存后应为 2795 个。
-- revisit/novel 标签语义和 cache 静默漏数问题已经修复，并通过 14 个针对性单元测试。
+- scenes 0-53 的 `pt1` 原始数据包结构完整，但旧 feature tree 只覆盖 1919/1944 个 episode；旧 E3 使用固定 switch 的 2746 个显式 goal，新版对齐 Li Guo 采样后完整数据应为 4206 个样本。
+- revisit/novel 标签语义、cache 静默漏数和 DataLoader 对齐已经完成，并通过 22 个针对性单元测试。
 - 新 checkpoint 在本地 16 样本诊断上显著降低 action loss，并改善 novel gate 和平均 gate separation，但 revisit 的 hard-gate recall 下降，真实 top-real retrieval accuracy 没有提升。
 - 因此目前不能说“新版全面优于旧版”，也不能据此判断在线导航成功率已经提高。
 - H100 上的 3-epoch 训练和两个统一口径的全量离线评测仍在运行或等待依赖；最终结论要等它们完成。
@@ -58,6 +58,12 @@ anchor_margin = num_scale + window - 1 = 8 + 32 - 1 = 39
 
 开始，因为更早的位置无法构造完整的 32 帧重计算窗口。
 
+### 2.4 当前 DataLoader 采样
+
+默认采样已与 Li Guo 的 `3af2c8d data_loader` 对齐：每次访问都在目标 leg 内随机选择 `k`，保留 `goal_slack=4`，并加入使用 14/83 帧阈值的动态 Goal A 样本。唯一有意的标签差异是继续以 `goal.kind` 为语义真值，不把 weak revisit 改成 novel。
+
+为复现旧 E3，仍可设置 `MEMNAV_SAMPLING_MODE=fixed_switch` 和 `MEMNAV_ADD_GOAL_A=0`；默认训练使用 `random_leg` 和 Goal A。
+
 ## 3. 数据检查结果
 
 ### 3.1 数据位置与范围
@@ -75,10 +81,12 @@ anchor_margin = num_scale + window - 1 = 8 + 32 - 1 = 39
 
 - pt1 共 1944/1944 个 episode 通过结构检查。
 - feature tree 审计到 1919 对 cache；25 个超过 2048 帧的 episode 与 25 个空 cache 目录完全一一对应，最长轨迹为 3954 帧。
-- 这 25 个 episode 会贡献 49 个有效 goal sample（24 revisit、25 novel）。完整数据应有 2795 个 sample（1587 revisit、1208 novel）；旧实验使用的 2746 个 sample 来自 1680 个可训练 episode：
+- 语义修复后的显式 covis goal 共 2795 个（1587 revisit、1208 novel）；现有 cache 覆盖其中 2746 个：
   - revisit：1563
   - novel：1183
-  - 因没有任何 `covis >= 0.5` 的强正例而跳过的 weak revisit：356 个 goal record
+  - 因没有任何 `covis >= 0.5` 的强正例而跳过的 weak revisit：357 个 goal record
+- 对齐 Li Guo 采样后还会加入 1411 个动态 Goal A，因此完整数据为 `2795 + 1411 = 4206` 个样本；现有 cache 只能覆盖 4141 个，25 个长 episode 共缺 65 个样本（49 covis goal + 16 Goal A）。
+- 若完全使用 Li Guo 原始 `null_pos = not pos.any()` 语义，则会得到 4563 个样本，其中多出的 357 个正是被误改成 novel 的 weak revisit；这些不会重新加入。
 - feature tree 约 791 GiB，所以训练直接在 HPC 读取，不适合整体复制到本机。
 
 因此，“原始数据包损坏”目前没有证据；问题位于 feature 预计算和 loader 覆盖检查。代码已阻止再次静默漏数，但在补算 25 个长 episode 之前，feature tree 仍然不完整。
@@ -178,20 +186,29 @@ revisit/novel gate：1 - P(NULL)
 - DataLoader 默认要求每个 source-ready episode 同时存在 aggregator 和 camera cache；缺失时汇总示例并终止训练/评测。
 - `MEMNAV_STRICT_FEATURE_COVERAGE=0` 只保留给明确需要部分数据的诊断任务。
 
+### 4.6 对齐 Li Guo DataLoader 采样
+
+- 默认恢复 `3af2c8d` 的 leg 内随机 `k`、Goal A、14/83 glimpse 阈值和 `goal_slack=4`。
+- covis curve 仍只监督进入 goal leg 之前的历史；own-leg 帧保持 ignore，但可作为结构上有效的 retrieval 候选。
+- 保留 metadata `goal.kind` 语义、早期 K/V 候选屏蔽、双 cache 严格检查和 32/8/4096 参数一致性。
+- 增加 `fixed_switch`/关闭 Goal A 的复现模式，并把采样配置写入离线评测 JSON。
+- 增加轻量 `audit_memnav_sampling.py`，无需加载图像或模型即可审计两套规则的样本数。
+
 ## 5. 已有实验结果
 
 ### 5.1 单元测试
 
-标签、评测与 cache 覆盖共 14 个针对性测试通过：
+标签、采样、评测与 cache 覆盖共 22 个针对性测试通过：
 
 ```bash
 pytest -q \
   InternNav/tests/unit_test/test_memnav_cache_coverage.py \
   InternNav/tests/unit_test/test_memnav_labels.py \
+  InternNav/tests/unit_test/test_memnav_sampling.py \
   InternNav/tests/unit_test/test_memnav_metrics.py
 ```
 
-这些测试验证标签、metric 和 cache 覆盖防护，不验证 Habitat 中的闭环导航行为。
+这些测试验证标签、random-leg/Goal A 采样、metric 和 cache 覆盖防护，不验证 Habitat 中的闭环导航行为。
 
 ### 5.2 本机统一 16 样本 checkpoint 对比
 
@@ -292,7 +309,7 @@ E3 final checkpoint 尚未写出，所以不能提前报告 E3 最终结果。
 
 按优先级应执行：
 
-1. 使用 4096 帧容量补算 25 个长 episode，并审计达到 1944 对 cache、2795 个有效 sample 后再启动完整数据训练。
+1. 使用 4096 帧容量补算 25 个长 episode，并审计达到 1944 对 cache、2795 个 covis goal、1411 个 Goal A、总计 4206 个样本后再启动完整数据训练。
 2. 旧 `lg_e1` 与新 E3 仍可在同一 2746-sample 子集上比较，但必须明确标记为旧 cache 覆盖口径。
 3. 保留语义修复，不回退到把 weak revisit 标成 novel 的旧逻辑。
 4. 做 retrieval v2：将 binary revisit gate 与 real-frame ranking 分开训练，并给 gray frame 连续或加权 covis 监督。

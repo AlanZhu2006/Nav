@@ -31,7 +31,7 @@ cross-attention readouts + raw goal descriptor):
   * retrieval is **`dino_cls`-only** for v1 (coarse, frame-level): ``goal_cls``
     vs ``mem_cls`` → top-k frames + retrieval/matchability gates.
   * **dense DINO is recomputed on the fly** (no dense storage): the policy loads
-    raw RGB at the current window ``[k-7..k]``, the goal frame ``k_goal``, and the
+    raw RGB at the current window ``[k-W+1..k]``, the goal frame ``k_goal``, and the
     retrieved frame indices (from ``rgb_dir``) and re-runs the DINO forward for
     the in-FoV and revisit dense cross-attention.
 So the dataset emits ``cache_path``, ``rgb_dir``, ``cur_step`` (= k), and
@@ -47,8 +47,9 @@ per-goal ``covis_curve``: occlusion-aware co-visibility of that goal view agains
 
 Each training sample is therefore an ``(episode, goal j)`` pair, NOT a synthetic
 ``(k, k_goal)``.  For goal ``j``:
-  * current step ``k = len(covis_curve) - 1`` (= ``switches[j] - 1``; robot is at
-    the previous stop, about to navigate the goal's leg).
+  * current step ``k`` is sampled inside the goal's own leg on every access,
+    matching Li Guo's ``3af2c8d`` loader. ``fixed_switch`` remains available to
+    reproduce the earlier MemNav checkpoints.
   * ``goal_image`` = the rendered ``goal_{j+1}.jpg`` (a real target view, NOT a
     trajectory frame — so it has no cached CLS; the policy computes ``goal_cls``
     from it via the frozen context-free DINO trunk).
@@ -60,13 +61,18 @@ per-episode thresholds recorded in the meta:
   * positive : ``covis >= covis_pos_hi``  AND index ``>= anchor_margin``
   * negative : ``covis <= covis_pos_lo``  AND index ``>= anchor_margin``
   * ignore   : the band in between, and all frames ``< anchor_margin`` (the stream
-    cannot ``goal_append`` a match that early → masked out of the loss entirely).
+    cannot ``goal_append`` a match that early), plus own-leg frames not covered by
+    the pre-approach covis curve.
   * ``goal.kind`` is the semantic truth: **revisit** makes ``null`` negative and
     **novel** makes it the sole positive. A revisit with no frame above ``pos_hi``
     is skipped; it must never be silently relabeled as novel.
 
-We keep only goals with ``k >= num_scale + window`` so the scale / history / window
-regions stay disjoint.
+As in ``3af2c8d``, goal A is also sampled using its trajectory arrival frame as
+the target and 14/83-frame glimpse thresholds. This label is explicitly heuristic
+because the generator does not provide a covis curve or separate goal-A rendering.
+
+We keep only goals with ``k >= num_scale + window - 1`` so the scale / history /
+window regions stay disjoint.
 """
 
 from collections import Counter
@@ -96,6 +102,11 @@ class MemNav_Dataset(NavDP_Base_Datset):
         covis_pos_hi=0.5,
         covis_pos_lo=0.1,
         anchor_margin=None,
+        glimpse_pos=14,
+        glimpse_neg=83,
+        goal_slack=4,
+        add_goalA=True,
+        sampling_mode='random_leg',
         pred_digit=4,
         random_digit=False,
         feature_filename='lingbot_cache.npz',
@@ -126,6 +137,17 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.covis_pos_lo = covis_pos_lo
         self.anchor_margin_default = (anchor_margin if anchor_margin is not None
                                       else num_scale + window_size - 1)
+        # Match Li Guo's data_loader sampling: add a heuristic goal-A sample and
+        # draw k inside each goal's own leg on every __getitem__ call.
+        self.glimpse_pos = int(glimpse_pos)
+        self.glimpse_neg = int(glimpse_neg)
+        self.goal_slack = int(goal_slack)
+        self.add_goalA = bool(add_goalA)
+        if sampling_mode not in ('random_leg', 'fixed_switch'):
+            raise ValueError(
+                f"sampling_mode must be 'random_leg' or 'fixed_switch', got {sampling_mode!r}"
+            )
+        self.sampling_mode = sampling_mode
         self.meta_filename = meta_filename
         self.pred_digit = pred_digit
         self.random_digit = random_digit
@@ -145,8 +167,8 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.trajectory_afford_path = []   # path.ply (path + obstacle points)
         self.trajectory_feature_path = []  # lingbot_cache.npz
         self.trajectory_rgb_dir = []       # raw rgb frames dir (window recompute)
-        # flat (episode, goal) sample index — one entry per goal B/C/... with a
-        # precomputed multi-positive retrieval label (see build_retrieval_label).
+        # Flat (episode, goal) index. k is sampled lazily per __getitem__, matching
+        # Li Guo's loader, while the semantic label is validated once here.
         self.samples = []
         self.label_stats = Counter()
         self.input_stats = Counter()
@@ -228,9 +250,14 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.repeat = max(1, int(repeat))
         n_traj = len(self.trajectory_dirs)
         n_samp = len(self.samples)
-        n_rev = sum(1 for s in self.samples if s['goal_kind'] == 'revisit')
+        n_covis = sum(1 for s in self.samples if s['has_covis'])
+        n_rev = sum(
+            1 for s in self.samples if s['has_covis'] and s['goal_kind'] == 'revisit'
+        )
+        n_goalA = n_samp - n_covis
         print(f"[MemNav_Dataset] {n_samp} goal-samples across {n_traj} episodes under "
-              f"{root_dirs} (revisit={n_rev}, novel={n_samp - n_rev}, repeat={self.repeat})")
+              f"{root_dirs} (covis: revisit={n_rev}, novel={n_covis - n_rev}; "
+              f"goalA[dynamic]={n_goalA}, sampling={self.sampling_mode}, repeat={self.repeat})")
         if self.input_stats:
             print(f"[MemNav_Dataset] skipped episode inputs: {dict(self.input_stats)}")
         if self.label_stats:
@@ -255,8 +282,12 @@ class MemNav_Dataset(NavDP_Base_Datset):
     # meta -> per-goal multi-positive retrieval labels
     # ------------------------------------------------------------------ #
     def _parse_meta(self, meta_path, rgb_dir, traj_dir):
-        """Read gen_meta.json and return a list of goal-sample dicts (one per goal
-        with a valid covis_curve, cache frame, and goal image)."""
+        """Build Li Guo-style random-leg and goal-A sample descriptors.
+
+        The sampling ranges and goal-A heuristic follow commit 3af2c8d. The one
+        deliberate semantic difference is that ``goal.kind`` is authoritative:
+        weak revisits and contradictory novel labels are skipped, never relabeled.
+        """
         try:
             meta = json.load(open(meta_path))
         except Exception:
@@ -267,34 +298,73 @@ class MemNav_Dataset(NavDP_Base_Datset):
         pos_hi = float(meta.get('covis_pos_hi', self.covis_pos_hi))
         pos_lo = float(meta.get('covis_pos_lo', self.covis_pos_lo))
         amargin = int(meta.get('anchor_margin', self.anchor_margin_default))
-        lo = self.num_scale + self.window_size          # disjoint scale/history/window
+        slack = self.goal_slack
         out = []
+
+        def _rgb(i):
+            return os.path.join(rgb_dir, f'{int(i)}.jpg')
+
+        # Covis goals B/C/...: sample k in the goal's own leg. The covis curve
+        # covers only the pre-approach history, so own-leg frames remain ignored
+        # by the label while still being structurally valid retrieval candidates.
         for j, g in enumerate(goals):
             curve = g.get('covis_curve')
             if not curve:
                 continue
             curve = np.asarray(curve, dtype=np.float32)
-            k = int(curve.shape[0] - 1)                 # current step = switches[j]-1
-            if k < lo:
-                continue
-            # goal image (goal_{j+1}.jpg) + current frame must both exist on disk
-            goal_img_path = os.path.join(traj_dir, f'goal_{j + 1}.jpg')
-            if not (os.path.isfile(goal_img_path) and os.path.isfile(os.path.join(rgb_dir, f'{k}.jpg'))):
-                continue
-            # goal_step = last frame of this goal's leg (leg j+1)
+            leg_start = int(curve.shape[0])
             leg_end = int(switches[j + 1]) if (j + 1) < len(switches) else n_frames
             goal_step = leg_end - 1
-            if goal_step <= k:                          # need >=1 frame of forward motion
+            if self.sampling_mode == 'random_leg':
+                k_lo = max(leg_start, amargin)
+                k_hi = goal_step - slack
+            else:
+                k_lo = leg_start - 1
+                k_hi = k_lo
+            if k_lo < amargin or k_hi < k_lo:
+                continue
+            goal_img_path = os.path.join(traj_dir, f'goal_{j + 1}.jpg')
+            if not (os.path.isfile(goal_img_path) and os.path.isfile(_rgb(k_lo))):
                 continue
             label, skip_reason = build_retrieval_label(
                 curve, g.get('kind'), pos_hi, pos_lo, amargin)
             if label is None:
                 self.label_stats[skip_reason] += 1
                 continue
-            out.append(dict(goal_j=j, k=k, goal_step=goal_step, goal_img_path=goal_img_path,
-                            goal_kind=g.get('kind'), pos_mask=label.pos_mask,
-                            neg_mask=label.neg_mask, candidate_mask=label.candidate_mask,
-                            null_pos=label.null_pos))
+            out.append(dict(
+                has_covis=True,
+                goal_j=j,
+                leg_start=leg_start,
+                goal_step=goal_step,
+                k_lo=int(k_lo),
+                k_hi=int(k_hi),
+                goal_img_path=goal_img_path,
+                goal_kind=g.get('kind'),
+                pos_pre=label.pos_mask,
+                neg_pre=label.neg_mask,
+                null_pos=label.null_pos,
+                amargin=amargin,
+            ))
+
+        # Goal A has no covis curve or separate rendered image. Match 3af2c8d by
+        # using its arrival frame as the goal and distance-to-arrival heuristics.
+        if self.add_goalA and len(switches) >= 1:
+            a_frame = int(switches[0]) - 1
+            k_lo = amargin
+            k_hi = a_frame - slack
+            has_clean_negative = (a_frame - self.glimpse_neg) >= amargin
+            if k_hi >= k_lo and has_clean_negative and os.path.isfile(_rgb(a_frame)):
+                out.append(dict(
+                    has_covis=False,
+                    goal_j=-1,
+                    goal_step=a_frame,
+                    k_lo=int(k_lo),
+                    k_hi=int(k_hi),
+                    goal_img_path=_rgb(a_frame),
+                    goal_kind='dynamic',
+                    T_A=a_frame,
+                    amargin=amargin,
+                ))
         return out
 
     def __len__(self):
@@ -321,6 +391,44 @@ class MemNav_Dataset(NavDP_Base_Datset):
             [path], mode=self.preprocess_mode, image_size=self.image_size, patch_size=self.patch_size
         )[0]
 
+    def _sample_current_step(self, sample, n_frames):
+        """Draw k from the prevalidated sample range, bounded by cache length."""
+        goal_step = int(sample['goal_step'])
+        if goal_step >= n_frames:
+            raise RuntimeError(
+                f"Feature/parquet length {n_frames} does not cover goal_step={goal_step}"
+            )
+        k_lo = int(sample['k_lo'])
+        k_hi = min(int(sample['k_hi']), goal_step - 1, n_frames - 2)
+        if k_hi < k_lo:
+            raise RuntimeError(
+                f"Feature/parquet length {n_frames} does not cover sampling range "
+                f"[{k_lo}, {sample['k_hi']}]"
+            )
+        return int(np.random.randint(k_lo, k_hi + 1))
+
+    def _build_label(self, sample, k):
+        """Build the Li Guo multi-positive label at a sampled current step."""
+        idx = np.arange(k + 1)
+        candidate = idx >= int(sample['amargin'])
+        pos = np.zeros(k + 1, dtype=bool)
+        neg = np.zeros(k + 1, dtype=bool)
+        if sample['has_covis']:
+            length = min(int(sample['leg_start']), k + 1)
+            pos[:length] = sample['pos_pre'][:length]
+            neg[:length] = sample['neg_pre'][:length]
+            null_pos = bool(sample['null_pos'])
+            is_revisit = sample['goal_kind'] == 'revisit'
+        else:
+            target = int(sample['T_A'])
+            pos = idx >= (target - self.glimpse_pos)
+            neg = (idx <= (target - self.glimpse_neg)) & candidate
+            null_pos = not bool(pos.any())
+            is_revisit = not null_pos
+        pos &= candidate
+        neg &= candidate & ~pos
+        return pos, neg, candidate, null_pos, is_revisit
+
     # ------------------------------------------------------------------ #
     # action label + goal-relative pose (no critic — collision is geometric at eval)
     # ------------------------------------------------------------------ #
@@ -344,8 +452,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
     def __getitem__(self, index):
         s = self.samples[index % len(self.samples)]
         ti = s['traj_idx']
-        k = s['k']
-        goal_step = s['goal_step']
+        goal_step = int(s['goal_step'])
 
         (
             _camera_intrinsic,
@@ -356,18 +463,13 @@ class MemNav_Dataset(NavDP_Base_Datset):
 
         dino_cls = self._load_dino_cls(ti)                 # [T_f, 1024]
         T = int(min(traj_len_parquet, dino_cls.shape[0]))
-        # cache/parquet should cover the whole episode; clamp defensively.
-        k = min(k, T - 2)
-        goal_step = min(goal_step, T - 1)
+        k = self._sample_current_step(s, T)
 
         pred_digit = np.random.randint(2, 8) if self.random_digit else self.pred_digit
 
         # --- retrieval keys: CLS of every observed frame [0..k] ---
         mem_cls = dino_cls[: k + 1].copy()                 # [k+1, 1024]
-        # multi-positive label over mem_cls[0..k] (aligned index i <-> frame i).
-        pos_mask = s['pos_mask'][: k + 1]
-        neg_mask = s['neg_mask'][: k + 1]
-        candidate_mask = s['candidate_mask'][: k + 1]
+        pos_mask, neg_mask, candidate_mask, null_pos, is_revisit = self._build_label(s, k)
 
         # --- action segment: forward path current(k) -> goal(goal_step) ---
         seg = extrinsics[k : goal_step + 1].copy()         # seg[0] == current frame k
@@ -386,8 +488,8 @@ class MemNav_Dataset(NavDP_Base_Datset):
             'pos_mask': torch.from_numpy(np.ascontiguousarray(pos_mask)),    # [k+1] bool
             'neg_mask': torch.from_numpy(np.ascontiguousarray(neg_mask)),    # [k+1] bool
             'candidate_mask': torch.from_numpy(np.ascontiguousarray(candidate_mask)),
-            'null_pos': torch.tensor(bool(s['null_pos'])),                   # scalar bool
-            'is_revisit': torch.tensor(float(s['goal_kind'] == 'revisit'), dtype=torch.float32),
+            'null_pos': torch.tensor(bool(null_pos)),                         # scalar bool
+            'is_revisit': torch.tensor(float(is_revisit), dtype=torch.float32),
             'pred_actions': torch.tensor(pred_actions, dtype=torch.float32),
             'goal_rel_pose': torch.tensor(goal_rel_pose, dtype=torch.float32),   # aux pose GT
             # raw images for the on-the-fly dense DINO + GCT window-forward.

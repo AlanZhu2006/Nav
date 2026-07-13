@@ -30,6 +30,11 @@ _MAX_FRAME_NUM = int(os.environ.get('MEMNAV_MAX_FRAME_NUM', '4096'))
 _STRICT_FEATURE_COVERAGE = os.environ.get(
     'MEMNAV_STRICT_FEATURE_COVERAGE', '1'
 ).lower() not in ('0', 'false', 'no')
+_SAMPLING_MODE = os.environ.get('MEMNAV_SAMPLING_MODE', 'random_leg')
+_ADD_GOAL_A = os.environ.get('MEMNAV_ADD_GOAL_A', '1').lower() not in ('0', 'false', 'no')
+_GLIMPSE_POS = int(os.environ.get('MEMNAV_GLIMPSE_POS', '14'))
+_GLIMPSE_NEG = int(os.environ.get('MEMNAV_GLIMPSE_NEG', '83'))
+_GOAL_SLACK = int(os.environ.get('MEMNAV_GOAL_SLACK', '4'))
 
 memnav_exp_cfg = ExpCfg(
     name='memnav_train',
@@ -70,6 +75,11 @@ memnav_exp_cfg = ExpCfg(
         root_dir=_ROOT_DIR,
         feature_root=_FEATURE_ROOT,
         strict_feature_coverage=_STRICT_FEATURE_COVERAGE,
+        sampling_mode=_SAMPLING_MODE,
+        add_goalA=_ADD_GOAL_A,
+        glimpse_pos=_GLIMPSE_POS,
+        glimpse_neg=_GLIMPSE_NEG,
+        goal_slack=_GOAL_SLACK,
         lingbot_repo=_LINGBOT_REPO,
         lingbot_weights=_LINGBOT_WEIGHTS,
         image_size=518,

@@ -257,6 +257,11 @@ def main(config, model_class, model_config_class):
                 lingbot_repo=config.il.lingbot_repo,
                 feature_root=getattr(config.il, 'feature_root', None),
                 strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
+                sampling_mode=getattr(config.il, 'sampling_mode', 'random_leg'),
+                add_goalA=getattr(config.il, 'add_goalA', True),
+                glimpse_pos=getattr(config.il, 'glimpse_pos', 14),
+                glimpse_neg=getattr(config.il, 'glimpse_neg', 83),
+                goal_slack=getattr(config.il, 'goal_slack', 4),
                 window_size=getattr(config.il, 'window_size', 8),
                 num_scale=getattr(config.il, 'num_scale', 8),
             )

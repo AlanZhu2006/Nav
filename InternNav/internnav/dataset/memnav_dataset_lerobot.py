@@ -84,6 +84,10 @@ import torch
 
 from internnav.dataset.navdp_dataset_lerobot import NavDP_Base_Datset
 from internnav.dataset.memnav_labels import build_retrieval_label
+from internnav.dataset.memnav_scene_splits import (
+    normalize_scene_split,
+    scene_ids_for_split,
+)
 
 
 class MemNav_Dataset(NavDP_Base_Datset):
@@ -113,6 +117,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
         camera_feature_filename='lingbot_cam_cache.npz',
         feature_root=None,
         strict_feature_coverage=True,
+        scene_split='all',
         rgb_subdir='videos/chunk-000/observation.images.rgb',
         meta_filename='meta/gen_meta.json',
         lingbot_repo='/home/asus/Research/Nav/NavDP/baselines/memnav/lingbot-map',
@@ -155,6 +160,8 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.camera_feature_filename = camera_feature_filename
         self.feature_root = feature_root
         self.strict_feature_coverage = strict_feature_coverage
+        self.scene_split = normalize_scene_split(scene_split)
+        allowed_scene_ids = scene_ids_for_split(self.scene_split)
         self.rgb_subdir = rgb_subdir
         self.batch_size = batch_size
         self.debug = debug
@@ -173,12 +180,16 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.label_stats = Counter()
         self.input_stats = Counter()
         missing_feature_episodes = []
+        selected_scene_ids = set()
 
         for group_dir in sorted(p for p in os.listdir(root_dirs)):
             group_path = os.path.join(root_dirs, group_dir)
             if not os.path.isdir(group_path):
                 continue
-            all_scene = np.array(sorted(p for p in os.listdir(group_path)))
+            all_scene = np.array(sorted(
+                p for p in os.listdir(group_path)
+                if allowed_scene_ids is None or p in allowed_scene_ids
+            ))
             if all_scene.shape[0] == 0:
                 continue
             sel_scene = all_scene[np.arange(0, all_scene.shape[0], 1 / scene_data_scale).astype(np.int32)]
@@ -186,6 +197,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
                 scene_path = os.path.join(group_path, scene_dir)
                 if not os.path.isdir(scene_path):
                     continue
+                selected_scene_ids.add(str(scene_dir))
                 all_traj = np.array(sorted(p for p in os.listdir(scene_path)))
                 if all_traj.shape[0] == 0:
                     continue
@@ -248,6 +260,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
             )
 
         self.repeat = max(1, int(repeat))
+        self.scene_ids = tuple(sorted(selected_scene_ids))
         n_traj = len(self.trajectory_dirs)
         n_samp = len(self.samples)
         n_covis = sum(1 for s in self.samples if s['has_covis'])
@@ -255,16 +268,19 @@ class MemNav_Dataset(NavDP_Base_Datset):
             1 for s in self.samples if s['has_covis'] and s['goal_kind'] == 'revisit'
         )
         n_goalA = n_samp - n_covis
-        print(f"[MemNav_Dataset] {n_samp} goal-samples across {n_traj} episodes under "
+        print(f"[MemNav_Dataset] {n_samp} goal-samples across {n_traj} episodes and "
+              f"{len(self.scene_ids)} scenes under "
               f"{root_dirs} (covis: revisit={n_rev}, novel={n_covis - n_rev}; "
-              f"goalA[dynamic]={n_goalA}, sampling={self.sampling_mode}, repeat={self.repeat})")
+              f"goalA[dynamic]={n_goalA}, split={self.scene_split}, "
+              f"sampling={self.sampling_mode}, repeat={self.repeat})")
         if self.input_stats:
             print(f"[MemNav_Dataset] skipped episode inputs: {dict(self.input_stats)}")
         if self.label_stats:
             print(f"[MemNav_Dataset] skipped goal labels: {dict(self.label_stats)}")
         if n_samp == 0:
             raise RuntimeError(
-                f"No goal-samples found under {root_dirs}. Need '{self.feature_filename}' "
+                f"No goal-samples found under {root_dirs} for split={self.scene_split}. "
+                f"Need '{self.feature_filename}' "
                 f"caches AND '{self.meta_filename}' with per-goal 'covis_curve'. "
                 "Did you run precompute_lingbot_features.py on generate_twoleg.py output?"
             )

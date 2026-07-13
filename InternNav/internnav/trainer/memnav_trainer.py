@@ -144,7 +144,13 @@ class MemNavTrainer(BaseTrainer):
     def get_train_dataloader(self):
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
-        sampler = DistributedSampler(self.train_dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=1234)
+        sampler = DistributedSampler(
+            self.train_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+            seed=getattr(self.config, 'seed', 0),
+        )
         return DataLoader(
             self.train_dataset,
             batch_size=self.config.il.batch_size,

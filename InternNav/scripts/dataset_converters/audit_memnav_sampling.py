@@ -6,6 +6,11 @@ from collections import Counter
 import json
 import os
 
+from internnav.dataset.memnav_scene_splits import (
+    normalize_scene_split,
+    scene_ids_for_split,
+)
+
 
 def _semantic_reason(curve, kind, pos_hi, anchor_margin):
     valid = range(anchor_margin, len(curve))
@@ -19,16 +24,22 @@ def _semantic_reason(curve, kind, pos_hi, anchor_margin):
     return 'unknown_goal_kind'
 
 
-def audit(root_dirs, feature_root=None, goal_slack=4, glimpse_neg=83):
+def audit(root_dirs, feature_root=None, goal_slack=4, glimpse_neg=83, scene_split='all'):
+    scene_split = normalize_scene_split(scene_split)
+    allowed_scene_ids = scene_ids_for_split(scene_split)
     stats = Counter()
+    selected_scenes = set()
     for group in sorted(os.listdir(root_dirs)):
         group_path = os.path.join(root_dirs, group)
         if not os.path.isdir(group_path):
             continue
         for scene in sorted(os.listdir(group_path)):
+            if allowed_scene_ids is not None and scene not in allowed_scene_ids:
+                continue
             scene_path = os.path.join(group_path, scene)
             if not os.path.isdir(scene_path):
                 continue
+            selected_scenes.add(scene)
             for episode in sorted(os.listdir(scene_path)):
                 episode_path = os.path.join(scene_path, episode)
                 meta_path = os.path.join(episode_path, 'meta/gen_meta.json')
@@ -120,7 +131,8 @@ def audit(root_dirs, feature_root=None, goal_slack=4, glimpse_neg=83):
     stats['semantic_total_samples_cached'] = (
         stats['semantic_covis_samples_cached'] + stats['goalA_samples_cached']
     )
-    return dict(sorted(stats.items()))
+    stats['scenes'] = len(selected_scenes)
+    return {'scene_split': scene_split, **dict(sorted(stats.items()))}
 
 
 def main():
@@ -129,6 +141,7 @@ def main():
     parser.add_argument('--feature_root')
     parser.add_argument('--goal_slack', type=int, default=4)
     parser.add_argument('--glimpse_neg', type=int, default=83)
+    parser.add_argument('--scene_split', default='all')
     args = parser.parse_args()
     print(json.dumps(audit(**vars(args)), indent=2))
 

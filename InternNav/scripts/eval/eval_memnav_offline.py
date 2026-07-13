@@ -32,6 +32,7 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--log-every', type=int, default=10)
     parser.add_argument('--dataset-role', default='train-diagnostic')
+    parser.add_argument('--scene-split', default=None)
     return parser.parse_args()
 
 
@@ -74,6 +75,7 @@ def main():
     config = copy.deepcopy(memnav_exp_cfg)
     root_dir = args.root_dir or config.il.root_dir
     feature_root = args.feature_root or getattr(config.il, 'feature_root', None)
+    scene_split = args.scene_split or getattr(config.il, 'scene_split', 'all')
     config.il.root_dir = root_dir
     config.il.feature_root = feature_root
 
@@ -84,6 +86,7 @@ def main():
         lingbot_repo=config.il.lingbot_repo,
         feature_root=feature_root,
         strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
+        scene_split=scene_split,
         sampling_mode=getattr(config.il, 'sampling_mode', 'random_leg'),
         add_goalA=getattr(config.il, 'add_goalA', True),
         glimpse_pos=getattr(config.il, 'glimpse_pos', 14),
@@ -137,6 +140,7 @@ def main():
         'checkpoint': str(Path(args.checkpoint).resolve()),
         'root_dir': root_dir,
         'feature_root': feature_root,
+        'scene_split': dataset.scene_split,
         'sampling_mode': dataset.sampling_mode,
         'add_goalA': dataset.add_goalA,
         'glimpse_pos': dataset.glimpse_pos,

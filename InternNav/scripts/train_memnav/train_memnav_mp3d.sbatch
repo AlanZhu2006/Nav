@@ -74,6 +74,9 @@ export MEMNAV_ADD_GOAL_A=${MEMNAV_ADD_GOAL_A:-1}
 export MEMNAV_GLIMPSE_POS=${MEMNAV_GLIMPSE_POS:-14}
 export MEMNAV_GLIMPSE_NEG=${MEMNAV_GLIMPSE_NEG:-83}
 export MEMNAV_GOAL_SLACK=${MEMNAV_GOAL_SLACK:-4}
+export MEMNAV_SCENE_SPLIT=${MEMNAV_SCENE_SPLIT:-all}
+export MEMNAV_W_RETRIEVAL=${MEMNAV_W_RETRIEVAL:-1.0}
+export MEMNAV_W_AUX_POSE=${MEMNAV_W_AUX_POSE:-0.5}
 
 # training knobs
 export NAME=${NAME:-memnav_mp3d}
@@ -84,6 +87,7 @@ export NUM_WORKERS=${NUM_WORKERS:-4}
 export MEMNAV_REPORT_TO=${MEMNAV_REPORT_TO:-wandb}
 export WANDB_PROJECT=${WANDB_PROJECT:-memnav}
 export WANDB_NAME=${WANDB_NAME:-${NAME}}
+export TRAIN_SEED=${TRAIN_SEED:-0}
 
 echo "host: $(hostname); start: $(date)"
 nvidia-smi -L || true
@@ -137,6 +141,7 @@ apptainer exec --nv \
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE}"
         echo "sampling=${MEMNAV_SAMPLING_MODE} goalA=${MEMNAV_ADD_GOAL_A} glimpse=${MEMNAV_GLIMPSE_POS}/${MEMNAV_GLIMPSE_NEG} slack=${MEMNAV_GOAL_SLACK}"
+        echo "scene_split=${MEMNAV_SCENE_SPLIT} w_retrieval=${MEMNAV_W_RETRIEVAL} w_aux_pose=${MEMNAV_W_AUX_POSE} seed=${TRAIN_SEED}"
 
         exec python scripts/train/train.py \
             --name "${NAME}" \
@@ -145,6 +150,7 @@ apptainer exec --nv \
             --num-workers "${NUM_WORKERS}" \
             --epochs "${EPOCHS}" \
             --max-steps "${MAX_STEPS}" \
+            --seed "${TRAIN_SEED}" \
             --root-dir "${MEMNAV_ROOT_DIR}"
     '
 

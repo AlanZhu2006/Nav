@@ -33,12 +33,16 @@ export MEMNAV_ADD_GOAL_A=${MEMNAV_ADD_GOAL_A:-1}
 export MEMNAV_GLIMPSE_POS=${MEMNAV_GLIMPSE_POS:-14}
 export MEMNAV_GLIMPSE_NEG=${MEMNAV_GLIMPSE_NEG:-83}
 export MEMNAV_GOAL_SLACK=${MEMNAV_GOAL_SLACK:-4}
+export MEMNAV_SCENE_SPLIT=${MEMNAV_SCENE_SPLIT:-all}
+export MEMNAV_W_RETRIEVAL=${MEMNAV_W_RETRIEVAL:-1.0}
+export MEMNAV_W_AUX_POSE=${MEMNAV_W_AUX_POSE:-0.5}
 
 export NAME=${NAME:-memnav_e1_offline}
 export BATCH_SIZE=${BATCH_SIZE:-4}
 export NUM_WORKERS=${NUM_WORKERS:-4}
 export MAX_SAMPLES=${MAX_SAMPLES:-0}
 export EVAL_SEED=${EVAL_SEED:-0}
+export DATASET_ROLE=${DATASET_ROLE:-train-diagnostic}
 export OUTPUT=${OUTPUT:-${LOG_DIR}/${NAME}-${SLURM_JOB_ID}.json}
 : "${CHECKPOINT:?Set CHECKPOINT to a memnav.ckpt path}"
 
@@ -71,6 +75,7 @@ apptainer exec --nv \
         echo "git_commit=$(git rev-parse HEAD)"
         echo "checkpoint=${CHECKPOINT} batch=${BATCH_SIZE} max_samples=${MAX_SAMPLES}"
         echo "sampling=${MEMNAV_SAMPLING_MODE} goalA=${MEMNAV_ADD_GOAL_A} glimpse=${MEMNAV_GLIMPSE_POS}/${MEMNAV_GLIMPSE_NEG} slack=${MEMNAV_GOAL_SLACK}"
+        echo "scene_split=${MEMNAV_SCENE_SPLIT} role=${DATASET_ROLE} w_retrieval=${MEMNAV_W_RETRIEVAL} w_aux_pose=${MEMNAV_W_AUX_POSE}"
         exec python scripts/eval/eval_memnav_offline.py \
             --checkpoint "${CHECKPOINT}" \
             --root-dir "${MEMNAV_ROOT_DIR}" \
@@ -79,5 +84,7 @@ apptainer exec --nv \
             --batch-size "${BATCH_SIZE}" \
             --num-workers "${NUM_WORKERS}" \
             --seed "${EVAL_SEED}" \
+            --scene-split "${MEMNAV_SCENE_SPLIT}" \
+            --dataset-role "${DATASET_ROLE}" \
             "${extra_args[@]}"
     '

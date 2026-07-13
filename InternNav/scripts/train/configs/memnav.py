@@ -35,6 +35,9 @@ _ADD_GOAL_A = os.environ.get('MEMNAV_ADD_GOAL_A', '1').lower() not in ('0', 'fal
 _GLIMPSE_POS = int(os.environ.get('MEMNAV_GLIMPSE_POS', '14'))
 _GLIMPSE_NEG = int(os.environ.get('MEMNAV_GLIMPSE_NEG', '83'))
 _GOAL_SLACK = int(os.environ.get('MEMNAV_GOAL_SLACK', '4'))
+_SCENE_SPLIT = os.environ.get('MEMNAV_SCENE_SPLIT', 'all')
+_W_RETRIEVAL = float(os.environ.get('MEMNAV_W_RETRIEVAL', '1.0'))
+_W_AUX_POSE = float(os.environ.get('MEMNAV_W_AUX_POSE', '0.5'))
 
 memnav_exp_cfg = ExpCfg(
     name='memnav_train',
@@ -75,6 +78,7 @@ memnav_exp_cfg = ExpCfg(
         root_dir=_ROOT_DIR,
         feature_root=_FEATURE_ROOT,
         strict_feature_coverage=_STRICT_FEATURE_COVERAGE,
+        scene_split=_SCENE_SPLIT,
         sampling_mode=_SAMPLING_MODE,
         add_goalA=_ADD_GOAL_A,
         glimpse_pos=_GLIMPSE_POS,
@@ -97,8 +101,8 @@ memnav_exp_cfg = ExpCfg(
         token_dim=384,
         num_diffusion_iters=10,
         # loss weights (consumed by MemNavTrainer)
-        w_retrieval=1.0,
-        w_aux_pose=0.5,
+        w_retrieval=_W_RETRIEVAL,
+        w_aux_pose=_W_AUX_POSE,
         ddp_find_unused_parameters=True,
     ),
     model=memnav_cfg,

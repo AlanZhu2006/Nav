@@ -11,7 +11,7 @@ from typing import Optional
 import torch
 import tyro
 from pydantic import BaseModel
-from transformers import TrainerCallback, TrainingArguments
+from transformers import TrainerCallback, TrainingArguments, set_seed
 
 from internnav.dataset.cma_lerobot_dataset import CMALerobotDataset, cma_collate_fn
 from internnav.dataset.rdp_lerobot_dataset import RDP_LerobotDataset, rdp_collate_fn
@@ -124,6 +124,7 @@ def _make_dir(config):
 def main(config, model_class, model_config_class):
     try:
         """Main training function."""
+        set_seed(config.seed)
         _make_dir(config)
 
         print(f"=== Start training ===")
@@ -257,6 +258,7 @@ def main(config, model_class, model_config_class):
                 lingbot_repo=config.il.lingbot_repo,
                 feature_root=getattr(config.il, 'feature_root', None),
                 strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
+                scene_split=getattr(config.il, 'scene_split', 'all'),
                 sampling_mode=getattr(config.il, 'sampling_mode', 'random_leg'),
                 add_goalA=getattr(config.il, 'add_goalA', True),
                 glimpse_pos=getattr(config.il, 'glimpse_pos', 14),
@@ -337,7 +339,7 @@ def main(config, model_class, model_config_class):
             save_steps=config.il.save_interval_epochs,
             save_total_limit=8,
             report_to=config.il.report_to,
-            seed=0,
+            seed=config.seed,
             do_eval=False,
             ddp_find_unused_parameters=config.il.ddp_find_unused_parameters,
             ddp_bucket_cap_mb=100,

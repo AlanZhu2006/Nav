@@ -337,7 +337,7 @@ class MemNavPolicy(PreTrainedModel):
         lingbot_kwargs = {}
         if il.get('lingbot_repo'):    lingbot_kwargs['lingbot_repo'] = il['lingbot_repo']
         if il.get('lingbot_weights'): lingbot_kwargs['weights'] = il['lingbot_weights']
-        # memory-partition geometry — MUST match the precompute + dataset (mp3d: 32/8/2048).
+        # memory-partition geometry — MUST match the precompute + dataset (mp3d: 32/8/4096).
         # LingBotStream sets kv_cache_sliding_window=window, so window here == the precompute
         # --kv_cache_sliding_window; max_frame_num sizes the 3D-RoPE table (long 3leg episodes).
         if il.get('window_size') is not None:   lingbot_kwargs['window'] = il['window_size']

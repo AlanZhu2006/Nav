@@ -84,6 +84,27 @@ def find_trajectories(root_dirs):
     return trajectories
 
 
+def validate_frame_capacity(trajectories, max_frame_num, root_dirs=None):
+    """Fail before model construction when 3D-RoPE cannot cover every frame."""
+    if max_frame_num <= 0:
+        raise ValueError(f"--max_frame_num must be positive, got {max_frame_num}")
+
+    oversized = [traj for traj in trajectories if len(traj[2]) > max_frame_num]
+    if not oversized:
+        return
+
+    oversized.sort(key=lambda traj: len(traj[2]), reverse=True)
+    examples = []
+    for traj_dir, _, rgb_paths in oversized[:5]:
+        display_path = os.path.relpath(traj_dir, root_dirs) if root_dirs else traj_dir
+        examples.append(f"{display_path} ({len(rgb_paths)} frames)")
+    raise ValueError(
+        f"{len(oversized)} selected trajectories exceed --max_frame_num={max_frame_num}; "
+        f"longest={len(oversized[0][2])}. Increase --max_frame_num before precomputation. "
+        f"Examples: {', '.join(examples)}"
+    )
+
+
 def _atomic_savez(path, **arrays):
     """np.savez to a sibling .tmp then os.replace(path) so the final file is never
     partially written. Writing to an open handle avoids numpy's auto ".npz" suffixing."""
@@ -285,8 +306,8 @@ def main():
     ap.add_argument("--kv_cache_sliding_window", type=int, default=8)
     ap.add_argument("--enable_3d_rope", action="store_true", default=True,
                     help="Temporal 3D RoPE (LingBot's intended mode). Needed for goal time-index placement.")
-    ap.add_argument("--max_frame_num", type=int, default=1024,
-                    help="Max frames for 3D RoPE (>= longest trajectory; dataset max is 342).")
+    ap.add_argument("--max_frame_num", type=int, default=4096,
+                    help="3D-RoPE capacity. Must be >= the longest selected trajectory.")
     ap.add_argument("--camera_num_iterations", type=int, default=4)
     ap.add_argument("--use_sdpa", action="store_true", default=False,
                     help="Use SDPA attention (no FlashInfer dependency). Recommended.")
@@ -318,12 +339,43 @@ def main():
     ap.add_argument("--dtype", default="bf16", choices=["fp32", "bf16", "fp16"])
     args = ap.parse_args()
 
+    trajectories = find_trajectories(args.root_dirs)
+    total = len(trajectories)
+    if args.num_shards > 1:
+        assert 0 <= args.shard < args.num_shards, f"--shard {args.shard} out of [0, {args.num_shards})"
+        trajectories = trajectories[args.shard::args.num_shards]  # interleaved for load balance
+    if args.limit:
+        trajectories = trajectories[:args.limit]
+    print(f"Found {total} trajectories under {args.root_dirs}; "
+          f"processing {len(trajectories)} on shard {args.shard}/{args.num_shards}")
+    validate_frame_capacity(trajectories, args.max_frame_num, args.root_dirs)
+
+    pending = []
+    n_skip = 0
+    for traj_dir, rgb_dir, rgb_paths in trajectories:
+        chunk_dir = os.path.dirname(rgb_dir.rstrip("/"))
+        if args.out_root:
+            rel = os.path.relpath(chunk_dir, args.root_dirs)
+            dst_dir = os.path.join(args.out_root, rel)
+        else:
+            dst_dir = chunk_dir
+        out_path = os.path.join(dst_dir, args.out_name)
+        cam_path = os.path.join(dst_dir, args.cam_out_name)
+        gate_path = cam_path if args.cam_only else out_path
+        if os.path.exists(gate_path) and not args.overwrite:
+            n_skip += 1
+            continue
+        pending.append((traj_dir, rgb_paths, dst_dir, out_path, cam_path))
+
+    if not pending:
+        print(f"Done. computed=0 skipped={n_skip} errors=0")
+        return
+
     sys.path.insert(0, args.lingbot_repo)
     from lingbot_map.utils.load_fn import load_and_preprocess_images
 
     device = torch.device(args.device)
     autocast_dtype = {"fp32": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[args.dtype]
-
     model = build_model(args, device)
 
     # Forward hook on the DINOv2 patch embedder to capture the context-free
@@ -334,73 +386,65 @@ def main():
         dino_capture[0] = out
 
     handle = model.aggregator.patch_embed.register_forward_hook(hook)
+    n_done = 0
+    errors = []
+    try:
+        for traj_dir, rgb_paths, dst_dir, out_path, cam_path in tqdm(pending, desc="trajectories"):
+            try:
+                images = load_and_preprocess_images(
+                    rgb_paths,
+                    mode=args.preprocess_mode,
+                    image_size=args.image_size,
+                    patch_size=args.patch_size,
+                )  # [N, 3, H, W] in [0, 1]
+                images = images.unsqueeze(0)  # [1, N, 3, H, W]
+                with torch.autocast(device_type="cuda", dtype=autocast_dtype,
+                                    enabled=(args.dtype != "fp32")):
+                    feats = extract_trajectory(
+                        model, images, args.num_scale_frames, dino_capture,
+                        cam_only=args.cam_only, skip_scale=args.skip_scale,
+                    )
+                assert np.isfinite(feats["cam_k"]).all(), "non-finite cam_k"
+                os.makedirs(dst_dir, exist_ok=True)
+                # Camera-head cache (always) — small; np.savez (ZIP_STORED) avoids slow deflate.
+                # ATOMIC write: savez into a .tmp *file handle* (writing to a handle skips numpy's
+                # ".npz" suffix munging), fsync, then os.replace. A crash mid-write (node death,
+                # timeout, OOM) leaves only a .tmp the skip-if-exists gate ignores — never a
+                # truncated final cache that would be silently treated as "done".
+                _atomic_savez(cam_path, cam_k=feats["cam_k"], cam_v=feats["cam_v"],
+                              cam_pose_enc=feats["cam_pose_enc"], cam_meta=feats["cam_meta"])
+                if not args.cam_only:
+                    assert np.isfinite(feats["dino_cls"]).all(), "non-finite dino_cls"
+                    save_kwargs = dict(
+                        dino_cls=feats["dino_cls"].astype(np.float16),
+                        anchor_k=feats["anchor_k"], anchor_v=feats["anchor_v"],
+                        meta=feats["meta"],
+                    )
+                    if not args.skip_scale:
+                        assert np.isfinite(feats["scale_k"]).all(), "non-finite scale_k"
+                        save_kwargs["scale_k"] = feats["scale_k"]
+                        save_kwargs["scale_v"] = feats["scale_v"]
+                    # out_path (gate file) written LAST + atomically, so it appears only once complete.
+                    _atomic_savez(out_path, **save_kwargs)
+                n_done += 1
+            except Exception as exc:  # noqa: BLE001 — finish the shard, then fail the job
+                errors.append((traj_dir, exc))
+                print(f"[ERROR] {traj_dir}: {type(exc).__name__}: {exc}", flush=True)
+                dino_capture[0] = None
+                try:
+                    model.clean_kv_cache()
+                except Exception:
+                    pass
+    finally:
+        handle.remove()
 
-    trajectories = find_trajectories(args.root_dirs)
-    total = len(trajectories)
-    if args.num_shards > 1:
-        assert 0 <= args.shard < args.num_shards, f"--shard {args.shard} out of [0, {args.num_shards})"
-        trajectories = trajectories[args.shard::args.num_shards]  # interleaved for load balance
-    if args.limit:
-        trajectories = trajectories[:args.limit]
-    print(f"Found {total} trajectories under {args.root_dirs}; "
-          f"processing {len(trajectories)} on shard {args.shard}/{args.num_shards}")
-
-    n_done, n_skip, n_err = 0, 0, 0
-    for traj_dir, rgb_dir, rgb_paths in tqdm(trajectories, desc="trajectories"):
-        chunk_dir = os.path.dirname(rgb_dir.rstrip("/"))
-        if args.out_root:
-            rel = os.path.relpath(chunk_dir, args.root_dirs)
-            dst_dir = os.path.join(args.out_root, rel)
-            os.makedirs(dst_dir, exist_ok=True)
-        else:
-            dst_dir = chunk_dir
-        out_path = os.path.join(dst_dir, args.out_name)
-        cam_path = os.path.join(dst_dir, args.cam_out_name)
-        gate_path = cam_path if args.cam_only else out_path
-        if os.path.exists(gate_path) and not args.overwrite:
-            n_skip += 1
-            continue
-        try:
-            images = load_and_preprocess_images(
-                rgb_paths,
-                mode=args.preprocess_mode,
-                image_size=args.image_size,
-                patch_size=args.patch_size,
-            )  # [N, 3, H, W] in [0, 1]
-            images = images.unsqueeze(0)  # [1, N, 3, H, W]
-            with torch.autocast(device_type="cuda", dtype=autocast_dtype, enabled=(args.dtype != "fp32")):
-                feats = extract_trajectory(
-                    model, images, args.num_scale_frames, dino_capture,
-                    cam_only=args.cam_only, skip_scale=args.skip_scale,
-                )
-            assert np.isfinite(feats["cam_k"]).all(), "non-finite cam_k"
-            # Camera-head cache (always) — small; np.savez (ZIP_STORED) avoids slow deflate.
-            # ATOMIC write: savez into a .tmp *file handle* (writing to a handle skips numpy's
-            # ".npz" suffix munging), fsync, then os.replace. A crash mid-write (node death,
-            # timeout, OOM) leaves only a .tmp the skip-if-exists gate ignores — never a
-            # truncated final cache that would be silently treated as "done".
-            _atomic_savez(cam_path, cam_k=feats["cam_k"], cam_v=feats["cam_v"],
-                          cam_pose_enc=feats["cam_pose_enc"], cam_meta=feats["cam_meta"])
-            if not args.cam_only:
-                assert np.isfinite(feats["dino_cls"]).all(), "non-finite dino_cls"
-                save_kwargs = dict(
-                    dino_cls=feats["dino_cls"].astype(np.float16),
-                    anchor_k=feats["anchor_k"], anchor_v=feats["anchor_v"],
-                    meta=feats["meta"],
-                )
-                if not args.skip_scale:
-                    assert np.isfinite(feats["scale_k"]).all(), "non-finite scale_k"
-                    save_kwargs["scale_k"] = feats["scale_k"]
-                    save_kwargs["scale_v"] = feats["scale_v"]
-                # out_path (gate file) written LAST + atomically, so it appears only once complete.
-                _atomic_savez(out_path, **save_kwargs)
-            n_done += 1
-        except Exception as e:  # noqa: BLE001 — keep going, report at the end
-            n_err += 1
-            print(f"[ERROR] {traj_dir}: {e}")
-
-    handle.remove()
-    print(f"Done. computed={n_done} skipped={n_skip} errors={n_err}")
+    print(f"Done. computed={n_done} skipped={n_skip} errors={len(errors)}")
+    if errors:
+        failed = ", ".join(path for path, _ in errors[:5])
+        raise RuntimeError(
+            f"Feature precomputation failed for {len(errors)} trajectories; "
+            f"the shard is incomplete. First failures: {failed}"
+        )
 
 
 if __name__ == "__main__":

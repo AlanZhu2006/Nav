@@ -20,18 +20,18 @@
 #   apptainer exec --overlay pt1.sqf:ro <base.sif>
 # Inside the container the frames appear at /mp3d_revisit_v0/vln_n1/traj_data, which is
 # MEMNAV_ROOT_DIR; caches are read from MEMNAV_FEATURE_ROOT on host /scratch. The
-# dataset only enumerates trajectories that HAVE a cache (memnav_dataset_lerobot.py
-# skips uncached ones), so this is safe to run while shards 4-7 are still precomputing —
-# it trains on whatever is ready (currently ~1788 of 1944 trajectories).
+# By default the dataset requires complete cache coverage and aborts if any source-ready
+# trajectory is missing either cache. Set MEMNAV_STRICT_FEATURE_COVERAGE=0 only for an
+# explicitly partial diagnostic run.
 #
 # CONSISTENCY (critical): the memory partition geometry MUST match the precompute.
-# The caches were built with --kv_cache_sliding_window 32 and --max_frame_num 2048, so:
+# The caches are built with --kv_cache_sliding_window 32 and --max_frame_num 4096, so:
 #   MEMNAV_WINDOW=32   -> MemNav_Dataset.window_size AND LingBotStream.window (== KV
 #                          manager sliding window). Using 8 here would mis-partition the
 #                          scale/history/window regions vs. how anchor_k/v was captured.
 #   MEMNAV_NUM_SCALE=8 -> scale frames [0..7].
-#   MEMNAV_MAX_FRAME_NUM=2048 -> sizes the 3D-RoPE table for long (>1024-frame) 3leg
-#                          episodes; LingBotStream now extends the camera-head rope too.
+#   MEMNAV_MAX_FRAME_NUM=4096 -> covers the longest current trajectory (3954 frames);
+#                          LingBotStream extends the camera-head rope to the same capacity.
 # These three flow config(memnav.py) -> dataset + LingBotStream via env vars.
 #
 # Overridable env vars (defaults shown):
@@ -67,7 +67,8 @@ export LINGBOT_WEIGHTS=${LINGBOT_WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-lo
 # memory-partition geometry — MUST match the precompute
 export MEMNAV_WINDOW=${MEMNAV_WINDOW:-32}
 export MEMNAV_NUM_SCALE=${MEMNAV_NUM_SCALE:-8}
-export MEMNAV_MAX_FRAME_NUM=${MEMNAV_MAX_FRAME_NUM:-2048}
+export MEMNAV_MAX_FRAME_NUM=${MEMNAV_MAX_FRAME_NUM:-4096}
+export MEMNAV_STRICT_FEATURE_COVERAGE=${MEMNAV_STRICT_FEATURE_COVERAGE:-1}
 
 # training knobs
 export NAME=${NAME:-memnav_mp3d}
@@ -129,7 +130,7 @@ apptainer exec --nv \
         echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} max_steps=${MAX_STEPS} wk=${NUM_WORKERS}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
-        echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"
+        echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE}"
 
         exec python scripts/train/train.py \
             --name "${NAME}" \

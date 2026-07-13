@@ -83,6 +83,7 @@ def main():
         image_size=config.il.image_size,
         lingbot_repo=config.il.lingbot_repo,
         feature_root=feature_root,
+        strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
         window_size=config.il.window_size,
         num_scale=config.il.num_scale,
     )

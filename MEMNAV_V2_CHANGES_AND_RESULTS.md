@@ -1,8 +1,8 @@
 # MemNav v2 修改与结果记录
 
 > 更新时间：2026-07-13  
-> 分支：`fix/memnav-v2-label-semantics`  
-> 本文对应代码基线：`309bdd5`（本文档提交之前）  
+> 分支：`fix/memnav-precompute-coverage`
+> 本文对应代码基线：`d6f719a`（本文档提交之前）
 > HPC 动态状态快照：2026-07-13 07:33（HPC 日志时间）
 
 ## 1. 结论摘要
@@ -11,8 +11,8 @@
 
 目前可以确认：
 
-- scenes 0-53 的 `pt1` 数据包结构完整，可用于当前训练；当前 loader 实际产生 2746 个 goal sample，来自 1680 个 episode。
-- revisit/novel 标签语义错误已经修复，并通过 11 个针对性单元测试。
+- scenes 0-53 的 `pt1` 原始数据包结构完整，但旧 feature tree 只覆盖 1919/1944 个 episode；旧实验实际使用 2746 个 goal sample，完整缓存后应为 2795 个。
+- revisit/novel 标签语义和 cache 静默漏数问题已经修复，并通过 14 个针对性单元测试。
 - 新 checkpoint 在本地 16 样本诊断上显著降低 action loss，并改善 novel gate 和平均 gate separation，但 revisit 的 hard-gate recall 下降，真实 top-real retrieval accuracy 没有提升。
 - 因此目前不能说“新版全面优于旧版”，也不能据此判断在线导航成功率已经提高。
 - H100 上的 3-epoch 训练和两个统一口径的全量离线评测仍在运行或等待依赖；最终结论要等它们完成。
@@ -50,7 +50,7 @@ MP3D revisit 数据由 Habitat 中的多段 episode 生成：
 - 后续历史帧每帧只保存 6 个 special-token K/V，文件中叫 **anchor_k/anchor_v**；这里的 anchor 只是压缩缓存类型。
 - 它们不是 HLoc 意义上的稀疏重定位 keyframe，也不是“轨迹前 8 帧全部叫 anchor frame”。
 
-当前 MP3D cache 的参数为 `num_scale=8`、`window=32`、`max_frame_num=2048`。可执行 retrieval 候选从
+修复后的 MP3D cache 参数为 `num_scale=8`、`window=32`、`max_frame_num=4096`。旧的短轨迹 cache 可以继续使用，因为 3D-RoPE 是解析生成的，扩展 table 不会改变已有索引。可执行 retrieval 候选从
 
 ```text
 anchor_margin = num_scale + window - 1 = 8 + 32 - 1 = 39
@@ -74,14 +74,14 @@ anchor_margin = num_scale + window - 1 = 8 + 32 - 1 = 39
 ### 3.2 审计结果
 
 - pt1 共 1944/1944 个 episode 通过结构检查。
-- feature tree 曾审计到 1919 对 cache；25 个超长 episode 因超过预计算上限 2048 帧而没有对应 cache。
-- 当前修复后的 loader 得到 2746 个 goal sample，来自 1680 个可训练 episode：
+- feature tree 审计到 1919 对 cache；25 个超过 2048 帧的 episode 与 25 个空 cache 目录完全一一对应，最长轨迹为 3954 帧。
+- 这 25 个 episode 会贡献 49 个有效 goal sample（24 revisit、25 novel）。完整数据应有 2795 个 sample（1587 revisit、1208 novel）；旧实验使用的 2746 个 sample 来自 1680 个可训练 episode：
   - revisit：1563
   - novel：1183
   - 因没有任何 `covis >= 0.5` 的强正例而跳过的 weak revisit：356 个 goal record
 - feature tree 约 791 GiB，所以训练直接在 HPC 读取，不适合整体复制到本机。
 
-因此，“数据包损坏”目前没有证据；但这不等于数据完全没有问题。仍然存在 cache 覆盖不全、weak revisit 被跳过、pt2 未缓存和没有 held-out split 等限制。
+因此，“原始数据包损坏”目前没有证据；问题位于 feature 预计算和 loader 覆盖检查。代码已阻止再次静默漏数，但在补算 25 个长 episode 之前，feature tree 仍然不完整。
 
 ## 4. 本轮代码修改
 
@@ -170,19 +170,28 @@ revisit/novel gate：1 - P(NULL)
 - [`InternNav/scripts/train_memnav/eval_memnav_mp3d.sbatch`](InternNav/scripts/train_memnav/eval_memnav_mp3d.sbatch)
 - [`InternNav/tests/unit_test/test_memnav_metrics.py`](InternNav/tests/unit_test/test_memnav_metrics.py)
 
+### 4.5 阻止 feature cache 静默漏数
+
+- 预计算默认 `max_frame_num` 从 1024/2048 统一提高到 4096，并在加载 GPU 模型前检查所选 shard 的最长轨迹。
+- 单个 trajectory 即使在运行中失败，shard 完成其余任务后也会返回非零状态，Slurm 不再把不完整预计算标成成功。
+- 失败前不再提前创建输出目录，减少空 cache 目录；输出文件继续使用临时文件加原子替换。
+- DataLoader 默认要求每个 source-ready episode 同时存在 aggregator 和 camera cache；缺失时汇总示例并终止训练/评测。
+- `MEMNAV_STRICT_FEATURE_COVERAGE=0` 只保留给明确需要部分数据的诊断任务。
+
 ## 5. 已有实验结果
 
 ### 5.1 单元测试
 
-标签与评测共 11 个针对性测试通过：
+标签、评测与 cache 覆盖共 14 个针对性测试通过：
 
 ```bash
 pytest -q \
+  InternNav/tests/unit_test/test_memnav_cache_coverage.py \
   InternNav/tests/unit_test/test_memnav_labels.py \
   InternNav/tests/unit_test/test_memnav_metrics.py
 ```
 
-这些测试验证标签和 metric 逻辑，不验证 Habitat 中的闭环导航行为。
+这些测试验证标签、metric 和 cache 覆盖防护，不验证 Habitat 中的闭环导航行为。
 
 ### 5.2 本机统一 16 样本 checkpoint 对比
 
@@ -283,13 +292,14 @@ E3 final checkpoint 尚未写出，所以不能提前报告 E3 最终结果。
 
 按优先级应执行：
 
-1. 等 `13415280`、`13467443`、`13467563` 全部完成，在同一 2746-sample、同一修正 metric 下比较旧 `lg_e1` 与新 E3。
-2. 保留语义修复，不回退到把 weak revisit 标成 novel 的旧逻辑。
-3. 做 retrieval v2：将 binary revisit gate 与 real-frame ranking 分开训练，并给 gray frame 连续或加权 covis 监督。
-4. 处理 aux pose 的角度周期和尺度，比较 angle wrap、`sin/cos` 表示与 Huber loss。
-5. 为 pt2 选一个小型 held-out scene 子集预计算 cache，先建立可信的泛化评测，不必一开始复制全部 791 GiB 特征。
-6. 补齐 Habitat 闭环 runner，报告 SR、SPL、collision rate、goal distance、U-turn/revisit 子集结果。
-7. 在同一 held-out episodes 上运行官方 NavDP，才能回答 MemNav 是否真正优于 baseline。
+1. 使用 4096 帧容量补算 25 个长 episode，并审计达到 1944 对 cache、2795 个有效 sample 后再启动完整数据训练。
+2. 旧 `lg_e1` 与新 E3 仍可在同一 2746-sample 子集上比较，但必须明确标记为旧 cache 覆盖口径。
+3. 保留语义修复，不回退到把 weak revisit 标成 novel 的旧逻辑。
+4. 做 retrieval v2：将 binary revisit gate 与 real-frame ranking 分开训练，并给 gray frame 连续或加权 covis 监督。
+5. 处理 aux pose 的角度周期和尺度，比较 angle wrap、`sin/cos` 表示与 Huber loss。
+6. 为 pt2 选一个小型 held-out scene 子集预计算 cache，先建立可信的泛化评测，不必一开始复制全部 791 GiB 特征。
+7. 补齐 Habitat 闭环 runner，报告 SR、SPL、collision rate、goal distance、U-turn/revisit 子集结果。
+8. 在同一 held-out episodes 上运行官方 NavDP，才能回答 MemNav 是否真正优于 baseline。
 
 ## 10. 相关提交
 

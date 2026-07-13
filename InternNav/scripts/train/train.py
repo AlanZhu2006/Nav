@@ -256,6 +256,7 @@ def main(config, model_class, model_config_class):
                 image_size=config.il.image_size,
                 lingbot_repo=config.il.lingbot_repo,
                 feature_root=getattr(config.il, 'feature_root', None),
+                strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
                 window_size=getattr(config.il, 'window_size', 8),
                 num_scale=getattr(config.il, 'num_scale', 8),
             )

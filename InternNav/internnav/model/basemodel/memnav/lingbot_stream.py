@@ -52,7 +52,7 @@ class LingBotStream(nn.Module):
         num_scale=8,
         window=8,
         enable_3d_rope=True,
-        max_frame_num=1024,
+        max_frame_num=4096,
         camera_num_iterations=4,
         use_sdpa=True,
         device="cuda",
@@ -106,7 +106,7 @@ class LingBotStream(nn.Module):
         # 3D-RoPE table extension (mirrors precompute build_model): the aggregator
         # sizes its WanRotaryPosEmbed table to max_frame_num, but the CAMERA HEAD
         # hardcodes max_seq_len=1024. camera_pose() runs the camera head forward at
-        # the current frame index k (up to ~1917 for long 3leg episodes), so its
+        # the current frame index k (up to 3953 in the current mp3d data), so its
         # table must be extended too or forward() slices past the end and crashes
         # ("size of tensor a (32) must match b (22)"). Rebuild every rope table whose
         # max_seq_len < max_frame_num up to max_frame_num; the overlap region is

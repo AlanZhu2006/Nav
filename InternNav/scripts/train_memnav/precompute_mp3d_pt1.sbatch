@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=lingbot_precompute_pt1
-#SBATCH --output=/scratch/lg154/Research/Nav/InternNav/logs/mp3d_gen/precomp-%A_%a.out
-#SBATCH --error=/scratch/lg154/Research/Nav/InternNav/logs/mp3d_gen/precomp-%A_%a.err
+#SBATCH --output=/scratch/%u/Research/Nav/InternNav/logs/mp3d_gen/precomp-%A_%a.out
+#SBATCH --error=/scratch/%u/Research/Nav/InternNav/logs/mp3d_gen/precomp-%A_%a.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
@@ -35,35 +35,39 @@ set -euo pipefail
 export NUM_SHARDS="${NUM_SHARDS:-1}"
 export LIMIT="${LIMIT:-0}"
 export SHARD="${SLURM_ARRAY_TASK_ID:-0}"
+export MAX_FRAME_NUM="${MAX_FRAME_NUM:-4096}"
 
-IMG=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
-BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
-export ROOT_DIRS=/mp3d_revisit_v0/vln_n1/traj_data                      # in-container overlay path
-export OUT_ROOT=/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data
-export REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
-export WEIGHTS=${REPO}/weights/lingbot-map-long.pt
+export IMG="${IMG:-/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf}"
+export BASE_SIF="${BASE_SIF:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}"
+export ROOT_DIRS="${ROOT_DIRS:-/mp3d_revisit_v0/vln_n1/traj_data}"      # in-container overlay path
+export NAV_ROOT="${NAV_ROOT:-/scratch/${USER}/Research/Nav}"
+export REPO_ROOT="${REPO_ROOT:-${NAV_ROOT}/InternNav}"
+export OUT_ROOT="${OUT_ROOT:-/scratch/${USER}/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data}"
+export LINGBOT_REPO="${LINGBOT_REPO:-${NAV_ROOT}/NavDP/baselines/memnav/lingbot-map}"
+export WEIGHTS="${WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}"
 
-echo "host: $(hostname); shard ${SHARD}/${NUM_SHARDS}; limit=${LIMIT}; start: $(date)"
+echo "host: $(hostname); shard ${SHARD}/${NUM_SHARDS}; limit=${LIMIT}; max_frame_num=${MAX_FRAME_NUM}; start: $(date)"
 mkdir -p "${OUT_ROOT}"
 
 apptainer exec --nv \
     --overlay "${IMG}:ro" \
     -B /scratch/lg154 \
+    -B "/scratch/${USER}" \
     "${BASE_SIF}" \
     bash -c '
         set -euo pipefail
         ls "${ROOT_DIRS}" >/dev/null || { echo "ABORT: overlay missing ${ROOT_DIRS}"; exit 1; }
         source /scratch/lg154/miniconda3/etc/profile.d/conda.sh
         conda activate /scratch/lg154/conda-envs/memnav
-        cd /scratch/lg154/Research/Nav/InternNav
+        cd "${REPO_ROOT}"
         python scripts/dataset_converters/precompute_lingbot_features.py \
             --root_dirs "${ROOT_DIRS}" \
             --out_root  "${OUT_ROOT}" \
-            --lingbot_repo "${REPO}" \
+            --lingbot_repo "${LINGBOT_REPO}" \
             --weights "${WEIGHTS}" \
             --skip_scale --use_sdpa \
             --kv_cache_sliding_window 32 \
-            --max_frame_num 2048 \
+            --max_frame_num "${MAX_FRAME_NUM}" \
             --num_shards "${NUM_SHARDS}" --shard "${SHARD}" \
             --limit "${LIMIT}"
     '

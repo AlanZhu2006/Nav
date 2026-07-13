@@ -99,7 +99,9 @@ class MemNav_Dataset(NavDP_Base_Datset):
         pred_digit=4,
         random_digit=False,
         feature_filename='lingbot_cache.npz',
+        camera_feature_filename='lingbot_cam_cache.npz',
         feature_root=None,
+        strict_feature_coverage=True,
         rgb_subdir='videos/chunk-000/observation.images.rgb',
         meta_filename='meta/gen_meta.json',
         lingbot_repo='/home/asus/Research/Nav/NavDP/baselines/memnav/lingbot-map',
@@ -128,22 +130,15 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.pred_digit = pred_digit
         self.random_digit = random_digit
         self.feature_filename = feature_filename
+        self.camera_feature_filename = camera_feature_filename
         self.feature_root = feature_root
+        self.strict_feature_coverage = strict_feature_coverage
         self.rgb_subdir = rgb_subdir
         self.batch_size = batch_size
         self.debug = debug
         self.image_size = image_size
         self.patch_size = patch_size
         self.preprocess_mode = preprocess_mode
-
-        # LingBot's exact image preprocessing (square-pad to image_size), so the
-        # goal/window images here match what the GCT window-forward + dense DINO
-        # forward expect on the GPU.
-        import sys
-        if lingbot_repo not in sys.path:
-            sys.path.insert(0, lingbot_repo)
-        from lingbot_map.utils.load_fn import load_and_preprocess_images
-        self._load_and_preprocess = load_and_preprocess_images
 
         self.trajectory_dirs = []
         self.trajectory_data_dir = []      # parquet (extrinsics / intrinsic)
@@ -154,6 +149,8 @@ class MemNav_Dataset(NavDP_Base_Datset):
         # precomputed multi-positive retrieval label (see build_retrieval_label).
         self.samples = []
         self.label_stats = Counter()
+        self.input_stats = Counter()
+        missing_feature_episodes = []
 
         for group_dir in sorted(p for p in os.listdir(root_dirs)):
             group_path = os.path.join(root_dirs, group_dir)
@@ -182,10 +179,25 @@ class MemNav_Dataset(NavDP_Base_Datset):
                         feat_path = os.path.join(self.feature_root, rel, self.feature_filename)
                     else:
                         feat_path = os.path.join(entire_task_dir, 'videos/chunk-000', self.feature_filename)
+                    cam_feat_path = os.path.join(os.path.dirname(feat_path), self.camera_feature_filename)
                     rgb_dir = os.path.join(entire_task_dir, self.rgb_subdir)
                     meta_path = os.path.join(entire_task_dir, self.meta_filename)
-                    if not (os.path.isfile(data_path) and os.path.isfile(feat_path)
-                            and os.path.isfile(meta_path)):
+                    if not os.path.isfile(data_path):
+                        self.input_stats['missing_data'] += 1
+                        continue
+                    if not os.path.isfile(meta_path):
+                        self.input_stats['missing_meta'] += 1
+                        continue
+                    if not os.path.isdir(rgb_dir):
+                        self.input_stats['missing_rgb'] += 1
+                        continue
+                    missing_cache_files = [
+                        path for path in (feat_path, cam_feat_path) if not os.path.isfile(path)
+                    ]
+                    if missing_cache_files:
+                        self.input_stats['missing_feature_episode'] += 1
+                        self.input_stats['missing_feature_file'] += len(missing_cache_files)
+                        missing_feature_episodes.append((entire_task_dir, missing_cache_files))
                         continue
                     # parse the generator meta -> per-goal samples (covis multi-positive label).
                     goal_samples = self._parse_meta(meta_path, rgb_dir, entire_task_dir)
@@ -201,12 +213,26 @@ class MemNav_Dataset(NavDP_Base_Datset):
                         s['traj_idx'] = ti
                         self.samples.append(s)
 
+        if missing_feature_episodes and self.strict_feature_coverage:
+            examples = []
+            for traj_dir, missing_paths in missing_feature_episodes[:5]:
+                names = ', '.join(os.path.basename(path) for path in missing_paths)
+                examples.append(f"{traj_dir} [{names}]")
+            raise RuntimeError(
+                f"Incomplete MemNav feature coverage: {len(missing_feature_episodes)} source-ready "
+                f"episodes are missing cache files under {self.feature_root or root_dirs}. "
+                f"Examples: {'; '.join(examples)}. Finish precomputation before training, or set "
+                "strict_feature_coverage=False only for an intentional partial-data run."
+            )
+
         self.repeat = max(1, int(repeat))
         n_traj = len(self.trajectory_dirs)
         n_samp = len(self.samples)
         n_rev = sum(1 for s in self.samples if s['goal_kind'] == 'revisit')
         print(f"[MemNav_Dataset] {n_samp} goal-samples across {n_traj} episodes under "
               f"{root_dirs} (revisit={n_rev}, novel={n_samp - n_rev}, repeat={self.repeat})")
+        if self.input_stats:
+            print(f"[MemNav_Dataset] skipped episode inputs: {dict(self.input_stats)}")
         if self.label_stats:
             print(f"[MemNav_Dataset] skipped goal labels: {dict(self.label_stats)}")
         if n_samp == 0:
@@ -215,6 +241,15 @@ class MemNav_Dataset(NavDP_Base_Datset):
                 f"caches AND '{self.meta_filename}' with per-goal 'covis_curve'. "
                 "Did you run precompute_lingbot_features.py on generate_twoleg.py output?"
             )
+
+        # LingBot's exact image preprocessing (square-pad to image_size), so the
+        # goal/window images here match what the GCT window-forward + dense DINO
+        # forward expect on the GPU. Import only after the cheap coverage checks.
+        import sys
+        if lingbot_repo not in sys.path:
+            sys.path.insert(0, lingbot_repo)
+        from lingbot_map.utils.load_fn import load_and_preprocess_images
+        self._load_and_preprocess = load_and_preprocess_images
 
     # ------------------------------------------------------------------ #
     # meta -> per-goal multi-positive retrieval labels

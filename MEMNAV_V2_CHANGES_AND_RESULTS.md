@@ -2,8 +2,9 @@
 
 > 更新时间：2026-07-14
 > 分支：`feat/align-lg-dataloader`
-> 本文对应代码基线：`d18e9e1`（本文档提交之前）
-> HPC 动态状态快照：2026-07-13 07:33（HPC 日志时间）
+> 本文对应代码基线：`ed7cf63`
+> HPC 动态状态快照：2026-07-14
+> 最新训练决策与作业清单见 [`MEMNAV_TRAINING_PLAN_2026-07-14.md`](MEMNAV_TRAINING_PLAN_2026-07-14.md)
 
 ## 1. 结论摘要
 
@@ -11,12 +12,12 @@
 
 目前可以确认：
 
-- scenes 0-53 的 `pt1` 原始数据包结构完整，但旧 feature tree 只覆盖 1919/1944 个 episode；旧 E3 使用固定 switch 的 2746 个显式 goal，新版对齐 Li Guo 采样后完整数据应为 4206 个样本。
-- revisit/novel 标签语义、cache 静默漏数和 DataLoader 对齐已经完成，并通过 22 个针对性单元测试。
-- 新 checkpoint 在本地 16 样本诊断上显著降低 action loss，并改善 novel gate 和平均 gate separation，但 revisit 的 hard-gate recall 下降，真实 top-real retrieval accuracy 没有提升。
-- 因此目前不能说“新版全面优于旧版”，也不能据此判断在线导航成功率已经提高。
-- H100 上的 3-epoch 训练和两个统一口径的全量离线评测仍在运行或等待依赖；最终结论要等它们完成。
-- 当前评测是训练集上的离线 checkpoint diagnostic，不是 Habitat 闭环评测，还没有 SR、SPL、collision rate 等导航指标。
+- scenes 0-53 的 `pt1` 原始数据包 1944/1944 个 episode 结构完整；25 个长 episode 的 4096-frame cache 正在由 job `13500804` 补算。
+- revisit/novel 标签语义、cache 静默漏数、Li Guo DataLoader 采样和 R2R scene-disjoint split 已完成，并通过 25 个针对性单元测试。
+- 旧 E3 在 2746-sample 训练集诊断上显著优于 `lg154 checkpoint-956`，但该结果混合了全部 54 个 scene，只证明拟合，不证明泛化。
+- E3 的 aux pose MSE 几乎不变，且加权后占离线 total loss 约 88.7%；已经提交 aux 0.5 对 0.05 的严格配对训练。
+- 新训练仅使用 pt1 中的 38 个 R2R train scene；7 个 val-unseen scene 用于模型选择，9 个 test scene 暂不使用。
+- 当前仍没有 Habitat 闭环 SR、SPL、collision rate，不能据离线 loss 判断真实导航已经提高。
 
 ## 2. 当前系统到底在做什么
 
@@ -46,7 +47,7 @@ MP3D revisit 数据由 Habitat 中的多段 episode 生成：
 
 这里有三个容易混淆的概念：
 
-- 前 8 帧是 LingBot KV cache 的 **scale frames**，保存完整 K/V。
+- 前 8 帧在逻辑上是 LingBot KV cache 的 **scale frames**，需要使用完整 K/V；当前 pt1 cache 使用 `--skip_scale`，因此不把这部分 K/V 写入磁盘，而是在训练读取样本时由原始前 8 帧重算。
 - 后续历史帧每帧只保存 6 个 special-token K/V，文件中叫 **anchor_k/anchor_v**；这里的 anchor 只是压缩缓存类型。
 - 它们不是 HLoc 意义上的稀疏重定位 keyframe，也不是“轨迹前 8 帧全部叫 anchor frame”。
 
@@ -198,14 +199,15 @@ revisit/novel gate：1 - P(NULL)
 
 ### 5.1 单元测试
 
-标签、采样、评测与 cache 覆盖共 22 个针对性测试通过：
+标签、采样、评测、cache 覆盖与 scene split 共 25 个针对性测试通过：
 
 ```bash
 pytest -q \
   InternNav/tests/unit_test/test_memnav_cache_coverage.py \
   InternNav/tests/unit_test/test_memnav_labels.py \
   InternNav/tests/unit_test/test_memnav_sampling.py \
-  InternNav/tests/unit_test/test_memnav_metrics.py
+  InternNav/tests/unit_test/test_memnav_metrics.py \
+  InternNav/tests/unit_test/test_memnav_scene_splits.py
 ```
 
 这些测试验证标签、random-leg/Goal A 采样、metric 和 cache 覆盖防护，不验证 Habitat 中的闭环导航行为。
@@ -256,7 +258,7 @@ pytest -q \
 | gate separation | 0.47266 |
 | aux pose MSE | 7.68320 |
 
-其中旧 metric 给出的 `revisit_match_accuracy=8.57%` 是 real+NULL joint argmax，不是实际 top-real frame accuracy，不能据此说“重定位只有 8.57%”。当前正在用修正后的 metric 重跑旧 checkpoint 全量结果。
+其中旧 metric 给出的 `revisit_match_accuracy=8.57%` 是 real+NULL joint argmax，不是实际 top-real frame accuracy，不能据此说“重定位只有 8.57%”。修正后的 execution metric 已经完成。
 
 原始结果：
 
@@ -264,26 +266,39 @@ pytest -q \
 /scratch/yz11502/Research/Nav/InternNav/logs/eval_memnav/memnav_e1_eval_full-13450741.json
 ```
 
+### 5.4 E3 与 lg154 checkpoint 的统一全量诊断
+
+相同 2746-sample、相同 seed 和 execution metric 下：
+
+| 指标 | `lg154 checkpoint-956` | 我们的 E3 `checkpoint-2058` |
+|---|---:|---:|
+| action loss | 0.241358 | **0.102639** |
+| retrieval loss | 1.197876 | **0.385376** |
+| retrieval positive accuracy | 45.34% | **62.64%** |
+| revisit top-real positive | 48.24% | **81.70%** |
+| revisit top-real explicit negative | 22.84% | **3.20%** |
+| novel NULL accuracy | 95.35% | **99.75%** |
+| gate accuracy @ 0.5 | 74.04% | **91.48%** |
+| gate separation | 0.3579 | **0.7471** |
+| aux pose MSE | 7.7210 | 7.6650 |
+
+这证明 E3 对旧训练口径拟合得更好，但两者都看过这些 scene，因此仍然是 train diagnostic。aux pose 几乎不改善，是下一轮 loss-weight 对照的直接依据。
+
 ## 6. 当前 HPC 任务状态
 
-状态快照如下：
+2026-07-14 状态与依赖链如下：
 
 | Job | 作用 | 状态 | 进度 |
 |---|---|---|---|
-| `13415280` `memnav_v2_e3_full` | 新语义版训练至 3 epoch | H100 运行中 | step 1915/2058，约 93.1% |
-| `13467443` `memnav_lg_e1_exec` | 旧 `lg_e1`，修正 metric 全量评测 | H100 运行中 | 1324/2746 sample，约 48.2% |
-| `13467563` `memnav_e3_exec` | 新 E3 final checkpoint，修正 metric 全量评测 | Pending | 等待训练和前序依赖 |
+| `13500804_[0-7]` | 25 个长 episode cache 补算 | Running/Pending | 8 shards，最多并行 2 GPU |
+| `13504863` | aux 0.5，5-step preflight | Dependency | cache 全部成功后启动 |
+| `13504864` | aux 0.05，5-step preflight | Dependency | cache 全部成功后启动 |
+| `13504865` | train38，aux 0.5，3 epoch | Dependency | preflight 成功后启动 |
+| `13504866` | train38，aux 0.05，3 epoch | Dependency | preflight 成功后启动 |
+| `13504997 13504998 13504999 13505001 13505002` | `aux=0.5` 的 val-unseen 多 epoch/seed 评测 | Dependency | full training 成功后启动 |
+| `13505003 13505004 13505005 13505006 13505007` | `aux=0.05` 的 val-unseen 多 epoch/seed 评测 | Dependency | full training 成功后启动 |
 
-训练任务当前没有 OOM、NaN 或 Python error。集群通知中的 H100 平均利用率为 74.17%，高于 60% 的取消阈值，`cancel_job=0`，因此通知是资源检查警告，不表示任务失败或已取消。
-
-当前已有：
-
-```text
-checkpoint-686   # E1
-checkpoint-1372  # E2
-```
-
-E3 final checkpoint 尚未写出，所以不能提前报告 E3 最终结果。
+新训练每 epoch 759 step，3 epoch 共 2277 step，预计约 14.5 小时。所有长任务使用 `afterok` 依赖；cache 或环境预检失败时不会继续消耗长任务 GPU。
 
 ## 7. 当前不能得出的结论
 
@@ -302,21 +317,22 @@ E3 final checkpoint 尚未写出，所以不能提前报告 E3 最终结果。
 3. **gray band 没有监督。** `0.1 < covis < 0.5` 不进入 loss，但可以在执行时被选中。
 4. **aux pose 目标尺度不理想。** 当前直接对 `(x, y, theta)` 做 MSE，角度 wrap 和不同量纲可能造成尖峰。
 5. **优化器配置有歧义。** 顶层配置包含 weight decay/warmup 等字段，但实际 trainer 使用 `Adam(lr=1e-4)` 和 `LinearLR(1.0 -> 0.5, 10000 steps)`；还不是配置中容易让人误以为的 cosine schedule。
-6. **没有独立 test split。** 当前 pt1 全量结果是 train diagnostic；pt2 尚未完成 cache。
+6. **完整 90-scene split 尚未覆盖。** pt1 已有严格 38/7/9 train/val-unseen/test 划分，但 pt2 的剩余 36 个 scene 尚未完成 cache。
 7. **没有完整在线 runner。** 目前缺少把 streaming memory、DDPM action、controller 和 Habitat episode 串起来的可复现闭环评测。
+8. **长序列 keyframe 策略缺失。** 82.7% 的 pt1 episode 超过 LingBot 官方说明的 320-view 训练长度；4096 RoPE 只解决容量，不保证长程精度。
 
 ## 9. 下一步
 
 按优先级应执行：
 
-1. 使用 4096 帧容量补算 25 个长 episode，并审计达到 1944 对 cache、2795 个 covis goal、1411 个 Goal A、总计 4206 个样本后再启动完整数据训练。
-2. 旧 `lg_e1` 与新 E3 仍可在同一 2746-sample 子集上比较，但必须明确标记为旧 cache 覆盖口径。
-3. 保留语义修复，不回退到把 weak revisit 标成 novel 的旧逻辑。
-4. 做 retrieval v2：将 binary revisit gate 与 real-frame ranking 分开训练，并给 gray frame 连续或加权 covis 监督。
-5. 处理 aux pose 的角度周期和尺度，比较 angle wrap、`sin/cos` 表示与 Huber loss。
-6. 为 pt2 选一个小型 held-out scene 子集预计算 cache，先建立可信的泛化评测，不必一开始复制全部 791 GiB 特征。
-7. 补齐 Habitat 闭环 runner，报告 SR、SPL、collision rate、goal distance、U-turn/revisit 子集结果。
-8. 在同一 held-out episodes 上运行官方 NavDP，才能回答 MemNav 是否真正优于 baseline。
+1. 完成 `13500804` 并验证 1944 对 cache 的 key、shape、frame length 和有限值。
+2. 完成 aux 0.5/0.05 配对训练，只按 val-unseen component metric 选模型，不比较不同权重的 total loss。
+3. 按 memory length 分桶，验证 dense per-frame K/V 在 `>320`、`>1024` 序列上的退化，再设计 keyframe/windowed 对照。
+4. 将 binary revisit gate 与 real-frame ranking 分开，并处理 gray frame 与候选数量校准。
+5. 将 aux pose 改为 scale-aware 或 scale-free 表示，并正确处理角度周期。
+6. 补齐 Habitat 闭环 runner，报告 SR、SPL、collision rate、goal distance、U-turn/revisit 子集结果。
+7. 完成 pt2 cache 后扩展到官方完整 61/11/18 building split。
+8. 在同一 held-out 闭环 episodes 上运行官方 NavDP，才能回答 MemNav 是否真正优于 baseline。
 
 ## 10. 相关提交
 
@@ -328,3 +344,6 @@ E3 final checkpoint 尚未写出，所以不能提前报告 E3 最终结果。
 | `3599028` | 增加 bounded smoke/full training |
 | `f0b9879` | 增加 checkpoint 离线诊断 |
 | `309bdd5` | 区分 top-real 与 NULL，并分类 retrieval failure |
+| `d18e9e1` | 强制完整 cache 覆盖与 4096-frame 预计算 |
+| `9200db2` | 对齐 Li Guo random-leg/Goal A DataLoader |
+| `ed7cf63` | 增加官方 R2R scene-disjoint split、loss env 与可复现 seed |

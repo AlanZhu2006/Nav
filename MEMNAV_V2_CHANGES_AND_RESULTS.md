@@ -2,7 +2,7 @@
 
 > 更新时间：2026-07-14
 > 分支：`feat/align-lg-dataloader`
-> 本文对应代码基线：`ed7cf63`
+> 本文对应实验基线：`ed15f61`（模型/数据改动 `ed7cf63`）
 > HPC 动态状态快照：2026-07-14
 > 最新训练决策与作业清单见 [`MEMNAV_TRAINING_PLAN_2026-07-14.md`](MEMNAV_TRAINING_PLAN_2026-07-14.md)
 
@@ -12,7 +12,7 @@
 
 目前可以确认：
 
-- scenes 0-53 的 `pt1` 原始数据包 1944/1944 个 episode 结构完整；25 个长 episode 的 4096-frame cache 正在由 job `13500804` 补算。
+- scenes 0-53 的 `pt1` 原始数据包 1944/1944 个 episode 结构完整；25 个长 episode 已由 job `13500804` 使用 4096-frame 容量补算完成，两类 cache 均达到 1944/1944。
 - revisit/novel 标签语义、cache 静默漏数、Li Guo DataLoader 采样和 R2R scene-disjoint split 已完成，并通过 25 个针对性单元测试。
 - 旧 E3 在 2746-sample 训练集诊断上显著优于 `lg154 checkpoint-956`，但该结果混合了全部 54 个 scene，只证明拟合，不证明泛化。
 - E3 的 aux pose MSE 几乎不变，且加权后占离线 total loss 约 88.7%；已经提交 aux 0.5 对 0.05 的严格配对训练。
@@ -290,13 +290,14 @@ pytest -q \
 
 | Job | 作用 | 状态 | 进度 |
 |---|---|---|---|
-| `13500804_[0-7]` | 25 个长 episode cache 补算 | Running/Pending | 8 shards，最多并行 2 GPU |
-| `13504863` | aux 0.5，5-step preflight | Dependency | cache 全部成功后启动 |
-| `13504864` | aux 0.05，5-step preflight | Dependency | cache 全部成功后启动 |
-| `13504865` | train38，aux 0.5，3 epoch | Dependency | preflight 成功后启动 |
-| `13504866` | train38，aux 0.05，3 epoch | Dependency | preflight 成功后启动 |
-| `13504997 13504998 13504999 13505001 13505002` | `aux=0.5` 的 val-unseen 多 epoch/seed 评测 | Dependency | full training 成功后启动 |
-| `13505003 13505004 13505005 13505006 13505007` | `aux=0.05` 的 val-unseen 多 epoch/seed 评测 | Dependency | full training 成功后启动 |
+| `13500804_[0-7]` | 25 个长 episode cache 补算 | Completed | 8/8 shards，errors=0 |
+| `13504863 13504864` | 第一版 5-step preflight | Failed | 容器 `which` alias 问题，21/25 秒退出 |
+| `13504865 13504866` | 第一版 3-epoch 训练 | Cancelled | 未启动，运行时间 0；旧评测 jobs 同时取消 |
+| `13560476 13560516` | 在线 W&B 5-step preflight | Completed | 两条均 exit 0，checkpoint 与 W&B 已同步 |
+| `13560538` | train38，aux 0.5，3 epoch | Running | H100，[W&B](https://wandb.ai/yz11502-new-york-university/memnav/runs/gn0gue4u) |
+| `13561091` | train38，aux 0.05，3 epoch | Running | H100，[W&B](https://wandb.ai/yz11502-new-york-university/memnav/runs/g4hn0mp8) |
+| `13561416 13561419 13561429 13562122 13562266` | `aux=0.5` val-unseen 多 epoch/seed | Dependency | full training 成功后启动 |
+| `13562641 13562646 13562663 13562684 13562688` | `aux=0.05` val-unseen 多 epoch/seed | Dependency | full training 成功后启动 |
 
 新训练每 epoch 759 step，3 epoch 共 2277 step，预计约 14.5 小时。所有长任务使用 `afterok` 依赖；cache 或环境预检失败时不会继续消耗长任务 GPU。
 
@@ -347,3 +348,4 @@ pytest -q \
 | `d18e9e1` | 强制完整 cache 覆盖与 4096-frame 预计算 |
 | `9200db2` | 对齐 Li Guo random-leg/Goal A DataLoader |
 | `ed7cf63` | 增加官方 R2R scene-disjoint split、loss env 与可复现 seed |
+| `ed15f61` | 修复容器 `which` preflight，并强制检查在线 W&B 环境 |

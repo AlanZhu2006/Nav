@@ -1,7 +1,7 @@
 # MemNav 下一阶段训练与评测计划
 
 > 制定时间：2026-07-14
-> 训练代码：`ed7cf63`（`feat/align-lg-dataloader`）
+> 实验代码：`ed15f61`（模型/数据改动 `ed7cf63`，W&B 与启动环境检查修复 `ed15f61`）
 > 数据：MP3D revisit pt1，scenes 0-53
 > 目标：从训练集拟合诊断转向 scene-disjoint 泛化实验
 
@@ -105,15 +105,15 @@ pt1 frame-length 审计：
 
 因此今晚的新训练是必要的干净 baseline，但不是最终长序列方案。后续必须单独做 keyframe stride / flow keyframe / windowed Sim(3) 对齐实验，不能把它混进 aux 权重对照。参考 [LingBot-Map 论文](https://arxiv.org/abs/2604.14141) 与[官方实现的长序列说明](https://github.com/robbyant/lingbot-map#streaming-with-keyframe-interval)。
 
-## 6. 今晚已提交的任务
+## 6. 当前任务与故障记录
 
 ### 6.1 Cache 补算
 
 | Job | 配置 | 作用 |
 |---|---|---|
-| `13500804_[0-7]` | H100/H200, 8 shards, `max_frame_num=4096` | 补算 25 个长 episode；已有 1919 个通过 symlink 复用 |
+| `13500804_[0-7]` | H100/H200, 8 shards, `max_frame_num=4096` | **8/8 completed, errors=0**；补算 25 个长 episode，已有 1919 个通过 symlink 复用 |
 
-任务幂等、原子写入，任何 shard 有错误都会返回非零。训练使用 `afterok:13500804`，所以未达到完整覆盖不会启动。
+任务幂等、原子写入，任何 shard 有错误都会返回非零。完成后 `lingbot_cache.npz` 与 `lingbot_cam_cache.npz` 均为 1944/1944，其中各 25 个是新写入的 regular file。
 
 ### 6.2 配对训练
 
@@ -128,23 +128,31 @@ pt1 frame-length 审计：
 | `w_aux_pose` | **0.5** | **0.05** |
 | sampling | random-leg + Goal A | random-leg + Goal A |
 
-依赖链：
+第一次提交的 `13504863/13504864` 在容器内执行 `which python` 时因 alias 不兼容而分别以 exit code 2 失败；`afterok` 阻止了长训练。未运行的 `13504865/13504866` 和旧评测 jobs 随后被取消，运行时间均为 0。
+
+修复后的依赖链：
 
 ```text
-13500804 cache array
-  +-> 13504863 aux0.5 preflight (5 steps) -> 13504865 aux0.5 full E3
-  +-> 13504864 aux0.05 preflight (5 steps) -> 13504866 aux0.05 full E3
+13560476 aux0.5 online-W&B preflight (5 steps, completed)
+  +-> 13560538 aux0.5 full E3 (running)
+13560516 aux0.05 online-W&B preflight (5 steps, completed)
+  +-> 13561091 aux0.05 full E3 (running)
 ```
 
-两个 full job 均申请 H100/H200、20 小时。旧 E3 实测 22.90 秒/step；2277 step 估计约 14.5 小时。账户最多同时使用 2 张 GPU，正好运行两条配对实验。
+两个 full job 均运行于 H100，申请 20 小时。启动检查确认 Python 3.10.20、PyTorch 2.8.0+cu128、Transformers 4.51.0、W&B 0.28.0、LingBot 权重 `0 missing / 0 unexpected`、3037 样本和完整 cache。当前 Slurm 平均 GPU utilization 为 81%/82%，显存约 25 GiB。旧 E3 实测 22.90 秒/step；2277 step 估计约 14.5 小时。
+
+在线训练曲线：
+
+- [aux 0.5 W&B run](https://wandb.ai/yz11502-new-york-university/memnav/runs/gn0gue4u)
+- [aux 0.05 W&B run](https://wandb.ai/yz11502-new-york-university/memnav/runs/g4hn0mp8)
 
 ### 6.3 自动 val-unseen 评测
 
 每条训练评测 `checkpoint-759`、`checkpoint-1518`、`checkpoint-2277` 的 seed 0；最终 checkpoint 再评测 seed 1/2。
 
 ```text
-aux0.5:  13504997 13504998 13504999 13505001 13505002
-aux0.05: 13505003 13505004 13505005 13505006 13505007
+aux0.5:  13561416 13561419 13561429 13562122 13562266
+aux0.05: 13562641 13562646 13562663 13562684 13562688
 ```
 
 每份评测为全部 620 个 val-unseen sample，batch 4，预计约 55 分钟。随机 seed 改变的是 random-leg 当前帧 `k`，最终报告使用三个 seed 的均值和离散程度。

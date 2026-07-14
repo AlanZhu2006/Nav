@@ -113,7 +113,9 @@ pt1 frame-length 审计：
 |---|---|---|
 | `13500804_[0-7]` | H100/H200, 8 shards, `max_frame_num=4096` | **8/8 completed, errors=0**；补算 25 个长 episode，已有 1919 个通过 symlink 复用 |
 
-任务幂等、原子写入，任何 shard 有错误都会返回非零。完成后 `lingbot_cache.npz` 与 `lingbot_cam_cache.npz` 均为 1944/1944，其中各 25 个是新写入的 regular file。
+任务幂等、原子写入，任何 shard 有错误都会返回非零。完成后 `lingbot_cache.npz` 与 `lingbot_cam_cache.npz` 均为 1944/1944，其中各 25 个是新写入的 regular file。针对这 25 个长 episode 的独立审计为 25/25 通过：key、dtype、真实 K/V shape、main/camera frame 数、原始 `n_frames` 和首尾 finite 抽样均一致，长度为 2073--3954。
+
+审计同时发现旧生成器把 aggregator `meta[-1]` 误写成 camera head dimension 128，真实 anchor tensor dimension 为 64。训练和评测不读取该 metadata，而是从 tensor shape 构造 cache，因此不需要重算；`454134c` 已修复未来 pt2 的 metadata 写入。
 
 ### 6.2 配对训练
 

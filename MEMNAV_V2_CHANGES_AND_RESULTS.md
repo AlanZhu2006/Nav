@@ -12,7 +12,7 @@
 
 目前可以确认：
 
-- scenes 0-53 的 `pt1` 原始数据包 1944/1944 个 episode 结构完整；25 个长 episode 已由 job `13500804` 使用 4096-frame 容量补算完成，两类 cache 均达到 1944/1944。
+- scenes 0-53 的 `pt1` 原始数据包 1944/1944 个 episode 结构完整；25 个长 episode 已由 job `13500804` 使用 4096-frame 容量补算完成，两类 cache 均达到 1944/1944，25/25 长 episode 结构审计通过。
 - revisit/novel 标签语义、cache 静默漏数、Li Guo DataLoader 采样和 R2R scene-disjoint split 已完成，并通过 25 个针对性单元测试。
 - 旧 E3 在 2746-sample 训练集诊断上显著优于 `lg154 checkpoint-956`，但该结果混合了全部 54 个 scene，只证明拟合，不证明泛化。
 - E3 的 aux pose MSE 几乎不变，且加权后占离线 total loss 约 88.7%；已经提交 aux 0.5 对 0.05 的严格配对训练。
@@ -349,3 +349,4 @@ pytest -q \
 | `9200db2` | 对齐 Li Guo random-leg/Goal A DataLoader |
 | `ed7cf63` | 增加官方 R2R scene-disjoint split、loss env 与可复现 seed |
 | `ed15f61` | 修复容器 `which` preflight，并强制检查在线 W&B 环境 |
+| `454134c` | 修复预计算文件中 aggregator metadata 误用 camera head dimension |

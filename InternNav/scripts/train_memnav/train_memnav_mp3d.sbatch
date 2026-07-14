@@ -41,6 +41,10 @@
 #   MAX_STEPS=-1              (-1 means use EPOCHS)
 #   NUM_WORKERS=4
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
+#   WANDB_PROJECT=memnav
+#   WANDB_ENTITY=             (empty uses the authenticated account default)
+#   WANDB_MODE=online
+#   MEMNAV_REQUIRE_WANDB_ONLINE=1
 #   REPO_ROOT=/scratch/$USER/Research/Nav/InternNav
 #
 # Submit:
@@ -87,6 +91,10 @@ export NUM_WORKERS=${NUM_WORKERS:-4}
 export MEMNAV_REPORT_TO=${MEMNAV_REPORT_TO:-wandb}
 export WANDB_PROJECT=${WANDB_PROJECT:-memnav}
 export WANDB_NAME=${WANDB_NAME:-${NAME}}
+export WANDB_MODE=${WANDB_MODE:-online}
+export WANDB_LOG_MODEL=${WANDB_LOG_MODEL:-false}
+export WANDB_WATCH=${WANDB_WATCH:-false}
+export MEMNAV_REQUIRE_WANDB_ONLINE=${MEMNAV_REQUIRE_WANDB_ONLINE:-1}
 export TRAIN_SEED=${TRAIN_SEED:-0}
 
 echo "host: $(hostname); start: $(date)"
@@ -125,7 +133,19 @@ apptainer exec --nv \
         export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
         export TOKENIZERS_PARALLELISM=${TOKENIZERS_PARALLELISM:-false}
 
+        case "${MEMNAV_REPORT_TO}" in
+          wandb|tensorboard|none) ;;
+          *) echo "ABORT: unsupported MEMNAV_REPORT_TO=${MEMNAV_REPORT_TO}"; exit 1 ;;
+        esac
+
         if [[ "${MEMNAV_REPORT_TO}" == "wandb" ]]; then
+          if [[ "${MEMNAV_REQUIRE_WANDB_ONLINE}" == "1" && "${WANDB_MODE}" != "online" ]]; then
+            echo "ABORT: W&B must be online, got WANDB_MODE=${WANDB_MODE}"
+            exit 1
+          fi
+          case "${WANDB_DISABLED:-false}" in
+            1|true|TRUE|yes|YES) echo "ABORT: WANDB_DISABLED=${WANDB_DISABLED}"; exit 1 ;;
+          esac
           export WANDB_DIR="${JOB_TMP_ROOT}/wandb_root"
           export WANDB_CACHE_DIR="${JOB_TMP_ROOT}/wandb_cache"
           export WANDB_CONFIG_DIR="${JOB_TMP_ROOT}/wandb_config"
@@ -134,14 +154,21 @@ apptainer exec --nv \
         fi
 
         echo "===== TRAIN ENV CHECK ====="
-        which python; python -V
-        python -c "import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available())"
+        command -v python
+        python -V
+        echo "git_commit=$(git rev-parse HEAD)"
+        python -c "import torch, transformers; assert torch.cuda.is_available(), \"CUDA unavailable\"; print(\"torch\", torch.__version__, \"transformers\", transformers.__version__, \"gpu\", torch.cuda.get_device_name(0))"
         echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} max_steps=${MAX_STEPS} wk=${NUM_WORKERS}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE}"
         echo "sampling=${MEMNAV_SAMPLING_MODE} goalA=${MEMNAV_ADD_GOAL_A} glimpse=${MEMNAV_GLIMPSE_POS}/${MEMNAV_GLIMPSE_NEG} slack=${MEMNAV_GOAL_SLACK}"
         echo "scene_split=${MEMNAV_SCENE_SPLIT} w_retrieval=${MEMNAV_W_RETRIEVAL} w_aux_pose=${MEMNAV_W_AUX_POSE} seed=${TRAIN_SEED}"
+        echo "report_to=${MEMNAV_REPORT_TO} wandb_mode=${WANDB_MODE:-<n/a>} project=${WANDB_PROJECT:-<n/a>} entity=${WANDB_ENTITY:-<default>} run=${WANDB_NAME:-<n/a>}"
+
+        if [[ "${MEMNAV_REPORT_TO}" == "wandb" && "${WANDB_MODE}" == "online" ]]; then
+          python -c "import os, wandb; from transformers.integrations import is_wandb_available; assert is_wandb_available(), \"Transformers W&B integration unavailable\"; api=wandb.Api(timeout=30); entity=os.environ.get(\"WANDB_ENTITY\") or api.default_entity; assert entity, \"No W&B entity\"; project=api.project(os.environ[\"WANDB_PROJECT\"], entity=entity); print(\"wandb\", wandb.__version__, \"online=True entity=\" + entity, \"project=\" + project.name)"
+        fi
 
         exec python scripts/train/train.py \
             --name "${NAME}" \

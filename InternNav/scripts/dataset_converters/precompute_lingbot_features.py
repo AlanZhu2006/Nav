@@ -243,6 +243,8 @@ def extract_trajectory(model, images, scale_frames, dino_capture, cam_only=False
     # Phase 1: scale frames as a single bidirectional block.
     scale_imgs = images[:, :scale].to(dev, non_blocking=True)
     scale_agg, psi = model._aggregate_features(scale_imgs, num_frame_for_scale=scale, num_frame_per_block=scale)
+    agg_heads = int(kv["k_0"].shape[1])
+    agg_head_dim = int(kv["k_0"].shape[-1])
     pl = ch(scale_agg, causal_inference=True, num_frame_per_block=scale, num_frame_for_scale=scale)
     cam_pose_list.append(pl[-1][0].float().cpu())            # [scale, 9]
     ck, cv = read_cam_newest(scale); cam_k_list.append(ck); cam_v_list.append(cv)
@@ -266,12 +268,11 @@ def extract_trajectory(model, images, scale_frames, dino_capture, cam_only=False
 
     model.clean_kv_cache()
 
-    Hh, d = ck.shape[3], ck.shape[-1]
     cam_k = torch.cat(cam_k_list, 0).numpy()                     # [S, NI, TD, H, d]
     cam_v = torch.cat(cam_v_list, 0).numpy()
     out = {"cam_k": cam_k, "cam_v": cam_v,
            "cam_pose_enc": torch.cat(cam_pose_list, 0).numpy(),   # [S, 9]
-           "cam_meta": np.array([NI, TD, Hh, d], dtype=np.int64)}
+           "cam_meta": np.asarray(cam_k.shape[1:], dtype=np.int64)}
     if cam_only:
         return out
 
@@ -279,12 +280,15 @@ def extract_trajectory(model, images, scale_frames, dino_capture, cam_only=False
         anchor_k = torch.stack(anchor_k_list, 0).numpy()         # [S-scale, L, H, psi, d]
         anchor_v = torch.stack(anchor_v_list, 0).numpy()
     else:
-        anchor_k = np.zeros((0, L, Hh, psi, d), np.float16)
-        anchor_v = np.zeros((0, L, Hh, psi, d), np.float16)
+        anchor_k = np.zeros((0, L, agg_heads, psi, agg_head_dim), np.float16)
+        anchor_v = np.zeros((0, L, agg_heads, psi, agg_head_dim), np.float16)
     out.update({
         "dino_cls": torch.cat(cls_list, dim=0).numpy(),          # [S, D']
         "anchor_k": anchor_k, "anchor_v": anchor_v,              # [S-scale, L, H, psi, d]
-        "meta": np.array([scale, psi, L, Hh, d], dtype=np.int64),
+        "meta": np.array(
+            [scale, psi, anchor_k.shape[1], anchor_k.shape[2], anchor_k.shape[4]],
+            dtype=np.int64,
+        ),
     })
     if not skip_scale:
         out["scale_k"] = scale_k.numpy()                          # [L, H, scale, P, d]

@@ -148,6 +148,14 @@ pt1 frame-length 审计：
 - [aux 0.5 W&B run](https://wandb.ai/yz11502-new-york-university/memnav/runs/gn0gue4u)
 - [aux 0.05 W&B run](https://wandb.ai/yz11502-new-york-university/memnav/runs/g4hn0mp8)
 
+为充分利用约 6 小时的后续窗口，补充了一条严格同口径的 aux-free E1
+消融：`13656008` 使用相同的 38-scene `r2r_train`、batch 4、seed 0 和
+random-leg + Goal A，唯一变量是 `w_aux_pose=0.0`，训练 1 epoch / 759 steps；
+`13656091` 在其成功后对全部 620 个 val-unseen sample 评测 seed 0。这条实验只用于
+与已有 aux 0.5/0.05 的 E1 checkpoint 比较，不能直接与两条 E3 结果比较。
+提交时 project GPU 配额已满，作业以 `QOSGrpGRES` pending；保留原有评测优先级，
+不为启动该补充消融取消或抢占正式评测。
+
 ### 6.3 自动 val-unseen 评测
 
 每条训练评测 `checkpoint-759`、`checkpoint-1518`、`checkpoint-2277` 的 seed 0；最终 checkpoint 再评测 seed 1/2。

@@ -25,25 +25,29 @@ mkdir -p /scratch/lg154/Research/Nav/InternNav/logs/train_memnav
 
 IMG=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
-REPO_ROOT=/scratch/lg154/Research/Nav/InternNav
+REPO_ROOT=${REPO_ROOT:-/scratch/lg154/Research/Nav/InternNav}
 
 export MEMNAV_ROOT_DIR=/mp3d_revisit_v0/vln_n1/traj_data
 export MEMNAV_FEATURE_ROOT=/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data
 export LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
 export LINGBOT_WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
+export MEMNAV_DINO_WEIGHTS=${MEMNAV_DINO_WEIGHTS:-${REPO_ROOT}/checkpoints/depth_anything_v2_vits.pth}
 export MEMNAV_WINDOW=32
 export MEMNAV_NUM_SCALE=8
 export MEMNAV_MAX_FRAME_NUM=2048
+export MEMNAV_STRICT_FEATURE_COVERAGE=1
+export MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION=1
 export MAX_PER_GROUP=${MAX_PER_GROUP:-300}
 
 apptainer exec --nv \
     --overlay "${IMG}:ro" \
-    -B /scratch/lg154 \
+    -B /scratch \
     "${BASE_SIF}" \
     bash -c '
         set -euo pipefail
         source /scratch/lg154/miniconda3/etc/profile.d/conda.sh
         conda activate /scratch/lg154/conda-envs/memnav
+        [[ -f "${MEMNAV_DINO_WEIGHTS}" ]] || { echo "ABORT: DINO weights missing ${MEMNAV_DINO_WEIGHTS}"; exit 1; }
         cd '"${REPO_ROOT}"'
         export PYTHONPATH="'"${REPO_ROOT}"'/src/diffusion-policy:${PYTHONPATH:-}"
         export TOKENIZERS_PARALLELISM=false

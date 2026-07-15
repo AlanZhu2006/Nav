@@ -13,7 +13,8 @@ Two design facts this checks (both flagged before writing the gate):
       the loop-closure frames. So we score EXACTLY that eligible region E, the same
       candidate set the retrieval label is drawn from, NOT the full [0..k].
 
-For each covis goal we take raw-CLS cosine over E, standardize within-sample
+For each sampled goal/time pair we take raw-CLS cosine over the dynamic eligible
+set E(k), standardize within-sample
 (z = (s - mean_E)/std_E, to kill the per-scene absolute-cosine offset the first
 probe exposed), and compute a menu of candidate gate features. We then rank each
 feature by its SAMPLE-LEVEL AUC for the revisit(1) / novel(0) decision, dump the
@@ -88,20 +89,27 @@ def main():
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     rng = np.random.default_rng(args.seed)
 
-    ds = MemNav_Dataset(root, predict_size=24, image_size=518, lingbot_repo=repo,
-                        feature_root=feat, window_size=W, num_scale=NS)
+    strict_features = os.environ.get("MEMNAV_STRICT_FEATURE_COVERAGE", "0") == "1"
+    require_convention = os.environ.get("MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION", "0") == "1"
+    ds = MemNav_Dataset(
+        root, predict_size=24, image_size=518, lingbot_repo=repo,
+        feature_root=feat, window_size=W, num_scale=NS,
+        strict_feature_coverage=strict_features,
+        require_generated_pose_convention=require_convention,
+    )
 
-    # eligible region E = pre-approach, retrievable frames [amargin .. leg_start)
-    # (covis goals only — that's where the loop-closure revisit/novel decision lives)
+    # Draw one deterministic k per sample and build the exact dynamic eligible
+    # region E(k) used by training.  A rendered B/C goal can be novel or revisit
+    # depending on whether an earlier co-visible frame is eligible at this k.
     buckets = {"revisit": [], "novel": []}
     for s in ds.samples:
-        if not s["has_covis"]:
+        k = int(rng.integers(int(s["k_lo"]), int(s["k_hi"]) + 1))
+        _pos, _neg, cand, nullp = ds._build_label(s, k)
+        eligible = np.flatnonzero(cand)
+        if eligible.size < args.min_elig:
             continue
-        leg = int(s["leg_start"]); am = int(s["amargin"])
-        if leg - am < args.min_elig:
-            continue
-        grp = "novel" if s["null_pos"] else "revisit"
-        buckets[grp].append((s["traj_idx"], s["goal_img_path"], am, leg))
+        grp = "novel" if nullp else "revisit"
+        buckets[grp].append((s["traj_idx"], s["goal_img_path"], eligible))
     for g in buckets:
         rng.shuffle(buckets[g]); buckets[g] = buckets[g][: args.max_per_group]
     print("[gate] group sizes:", {g: len(v) for g, v in buckets.items()}, "| device:", device)
@@ -109,6 +117,7 @@ def main():
     net = MemNavNet(
         token_dim=384, heads=8, predict_size=24, temporal_depth=8, num_diffusion_iters=10,
         lingbot_kwargs=dict(lingbot_repo=repo, weights=wts, window=W, num_scale=NS, max_frame_num=MFN),
+        novel_backbone_weights=os.environ['MEMNAV_DINO_WEIGHTS'],
         device=device,
     ).to(device).eval()
 
@@ -135,8 +144,8 @@ def main():
             continue
         gcls = goal_cls_of([it[1] for it in items])
         gcls = gcls / (np.linalg.norm(gcls, axis=1, keepdims=True) + 1e-8)
-        for (ti, _p, am, leg), gc in zip(items, gcls):
-            mem = mem_of(ti)[am:leg].astype(np.float32)          # eligible region E
+        for (ti, _p, eligible), gc in zip(items, gcls):
+            mem = mem_of(ti)[eligible].astype(np.float32)        # dynamic E(k)
             mem = mem / (np.linalg.norm(mem, axis=1, keepdims=True) + 1e-8)
             s = mem @ gc                                          # [|E|]
             fd, z = _features(s)

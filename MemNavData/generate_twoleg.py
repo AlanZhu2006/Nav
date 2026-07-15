@@ -369,7 +369,8 @@ def save_traj(out_dir, rgbs, depths, poses_hab, meta, goal_rgbs):
                      "observation.camera_extrinsic": ext.astype(np.float32).tolist(),
                      "action": Td.astype(np.float32).tolist()})
     pd.DataFrame(rows).to_parquet(os.path.join(dat_d, "episode_000000.parquet"))
-    json.dump(meta, open(os.path.join(met_d, "gen_meta.json"), "w"), indent=2)
+    with open(os.path.join(met_d, "gen_meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
 
 
 def align_turn(pos, yaw0, yaw1, max_turn_deg):

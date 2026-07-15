@@ -24,67 +24,13 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from transformers import PretrainedConfig, PreTrainedModel
 
 from internnav.model.basemodel.memnav.lingbot_stream import LingBotStream
+from internnav.model.basemodel.memnav.retrieval_head import RetrievalHead
 from internnav.model.encoder.navdp_backbone import (
     LearnablePositionalEncoding,
     NavDP_ImageGoal_Backbone,
     SinusoidalPosEmb,
     TokenCompressor,
 )
-
-
-# --------------------------------------------------------------------------- #
-# (2.retrieval) Target-image retrieval over dino_cls — trainable, supervised
-# --------------------------------------------------------------------------- #
-class RetrievalHead(nn.Module):
-    """goal_cls vs mem_cls (history CLS) over the revisit CANDIDATE set → decoupled
-    ranking logits + a separate revisit/novel gate.
-
-    Two jobs, DECOUPLED (a joint softmax with a null slot collapses to always-null):
-      * RANKING  : cosine(goal, mem)/temp over candidate frames -> ret_logits [B,L].
-                   Multi-positive InfoNCE (revisit rows) is applied on these.
-      * GATE     : the revisit/novel decision is an AFFINE readout of the single most
-                   similar candidate: g = a·max_i cos_i + b -> BCE(sigmoid(g), revisit).
-                   (Probe: absolute top-1 cosine over the candidate region separates
-                   revisit vs novel at AUC≈0.91; within-scene contrast / peak-sharpness
-                   do NOT — so gate on the max, not a shape statistic.)
-    The candidate set (mem_mask here = cand_mask from the loader) already excludes the
-    recent approach window + <anchor_margin, which is what makes max-cos discriminative.
-
-      - match_idx : argmax candidate frame (drives LingBotStream.goal_append)
-      - gate_logit: [B] pre-sigmoid revisit logit (BCE target)
-      - ret_logits: [B, L] cosine/temp over candidates (-inf elsewhere) for InfoNCE
-    """
-
-    def __init__(self, dino_dim=1024, proj_dim=256, temp_init=0.07):
-        super().__init__()
-        self.proj_goal = nn.Linear(dino_dim, proj_dim)
-        self.proj_mem = nn.Linear(dino_dim, proj_dim)
-        self.log_temp = nn.Parameter(torch.tensor(float(np.log(temp_init))))
-        # affine gate on the max candidate cosine: sigmoid(a·max_cos + b) = P(revisit)
-        self.gate_a = nn.Parameter(torch.tensor(10.0))
-        self.gate_b = nn.Parameter(torch.tensor(-8.0))
-
-    def forward(self, goal_cls, mem_cls, cand_mask):
-        """goal_cls [B,D'], mem_cls [B,L,D'], cand_mask [B,L] bool (revisit candidates)."""
-        gq = F.normalize(self.proj_goal(goal_cls), dim=-1)        # [B,d]
-        mk = F.normalize(self.proj_mem(mem_cls), dim=-1)          # [B,L,d]
-        temp = self.log_temp.exp().clamp(0.01, 1.0)
-
-        cos = (gq.unsqueeze(1) * mk).sum(-1)                      # [B,L] raw cosine (finite)
-        NEG_INF = torch.finfo(cos.dtype).min
-        # mask AFTER dividing by temp with a FINITE floor: putting -inf through /temp
-        # makes 0*inf = nan flow into log_temp on backward (masked_fill zeros the upstream
-        # grad, but the local d(-inf/temp)/dtemp = inf).
-        ret_logits = (cos / temp).masked_fill(~cand_mask, NEG_INF)  # ranking logits over candidates
-
-        # gate feature = max candidate cosine (finite floor for all-masked rows)
-        has_cand = cand_mask.any(-1)                             # [B]
-        max_cos = cos.masked_fill(~cand_mask, -1.0).max(-1).values  # [B] in [-1,1]
-        max_cos = torch.where(has_cand, max_cos, max_cos.new_full((), -1.0))
-        gate_logit = self.gate_a * max_cos + self.gate_b        # [B]
-
-        match_idx = ret_logits.argmax(-1)                       # best candidate frame
-        return match_idx, gate_logit, ret_logits
 
 
 # --------------------------------------------------------------------------- #
@@ -98,11 +44,30 @@ class NovelBranch(nn.Module):
     the heading toward goal-matching content. (skips NavDP's mean-pool to keep spatial info.)
     """
 
-    def __init__(self, dim=384, heads=8, out_tokens=4, image_size=224, device="cuda"):
+    def __init__(self, dim=384, heads=8, out_tokens=4, image_size=224,
+                 pretrained_checkpoint=None, device="cuda"):
         super().__init__()
-        self.backbone = NavDP_ImageGoal_Backbone(image_size=image_size, embed_size=dim, device=device)
+        if not pretrained_checkpoint:
+            raise ValueError(
+                'MemNav novel branch requires a pretrained DINO/Depth-Anything '
+                'checkpoint; set MEMNAV_DINO_WEIGHTS'
+            )
+        self.backbone = NavDP_ImageGoal_Backbone(
+            image_size=image_size, embed_size=dim, device=device,
+            checkpoint=pretrained_checkpoint,
+        )
         self.backbone.project_layer = nn.Identity()              # unused (we skip NavDP's mean-pool)
         self.image_size = image_size
+        self.register_buffer(
+            'preprocess_mean',
+            torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            'preprocess_std',
+            torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
         self.proj = nn.Linear(384, dim)                          # DINOv2-S patch dim -> token_dim
         self.compress = TokenCompressor(dim, heads, out_tokens)
 
@@ -111,13 +76,17 @@ class NovelBranch(nn.Module):
         sz = (self.image_size, self.image_size)
         cur = F.interpolate(cur_img, size=sz, mode="bilinear", align_corners=False)
         goal = F.interpolate(goal_img, size=sz, mode="bilinear", align_corners=False)
+        # The pretrained DINO trunk expects ImageNet-normalized RGB. Normalize the
+        # two images independently before the six-channel early-fusion concat.
+        cur = (cur.float() - self.preprocess_mean) / self.preprocess_std
+        goal = (goal.float() - self.preprocess_mean) / self.preprocess_std
         six = torch.cat([cur, goal], dim=1)                      # [B, 6, H, W]  early fusion
         patch = self.backbone.imagegoal_encoder.get_intermediate_layers(six)[0]  # [B, N, 384] (no pool)
         return self.compress(self.proj(patch))                   # [B, out_tokens, dim]
 
 
 # --------------------------------------------------------------------------- #
-# (2.merge) Revisit: analytic relative pose -> decoder tokens + calibrated (x,y)
+# (2.merge) Revisit: analytic relative pose -> decoder tokens + planar direction
 # --------------------------------------------------------------------------- #
 class RevisitMerge(nn.Module):
     """Turns the **current** and **goal** absolute camera poses (frozen camera head, map
@@ -133,7 +102,12 @@ class RevisitMerge(nn.Module):
         Linear on [t_rel, R_rel.flatten()] (12-d) — no attention needed for a single
         input feature vector (TokenCompressor would degenerate to per-slot linear reads
         of it anyway).
-      - aux_pose_head → (x, y) ONLY, not θ. θ (net heading change along the path from
+      - aux_pose_head → translation direction in (x, y), not metric scale and not θ.
+        The direction loss is invariant to LingBot's per-sequence canonical scale and,
+        through ``rel_adapter``, shapes the same relative feature consumed by the
+        diffusion revisit tokens. Raw (x,y) output is retained only for metric/drift
+        diagnostics.
+        θ (net heading change along the path from
         departure to arrival) is NOT a function of the two endpoint poses — it depends on
         the geodesic route's shape between them (obstacle layout), which two poses don't
         encode; that's the diffusion decoder's job (it sees current_state's depth/visual
@@ -143,11 +117,10 @@ class RevisitMerge(nn.Module):
         heading is the natural approach heading"; goal_yaw = anchor's OWN heading +
         random jitter) — so there is no θ signal in (cur_pose, goal_pose) to extract even
         in principle.
-        aux_pose_head remains trainable even though cur_pose/goal_pose are frozen: a
-        Linear layer receives gradients for its own weight and bias from constant input
-        features. It learns a global affine calibration and therefore cannot repair
-        sequence-dependent monocular scale or accumulated VO drift. Its residual is a
-        diagnostic of that ceiling; its output is not fed into the diffusion decoder.
+        A global affine head cannot repair sequence-dependent monocular scale or
+        accumulated VO drift, which is why metric x/y MSE is diagnostic rather than a
+        training loss. ``rel_adapter`` is shared by the auxiliary direction head and
+        ``revisit_head``, so this supervision is no longer an isolated sidecar.
         The initial signed-axis mapping is derived from the corrected generated-data
         convention. Metric scale is deliberately left for training instead of baking in
         the former two-episode fit, which was measured against legacy labels that dropped
@@ -163,6 +136,14 @@ class RevisitMerge(nn.Module):
 
     def __init__(self, dim=384, n_out=4):
         super().__init__()
+        self.rel_adapter = nn.Sequential(
+            nn.Linear(12, 12), nn.GELU(), nn.Linear(12, 12)
+        )
+        # Residual identity at initialization keeps old behavior and checkpoint
+        # compatibility while allowing both action and auxiliary gradients to
+        # reshape the relative representation.
+        nn.init.zeros_(self.rel_adapter[-1].weight)
+        nn.init.zeros_(self.rel_adapter[-1].bias)
         self.revisit_head = nn.Linear(12, n_out * dim)       # [t_rel(3), R_rel.flatten(9)] -> n_out tokens
         self.n_out, self.dim = n_out, dim
         # Trainable global affine calibration, initialized with the known axis map.
@@ -203,8 +184,9 @@ class RevisitMerge(nn.Module):
     def forward(self, cur_pose, goal_pose):
         """cur_pose, goal_pose: [B, 9] absolute camera poses (map frame)."""
         t_rel, R_rel = self._relative_pose(cur_pose, goal_pose)          # [B,3], [B,3,3]
-        aux_pose = self.aux_pose_head(t_rel)                             # [B,2]  (x,y) only
         rel_feat = torch.cat([t_rel, R_rel.flatten(-2)], dim=-1)         # [B,12]
+        rel_feat = rel_feat + self.rel_adapter(rel_feat)
+        aux_pose = self.aux_pose_head(rel_feat[..., :3])                 # [B,2] raw translation proxy
         revisit_readout = self.revisit_head(rel_feat).view(-1, self.n_out, self.dim)
         # R_rel returned too — not for any loss (no head/calibration needed for it, it's a
         # raw feature into revisit_head), just so the trainer can log a rotation-accuracy
@@ -219,7 +201,8 @@ class RevisitMerge(nn.Module):
 class MemNavNet(nn.Module):
     def __init__(self, lingbot_kwargs=None, dino_dim=1024, lingbot_dim=2048, depth_feat_dim=256,
                  token_dim=384, heads=8, m_rgbd=4, m_depth=4, m_revisit=4, m_novel=4,
-                 predict_size=24, temporal_depth=8, num_diffusion_iters=10, goal_warm=64, device="cuda"):
+                 predict_size=24, temporal_depth=8, num_diffusion_iters=10, goal_warm=64,
+                 novel_backbone_weights=None, device="cuda"):
         super().__init__()
         self.lingbot = LingBotStream(device=device, **(lingbot_kwargs or {}))
         self.window = self.lingbot.window
@@ -234,7 +217,10 @@ class MemNavNet(nn.Module):
 
         # trainable heads
         self.retrieval = RetrievalHead(dino_dim=dino_dim)
-        self.novel = NovelBranch(dim=token_dim, heads=heads, out_tokens=m_novel, device=device)
+        self.novel = NovelBranch(
+            dim=token_dim, heads=heads, out_tokens=m_novel,
+            pretrained_checkpoint=novel_backbone_weights, device=device,
+        )
 
         # current_state = two Perceiver branches (LoGoPlanner-style: perception + geometry)
         #   RGBD branch  : post-GCT window tokens (2C)        -> m_rgbd tokens
@@ -268,11 +254,10 @@ class MemNavNet(nn.Module):
         self.register_buffer("tgt_mask",
                              tgt.float().masked_fill(tgt == 0, float("-inf")).masked_fill(tgt == 1, 0.0))
 
-        # global prior on revisit vs novel, ADDED to the per-sample gate bias in the decoder
-        # cross-attention. [0]=revisit, [1]=novel; only the difference matters (softmax).
-        # Learnable by default (the model tunes the global balance); to force/ablate a weighting
-        # set `net.branch_bias.data = torch.tensor([r, n])` and `net.branch_bias.requires_grad_(False)`.
-        self.branch_bias = nn.Parameter(torch.zeros(2))
+        # Keep the decoder routing identifiable: only the supervised per-sample gate
+        # chooses revisit vs novel. A second learnable global branch bias can cancel
+        # the gate and recreate an unsupervised shortcut.
+        self.branch_bias = nn.Parameter(torch.zeros(2), requires_grad=False)
 
         self.to(device)   # move trainable heads to device (lingbot.model already there)
 
@@ -328,44 +313,55 @@ class MemNavNet(nn.Module):
 
         labels = batch["batch_labels"].to(dev)          # [B, predict_size, 3]
         B = labels.shape[0]
-        noise = torch.randn_like(labels)
-        timesteps = torch.randint(0, self.noise_scheduler.config.num_train_timesteps, (B,), device=dev)
+        noise = batch.get('diagnostic_noise')
+        if noise is None:
+            noise = torch.randn_like(labels)
+        else:
+            noise = noise.to(dev)
+        timesteps = batch.get('diagnostic_timesteps')
+        if timesteps is None:
+            timesteps = torch.randint(
+                0, self.noise_scheduler.config.num_train_timesteps, (B,), device=dev
+            )
+        else:
+            timesteps = timesteps.to(dev)
         noisy = self.noise_scheduler.add_noise(labels, noise, timesteps)
 
         noise_pred = self.predict_noise(noisy, timesteps, current_state, revisit, novel, gate)
         return dict(
-            noise_pred=noise_pred, noise=noise,
+            noise_pred=noise_pred, noise=noise, timesteps=timesteps,
             aux_pose=aux_pose, R_rel=R_rel, ret_logits=enc["ret_logits"], revisit_gate=gate,
-            gate_logit=enc["gate_logit"], match_idx=enc["match_idx"], anchor_idx=enc["anchor_idx"],
+            gate_logit=enc["gate_logit"], gate_feature=enc["gate_feature"],
+            match_idx=enc["match_idx"], anchor_idx=enc["anchor_idx"],
         )
 
     @torch.no_grad()
-    def _load_cache(self, path, rgb_dir):
+    def _load_cache(self, path, camera_path, rgb_dir):
         """Assemble the KV cache dict from disk. If the npz lacks
         ``scale_k/scale_v`` (--skip_scale precompute mode), compute it on the
         fly from the first ``num_scale`` RGB frames of ``rgb_dir`` — bf16 output,
         LRU-cached per trajectory inside LingBotStream."""
-        c = np.load(path)
-        keys = set(c.files)
-        if "scale_k" in keys and "scale_v" in keys:
-            sk, sv, ak, av = LingBotStream._cache_to_layered(
-                c["scale_k"], c["scale_v"], c["anchor_k"], c["anchor_v"], self.device)
-        else:
-            sk, sv = self.lingbot.get_scale_kv(rgb_dir)
-            ak = torch.as_tensor(c["anchor_k"], device=self.device, dtype=torch.bfloat16)\
-                .permute(1, 2, 0, 3, 4).contiguous()
-            av = torch.as_tensor(c["anchor_v"], device=self.device, dtype=torch.bfloat16)\
-                .permute(1, 2, 0, 3, 4).contiguous()
-        cc = np.load(path.replace("lingbot_cache.npz", "lingbot_cam_cache.npz"))
-        ck, cv = LingBotStream._cam_to_device(cc["cam_k"], cc["cam_v"], self.device)
-        # cam_pose_enc [S,9]: the frozen camera head's own pose for every REAL trajectory
-        # frame, captured during precompute's genuinely continuous stream (extract_trajectory)
-        # — used directly for cur_pose (see encode_memory) instead of re-deriving it from a
-        # window_forward recompute, which cold-starts at k-W+1 with no real predecessors and
-        # is measurably worse (diag_lingbot_pose_accuracy.py: ATE 3.35m vs 0.04m on a 2-leg
-        # smoke episode). goal_pose still needs a live camera_pose() call — the goal image is
-        # newly inserted, not a frame this array has an entry for.
-        cam_pose_enc = torch.as_tensor(cc["cam_pose_enc"], device=self.device, dtype=torch.float32)
+        with np.load(path) as c:
+            keys = set(c.files)
+            if "scale_k" in keys and "scale_v" in keys:
+                sk, sv, ak, av = LingBotStream._cache_to_layered(
+                    c["scale_k"], c["scale_v"], c["anchor_k"], c["anchor_v"], self.device)
+            else:
+                sk, sv = self.lingbot.get_scale_kv(rgb_dir)
+                ak = torch.as_tensor(c["anchor_k"], device=self.device, dtype=torch.bfloat16)\
+                    .permute(1, 2, 0, 3, 4).contiguous()
+                av = torch.as_tensor(c["anchor_v"], device=self.device, dtype=torch.bfloat16)\
+                    .permute(1, 2, 0, 3, 4).contiguous()
+        with np.load(camera_path) as cc:
+            ck, cv = LingBotStream._cam_to_device(cc["cam_k"], cc["cam_v"], self.device)
+            # cam_pose_enc [S,9]: the frozen camera head's own pose for every REAL
+            # trajectory frame, captured during the continuous precompute stream.
+            cam_pose_enc = torch.as_tensor(
+                cc["cam_pose_enc"], device=self.device, dtype=torch.float32
+            )
+        # cur_pose reads cam_pose_enc directly instead of reconstructing it from a
+        # cold-start window. goal_pose still needs a live camera_pose() call because
+        # the goal image is newly inserted and has no trajectory entry.
         return dict(scale_k=sk, scale_v=sv, anchor_k=ak, anchor_v=av, cam_k=ck, cam_v=cv,
                    cam_pose_enc=cam_pose_enc)
 
@@ -386,7 +382,9 @@ class MemNavNet(nn.Module):
         mem_cls = batch["batch_mem_cls"].to(dev)
         cand_mask = batch["batch_cand_mask"].to(dev)   # revisit candidates E(k) = [amargin..k-t]
         # (trainable) retrieval — match index + gate logit + ranking logits (over candidates)
-        match_idx, gate_logit, ret_logits = self.retrieval(goal_cls, mem_cls, cand_mask)
+        match_idx, gate_logit, ret_logits, gate_feature = self.retrieval(
+            goal_cls, mem_cls, cand_mask
+        )
         revisit_gate = torch.sigmoid(gate_logit)       # P(revisit) for the decoder soft-gate
 
         # goal_append anchor: at TRAIN time teacher-force it to a GT co-visible frame so the
@@ -395,7 +393,8 @@ class MemNavNet(nn.Module):
         # the live match_idx — the same anchor a converged retrieval produces. Novel rows have
         # no positive -> keep match_idx (aux weight is 0 for them anyway).
         pos_mask = batch.get("batch_pos_mask")
-        if self.training and pos_mask is not None:
+        force_oracle_positive = bool(batch.get('diagnostic_oracle_positive', False))
+        if (self.training or force_oracle_positive) and pos_mask is not None:
             pos_mask = pos_mask.to(dev).bool()
             NEG_INF = torch.finfo(ret_logits.dtype).min
             tf_idx = ret_logits.masked_fill(~pos_mask, NEG_INF).argmax(-1)   # best-scoring positive
@@ -412,7 +411,9 @@ class MemNavNet(nn.Module):
             goal_img = batch["batch_goal_image"][b].to(dev)
             win_img = batch["batch_window_images"][b].to(dev)
             with torch.no_grad():
-                cache = self._load_cache(batch["cache_paths"][b], rgb_dir)
+                cache = self._load_cache(
+                    batch["cache_paths"][b], batch["camera_cache_paths"][b], rgb_dir
+                )
                 ck, cv = cache["cam_k"], cache["cam_v"]
                 # (1) current state: post-GCT tokens + depth-head geometry + pose feature
                 #  wt: window tokens [W, P, 2C], cur_agg: current frame's multi-layer agg, psi: patch_start_idx
@@ -440,7 +441,7 @@ class MemNavNet(nn.Module):
             cur_pose=torch.stack(curp),      # [B, 9]        current absolute camera pose (map frame)
             goal_pose=torch.stack(goalp),    # [B, 9]        goal absolute camera pose (map frame)
             match_idx=match_idx, anchor_idx=anchor, revisit_gate=revisit_gate,
-            gate_logit=gate_logit, ret_logits=ret_logits,
+            gate_logit=gate_logit, gate_feature=gate_feature, ret_logits=ret_logits,
         )
 
 
@@ -491,10 +492,17 @@ class MemNavPolicy(PreTrainedModel):
         if il.get('window_size') is not None:   lingbot_kwargs['window'] = il['window_size']
         if il.get('num_scale') is not None:     lingbot_kwargs['num_scale'] = il['num_scale']
         if il.get('max_frame_num') is not None: lingbot_kwargs['max_frame_num'] = il['max_frame_num']
+        novel_backbone_weights = il.get('novel_backbone_weights')
+        if not novel_backbone_weights:
+            raise ValueError(
+                'model_cfg.il.novel_backbone_weights is required; '
+                'set MEMNAV_DINO_WEIGHTS'
+            )
         self.core = MemNavNet(
             token_dim=il['token_dim'], heads=il['heads'], predict_size=il['predict_size'],
             temporal_depth=il['temporal_depth'], num_diffusion_iters=il.get('num_diffusion_iters', 10),
             goal_warm=il.get('goal_warm', 64),
+            novel_backbone_weights=novel_backbone_weights,
             lingbot_kwargs=lingbot_kwargs or None, device=str(self._device),
         )
 
@@ -516,21 +524,25 @@ if __name__ == "__main__":
     cand_mask = torch.ones(B, L, dtype=torch.bool)
     cand_mask[0, 40:] = False  # sample 0: fewer candidates
     cand_mask[1, :] = False    # sample 1: no candidate -> novel (gate floor)
-    m, gate_logit, logits = rh(goal_cls, mem_cls, cand_mask)
+    m, gate_logit, logits, gate_feature = rh(goal_cls, mem_cls, cand_mask)
     gate = torch.sigmoid(gate_logit)
     print(f"RetrievalHead: match_idx={m.tolist()} gate={[round(x,3) for x in gate.tolist()]} logits={tuple(logits.shape)}")
     # decoupled losses: InfoNCE (ranking) + BCE (gate)
     pos = torch.zeros(B, L, dtype=torch.bool); pos[[0, 2, 3], [12, 5, 33]] = True
     neg = cand_mask & ~pos
-    rank = (logits.masked_fill(~(pos | neg), float("-inf")).logsumexp(-1)
-            - logits.masked_fill(~pos, float("-inf")).logsumexp(-1))[[0, 2, 3]].mean()
+    rows = torch.tensor([0, 2, 3])
+    floor = torch.finfo(logits.dtype).min
+    lse_pn = logits.masked_fill(~(pos | neg), floor).logsumexp(-1)
+    lse_p = logits.masked_fill(~pos, floor).logsumexp(-1)
+    rank = (lse_pn[rows] - lse_p[rows]).mean()
     is_rev = torch.tensor([1.0, 0.0, 1.0, 1.0])
     gate_ce = F.binary_cross_entropy_with_logits(gate_logit, is_rev)
     print(f"  rank InfoNCE={rank.item():.3f}  gate BCE={gate_ce.item():.3f}  "
           f"grad ok={torch.autograd.grad(rank + gate_ce, rh.log_temp, retain_graph=True)[0] is not None}")
 
     # novel branch smoke (early fusion on raw images)
-    nb = NovelBranch(device="cuda").to("cuda")
+    dino_weights = os.environ.get('MEMNAV_DINO_WEIGHTS')
+    nb = NovelBranch(pretrained_checkpoint=dino_weights, device="cuda").to("cuda")
     cur_img = torch.rand(B, 3, 518, 518, device="cuda")
     goal_img = torch.rand(B, 3, 518, 518, device="cuda")
     out = nb(cur_img, goal_img)
@@ -542,7 +554,7 @@ if __name__ == "__main__":
         from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset, memnav_collate_fn
         ds = MemNav_Dataset("/home/asus/Research/datasets/InternData-N1/vln_n1/traj_data", predict_size=24)
         batch = memnav_collate_fn([ds[i] for i in range(2)])
-        net = MemNavNet(device="cuda")
+        net = MemNavNet(novel_backbone_weights=dino_weights, device="cuda")
         out = net.encode_memory(batch)
         print("\nencode_memory readouts:")
         for key, v in out.items():

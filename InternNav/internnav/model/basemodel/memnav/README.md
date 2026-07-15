@@ -117,18 +117,22 @@ via `quat_to_mat` (`lingbot_map.utils.rotation`, lazy import — needs
 needs the compact 4-d form, and `mat_to_quat`'s branch-selection has known
 numerical rough edges near 180° rotations that a plain matrix avoids.
 
-- **`revisit_head`**: trainable `Linear(12, n_out·token_dim)` on
-  `[t_rel, R_rel.flatten()]`, reshaped to the decoder's revisit tokens.
+- **shared `rel_adapter`**: residual MLP on
+  `[t_rel, R_rel.flatten()]`, initialized as an exact identity. Both the
+  action-facing revisit tokens and the auxiliary direction head consume this
+  representation, so the auxiliary is no longer a disconnected sidecar.
+- **`revisit_head`**: trainable `Linear(12, n_out·token_dim)` on the adapted
+  relative feature, reshaped to the decoder's revisit tokens.
   Replaces the old `pose_encoder(7,dim) + TokenCompressor` pipeline — no
   attention machinery needed for a single input feature vector
   (`TokenCompressor` degenerates to per-slot linear reads of one token
   anyway).
-- **`aux_pose_head`**: `Linear(3, 2)`, output `(x, y)` **only** — `θ` is
-  dropped from this auxiliary task (see §1; it belongs to the diffusion
-  decoder, which has the depth/visual context needed to reason about
-  obstacles, not `RevisitMerge`, which only ever sees two poses).
+- **`aux_pose_head`**: `Linear(3, 2)`, supervised by planar **direction**
+  only. Path `θ` is dropped (see §1), and metric magnitude is diagnostic
+  rather than a loss because LingBot's raw translation uses per-sequence
+  canonical scale.
 
-### 2.4 `aux_pose_head` is a trainable global calibration
+### 2.4 The auxiliary is scale-invariant and policy-shared
 
 `cur_pose`/`goal_pose` come from the frozen camera head under
 `torch.no_grad()`, but that does **not** prevent `Linear(3,2)` from learning:
@@ -136,11 +140,11 @@ its input can be constant while its own weight and bias still receive
 gradients. The previous freeze made `w_aux * aux_loss` a constant offset in
 the reported total loss and did not change any parameter update.
 
-The head is now trainable and initialized only with the known signed-axis
-mapping:
+The head remains initialized with the known signed-axis mapping:
 
 ```python
-aux_pose = aux_pose_head(t_rel)
+rel_feat = rel_feat + rel_adapter(rel_feat)
+aux_pose = aux_pose_head(rel_feat[..., :3])
 aux_pose_head.weight = [[0, 0, 1], [-1, 0, 0]]
 aux_pose_head.bias = [0, 0]
 ```
@@ -152,15 +156,61 @@ the corrected planar coordinates are `[lingbot_z, -lingbot_x]`.
 
 No fixed metric scale is baked in. The former `1 / 0.541` value came from two
 episodes evaluated against legacy labels that omitted one horizontal axis, so
-it is not a valid calibration target. Training can learn the best dataset-wide
-affine scale, but a single linear head still cannot remove LingBot's
-sequence-dependent monocular scale or accumulated VO drift. Also, the aux
-output is not consumed by the diffusion decoder, so this loss updates the aux
-head only; it is a calibration diagnostic rather than additional policy
-supervision.
+it is not a valid calibration target. A single affine head cannot remove
+LingBot's sequence-dependent monocular scale or accumulated VO drift. The
+training loss is therefore `1 - cosine(pred_xy, gt_xy)` on revisit rows,
+bounded and invariant to magnitude. Raw x/y MSE, per-axis prediction/GT std,
+and L2 error remain logged specifically to reveal metric mismatch or collapse.
+
+The residual `rel_adapter` is shared with `revisit_head`; direction gradients
+therefore shape features used by the diffusion policy. This removes the old
+failure mode where a large y MSE participated in global gradient clipping but
+could update only an isolated calibration head.
 
 `MemNavTrainer.compute_loss`'s `gt_pose` is now sliced to
 `inputs["batch_goal_rel_pose"][..., :2]` to match.
+
+### 2.5 Novel branch starts from the intended pretrained DINO-S
+
+The six-channel current+goal encoder previously constructed a fresh
+`DepthAnythingV2` model but never loaded its checkpoint. It also passed raw
+`[0,1]` pixels into a trunk pretrained with ImageNet normalization. Thus the
+entire novel visual branch was silently random even though it was described as
+DINOv2-S.
+
+MemNav now requires `MEMNAV_DINO_WEIGHTS` (default:
+`InternNav/checkpoints/depth_anything_v2_vits.pth`) and fails before training if
+the file is absent or incompatible. The pretrained 3-channel patch projection
+is expanded to six channels by copying half of its RGB kernel to the current
+half and half to the goal half. Therefore, when current and goal are identical,
+the expanded convolution exactly reproduces the pretrained RGB response while
+both halves remain independently trainable. Current and goal are ImageNet-
+normalized independently before concatenation.
+
+### 2.6 Training and W&B correctness
+
+- Action heading deltas are wrapped to `[-pi, pi)` before NavDP's x4 scaling;
+  W&B reports diffusion error separately as `action_noise_mse_x/y/theta` and
+  reports the x/y/theta target standard deviations over the same logging window.
+- Retrieval ranking is computed only on rows with both a positive and a
+  negative. Novel-only batches produce an exact zero ranking term, without
+  first forming a near-float-limit masked value.
+- The supervised gate uses raw frozen-DINO maximum cosine, while ranking keeps
+  its trainable projection. Gate loss has fixed semantics (no four-sample
+  batch-derived class weight), and logs class-specific recall plus window-level
+  separation.
+- Component metrics are accumulated over the exact Hugging Face logging
+  interval. A deterministic, scene-held-out validation subset is evaluated with
+  fixed k/noise/timesteps, so changes across checkpoints are comparable.
+- The custom dictionary batch explicitly declares `batch_labels` to Hugging
+  Face. Scheduled evaluation therefore runs `MemNavTrainer.compute_loss`
+  instead of incorrectly expanding the batch as keyword arguments to the model.
+- Step checkpoints contain the trainable state plus optimizer, scheduler, RNG,
+  trainer state, and train/eval fingerprints. Slurm jobs auto-resume rather than
+  losing an eight-hour run at the wall-time boundary.
+- `scripts/eval/eval_memnav_offline.py` provides a fixed current-architecture
+  diagnostic, including oracle-positive retrieval. It is explicitly not a
+  closed-loop Habitat navigation score.
 
 ---
 
@@ -168,10 +218,14 @@ supervision.
 
 | file | change |
 |---|---|
-| `internnav/model/basemodel/memnav/memnav_policy.py` | `_load_cache` loads `cam_pose_enc`; `cur_pose` reads it directly; `RevisitMerge` uses analytic `_relative_pose` and a trainable corrected-axis aux calibration; `MemNavNet.__init__` gains `goal_warm` |
+| `internnav/model/basemodel/memnav/memnav_policy.py` | `_load_cache` loads `cam_pose_enc`; `cur_pose` reads it directly; analytic relative pose; normalized, pretrained novel branch |
+| `internnav/model/encoder/navdp_backbone.py` | validates DINO-S weights and expands the pretrained RGB patch projection to six-channel early fusion |
 | `internnav/model/basemodel/memnav/lingbot_stream.py` | new `goal_append_warm` method |
-| `internnav/trainer/memnav_trainer.py` | `gt_pose` sliced to `[..., :2]`; aux loss trains only the calibration head |
-| `scripts/train/configs/memnav.py` | explicit `goal_warm=64` |
+| `internnav/trainer/memnav_trainer.py` | scale-invariant direction auxiliary, interval-averaged diagnostics, fixed validation |
+| `scripts/train/configs/memnav.py` | explicit `goal_warm=64`, required DINO weights, held-out split/eval and resumable step checkpoint defaults |
+| `internnav/model/basemodel/memnav/retrieval_head.py` | separately testable projected ranking and raw-cosine revisit gate |
+| `internnav/model/basemodel/memnav/metrics.py` | deterministic per-sample and aggregate offline diagnostics |
+| `scripts/eval/eval_memnav_offline.py` | strict fixed-split checkpoint evaluator with optional oracle-positive pass |
 | `scripts/diag_lingbot_pose_accuracy.py` | new diagnostic harness (GT vs. official-continuous-stream vs. ours; `warm_forward`/`warm_goal_pose`/`oracle_goal_pose`) used to find and validate all of the above |
 
 ## 4. Open items
@@ -182,10 +236,10 @@ supervision.
   measured vs. 0.64–0.65 m at window=32 on the same trajectories). Not yet
   changed — it's a precompute config/cost tradeoff (roughly doubles
   per-trajectory KV work), not a code fix, and out of scope for this round.
-- **Global aux calibration has an irreducible residual** because LingBot's
+- **Metric translation has an irreducible residual** because LingBot's
   monocular scale varies by sequence and long trajectories accumulate drift.
-  Report per-axis errors and distance-binned errors; do not interpret one
-  aggregate aux MSE as a direct policy-quality metric.
+  It remains an evaluator diagnostic; do not interpret aggregate x/y MSE as
+  the optimized auxiliary or as direct policy quality.
 - Frozen VO accuracy has a real, separate ceiling on long/turn-heavy
   trajectories (measured 2.5 m ATE on a 744-frame, 2-turn episode even for
   the trusted continuous-stream reference) — not something any of the

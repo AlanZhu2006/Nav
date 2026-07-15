@@ -21,8 +21,14 @@ def main():
     root = os.environ["MEMNAV_ROOT_DIR"]; feat = os.environ["MEMNAV_FEATURE_ROOT"]
     repo = os.environ["LINGBOT_REPO"]
     W = int(os.environ.get("MEMNAV_WINDOW", 32)); NS = int(os.environ.get("MEMNAV_NUM_SCALE", 8))
-    ds = MemNav_Dataset(root, predict_size=24, image_size=518, lingbot_repo=repo,
-                        feature_root=feat, window_size=W, num_scale=NS)
+    strict_features = os.environ.get("MEMNAV_STRICT_FEATURE_COVERAGE", "0") == "1"
+    require_convention = os.environ.get("MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION", "0") == "1"
+    ds = MemNav_Dataset(
+        root, predict_size=24, image_size=518, lingbot_repo=repo,
+        feature_root=feat, window_size=W, num_scale=NS,
+        strict_feature_coverage=strict_features,
+        require_generated_pose_convention=require_convention,
+    )
     t = ds.exclude_recent
     print(f"exclude_recent={t}  n_samples={len(ds.samples)}")
 
@@ -57,6 +63,9 @@ def main():
 
     # ---- full __getitem__ + collate on a few items (exercises cand_mask plumbing) ----
     items = [ds[int(i)] for i in sel[:3]]
+    for item in items:
+        assert bool((item["pred_actions"][:, 2].abs() <= 4.0 * np.pi + 1e-5).all()), \
+            "wrapped action theta exceeds [-4π, 4π)"
     batch = memnav_collate_fn(items)
     for key in ("batch_cand_mask", "batch_pos_mask", "batch_neg_mask", "batch_is_revisit"):
         assert key in batch, f"missing {key}"
@@ -84,13 +93,14 @@ def main():
     lse_pn = logits.masked_fill(~(pos | neg), NEG_INF).logsumexp(-1)
     lse_p = logits.masked_fill(~pos, NEG_INF).logsumexp(-1)
     rank_rows = pos.any(-1) & neg.any(-1)
-    rank_loss = ((lse_pn - lse_p) * rank_rows).sum() / rank_rows.sum().clamp(min=1.0)
-    pw = ((1 - is_rev).sum() / is_rev.sum().clamp(min=1)).clamp(0.1, 10.0)
-    gate_loss = F.binary_cross_entropy_with_logits(gate_logit, is_rev, pos_weight=pw)
+    rank_loss = (
+        lse_pn[rank_rows] - lse_p[rank_rows]
+    ).sum() / rank_rows.sum().clamp(min=1.0)
+    gate_loss = F.binary_cross_entropy_with_logits(gate_logit, is_rev)
     assert torch.isfinite(rank_loss) and rank_loss >= -1e-4, "bad rank loss"
     assert torch.isfinite(gate_loss), "bad gate loss"
     print(f"[A] loss math OK | rank={rank_loss.item():.4f} (rows {int(rank_rows.sum())}/{Bn}) "
-          f"gate_bce={gate_loss.item():.4f} pos_weight={pw.item():.2f}")
+          f"gate_bce={gate_loss.item():.4f}")
 
     if not args.gpu:
         print("OK (Part A). Re-run with --gpu for the full forward+loss+backward.")
@@ -99,6 +109,7 @@ def main():
     # ---- Part B: full net forward + exact trainer loss + backward ----
     from internnav.model.basemodel.memnav.memnav_policy import MemNavNet
     wts = os.environ["LINGBOT_WEIGHTS"]; MFN = int(os.environ.get("MEMNAV_MAX_FRAME_NUM", 2048))
+    dino_weights = os.environ["MEMNAV_DINO_WEIGHTS"]
     dev = "cuda:0"
     # revisit/novel is resolved per-k INSIDE __getitem__ (random k), so we must DRAW items
     # until they land revisit — else the batch is all-novel and the teacher-forcing path
@@ -128,11 +139,15 @@ def main():
           f"cand_per_row={batch['batch_cand_mask'].sum(1).tolist()}")
     net = MemNavNet(token_dim=384, heads=8, predict_size=24, temporal_depth=8, num_diffusion_iters=10,
                     lingbot_kwargs=dict(lingbot_repo=repo, weights=wts, window=W, num_scale=NS, max_frame_num=MFN),
+                    novel_backbone_weights=dino_weights,
                     device=dev).to(dev)
     net.train()
     fwd = net(batch)
     for k in ("ret_logits", "gate_logit", "revisit_gate", "aux_pose"):
-        v = fwd[k]; print(f"  {k}: {tuple(v.shape)} finite={bool(torch.isfinite(v[torch.isfinite(v)]).all())}")
+        v = fwd[k]
+        finite = bool(torch.isfinite(v).all())
+        print(f"  {k}: {tuple(v.shape)} finite={finite}")
+        assert finite, f"non-finite values in {k}"
 
     # --- teacher-forcing: train anchor must land on a GT positive for every revisit row ---
     posB = batch["batch_pos_mask"].to(dev).bool()
@@ -157,15 +172,19 @@ def main():
     is_rev = batch["batch_is_revisit"].to(dev)
     NI = torch.finfo(rl.dtype).min
     rr = pos.any(-1) & neg.any(-1)
-    rank = (((rl.masked_fill(~(pos | neg), NI).logsumexp(-1) - rl.masked_fill(~pos, NI).logsumexp(-1)) * rr).sum()
-            / rr.sum().clamp(min=1))
-    pw = ((1 - is_rev).sum() / is_rev.sum().clamp(min=1)).clamp(0.1, 10.0)
-    gate = F.binary_cross_entropy_with_logits(gl, is_rev, pos_weight=pw)
-    per = (fwd["aux_pose"] - batch["batch_goal_rel_pose"].to(dev)).square().mean(-1)
-    aux = (per * is_rev).sum() / is_rev.sum().clamp(min=1)
-    loss = action_loss + rank + gate + 0.5 * aux
+    lse_pn = rl.masked_fill(~(pos | neg), NI).logsumexp(-1)
+    lse_p = rl.masked_fill(~pos, NI).logsumexp(-1)
+    rank = (lse_pn[rr] - lse_p[rr]).sum() / rr.sum().clamp(min=1)
+    gate = F.binary_cross_entropy_with_logits(gl, is_rev)
+    aux_gt = batch["batch_goal_rel_pose"].to(dev)[..., :fwd["aux_pose"].shape[-1]]
+    pred_norm = torch.linalg.norm(fwd["aux_pose"], dim=-1).clamp(min=0.25)
+    gt_norm = torch.linalg.norm(aux_gt, dim=-1).clamp(min=1e-4)
+    direction_cos = ((fwd["aux_pose"] / pred_norm[:, None])
+                     * (aux_gt / gt_norm[:, None])).sum(-1).clamp(-1, 1)
+    aux = ((1 - direction_cos) * is_rev).sum() / is_rev.sum().clamp(min=1)
+    loss = action_loss + rank + gate + 0.2 * aux
     print(f"[B] loss={loss.item():.4f} act={action_loss.item():.4f} rank={rank.item():.4f} "
-          f"gate={gate.item():.4f} aux={aux.item():.4f}")
+          f"gate={gate.item():.4f} aux_direction={aux.item():.4f}")
     assert torch.isfinite(loss), "non-finite loss"
     loss.backward()
     for nm_ in ("gate_a", "gate_b", "log_temp"):
@@ -173,15 +192,19 @@ def main():
         print(f"  retrieval.{nm_}.grad = {None if g is None else round(g.item(), 6)}")
         assert g is not None, f"no grad to retrieval.{nm_}"
         assert torch.isfinite(g), f"retrieval.{nm_}.grad is not finite ({g.item()})"
-    # aux-pose head must receive gradient (teacher-forced anchor -> learnable aux target)
-    ag = net.revisit_merge.aux_pose_head[-1].weight.grad
+    # Direction auxiliary must reach both its head and the representation shared
+    # with revisit policy tokens.
+    ag = net.revisit_merge.aux_pose_head.weight.grad
     gn = None if ag is None else round(ag.norm().item(), 6)
     print(f"  revisit_merge.aux_pose_head.grad_norm = {gn}")
     if bool(revB.any()):
         assert ag is not None and torch.isfinite(ag).all() and ag.abs().sum() > 0, "no/!finite aux grad"
+        shared_grad = net.revisit_merge.rel_adapter[-1].weight.grad
+        assert (shared_grad is not None and torch.isfinite(shared_grad).all()
+                and shared_grad.abs().sum() > 0), "aux/action grad did not reach shared rel_adapter"
     else:
         print("  (no revisit rows in this batch -> aux weight 0, grad check skipped)")
-    print("OK (Part B): forward + decoupled loss + backward, grads reach gate + temp + aux head.")
+    print("OK (Part B): forward + decoupled loss + backward, grads reach gate, temp, and shared aux path.")
 
 
 if __name__ == "__main__":

@@ -22,6 +22,12 @@ def generated_camera_extrinsic(camera_height_m=0.5):
     return extrinsic
 
 
+def wrap_radians(angle):
+    """Wrap scalar/array angles to the half-open interval ``[-pi, pi)``."""
+    angle = np.asarray(angle)
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
+
 def resolve_memnav_base_extrinsic(recorded_extrinsic, frame_convention):
     """Upgrade legacy generated episodes without changing unrelated datasets.
 

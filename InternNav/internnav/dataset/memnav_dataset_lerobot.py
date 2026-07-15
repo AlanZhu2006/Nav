@@ -69,13 +69,19 @@ We keep only goals with ``k >= num_scale + window`` so the scale / history / win
 regions stay disjoint.
 """
 
+from collections import Counter
+import hashlib
 import json
 import os
 
 import numpy as np
 import torch
 
-from internnav.dataset.memnav_pose_conventions import resolve_memnav_base_extrinsic
+from internnav.dataset.memnav_pose_conventions import (
+    GENERATED_ZUP_FRAME_CONVENTION,
+    resolve_memnav_base_extrinsic,
+    wrap_radians,
+)
 from internnav.dataset.navdp_dataset_lerobot import NavDP_Base_Datset
 
 # Habitat (Y-up) -> dataset "data" world frame (Z-up): data = MW @ habitat. Exact transform
@@ -121,7 +127,15 @@ class MemNav_Dataset(NavDP_Base_Datset):
         pred_digit=4,
         random_digit=False,
         feature_filename='lingbot_cache.npz',
+        camera_feature_filename='lingbot_cam_cache.npz',
         feature_root=None,
+        strict_feature_coverage=False,
+        require_generated_pose_convention=False,
+        data_split='all',
+        validation_fraction=0.1,
+        split_seed=0,
+        sampling_mode='random_leg',
+        sampling_seed=0,
         rgb_subdir='videos/chunk-000/observation.images.rgb',
         meta_filename='meta/gen_meta.json',
         lingbot_repo='/home/asus/Research/Nav/NavDP/baselines/memnav/lingbot-map',
@@ -136,6 +150,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
         # depth dirs; memnav only needs parquet (poses), path.ply (critic), the
         # cache npz, and the rgb dir (raw frames for goal/window + lazy matches).
         self.predict_size = predict_size
+        self.root_dirs = os.fspath(root_dirs)
         self.num_scale = num_scale
         self.window_size = window_size
         self.seen_ratio = seen_ratio      # (unused in v2; kept for signature compat)
@@ -165,7 +180,23 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.pred_digit = pred_digit
         self.random_digit = random_digit
         self.feature_filename = feature_filename
+        self.camera_feature_filename = camera_feature_filename
         self.feature_root = feature_root
+        self.strict_feature_coverage = bool(strict_feature_coverage)
+        self.require_generated_pose_convention = bool(require_generated_pose_convention)
+        if data_split not in {'all', 'train', 'val'}:
+            raise ValueError(f"data_split must be all/train/val, got {data_split!r}")
+        if not 0.0 < float(validation_fraction) < 1.0:
+            raise ValueError('validation_fraction must be strictly between 0 and 1')
+        if sampling_mode not in {'random_leg', 'fixed_leg'}:
+            raise ValueError(
+                f"sampling_mode must be random_leg/fixed_leg, got {sampling_mode!r}"
+            )
+        self.data_split = data_split
+        self.validation_fraction = float(validation_fraction)
+        self.split_seed = int(split_seed)
+        self.sampling_mode = sampling_mode
+        self.sampling_seed = int(sampling_seed)
         self.rgb_subdir = rgb_subdir
         self.batch_size = batch_size
         self.debug = debug
@@ -186,10 +217,23 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.trajectory_data_dir = []      # parquet (extrinsics / intrinsic)
         self.trajectory_afford_path = []   # path.ply (path + obstacle points)
         self.trajectory_feature_path = []  # lingbot_cache.npz
+        self.trajectory_camera_feature_path = []  # lingbot camera KV + continuous pose
         self.trajectory_rgb_dir = []       # raw rgb frames dir (window recompute)
         # flat (episode, goal) sample index — one entry per goal B/C/... with a
         # precomputed multi-positive retrieval label (see _build_goal_label).
         self.samples = []
+        self._validated_length_indices = set()
+        self.input_stats = Counter()
+        missing_feature_episodes = []
+        invalid_pose_conventions = []
+        dataset_manifest_rows = []
+
+        def scene_is_validation(scene_name):
+            digest = hashlib.sha256(
+                f'{self.split_seed}:{scene_name}'.encode('utf-8')
+            ).digest()
+            unit = int.from_bytes(digest[:8], 'big') / float(1 << 64)
+            return unit < self.validation_fraction
 
         for group_dir in sorted(p for p in os.listdir(root_dirs)):
             group_path = os.path.join(root_dirs, group_dir)
@@ -218,24 +262,92 @@ class MemNav_Dataset(NavDP_Base_Datset):
                         feat_path = os.path.join(self.feature_root, rel, self.feature_filename)
                     else:
                         feat_path = os.path.join(entire_task_dir, 'videos/chunk-000', self.feature_filename)
+                    cam_feat_path = os.path.join(
+                        os.path.dirname(feat_path), self.camera_feature_filename
+                    )
                     rgb_dir = os.path.join(entire_task_dir, self.rgb_subdir)
                     meta_path = os.path.join(entire_task_dir, self.meta_filename)
-                    if not (os.path.isfile(data_path) and os.path.isfile(feat_path)
-                            and os.path.isfile(meta_path)):
+                    if not os.path.isfile(data_path):
+                        self.input_stats['missing_data'] += 1
+                        continue
+                    if not os.path.isfile(meta_path):
+                        self.input_stats['missing_meta'] += 1
+                        continue
+                    if not os.path.isdir(rgb_dir):
+                        self.input_stats['missing_rgb'] += 1
+                        continue
+                    missing_cache_files = [
+                        path for path in (feat_path, cam_feat_path)
+                        if not os.path.isfile(path)
+                    ]
+                    if missing_cache_files:
+                        self.input_stats['missing_feature_episode'] += 1
+                        self.input_stats['missing_feature_file'] += len(missing_cache_files)
+                        missing_feature_episodes.append((entire_task_dir, missing_cache_files))
                         continue
                     # parse the generator meta -> per-goal samples (covis multi-positive label).
                     goal_samples = self._parse_meta(meta_path, rgb_dir, entire_task_dir)
                     if not goal_samples:
+                        continue
+                    frame_convention = goal_samples[0].get('frame_convention', '')
+                    if (self.require_generated_pose_convention
+                            and not frame_convention.startswith(GENERATED_ZUP_FRAME_CONVENTION)):
+                        self.input_stats['invalid_pose_convention'] += 1
+                        invalid_pose_conventions.append((entire_task_dir, frame_convention))
+                        continue
+                    is_validation = scene_is_validation(str(scene_dir))
+                    if ((self.data_split == 'train' and is_validation)
+                            or (self.data_split == 'val' and not is_validation)):
+                        self.input_stats['excluded_by_split'] += 1
                         continue
                     ti = len(self.trajectory_dirs)
                     self.trajectory_dirs.append(entire_task_dir)
                     self.trajectory_data_dir.append(data_path)
                     self.trajectory_afford_path.append(afford_path)
                     self.trajectory_feature_path.append(feat_path)
+                    self.trajectory_camera_feature_path.append(cam_feat_path)
                     self.trajectory_rgb_dir.append(rgb_dir)
+                    with open(meta_path, 'rb') as meta_file:
+                        meta_digest = hashlib.sha256(meta_file.read()).hexdigest()
+                    data_stat = os.stat(data_path)
+                    feature_stat = os.stat(feat_path)
+                    camera_stat = os.stat(cam_feat_path)
+                    dataset_manifest_rows.append('\t'.join((
+                        os.path.relpath(entire_task_dir, root_dirs),
+                        str(data_stat.st_size), str(data_stat.st_mtime_ns),
+                        str(feature_stat.st_size), str(feature_stat.st_mtime_ns),
+                        str(camera_stat.st_size), str(camera_stat.st_mtime_ns),
+                        meta_digest,
+                    )))
                     for s in goal_samples:
                         s['traj_idx'] = ti
+                        s['sample_identity'] = (
+                            f"{os.path.relpath(entire_task_dir, root_dirs)}:"
+                            f"goal={s.get('goal_j', -1)}"
+                        )
                         self.samples.append(s)
+
+        if missing_feature_episodes and self.strict_feature_coverage:
+            examples = []
+            for traj_dir, missing_paths in missing_feature_episodes[:5]:
+                names = ', '.join(os.path.basename(path) for path in missing_paths)
+                examples.append(f"{traj_dir} [{names}]")
+            raise RuntimeError(
+                f"Incomplete MemNav feature coverage: {len(missing_feature_episodes)} "
+                f"source-ready episodes are missing cache files. Examples: "
+                f"{'; '.join(examples)}. Finish precomputation before training, or set "
+                "strict_feature_coverage=False only for an intentional partial-data run."
+            )
+        if invalid_pose_conventions:
+            examples = '; '.join(
+                f"{path} [{convention or '<missing>'}]"
+                for path, convention in invalid_pose_conventions[:5]
+            )
+            raise RuntimeError(
+                f"Invalid generated pose convention in {len(invalid_pose_conventions)} "
+                f"episodes; expected prefix {GENERATED_ZUP_FRAME_CONVENTION!r}. "
+                f"Examples: {examples}"
+            )
 
         self.repeat = max(1, int(repeat))
         n_traj = len(self.trajectory_dirs)
@@ -246,13 +358,49 @@ class MemNav_Dataset(NavDP_Base_Datset):
         n_goalA = n_samp - n_covis
         print(f"[MemNav_Dataset] {n_samp} goal-samples across {n_traj} episodes under "
               f"{root_dirs} (covis B/C={n_covis}, goalA={n_goalA}; "
+              f"split={self.data_split}, sampling={self.sampling_mode}, "
               f"revisit/novel dynamic per-k, exclude_recent={self.exclude_recent}, repeat={self.repeat})")
+        if self.input_stats:
+            print(f"[MemNav_Dataset] skipped episode inputs: {dict(self.input_stats)}")
         if n_samp == 0:
             raise RuntimeError(
                 f"No goal-samples found under {root_dirs}. Need '{self.feature_filename}' "
                 f"caches AND '{self.meta_filename}' with per-goal 'covis_curve'. "
                 "Did you run precompute_lingbot_features.py on generate_twoleg.py output?"
             )
+        # Fingerprint both the selected files and every loader option that changes
+        # sample identities or labels.  This keeps resume protection meaningful even
+        # when the underlying files stay the same but, for example, exclude_recent or
+        # the scene split changes.
+        fingerprint_config = {
+            'data_split': self.data_split,
+            'validation_fraction': self.validation_fraction,
+            'split_seed': self.split_seed,
+            'sampling_mode': self.sampling_mode,
+            'sampling_seed': self.sampling_seed,
+            'predict_size': self.predict_size,
+            'num_scale': self.num_scale,
+            'window_size': self.window_size,
+            'anchor_margin_default': self.anchor_margin_default,
+            'exclude_recent': self.exclude_recent,
+            'goal_slack': self.goal_slack,
+            'add_goalA': self.add_goalA,
+            'pred_digit': self.pred_digit,
+            'random_digit': self.random_digit,
+            'covis_pos_hi': self.covis_pos_hi,
+            'covis_pos_lo': self.covis_pos_lo,
+            'feature_filename': self.feature_filename,
+            'camera_feature_filename': self.camera_feature_filename,
+        }
+        fingerprint_payload = (
+            json.dumps(fingerprint_config, sort_keys=True, separators=(',', ':'))
+            + '\n'
+            + '\n'.join(sorted(dataset_manifest_rows))
+        )
+        self.dataset_fingerprint = hashlib.sha256(
+            fingerprint_payload.encode('utf-8')
+        ).hexdigest()
+        print(f"[MemNav_Dataset] dataset fingerprint: {self.dataset_fingerprint}")
 
     # ------------------------------------------------------------------ #
     # meta -> per-goal multi-positive retrieval labels
@@ -261,16 +409,17 @@ class MemNav_Dataset(NavDP_Base_Datset):
         """Read gen_meta.json and return a list of goal-sample dicts.  The current
         step ``k`` is NOT stored here — it is SAMPLED per ``__getitem__`` inside the
         goal's own leg ``[k_lo .. k_hi]`` (see there).  Each dict carries the goal
-        image, the action target ``goal_step``, the ``k`` range, and the *static*
-        part of the retrieval label:
+        image, the action target ``goal_step``, the ``k`` range, and the raw
+        information required to build the retrieval label dynamically:
 
-          * covis goals (B, C, ...): the pre-approach pos/neg boolean masks (length
-            ``leg_start``), thresholded from ``covis_curve``; ``null_pos`` is static.
-          * goal A (no covis, ``has_covis=False``): only the frame-offset params; its
-            pos/neg mask and ``null_pos`` are built per-sample from ``k``.
+          * covis goals (B, C, ...): the raw ``covis_curve`` and thresholds;
+            candidate/positive/negative masks are built for the sampled ``k``.
+          * goal A (no covis, ``has_covis=False``): only the frame-offset params;
+            it is always novel under the unified exclusion rule.
         """
         try:
-            meta = json.load(open(meta_path))
+            with open(meta_path, encoding='utf-8') as f:
+                meta = json.load(f)
         except Exception:
             return []
         goals = meta.get('goals') or []
@@ -337,6 +486,21 @@ class MemNav_Dataset(NavDP_Base_Datset):
     def __len__(self):
         return len(self.samples) * self.repeat
 
+    def _sample_k_and_digit(self, sample, k_lo, k_hi):
+        """Choose temporal position; fixed mode is host-path-independent."""
+        if self.sampling_mode == 'fixed_leg':
+            identity = f"{self.sampling_seed}:{sample['sample_identity']}"
+            sample_seed = int.from_bytes(
+                hashlib.sha256(identity.encode('utf-8')).digest()[:8], 'big'
+            )
+            rng = np.random.default_rng(sample_seed)
+            k = int(rng.integers(k_lo, k_hi + 1))
+            pred_digit = int(rng.integers(2, 8)) if self.random_digit else self.pred_digit
+        else:
+            k = int(np.random.randint(k_lo, k_hi + 1))
+            pred_digit = np.random.randint(2, 8) if self.random_digit else self.pred_digit
+        return k, pred_digit
+
     # ------------------------------------------------------------------ #
     # Light feature read (CLS only — np.load is lazy, scale_k/v untouched)
     # ------------------------------------------------------------------ #
@@ -373,8 +537,18 @@ class MemNav_Dataset(NavDP_Base_Datset):
         pred_xyt = target_xyt[action_indexes]                       # [predict_size+1, 3]
         # aux GT = the TRUE goal (full-path endpoint), not pred_xyt[-1] which is the
         # action-horizon-truncated waypoint (~96 steps) for long revisit segments.
-        goal_rel_pose = target_xyt[-1].astype(np.float32).copy()    # goal pose rel to current
-        pred_actions = (pred_xyt[1:] - pred_xyt[:-1]) * 4.0         # [predict_size, 3] deltas
+        goal_rel_pose = target_xyt[-1].astype(np.float32).copy()
+        # xyz_to_xyt stores the position at the *start* of each segment, so its
+        # final row is the penultimate frame.  Use the actual endpoint position
+        # while retaining the final path-tangent heading from xyz_to_xyt.
+        goal_rel_pose[:2] = target_local_points[-1, :2]
+        goal_rel_pose[2] = wrap_radians(goal_rel_pose[2])
+        pred_actions = pred_xyt[1:] - pred_xyt[:-1]                  # [predict_size, 3] deltas
+        # Heading is circular. Direct subtraction creates a fake +/-2pi jump
+        # whenever adjacent headings straddle atan2's branch cut; after NavDP's
+        # x4 scaling that becomes an outlier near 8pi.
+        pred_actions[:, 2] = wrap_radians(pred_actions[:, 2])
+        pred_actions *= 4.0
         return pred_actions, goal_rel_pose
 
     # ------------------------------------------------------------------ #
@@ -412,7 +586,8 @@ class MemNav_Dataset(NavDP_Base_Datset):
         return pos, neg, cand, null_pos
 
     def __getitem__(self, index):
-        s = self.samples[index % len(self.samples)] # fixed goal-sample dict
+        sample_index = index % len(self.samples)
+        s = self.samples[sample_index] # fixed goal-sample dict
         ti = s['traj_idx']            # trajectory index
         goal_step = s['goal_step']    # fixed last frame of this leg
 
@@ -427,14 +602,40 @@ class MemNav_Dataset(NavDP_Base_Datset):
         )
 
         dino_cls = self._load_dino_cls(ti)                 # [T_f, 1024]
+        if self.strict_feature_coverage and ti not in self._validated_length_indices:
+            with np.load(self.trajectory_camera_feature_path[ti]) as camera_cache:
+                if 'cam_pose_enc' not in camera_cache:
+                    raise RuntimeError(
+                        f"Camera cache lacks cam_pose_enc: "
+                        f"{self.trajectory_camera_feature_path[ti]}"
+                    )
+                camera_pose_length = int(camera_cache['cam_pose_enc'].shape[0])
+            lengths = {
+                'parquet': int(traj_len_parquet),
+                'dino_cls': int(dino_cls.shape[0]),
+                'cam_pose_enc': camera_pose_length,
+            }
+            if len(set(lengths.values())) != 1:
+                raise RuntimeError(
+                    f"MemNav cache/frame length mismatch for {self.trajectory_dirs[ti]}: "
+                    f"{lengths}. Regenerate both caches before training."
+                )
+            max_goal_step = max(
+                int(sample['goal_step']) for sample in self.samples
+                if int(sample['traj_idx']) == ti
+            )
+            if max_goal_step >= int(traj_len_parquet):
+                raise RuntimeError(
+                    f"Goal step {max_goal_step} exceeds trajectory length "
+                    f"{traj_len_parquet} for {self.trajectory_dirs[ti]}"
+                )
+            self._validated_length_indices.add(ti)
         T = int(min(traj_len_parquet, dino_cls.shape[0]))
         goal_step = min(goal_step, T - 1)
         # --- sample the current step k inside the goal's own leg [k_lo .. k_hi] ---
         k_hi = min(int(s['k_hi']), goal_step - 1, T - 2)   # keep >=1 forward frame + defensive
         k_lo = min(int(s['k_lo']), k_hi)
-        k = int(np.random.randint(k_lo, k_hi + 1))
-
-        pred_digit = np.random.randint(2, 8) if self.random_digit else self.pred_digit
+        k, pred_digit = self._sample_k_and_digit(s, k_lo, k_hi)
 
         # --- retrieval keys: CLS of every observed frame [0..k] ---
         mem_cls = dino_cls[: k + 1].copy()                 # [k+1, 1024]
@@ -483,6 +684,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
             #   - rgb_dir = path to ALL historical frames: load any retrieved
             #     match's image lazily as rgb_dir/<idx>.jpg
             'cache_path': self.trajectory_feature_path[ti],
+            'camera_cache_path': self.trajectory_camera_feature_path[ti],
             'rgb_dir': rgb_dir,
             'cur_step': int(k),
             'goal_step': int(goal_step),
@@ -528,6 +730,7 @@ def memnav_collate_fn(batch):
         'batch_window_images':   torch.stack([b['window_images'] for b in batch]),     # [B, W, 3, H, W]
         # pointers (lists, length B) — the policy loads cache + lazy match frames per sample
         'cache_paths':           [b['cache_path'] for b in batch],
+        'camera_cache_paths':    [b['camera_cache_path'] for b in batch],
         'rgb_dirs':              [b['rgb_dir'] for b in batch],
         'cur_steps':             [b['cur_step'] for b in batch],
         'goal_steps':            [b['goal_step'] for b in batch],

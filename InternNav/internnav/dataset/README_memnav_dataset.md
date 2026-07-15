@@ -24,6 +24,7 @@ Per trajectory directory (`.../<group>/<scene>/<traj>/`):
 | `data/chunk-000/path.ply` | path + obstacle points (kept for signature compat; no critic) |
 | `videos/chunk-000/observation.images.rgb/<i>.jpg` | raw frames (window recompute + lazy match reads) |
 | `videos/chunk-000/lingbot_cache.npz` | frozen LingBot KV cache + `dino_cls` retrieval keys |
+| `videos/chunk-000/lingbot_cam_cache.npz` | camera KV + continuous-stream `cam_pose_enc` |
 | `meta/gen_meta.json` | per-goal `covis_curve`, `switches`, thresholds |
 | `goal_{j+1}.jpg` | rendered goal view for covis goal `j` (a real target view, not a traj frame) |
 
@@ -78,6 +79,8 @@ window  frames [k-W+1 .. k]    recomputed live from raw RGB (in the policy)
 ```
 
 Goals whose leg is too short to satisfy `k_hi >= k_lo` are dropped in `_parse_meta`.
+For fixed validation, `sampling_mode=fixed_leg` hashes the relative episode/goal identity
+and always selects the same `k`, independent of checkout location or worker scheduling.
 
 ---
 
@@ -139,7 +142,8 @@ Reuses the NavDP action pipeline (`process_actions`) on the forward segment
   `predict_size=24`, `pred_digit=4` this reaches up to 96 frames ahead and **saturates
   at the goal** when the segment is shorter (arrive-and-stop → zero deltas). No `k ≤ T−24`
   constraint.
-- `pred_actions [24, 3]` = `(pred_xyt[1:] - pred_xyt[:-1]) * 4.0` (local x, y, θ deltas).
+- `pred_actions [24, 3]` = local x/y/θ deltas times 4. Heading differences are wrapped
+  to `[-π,π)` **before** scaling, eliminating fake `~8π` outliers at the atan2 branch cut.
 - `goal_rel_pose [3]` = the **true** full-path endpoint (not the horizon-truncated
   waypoint) — GT for the revisit aux-pose head.
 
@@ -160,7 +164,7 @@ Reuses the NavDP action pipeline (`process_actions`) on the forward segment
 | `goal_rel_pose` | `[3]` | aux-pose GT |
 | `goal_image` | `[3, H, W]` | LingBot-preprocessed real goal view |
 | `window_images` | `[W, 3, H, W]` | current local window `[k-W+1 .. k]` |
-| `cache_path`, `rgb_dir`, `cur_step`, `goal_step` | pointers | policy loads KV cache + lazy match frames GPU-side |
+| `cache_path`, `camera_cache_path`, `rgb_dir`, `cur_step`, `goal_step` | pointers | policy loads both caches + lazy match frames GPU-side |
 
 Images use LingBot's exact preprocessing (`load_and_preprocess_images`, square-pad to
 `image_size=518`) so they match what the GCT window-forward + dense DINO expect.
@@ -180,7 +184,8 @@ via the frozen context-free DINO trunk.
 
 Output keys are prefixed `batch_*` and consumed by `MemNavTrainer.compute_loss`:
 **decoupled** ranking InfoNCE (`pos` vs `pos∪neg`, revisit rows) + gate BCE
-(`sigmoid(a·max_cos+b)` vs `is_revisit`, all rows) + aux pose on revisit rows only.
+(`sigmoid(a·max_cos+b)` vs `is_revisit`, all rows) + a scale-invariant planar-direction
+auxiliary on revisit rows. Raw metric x/y error is logged as a diagnostic only.
 
 ---
 
@@ -198,7 +203,15 @@ Output keys are prefixed `batch_*` and consumed by `MemNavTrainer.compute_loss`:
 | `goal_slack` | 4 | min forward frames `k → goal_step` |
 | `add_goalA` | True | include the goal-A milestone samples |
 | `feature_root` | None | separate writable cache tree (read-only frame overlays) |
+| `strict_feature_coverage` | False | require both caches and matching parquet/DINO/camera lengths |
+| `data_split` / `validation_fraction` | all / 0.1 | scene-level train/val partition (no scene leakage) |
+| `sampling_mode` | random_leg | `fixed_leg` gives deterministic k for evaluation |
 | `scene_data_scale` / `trajectory_data_scale` | 1.0 | subsample scenes / trajectories |
+
+The dataset fingerprint includes the selected relative paths, file sizes, meta
+hashes, and every loader option that changes samples or labels. Checkpoint
+resume rejects a different fingerprint instead of silently continuing on a new
+population.
 
 Run `python -m internnav.dataset.memnav_dataset_lerobot --root_dirs <path> --n 20`
 for a standalone sanity check (revisit fraction, mask/mem alignment, collate shapes).

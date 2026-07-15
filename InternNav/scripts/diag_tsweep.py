@@ -30,10 +30,16 @@ def main():
     root = os.environ["MEMNAV_ROOT_DIR"]; feat = os.environ["MEMNAV_FEATURE_ROOT"]
     repo = os.environ["LINGBOT_REPO"]
     W = int(os.environ.get("MEMNAV_WINDOW", 32)); NS = int(os.environ.get("MEMNAV_NUM_SCALE", 8))
-    ds = MemNav_Dataset(root, predict_size=24, image_size=518, lingbot_repo=repo,
-                        feature_root=feat, window_size=W, num_scale=NS)
+    ds = MemNav_Dataset(
+        root, predict_size=24, image_size=518, lingbot_repo=repo,
+        feature_root=feat, window_size=W, num_scale=NS,
+        strict_feature_coverage=os.environ.get('MEMNAV_STRICT_FEATURE_COVERAGE', '0') == '1',
+        require_generated_pose_convention=(
+            os.environ.get('MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION', '0') == '1'
+        ),
+    )
 
-    # per-t, per-k tallies over covis-REVISIT goals (static null_pos False)
+    # per-t, per-k tallies over covis goals with at least one possible old positive
     # rev_goal := a covis goal that has >=1 pos in the FULL pre-approach region.
     surv = {t: [0, 0] for t in ts}           # [k-with-pos, k-total] pooled over revisit goals
     goal_frac = {t: [] for t in ts}          # per-goal fraction of k that keep a pos
@@ -44,14 +50,15 @@ def main():
         if not s["has_covis"]:
             continue
         n_covis += 1
-        if s["null_pos"]:                     # novel covis goal: no pos ever -> skip survival
+        am = int(s["amargin"]); leg = int(s["leg_start"])
+        curve = np.asarray(s['curve'][:leg], dtype=np.float32)
+        indices = np.arange(leg)
+        pos_idx = np.flatnonzero((indices >= am) & (curve >= float(s['pos_hi'])))
+        if pos_idx.size == 0:
             continue
         n_rev += 1
         if n_rev > args.max_goals:
             break
-        am = int(s["amargin"]); leg = int(s["leg_start"])
-        pos_pre = np.asarray(s["pos_pre"], dtype=bool)     # length leg, over [0..leg)
-        pos_idx = np.where(pos_pre)[0]                      # positive frame indices (< leg, >= am)
         klo, khi = int(s["k_lo"]), int(s["k_hi"])
         ks = np.arange(klo, khi + 1)
         if ks.size == 0:

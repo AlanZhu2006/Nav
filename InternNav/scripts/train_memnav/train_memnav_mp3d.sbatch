@@ -20,9 +20,9 @@
 #   apptainer exec --overlay pt1.sqf:ro <base.sif>
 # Inside the container the frames appear at /mp3d_revisit_v0/vln_n1/traj_data, which is
 # MEMNAV_ROOT_DIR; caches are read from MEMNAV_FEATURE_ROOT on host /scratch. The
-# dataset only enumerates trajectories that HAVE a cache (memnav_dataset_lerobot.py
-# skips uncached ones), so this is safe to run while shards 4-7 are still precomputing —
-# it trains on whatever is ready (currently ~1788 of 1944 trajectories).
+# Training is deliberately strict: it aborts if either cache is missing for any
+# source-ready episode. This prevents the dataset composition from changing silently
+# between restarts or while feature precomputation is still running.
 #
 # CONSISTENCY (critical): the memory partition geometry MUST match the precompute.
 # The caches were built with --kv_cache_sliding_window 32 and --max_frame_num 2048, so:
@@ -35,10 +35,12 @@
 # These three flow config(memnav.py) -> dataset + LingBotStream via env vars.
 #
 # Overridable env vars (defaults shown):
-#   NAME=memnav_mp3d
+#   NAME=memnav_correctness
 #   BATCH_SIZE=4
 #   EPOCHS=1
 #   NUM_WORKERS=4
+#   RESUME_FROM_CHECKPOINT=auto
+#   MEMNAV_SAVE_STEPS=25
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
 #
 # Submit:
@@ -51,40 +53,56 @@ mkdir -p /scratch/lg154/Research/Nav/InternNav/logs/train_memnav
 
 IMG=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
-REPO_ROOT=/scratch/lg154/Research/Nav/InternNav
+REPO_ROOT=${REPO_ROOT:-/scratch/lg154/Research/Nav/InternNav}
 
 # in-container overlay path (frames) + host feature tree (caches)
 export MEMNAV_ROOT_DIR=/mp3d_revisit_v0/vln_n1/traj_data
 export MEMNAV_FEATURE_ROOT=/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data
 export LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
 export LINGBOT_WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
+export MEMNAV_DINO_WEIGHTS=${MEMNAV_DINO_WEIGHTS:-${REPO_ROOT}/checkpoints/depth_anything_v2_vits.pth}
 
 # memory-partition geometry — MUST match the precompute
 export MEMNAV_WINDOW=32
 export MEMNAV_NUM_SCALE=8
 export MEMNAV_MAX_FRAME_NUM=2048
+export MEMNAV_STRICT_FEATURE_COVERAGE=1
+export MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION=1
+export MEMNAV_DATA_SPLIT=${MEMNAV_DATA_SPLIT:-train}
+export MEMNAV_VALIDATION_FRACTION=${MEMNAV_VALIDATION_FRACTION:-0.1}
+export MEMNAV_SPLIT_SEED=${MEMNAV_SPLIT_SEED:-0}
+export MEMNAV_SAMPLING_MODE=${MEMNAV_SAMPLING_MODE:-random_leg}
 
 # training knobs
-export NAME=${NAME:-memnav_mp3d}
+export NAME=${NAME:-memnav_correctness}
 export BATCH_SIZE=${BATCH_SIZE:-4}
 export EPOCHS=${EPOCHS:-1}
 export NUM_WORKERS=${NUM_WORKERS:-4}
+export RESUME_FROM_CHECKPOINT=${RESUME_FROM_CHECKPOINT:-auto}
+export MEMNAV_SAVE_STEPS=${MEMNAV_SAVE_STEPS:-25}
+export MEMNAV_LOGGING_STEPS=${MEMNAV_LOGGING_STEPS:-10}
+export MEMNAV_EVAL_SAMPLES=${MEMNAV_EVAL_SAMPLES:-16}
+export MEMNAV_EVAL_STEPS=${MEMNAV_EVAL_STEPS:-25}
+export MEMNAV_EVAL_BATCH_SIZE=${MEMNAV_EVAL_BATCH_SIZE:-4}
 export MEMNAV_REPORT_TO=${MEMNAV_REPORT_TO:-wandb}
 export WANDB_PROJECT=${WANDB_PROJECT:-memnav}
 export WANDB_NAME=${WANDB_NAME:-${NAME}}
+export WANDB_RUN_ID=${WANDB_RUN_ID:-${NAME}}
+export WANDB_RESUME=${WANDB_RESUME:-allow}
 
 echo "host: $(hostname); start: $(date)"
 nvidia-smi -L || true
 
 apptainer exec --nv \
     --overlay "${IMG}:ro" \
-    -B /scratch/lg154 \
+    -B /scratch \
     "${BASE_SIF}" \
     bash -c '
         set -euo pipefail
         ls "${MEMNAV_ROOT_DIR}" >/dev/null || { echo "ABORT: overlay missing ${MEMNAV_ROOT_DIR}"; exit 1; }
         [[ -d "${MEMNAV_FEATURE_ROOT}" ]] || { echo "ABORT: feature tree missing ${MEMNAV_FEATURE_ROOT}"; exit 1; }
         [[ -f "${LINGBOT_WEIGHTS}" ]]     || { echo "ABORT: weights missing ${LINGBOT_WEIGHTS}"; exit 1; }
+        [[ -f "${MEMNAV_DINO_WEIGHTS}" ]] || { echo "ABORT: DINO weights missing ${MEMNAV_DINO_WEIGHTS}"; exit 1; }
 
         source /scratch/lg154/miniconda3/etc/profile.d/conda.sh
         conda activate /scratch/lg154/conda-envs/memnav
@@ -119,10 +137,12 @@ apptainer exec --nv \
         echo "===== TRAIN ENV CHECK ====="
         which python; python -V
         python -c "import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available())"
-        echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} wk=${NUM_WORKERS}"
+        echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} wk=${NUM_WORKERS} resume=${RESUME_FROM_CHECKPOINT}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"
+        echo "strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE} require_pose_marker=${MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION}"
+        echo "dino_weights=${MEMNAV_DINO_WEIGHTS}"
 
         exec python scripts/train/train.py \
             --name "${NAME}" \
@@ -130,7 +150,8 @@ apptainer exec --nv \
             --batch-size "${BATCH_SIZE}" \
             --num-workers "${NUM_WORKERS}" \
             --epochs "${EPOCHS}" \
-            --root-dir "${MEMNAV_ROOT_DIR}"
+            --root-dir "${MEMNAV_ROOT_DIR}" \
+            --resume-from-checkpoint "${RESUME_FROM_CHECKPOINT}"
     '
 
 echo "=== done: $(date) ==="

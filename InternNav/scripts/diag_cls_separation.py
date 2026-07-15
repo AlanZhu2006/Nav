@@ -12,15 +12,12 @@ separation is at chance, the collapse we saw in training (`seen_match=0.00`) is 
 representation problem, not an optimization one, and no anti-collapse trick fixes
 it — retrieval needs dense features or a trainable encoder, not frozen CLS.
 
-Groups measured:
-  covis_revisit  — B/C goals (RENDERED goal image) that keep a covis positive.
-                   The domain-gap case: does a render match its real frames?
-  goalA_revisit  — goal A, whose goal image IS a trajectory frame (no render
-                   gap). Control: separation SHOULD be easy here; if it isn't,
-                   the failure is the head/null-collapse, not the domain gap.
-  covis_novel    — novel goals (no positive). We report their distractor max-cos:
-                   it should sit BELOW the revisit positives, else `null` is
-                   confusable with a real match.
+Groups measured under the loader's current dynamic-k rule:
+  covis_revisit  — rendered B/C goals whose sampled eligible set contains a
+                   co-visible positive.
+  covis_novel    — rendered B/C goals with no eligible positive at the sampled k.
+  goalA_novel    — first goals, which are always novel because their recent
+                   approach is excluded from the revisit candidate set.
 
 Per revisit sample the key scalars:
   AUC       — P(cos[positive] > cos[negative]) over all pos×neg pairs. 0.5=chance.
@@ -67,35 +64,32 @@ def main():
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     rng = np.random.default_rng(args.seed)
 
-    ds = MemNav_Dataset(root, predict_size=24, image_size=518, lingbot_repo=repo,
-                        feature_root=feat, window_size=W, num_scale=NS)
+    strict_features = os.environ.get("MEMNAV_STRICT_FEATURE_COVERAGE", "0") == "1"
+    require_convention = os.environ.get("MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION", "0") == "1"
+    ds = MemNav_Dataset(
+        root, predict_size=24, image_size=518, lingbot_repo=repo,
+        feature_root=feat, window_size=W, num_scale=NS,
+        strict_feature_coverage=strict_features,
+        require_generated_pose_convention=require_convention,
+    )
 
-    # ---- bucket samples: (group, traj_idx, goal_path, mem_end, pos_idx, neg_idx) ----
-    buckets = {"covis_revisit": [], "goalA_revisit": [], "covis_novel": []}
-    for si, s in enumerate(ds.samples):
-        if s["has_covis"]:
-            leg = int(s["leg_start"])
-            pos = np.where(s["pos_pre"][:leg])[0]
-            neg = np.where(s["neg_pre"][:leg])[0]
-            grp = "covis_novel" if s["null_pos"] else "covis_revisit"
-            mem_end = leg
-        else:
-            k = min(int(s["k_hi"]), int(s["T_A"]) - 1)
-            k = max(k, int(s["k_lo"]))
-            pmask, nmask, nullp = ds._build_label(s, k)
-            if nullp:                                   # goalA_novel: skip (no positive)
-                continue
-            pos = np.where(pmask)[0]
-            neg = np.where(nmask)[0]
-            grp = "goalA_revisit"
-            mem_end = k + 1
-        # revisit groups need >=1 pos AND >=1 neg to be separable; novel needs frames
-        if grp == "covis_novel":
+    # ---- bucket one deterministic k draw per sample ----
+    # tuple = (traj_idx, goal_path, mem_end, pos_idx, neg_idx)
+    buckets = {"covis_revisit": [], "covis_novel": [], "goalA_novel": []}
+    for s in ds.samples:
+        k = int(rng.integers(int(s["k_lo"]), int(s["k_hi"]) + 1))
+        pmask, nmask, _cand, nullp = ds._build_label(s, k)
+        pos = np.where(pmask)[0]
+        neg = np.where(nmask)[0]
+        if nullp:
+            grp = "covis_novel" if s["has_covis"] else "goalA_novel"
             if neg.size == 0:
                 continue
-        elif pos.size == 0 or neg.size == 0:
-            continue
-        buckets[grp].append((s["traj_idx"], s["goal_img_path"], int(mem_end), pos, neg))
+        else:
+            grp = "covis_revisit"
+            if pos.size == 0 or neg.size == 0:
+                continue
+        buckets[grp].append((s["traj_idx"], s["goal_img_path"], k + 1, pos, neg))
 
     for g in buckets:
         arr = buckets[g]
@@ -107,6 +101,7 @@ def main():
     net = MemNavNet(
         token_dim=384, heads=8, predict_size=24, temporal_depth=8, num_diffusion_iters=10,
         lingbot_kwargs=dict(lingbot_repo=repo, weights=wts, window=W, num_scale=NS, max_frame_num=MFN),
+        novel_backbone_weights=os.environ['MEMNAV_DINO_WEIGHTS'],
         device=device,
     ).to(device).eval()
 
@@ -140,7 +135,7 @@ def main():
             mem = mem / (np.linalg.norm(mem, axis=1, keepdims=True) + 1e-8)
             cos = mem @ gc                                             # [mem_end]
             ps, ns = cos[pos], cos[neg]
-            if grp == "covis_novel":
+            if grp in ("covis_novel", "goalA_novel"):
                 # no positives: how high can a DISTRACTOR score? (should be low)
                 rows.append(dict(distractor_max=float(cos[neg].max()),
                                  distractor_mean=float(cos[neg].mean())))
@@ -161,7 +156,7 @@ def main():
         return v
 
     print("\n================ CLS-SEPARATION SUMMARY ================")
-    for grp in ("covis_revisit", "goalA_revisit"):
+    for grp in ("covis_revisit",):
         rows = results[grp]
         if not rows:
             print(f"\n[{grp}] (empty)")
@@ -175,17 +170,18 @@ def main():
         print(f"  margin   mean={mg.mean():+.3f}  median={np.median(mg):+.3f}  frac>0={np.mean(mg>0):.2f}")
         print(f"  cos      pos_mean={pm.mean():.3f}  neg_mean={nm.mean():.3f}  gap={pm.mean()-nm.mean():+.3f}")
 
-    nov = results.get("covis_novel", [])
-    if nov:
+    for novel_group in ("covis_novel", "goalA_novel"):
+        nov = results.get(novel_group, [])
+        if not nov:
+            continue
         dmax = col(nov, "distractor_max")
-        print(f"\n[covis_novel] N={len(nov)}  distractor_max: mean={dmax.mean():.3f} "
+        print(f"\n[{novel_group}] N={len(nov)}  distractor_max: mean={dmax.mean():.3f} "
               f"median={np.median(dmax):.3f} p90={np.percentile(dmax,90):.3f}")
         rev = results.get("covis_revisit", [])
         if rev:
             posmax = col(rev, "pos_max")
             print(f"   compare covis_revisit pos_max mean={posmax.mean():.3f}  "
-                  f"→ null is {'SEPARABLE' if posmax.mean() > dmax.mean() + 0.03 else 'CONFUSABLE'} "
-                  f"(revisit pos vs novel distractor)")
+                  f"→ {'SEPARABLE' if posmax.mean() > dmax.mean() + 0.03 else 'CONFUSABLE'}")
 
     print("\nRead: AUC≈0.5 / retr@1≈chance / gap≈0  →  frozen CLS carries NO match signal "
           "(collapse is representational; drop CLS-only retrieval). AUC≳0.8 / retr@1≳0.7 "

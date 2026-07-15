@@ -7,6 +7,7 @@ from internnav.dataset.memnav_pose_conventions import (
     HABITAT_TO_DATA_ROTATION,
     generated_camera_extrinsic,
     resolve_memnav_base_extrinsic,
+    wrap_radians,
 )
 
 
@@ -94,6 +95,14 @@ class MemNavPoseConventionTest(unittest.TestCase):
             np.linalg.norm(fixed_local[:2]),
             np.linalg.norm(delta_habitat[[0, 2]]),
         )
+
+    def test_angle_wrap_removes_atan2_branch_cut_jump(self):
+        angles = np.array([
+            (-np.pi + 0.01) - (np.pi - 0.01),
+            (np.pi - 0.02) - (-np.pi + 0.02),
+            0.25,
+        ])
+        np.testing.assert_allclose(wrap_radians(angles), [0.02, -0.04, 0.25])
 
 
 if __name__ == "__main__":

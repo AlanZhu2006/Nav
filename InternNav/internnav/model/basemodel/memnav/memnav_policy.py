@@ -143,46 +143,33 @@ class RevisitMerge(nn.Module):
         heading is the natural approach heading"; goal_yaw = anchor's OWN heading +
         random jitter) — so there is no θ signal in (cur_pose, goal_pose) to extract even
         in principle.
-        aux_pose_head is a FROZEN (non-trainable) Linear(3,2): cur_pose/goal_pose come
-        from the frozen camera head under no_grad, so t_rel carries no gradient anyway —
-        a learned correction here can only ever converge to the same fixed calibration a
-        precomputed one would, since t_rel alone carries no per-sample signal a global
-        affine map could improve on (LingBot's scale ambiguity/axis convention is a
-        global property, not something (cur_pose,goal_pose) alone lets you condition
-        per-sample). Kept as a logged diagnostic (not part of the optimized loss — see
-        MemNavTrainer), not deleted, so that IF the frozen branch is later LoRA-tuned
-        (making cur_pose/goal_pose differentiable), unfreezing this one module turns it
-        back into a real trainable calibration head with zero other code changes.
-        Weights are set to the empirically-fit R_conv + scale (see
-        scripts/diag_lingbot_pose_accuracy.py's end-to-end validation: real t_rel vs
-        real GT goal position, ~3° direction error, ~0.52-0.56 magnitude ratio across
-        two independent episodes — consistent with the ~0.5x scale-ambiguity finding in
-        the lingbot-pose-calibration investigation).
+        aux_pose_head remains trainable even though cur_pose/goal_pose are frozen: a
+        Linear layer receives gradients for its own weight and bias from constant input
+        features. It learns a global affine calibration and therefore cannot repair
+        sequence-dependent monocular scale or accumulated VO drift. Its residual is a
+        diagnostic of that ceiling; its output is not fed into the diffusion decoder.
+        The initial signed-axis mapping is derived from the corrected generated-data
+        convention. Metric scale is deliberately left for training instead of baking in
+        the former two-episode fit, which was measured against legacy labels that dropped
+        one horizontal coordinate.
     """
 
-    # Empirically-fit local-frame axis convention (LingBot pose9 -> dataset's local
-    # (x,y,z)): swap x/y with sign flips, negate z. Validated two ways — (1) fitting a
-    # rotation between consecutive-frame LOCAL displacement directions (LingBot vs GT),
-    # clean (~3-5 deg residual) whenever LingBot's own pose estimate is accurate, and
-    # degrading in lockstep with measured LingBot VO drift (not a different convention
-    # per trajectory); (2) applying it to REAL t_rel from REAL (cur_pose, goal_pose)
-    # pairs and comparing directly to real GT goal_rel_pose (x,y): ~3 deg direction
-    # error. Scale: mean(0.523, 0.559) magnitude ratio across those two episodes -> the
-    # correction is 1/0.541.
-    _R_CONV = ((0.0, -1.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, -1.0))
-    _SCALE = 1.0 / 0.541
+    # LingBot local -> corrected NavDP planar axes. Legacy generated labels used
+    # [up, -right, back]; the fixed camera mount produces [-back, -right, up].
+    # The previously validated LingBot->legacy mapping was
+    # [old_x, old_y, old_z] = [-l_y, -l_x, -l_z], hence corrected
+    # [x, y] = [-old_z, old_y] = [l_z, -l_x].
+    _AUX_XY_INIT = ((0.0, 0.0, 1.0), (-1.0, 0.0, 0.0))
 
     def __init__(self, dim=384, n_out=4):
         super().__init__()
         self.revisit_head = nn.Linear(12, n_out * dim)       # [t_rel(3), R_rel.flatten(9)] -> n_out tokens
         self.n_out, self.dim = n_out, dim
-        # frozen, pre-calibrated (x,y) readout — see class docstring
+        # Trainable global affine calibration, initialized with the known axis map.
         self.aux_pose_head = nn.Linear(3, 2)
-        R_conv = torch.tensor(self._R_CONV)
         with torch.no_grad():
-            self.aux_pose_head.weight.copy_(self._SCALE * R_conv[:2])
+            self.aux_pose_head.weight.copy_(torch.tensor(self._AUX_XY_INIT))
             self.aux_pose_head.bias.zero_()
-        self.aux_pose_head.requires_grad_(False)
 
     @staticmethod
     def _split_pose9(pose9):
@@ -216,7 +203,7 @@ class RevisitMerge(nn.Module):
     def forward(self, cur_pose, goal_pose):
         """cur_pose, goal_pose: [B, 9] absolute camera poses (map frame)."""
         t_rel, R_rel = self._relative_pose(cur_pose, goal_pose)          # [B,3], [B,3,3]
-        aux_pose = self.aux_pose_head(t_rel)                             # [B,2]  (x,y) only — frozen
+        aux_pose = self.aux_pose_head(t_rel)                             # [B,2]  (x,y) only
         rel_feat = torch.cat([t_rel, R_rel.flatten(-2)], dim=-1)         # [B,12]
         revisit_readout = self.revisit_head(rel_feat).view(-1, self.n_out, self.dim)
         # R_rel returned too — not for any loss (no head/calibration needed for it, it's a

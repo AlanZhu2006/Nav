@@ -68,11 +68,9 @@ class MemNavTrainer(BaseTrainer):
         gate_loss = F.binary_cross_entropy_with_logits(gate_logit, is_rev, pos_weight=pos_weight)
 
         # --- aux pose (x,y only — θ dropped, see RevisitMerge docstring): MSE on REVISIT
-        # rows only (relocalization branch). aux_pose_head is FROZEN (pre-calibrated, not
-        # trainable — cur_pose/goal_pose come from the frozen camera head under no_grad,
-        # so this contributes zero gradient today); kept in the loss sum as a no-op so a
-        # future LoRA fine-tune of the frozen branch can unfreeze aux_pose_head and have
-        # this term start training with no other code changes.
+        # rows only. The frozen LingBot poses are constant features, but aux_pose_head's
+        # own weight and bias are trainable. This learns only a global affine calibration;
+        # it does not backpropagate into LingBot or directly supervise the diffusion path.
         gt_pose = inputs["batch_goal_rel_pose"][..., :2].to(dev)  # [B,2]
         revisit = is_rev                                         # 1 = goal is in memory
         per = (fwd["aux_pose"] - gt_pose).square().mean(-1)      # [B]

@@ -75,6 +75,7 @@ import os
 import numpy as np
 import torch
 
+from internnav.dataset.memnav_pose_conventions import resolve_memnav_base_extrinsic
 from internnav.dataset.navdp_dataset_lerobot import NavDP_Base_Datset
 
 # Habitat (Y-up) -> dataset "data" world frame (Z-up): data = MW @ habitat. Exact transform
@@ -278,6 +279,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
         pos_hi = float(meta.get('covis_pos_hi', self.covis_pos_hi))
         pos_lo = float(meta.get('covis_pos_lo', self.covis_pos_lo))
         amargin = int(meta.get('anchor_margin', self.anchor_margin_default))
+        frame_convention = meta.get('frame_convention', '')
         slack = self.goal_slack
         t = self.exclude_recent
         out = []
@@ -328,6 +330,8 @@ class MemNav_Dataset(NavDP_Base_Datset):
                 out.append(dict(has_covis=False, goal_j=-1, leg_start=0, goal_step=goal_step,
                                 k_lo=int(k_lo), k_hi=int(k_hi), goal_img_path=_rgb(a_frame),
                                 T_A=a_frame, amargin=amargin))
+        for sample in out:
+            sample['frame_convention'] = frame_convention
         return out
 
     def __len__(self):
@@ -418,6 +422,9 @@ class MemNav_Dataset(NavDP_Base_Datset):
             extrinsics,            # [T_pq, 4, 4] camera-to-world per frame
             traj_len_parquet,
         ) = self.process_data_parquet(ti)
+        base_extrinsic = resolve_memnav_base_extrinsic(
+            base_extrinsic, s.get('frame_convention')
+        )
 
         dino_cls = self._load_dino_cls(ti)                 # [T_f, 1024]
         T = int(min(traj_len_parquet, dino_cls.shape[0]))

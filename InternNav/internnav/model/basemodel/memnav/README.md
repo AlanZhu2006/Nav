@@ -128,64 +128,36 @@ numerical rough edges near 180° rotations that a plain matrix avoids.
   decoder, which has the depth/visual context needed to reason about
   obstacles, not `RevisitMerge`, which only ever sees two poses).
 
-### 2.4 `aux_pose_head` is frozen and pre-calibrated, not trained
+### 2.4 `aux_pose_head` is a trainable global calibration
 
-`cur_pose`/`goal_pose` come from the frozen camera head under `torch.no_grad()`,
-so `t_rel` carries no gradient regardless — a *learned* `Linear(3,2)` here
-could only ever converge to the same fixed affine calibration a
-precomputed one would, since `t_rel` alone carries no per-sample signal
-that would let a more expressive/adaptive function do better than one
-global correction. So `aux_pose_head` is initialized to an
-empirically-fit calibration and **frozen** (`requires_grad_(False)`,
-verified 0 trainable params, `weight.grad is None` after backward):
+`cur_pose`/`goal_pose` come from the frozen camera head under
+`torch.no_grad()`, but that does **not** prevent `Linear(3,2)` from learning:
+its input can be constant while its own weight and bias still receive
+gradients. The previous freeze made `w_aux * aux_loss` a constant offset in
+the reported total loss and did not change any parameter update.
+
+The head is now trainable and initialized only with the known signed-axis
+mapping:
 
 ```python
-aux_pose = scale * (R_conv @ t_rel)[:2]
-R_conv = [[0,-1,0],[-1,0,0],[0,0,-1]]     # local-frame axis convention
-scale  = 1 / 0.541                          # ≈ 1.848
+aux_pose = aux_pose_head(t_rel)
+aux_pose_head.weight = [[0, 0, 1], [-1, 0, 0]]
+aux_pose_head.bias = [0, 0]
 ```
 
-`R_conv` and `scale` were fit empirically (not hardcoded from
-documentation — a prior LingBot pose_enc docstring was already found wrong
-about cam-to-world vs. world-to-camera, so conventions are verified against
-real data here, not trusted from comments):
+The mapping follows from the generated-data camera-mount correction. Legacy
+labels represented `[up, -right, back]`; corrected NavDP coordinates are
+`[-back, -right, up]`. Combined with the validated LingBot-to-legacy mapping,
+the corrected planar coordinates are `[lingbot_z, -lingbot_x]`.
 
-1. **Local-frame axis convention** (`R_conv`): fit a rotation between
-   consecutive-frame local displacement *directions* (LingBot's own
-   estimate vs. GT), pooled over many frame pairs. Clean (~3–5° residual,
-   close to a signed permutation matrix) whenever LingBot's own pose
-   estimate is accurate; degrades in lockstep with independently-measured
-   LingBot VO drift on a hard trajectory (not a different convention per
-   episode — confirmed by refitting on that episode's early, pre-drift
-   frames only, which came back clean again).
-2. **End-to-end validation**: ran the *actual* `_relative_pose` formula on
-   *real* `(cur_pose, goal_pose)` pairs from real revisit goals, applied
-   `R_conv`, compared directly to real GT `goal_rel_pose (x,y)`:
-
-   | case | direction error | magnitude ratio (est/GT) |
-   |---|---|---|
-   | 2-leg goal B (`recall_gap=149`) | 3.1° | 0.523 |
-   | 3-leg goal C (`recall_gap=291`) | 2.9° | 0.559 |
-
-   `scale = 1 / mean(0.523, 0.559)`. The ~0.5× ratio matches the
-   independently-known LingBot scale-ambiguity finding (see the
-   `lingbot-pose-calibration` project memory).
-3. Caught and fixed one bug along the way: `gen_meta.json`'s `goals[i].pos`
-   is the goal's **floor** position, not its camera position (constant
-   0.5 m vertical offset, identical across episodes) — comparing against it
-   directly produced a spurious ~90° error. Fixed by using the trajectory's
-   own final-frame camera position instead (confirmed to land within ~1 cm
-   of the goal in `x,y`).
-
-**Why frozen, not deleted**: kept as a real `nn.Module` (not a raw
-function) specifically so that a future LoRA fine-tune of the frozen
-LingBot branch (making `cur_pose`/`goal_pose` differentiable) can flip
-`requires_grad_(True)` and have `aux_pose_head` resume being a real
-trainable calibration head, with the `w_aux * aux_loss` term in
-`MemNavTrainer.compute_loss` already wired into the total loss (currently
-a mathematical no-op — contributes exactly zero gradient today, verified —
-but the plumbing doesn't need to change later, only the freeze/unfreeze
-call).
+No fixed metric scale is baked in. The former `1 / 0.541` value came from two
+episodes evaluated against legacy labels that omitted one horizontal axis, so
+it is not a valid calibration target. Training can learn the best dataset-wide
+affine scale, but a single linear head still cannot remove LingBot's
+sequence-dependent monocular scale or accumulated VO drift. Also, the aux
+output is not consumed by the diffusion decoder, so this loss updates the aux
+head only; it is a calibration diagnostic rather than additional policy
+supervision.
 
 `MemNavTrainer.compute_loss`'s `gt_pose` is now sliced to
 `inputs["batch_goal_rel_pose"][..., :2]` to match.
@@ -196,9 +168,9 @@ call).
 
 | file | change |
 |---|---|
-| `internnav/model/basemodel/memnav/memnav_policy.py` | `_load_cache` loads `cam_pose_enc`; `cur_pose` reads it directly; `RevisitMerge` rewritten (analytic `_relative_pose`, `revisit_head`/`aux_pose_head` redesigned, `heads` param dropped); `MemNavNet.__init__` gains `goal_warm` |
+| `internnav/model/basemodel/memnav/memnav_policy.py` | `_load_cache` loads `cam_pose_enc`; `cur_pose` reads it directly; `RevisitMerge` uses analytic `_relative_pose` and a trainable corrected-axis aux calibration; `MemNavNet.__init__` gains `goal_warm` |
 | `internnav/model/basemodel/memnav/lingbot_stream.py` | new `goal_append_warm` method |
-| `internnav/trainer/memnav_trainer.py` | `gt_pose` sliced to `[..., :2]` |
+| `internnav/trainer/memnav_trainer.py` | `gt_pose` sliced to `[..., :2]`; aux loss trains only the calibration head |
 | `scripts/train/configs/memnav.py` | explicit `goal_warm=64` |
 | `scripts/diag_lingbot_pose_accuracy.py` | new diagnostic harness (GT vs. official-continuous-stream vs. ours; `warm_forward`/`warm_goal_pose`/`oracle_goal_pose`) used to find and validate all of the above |
 
@@ -210,10 +182,10 @@ call).
   measured vs. 0.64–0.65 m at window=32 on the same trajectories). Not yet
   changed — it's a precompute config/cost tradeoff (roughly doubles
   per-trajectory KV work), not a code fix, and out of scope for this round.
-- **`R_conv`/`scale` are fit from 2 episodes** (one per scene, one goal
-  each). Good enough to confirm the calibration is real and roughly right,
-  but refitting on a larger sample before trusting the exact numbers for a
-  real training run would tighten them.
+- **Global aux calibration has an irreducible residual** because LingBot's
+  monocular scale varies by sequence and long trajectories accumulate drift.
+  Report per-axis errors and distance-binned errors; do not interpret one
+  aggregate aux MSE as a direct policy-quality metric.
 - Frozen VO accuracy has a real, separate ceiling on long/turn-heavy
   trajectories (measured 2.5 m ATE on a 744-frame, 2-turn episode even for
   the trusted continuous-stream reference) — not something any of the

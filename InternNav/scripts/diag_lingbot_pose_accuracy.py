@@ -336,7 +336,7 @@ def main():
                     help="comma-separated group/scene/traj (relative to --root)")
     ap.add_argument("--window", type=int, default=32)
     ap.add_argument("--num_scale", type=int, default=8)
-    ap.add_argument("--max_frame_num", type=int, default=2048)
+    ap.add_argument("--max_frame_num", type=int, default=4096)
     ap.add_argument("--stride", type=int, default=8, help="k-sampling stride for the 'ours' path")
     ap.add_argument("--max_k", type=int, default=None, help="cap the last k sampled (debug/speed)")
     ap.add_argument("--warm", type=int, default=None,

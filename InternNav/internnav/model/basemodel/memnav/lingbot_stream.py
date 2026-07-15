@@ -52,7 +52,7 @@ class LingBotStream(nn.Module):
         num_scale=8,
         window=8,
         enable_3d_rope=True,
-        max_frame_num=1024,
+        max_frame_num=4096,
         camera_num_iterations=4,
         use_sdpa=True,
         device="cuda",

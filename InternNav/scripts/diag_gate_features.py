@@ -85,7 +85,7 @@ def main():
     root = os.environ["MEMNAV_ROOT_DIR"]; feat = os.environ["MEMNAV_FEATURE_ROOT"]
     repo = os.environ["LINGBOT_REPO"];    wts = os.environ["LINGBOT_WEIGHTS"]
     W = int(os.environ.get("MEMNAV_WINDOW", 32)); NS = int(os.environ.get("MEMNAV_NUM_SCALE", 8))
-    MFN = int(os.environ.get("MEMNAV_MAX_FRAME_NUM", 2048))
+    MFN = int(os.environ.get("MEMNAV_MAX_FRAME_NUM", 4096))
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     rng = np.random.default_rng(args.seed)
 

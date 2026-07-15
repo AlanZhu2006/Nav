@@ -108,7 +108,7 @@ def main():
 
     # ---- Part B: full net forward + exact trainer loss + backward ----
     from internnav.model.basemodel.memnav.memnav_policy import MemNavNet
-    wts = os.environ["LINGBOT_WEIGHTS"]; MFN = int(os.environ.get("MEMNAV_MAX_FRAME_NUM", 2048))
+    wts = os.environ["LINGBOT_WEIGHTS"]; MFN = int(os.environ.get("MEMNAV_MAX_FRAME_NUM", 4096))
     dino_weights = os.environ["MEMNAV_DINO_WEIGHTS"]
     dev = "cuda:0"
     # revisit/novel is resolved per-k INSIDE __getitem__ (random k), so we must DRAW items

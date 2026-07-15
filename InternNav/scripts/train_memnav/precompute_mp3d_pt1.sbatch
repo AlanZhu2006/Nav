@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=lingbot_precompute_pt1
-#SBATCH --output=/scratch/lg154/Research/Nav/InternNav/logs/mp3d_gen/precomp-%A_%a.out
-#SBATCH --error=/scratch/lg154/Research/Nav/InternNav/logs/mp3d_gen/precomp-%A_%a.err
+#SBATCH --output=logs/mp3d_gen/precomp-%A_%a.out
+#SBATCH --error=logs/mp3d_gen/precomp-%A_%a.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
@@ -35,37 +35,48 @@ set -euo pipefail
 export NUM_SHARDS="${NUM_SHARDS:-1}"
 export LIMIT="${LIMIT:-0}"
 export SHARD="${SLURM_ARRAY_TASK_ID:-0}"
+export MAX_FRAME_NUM="${MAX_FRAME_NUM:-4096}"
+export TRAJECTORY_LIST="${TRAJECTORY_LIST:-}"
 
-IMG=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
-BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
-export ROOT_DIRS=/mp3d_revisit_v0/vln_n1/traj_data                      # in-container overlay path
-export OUT_ROOT=/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data
-export REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
-export WEIGHTS=${REPO}/weights/lingbot-map-long.pt
+IMG=${IMG:-/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf}
+BASE_SIF=${BASE_SIF:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}
+export ROOT_DIRS=${ROOT_DIRS:-/mp3d_revisit_v0/vln_n1/traj_data}  # in-container overlay path
+export OUT_ROOT=${OUT_ROOT:-/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data}
+export LINGBOT_REPO=${LINGBOT_REPO:-/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map}
+export WEIGHTS=${WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
+export REPO_ROOT=${REPO_ROOT:-/scratch/lg154/Research/Nav/InternNav}
+export CONDA_SH=${CONDA_SH:-/scratch/lg154/miniconda3/etc/profile.d/conda.sh}
+export CONDA_ENV=${CONDA_ENV:-/scratch/lg154/conda-envs/memnav}
 
 echo "host: $(hostname); shard ${SHARD}/${NUM_SHARDS}; limit=${LIMIT}; start: $(date)"
 mkdir -p "${OUT_ROOT}"
 
 apptainer exec --nv \
     --overlay "${IMG}:ro" \
-    -B /scratch/lg154 \
+    -B /scratch \
     "${BASE_SIF}" \
     bash -c '
         set -euo pipefail
         ls "${ROOT_DIRS}" >/dev/null || { echo "ABORT: overlay missing ${ROOT_DIRS}"; exit 1; }
-        source /scratch/lg154/miniconda3/etc/profile.d/conda.sh
-        conda activate /scratch/lg154/conda-envs/memnav
-        cd /scratch/lg154/Research/Nav/InternNav
+        source "${CONDA_SH}"
+        conda activate "${CONDA_ENV}"
+        cd "${REPO_ROOT}"
+        extra_args=()
+        if [[ -n "${TRAJECTORY_LIST}" ]]; then
+            [[ -f "${TRAJECTORY_LIST}" ]] || { echo "ABORT: trajectory list missing ${TRAJECTORY_LIST}"; exit 1; }
+            extra_args+=(--trajectory_list "${TRAJECTORY_LIST}")
+        fi
         python scripts/dataset_converters/precompute_lingbot_features.py \
             --root_dirs "${ROOT_DIRS}" \
             --out_root  "${OUT_ROOT}" \
-            --lingbot_repo "${REPO}" \
+            --lingbot_repo "${LINGBOT_REPO}" \
             --weights "${WEIGHTS}" \
             --skip_scale --use_sdpa \
             --kv_cache_sliding_window 32 \
-            --max_frame_num 2048 \
+            --max_frame_num "${MAX_FRAME_NUM}" \
             --num_shards "${NUM_SHARDS}" --shard "${SHARD}" \
-            --limit "${LIMIT}"
+            --limit "${LIMIT}" \
+            "${extra_args[@]}"
     '
 
 echo "=== shard ${SHARD} done: $(date) ==="

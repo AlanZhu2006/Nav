@@ -43,6 +43,7 @@ Run (in the lingbot-map / torch-2.8 env). Smoke-test on one trajectory first:
 import argparse
 import os
 import sys
+import traceback
 
 import numpy as np
 import torch
@@ -82,6 +83,74 @@ def find_trajectories(root_dirs):
                     continue
                 trajectories.append((entire_task_dir, rgb_dir, rgb_paths))
     return trajectories
+
+
+def select_trajectories(trajectories, root_dirs, trajectory_list=""):
+    """Select an explicit, ordered subset from a newline-delimited manifest.
+
+    Each non-empty, non-comment line is an episode path relative to ``root_dirs``.
+    A tab-delimited diagnostic suffix is allowed so the strict-coverage report can
+    be passed directly.  Unknown or duplicate episodes are rejected rather than
+    silently ignored.
+    """
+    if not trajectory_list:
+        return trajectories
+
+    by_relpath = {
+        os.path.relpath(item[0], root_dirs): item
+        for item in trajectories
+    }
+    requested = []
+    seen = set()
+    duplicates = set()
+    with open(trajectory_list, encoding="utf-8") as manifest:
+        for line_number, raw_line in enumerate(manifest, start=1):
+            episode = raw_line.split("\t", 1)[0].strip().rstrip("/")
+            if not episode or episode.startswith("#"):
+                continue
+            normalized = os.path.normpath(episode)
+            if os.path.isabs(normalized) or normalized == ".." or normalized.startswith("../"):
+                raise ValueError(
+                    f"{trajectory_list}:{line_number}: episode must be relative to "
+                    f"root_dirs, got {episode!r}"
+                )
+            if normalized in seen:
+                duplicates.add(normalized)
+            seen.add(normalized)
+            requested.append(normalized)
+
+    if not requested:
+        raise ValueError(f"No episode paths found in {trajectory_list}")
+    if duplicates:
+        raise ValueError(
+            f"Duplicate episode(s) in {trajectory_list}: {sorted(duplicates)[:5]}"
+        )
+    missing = [episode for episode in requested if episode not in by_relpath]
+    if missing:
+        raise ValueError(
+            f"{len(missing)} episode(s) from {trajectory_list} were not found under "
+            f"{root_dirs}: {missing[:5]}"
+        )
+    return [by_relpath[episode] for episode in requested]
+
+
+def validate_frame_capacity(trajectories, max_frame_num):
+    """Fail before GPU work if temporal RoPE cannot represent an episode."""
+    too_long = [
+        (traj_dir, len(rgb_paths))
+        for traj_dir, _rgb_dir, rgb_paths in trajectories
+        if len(rgb_paths) > max_frame_num
+    ]
+    if too_long:
+        examples = "; ".join(
+            f"{traj_dir} ({length} frames)" for traj_dir, length in too_long[:5]
+        )
+        raise ValueError(
+            f"max_frame_num={max_frame_num} is too small for {len(too_long)} "
+            f"trajectory/trajectories; temporal RoPE would be truncated. Examples: "
+            f"{examples}. Set --max_frame_num to at least "
+            f"{max(length for _traj_dir, length in too_long)}."
+        )
 
 
 def _atomic_savez(path, **arrays):
@@ -285,8 +354,8 @@ def main():
     ap.add_argument("--kv_cache_sliding_window", type=int, default=8)
     ap.add_argument("--enable_3d_rope", action="store_true", default=True,
                     help="Temporal 3D RoPE (LingBot's intended mode). Needed for goal time-index placement.")
-    ap.add_argument("--max_frame_num", type=int, default=1024,
-                    help="Max frames for 3D RoPE (>= longest trajectory; dataset max is 342).")
+    ap.add_argument("--max_frame_num", type=int, default=4096,
+                    help="Max frames for 3D RoPE; must cover the longest selected trajectory.")
     ap.add_argument("--camera_num_iterations", type=int, default=4)
     ap.add_argument("--use_sdpa", action="store_true", default=False,
                     help="Use SDPA attention (no FlashInfer dependency). Recommended.")
@@ -311,6 +380,10 @@ def main():
                     help="Recompute even if the output npz already exists.")
     ap.add_argument("--limit", type=int, default=0,
                     help="Process at most N trajectories (0 = all). For smoke tests.")
+    ap.add_argument("--trajectory_list", default="",
+                    help="Optional newline-delimited episode paths relative to root_dirs. "
+                         "Tab-delimited suffixes are ignored, so a strict-coverage report "
+                         "can be used directly.")
     ap.add_argument("--num_shards", type=int, default=1,
                     help="Divide the traj list into this many interleaved shards.")
     ap.add_argument("--shard", type=int, default=0,
@@ -320,6 +393,22 @@ def main():
 
     sys.path.insert(0, args.lingbot_repo)
     from lingbot_map.utils.load_fn import load_and_preprocess_images
+
+    all_trajectories = find_trajectories(args.root_dirs)
+    total = len(all_trajectories)
+    trajectories = select_trajectories(
+        all_trajectories, args.root_dirs, args.trajectory_list
+    )
+    selected = len(trajectories)
+    if args.num_shards > 1:
+        assert 0 <= args.shard < args.num_shards, f"--shard {args.shard} out of [0, {args.num_shards})"
+        trajectories = trajectories[args.shard::args.num_shards]  # interleaved for load balance
+    if args.limit:
+        trajectories = trajectories[:args.limit]
+    validate_frame_capacity(trajectories, args.max_frame_num)
+    print(f"Found {total} trajectories under {args.root_dirs}; "
+          f"selected {selected}; "
+          f"processing {len(trajectories)} on shard {args.shard}/{args.num_shards}")
 
     device = torch.device(args.device)
     autocast_dtype = {"fp32": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[args.dtype]
@@ -334,16 +423,6 @@ def main():
         dino_capture[0] = out
 
     handle = model.aggregator.patch_embed.register_forward_hook(hook)
-
-    trajectories = find_trajectories(args.root_dirs)
-    total = len(trajectories)
-    if args.num_shards > 1:
-        assert 0 <= args.shard < args.num_shards, f"--shard {args.shard} out of [0, {args.num_shards})"
-        trajectories = trajectories[args.shard::args.num_shards]  # interleaved for load balance
-    if args.limit:
-        trajectories = trajectories[:args.limit]
-    print(f"Found {total} trajectories under {args.root_dirs}; "
-          f"processing {len(trajectories)} on shard {args.shard}/{args.num_shards}")
 
     n_done, n_skip, n_err = 0, 0, 0
     for traj_dir, rgb_dir, rgb_paths in tqdm(trajectories, desc="trajectories"):
@@ -398,9 +477,16 @@ def main():
         except Exception as e:  # noqa: BLE001 — keep going, report at the end
             n_err += 1
             print(f"[ERROR] {traj_dir}: {e}")
+            traceback.print_exc()
 
     handle.remove()
     print(f"Done. computed={n_done} skipped={n_skip} errors={n_err}")
+    if n_err:
+        raise RuntimeError(
+            f"LingBot precomputation failed for {n_err} trajectory/trajectories; "
+            "see the tracebacks above. Partial successful outputs are retained and "
+            "a rerun will skip them."
+        )
 
 
 if __name__ == "__main__":

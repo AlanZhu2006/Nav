@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=memnav_mp3d
-#SBATCH --output=/scratch/lg154/Research/Nav/InternNav/logs/train_memnav/mp3d-%j.out
-#SBATCH --error=/scratch/lg154/Research/Nav/InternNav/logs/train_memnav/mp3d-%j.err
+#SBATCH --output=logs/train_memnav/mp3d-%j.out
+#SBATCH --error=logs/train_memnav/mp3d-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
@@ -25,13 +25,13 @@
 # between restarts or while feature precomputation is still running.
 #
 # CONSISTENCY (critical): the memory partition geometry MUST match the precompute.
-# The caches were built with --kv_cache_sliding_window 32 and --max_frame_num 2048, so:
+# The caches were built with --kv_cache_sliding_window 32 and --max_frame_num 4096, so:
 #   MEMNAV_WINDOW=32   -> MemNav_Dataset.window_size AND LingBotStream.window (== KV
 #                          manager sliding window). Using 8 here would mis-partition the
 #                          scale/history/window regions vs. how anchor_k/v was captured.
 #   MEMNAV_NUM_SCALE=8 -> scale frames [0..7].
-#   MEMNAV_MAX_FRAME_NUM=2048 -> sizes the 3D-RoPE table for long (>1024-frame) 3leg
-#                          episodes; LingBotStream now extends the camera-head rope too.
+#   MEMNAV_MAX_FRAME_NUM=4096 -> covers the actual longest packed episode (3954 frames)
+#                          and sizes both aggregator and camera-head 3D-RoPE tables.
 # These three flow config(memnav.py) -> dataset + LingBotStream via env vars.
 #
 # Overridable env vars (defaults shown):
@@ -49,23 +49,25 @@
 #       sbatch --export=ALL InternNav/scripts/train_memnav/train_memnav_mp3d.sbatch
 set -euo pipefail
 
-mkdir -p /scratch/lg154/Research/Nav/InternNav/logs/train_memnav
-
-IMG=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
-BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 REPO_ROOT=${REPO_ROOT:-/scratch/lg154/Research/Nav/InternNav}
+IMG=${IMG:-/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf}
+BASE_SIF=${BASE_SIF:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}
+CONDA_SH=${CONDA_SH:-/scratch/lg154/miniconda3/etc/profile.d/conda.sh}
+CONDA_ENV=${CONDA_ENV:-/scratch/lg154/conda-envs/memnav}
+mkdir -p "${REPO_ROOT}/logs/train_memnav"
 
 # in-container overlay path (frames) + host feature tree (caches)
-export MEMNAV_ROOT_DIR=/mp3d_revisit_v0/vln_n1/traj_data
-export MEMNAV_FEATURE_ROOT=/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data
-export LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
-export LINGBOT_WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
+export MEMNAV_ROOT_DIR=${MEMNAV_ROOT_DIR:-/mp3d_revisit_v0/vln_n1/traj_data}
+export MEMNAV_FEATURE_ROOT=${MEMNAV_FEATURE_ROOT:-/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data}
+export LINGBOT_REPO=${LINGBOT_REPO:-/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map}
+export LINGBOT_WEIGHTS=${LINGBOT_WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
 export MEMNAV_DINO_WEIGHTS=${MEMNAV_DINO_WEIGHTS:-${REPO_ROOT}/checkpoints/depth_anything_v2_vits.pth}
+export CONDA_SH CONDA_ENV
 
 # memory-partition geometry — MUST match the precompute
 export MEMNAV_WINDOW=32
 export MEMNAV_NUM_SCALE=8
-export MEMNAV_MAX_FRAME_NUM=2048
+export MEMNAV_MAX_FRAME_NUM=4096
 export MEMNAV_STRICT_FEATURE_COVERAGE=1
 export MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION=1
 export MEMNAV_DATA_SPLIT=${MEMNAV_DATA_SPLIT:-train}
@@ -104,8 +106,8 @@ apptainer exec --nv \
         [[ -f "${LINGBOT_WEIGHTS}" ]]     || { echo "ABORT: weights missing ${LINGBOT_WEIGHTS}"; exit 1; }
         [[ -f "${MEMNAV_DINO_WEIGHTS}" ]] || { echo "ABORT: DINO weights missing ${MEMNAV_DINO_WEIGHTS}"; exit 1; }
 
-        source /scratch/lg154/miniconda3/etc/profile.d/conda.sh
-        conda activate /scratch/lg154/conda-envs/memnav
+        source "${CONDA_SH}"
+        conda activate "${CONDA_ENV}"
         cd '"${REPO_ROOT}"'
 
         export PYTHONPATH="'"${REPO_ROOT}"'/src/diffusion-policy:${PYTHONPATH:-}"

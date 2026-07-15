@@ -136,12 +136,12 @@ pt1 frame-length 审计：
 
 ```text
 13560476 aux0.5 online-W&B preflight (5 steps, completed)
-  +-> 13560538 aux0.5 full E3 (running)
+  +-> 13560538 aux0.5 full E3 (completed, 14:26:45)
 13560516 aux0.05 online-W&B preflight (5 steps, completed)
-  +-> 13561091 aux0.05 full E3 (running)
+  +-> 13561091 aux0.05 full E3 (completed, 14:16:08)
 ```
 
-两个 full job 均运行于 H100，申请 20 小时。启动检查确认 Python 3.10.20、PyTorch 2.8.0+cu128、Transformers 4.51.0、W&B 0.28.0、LingBot 权重 `0 missing / 0 unexpected`、3037 样本和完整 cache。当前 Slurm 平均 GPU utilization 为 81%/82%，显存约 25 GiB。旧 E3 实测 22.90 秒/step；2277 step 估计约 14.5 小时。
+两个 full job 均运行于 H100，并在 20 小时限制内正常完成。启动检查确认 Python 3.10.20、PyTorch 2.8.0+cu128、Transformers 4.51.0、W&B 0.28.0、LingBot 权重 `0 missing / 0 unexpected`、3037 样本和完整 cache。两条训练均保存了 `checkpoint-759/1518/2277`，无 NaN、OOM 或训练 traceback。
 
 在线训练曲线：
 
@@ -153,8 +153,7 @@ pt1 frame-length 审计：
 random-leg + Goal A，唯一变量是 `w_aux_pose=0.0`，训练 1 epoch / 759 steps；
 `13656091` 在其成功后对全部 620 个 val-unseen sample 评测 seed 0。这条实验只用于
 与已有 aux 0.5/0.05 的 E1 checkpoint 比较，不能直接与两条 E3 结果比较。
-提交时 project GPU 配额已满，作业以 `QOSGrpGRES` pending；保留原有评测优先级，
-不为启动该补充消融取消或抢占正式评测。
+提交时 project GPU 配额已满，作业曾以 `QOSGrpGRES` pending；最终训练与评测分别以 04:53:09 和 01:00:02 正常完成。
 
 ### 6.3 自动 val-unseen 评测
 
@@ -165,7 +164,7 @@ aux0.5:  13561416 13561419 13561429 13562122 13562266
 aux0.05: 13562641 13562646 13562663 13562684 13562688
 ```
 
-每份评测为全部 620 个 val-unseen sample，batch 4，预计约 55 分钟。随机 seed 改变的是 random-leg 当前帧 `k`，最终报告使用三个 seed 的均值和离散程度。
+每份评测为全部 620 个 val-unseen sample，batch 4，实测约 54--58 分钟。上述 10 份评测均已正常完成。随机 seed 改变的是 random-leg 当前帧 `k`，最终报告使用三个 seed 的均值和离散程度。
 
 ## 7. 明早如何判定结果
 
@@ -198,3 +197,56 @@ aux0.05: 13562641 13562646 13562663 13562684 13562688
 - `--skip_scale` cache 在训练时重算前 8 帧 full K/V；sample shuffle 使 4-entry GPU LRU 命中率可能偏低。
 - 当前 offline eval 每个 goal 只采一个随机 `k`，所以最终 checkpoint 必须保留多 seed 评测。
 - 仍缺在线 policy/controller runner；离线 loss 不是导航成功率。
+
+## 10. 2026-07-15 val-unseen 结果
+
+### 10.1 E3 三个 random-k seed
+
+| metric | aux 0.5 mean | aux 0.05 mean | 结果 |
+|---|---:|---:|---|
+| action loss | **0.082063** | 0.084080 | aux 0.5 低 2.4% |
+| retrieval loss | **1.323394** | 1.364244 | aux 0.5 低 3.0% |
+| revisit top-real positive | **43.13%** | 42.19% | aux 0.5 高 0.94 pp |
+| revisit explicit negative | **13.31%** | 14.25% | aux 0.5 低 0.94 pp |
+| novel NULL accuracy | **62.56%** | 59.23% | aux 0.5 高 3.32 pp |
+| joint retrieval accuracy | **51.61%** | 49.46% | aux 0.5 高 2.15 pp |
+| gate balanced accuracy @ 0.5 | **62.04%** | 61.63% | aux 0.5 高 0.41 pp |
+| gate separation | **0.248115** | 0.243408 | aux 0.5 略高 |
+
+aux 0.5 在三个 seed 上的 action/retrieval loss 都更低，revisit top-real 都更高，
+novel NULL 也都更高；因此在 **E3 之间**应选 aux 0.5，不应切换到 0.05。
+
+### 10.2 epoch 趋势不支持继续盲训
+
+aux 0.5 的 seed-0 val-unseen 趋势：
+
+| epoch | action loss | retrieval loss | revisit top-real | novel NULL | joint retrieval acc |
+|---|---:|---:|---:|---:|---:|
+| E1 | 0.107758 | **1.233900** | 24.10% | **97.30%** | **58.87%** |
+| E2 | 0.142364 | 1.336865 | 34.94% | 69.81% | 49.19% |
+| E3 | **0.082279** | 1.351527 | **43.78%** | 61.19% | 50.81% |
+
+训练集 retrieval loss 在 E1--E3 持续下降，但 val-unseen retrieval loss 持续上升。
+E3 提高了 action 和 revisit 匹配，但明显牺牲 novel 判断；它不是无条件的全局最优 checkpoint。
+当前 gate 也未校准：E3 aux 0.5 的平均 revisit/novel gate 约为 0.952/0.704，
+在 0.5 阈值下大量 novel 被判成 revisit。
+
+### 10.3 aux-free E1
+
+| E1 metric | aux 0.5 | aux 0.05 | aux 0.0 |
+|---|---:|---:|---:|
+| action loss | 0.107758 | 0.106343 | **0.102838** |
+| retrieval loss | **1.233900** | 1.234794 | 1.238269 |
+| revisit top-real | 24.10% | **24.50%** | **24.50%** |
+| novel NULL | **97.30%** | 97.04% | 97.04% |
+| joint retrieval acc | 58.87% | 58.71% | **59.03%** |
+
+E1 的三条结果非常接近；去掉 aux 只带来小幅 action 改善，没有带来明确的
+retrieval/gate 改善。结合 E3 的三 seed 结果，“aux loss 数值大”不等于“降低权重就会更好”。
+
+### 10.4 决策
+
+1. 不继续 E4/E5 或 50 epoch；当前的主要矛盾是 held-out gate/retrieval 校准，不是训练 loss 不够低。
+2. 若必须在两个 E3 中选择，使用 `mn38_aux050_s0_e3_20260714/checkpoint-2277`。
+3. 保留 aux 0.5 作为当前 control，后续修改 scale-free target representation，而不是继续扫静态权重。
+4. 下一个 GPU 实验前先保存 per-sample gate/NULL score，按 memory length 分桶做 threshold sweep 和 oracle-gate 消融；然后再决定独立 matchability head 与 keyframe stride 实验。

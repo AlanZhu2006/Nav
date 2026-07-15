@@ -43,6 +43,8 @@ export NUM_WORKERS=${NUM_WORKERS:-4}
 export MAX_SAMPLES=${MAX_SAMPLES:-0}
 export EVAL_SEED=${EVAL_SEED:-0}
 export DATASET_ROLE=${DATASET_ROLE:-train-diagnostic}
+export ORACLE_GATE=${ORACLE_GATE:-0}
+export SAVE_PER_SAMPLE=${SAVE_PER_SAMPLE:-0}
 export OUTPUT=${OUTPUT:-${LOG_DIR}/${NAME}-${SLURM_JOB_ID}.json}
 : "${CHECKPOINT:?Set CHECKPOINT to a memnav.ckpt path}"
 
@@ -71,11 +73,18 @@ apptainer exec --nv \
         if (( MAX_SAMPLES > 0 )); then
             extra_args+=(--max-samples "${MAX_SAMPLES}")
         fi
+        if [[ "${ORACLE_GATE}" == "1" ]]; then
+            extra_args+=(--oracle-gate)
+        fi
+        if [[ "${SAVE_PER_SAMPLE}" == "1" ]]; then
+            extra_args+=(--save-per-sample)
+        fi
 
         echo "git_commit=$(git rev-parse HEAD)"
         echo "checkpoint=${CHECKPOINT} batch=${BATCH_SIZE} max_samples=${MAX_SAMPLES}"
         echo "sampling=${MEMNAV_SAMPLING_MODE} goalA=${MEMNAV_ADD_GOAL_A} glimpse=${MEMNAV_GLIMPSE_POS}/${MEMNAV_GLIMPSE_NEG} slack=${MEMNAV_GOAL_SLACK}"
         echo "scene_split=${MEMNAV_SCENE_SPLIT} role=${DATASET_ROLE} w_retrieval=${MEMNAV_W_RETRIEVAL} w_aux_pose=${MEMNAV_W_AUX_POSE}"
+        echo "oracle_gate=${ORACLE_GATE} save_per_sample=${SAVE_PER_SAMPLE}"
         exec python scripts/eval/eval_memnav_offline.py \
             --checkpoint "${CHECKPOINT}" \
             --root-dir "${MEMNAV_ROOT_DIR}" \

@@ -2,6 +2,9 @@ import pytest
 import torch
 
 from internnav.model.basemodel.memnav.metrics import (
+    compute_gate_threshold_sweep,
+    compute_memory_length_diagnostics,
+    compute_memnav_batch_records,
     compute_memnav_batch_totals,
     finalize_memnav_metrics,
 )
@@ -123,3 +126,51 @@ def test_memnav_metrics_classify_retrieval_failures():
     assert metrics['gate_accuracy_at_0_5'] == pytest.approx(0.4)
     assert metrics['gate_revisit_accuracy_at_0_5'] == pytest.approx(0.0)
     assert metrics['gate_novel_accuracy_at_0_5'] == pytest.approx(1.0)
+
+
+def test_memnav_per_sample_records_and_memory_buckets():
+    batch = _synthetic_batch()
+    batch.update({
+        'cur_steps': [319, 1024],
+        'goal_steps': [400, 1100],
+        'cache_paths': ['revisit.npz', 'novel.npz'],
+    })
+    outputs = _synthetic_outputs()
+    outputs['noise_oracle_gate'] = torch.tensor([[[1.0]], [[3.0]]])
+
+    records = compute_memnav_batch_records(outputs, batch)
+
+    assert records[0]['memory_length'] == 320
+    assert records[0]['joint_outcome'] == 'positive'
+    assert records[0]['top_real_outcome'] == 'positive'
+    assert records[0]['max_real_null_margin'] == pytest.approx(4.0)
+    assert records[0]['oracle_gate_action_loss'] == pytest.approx(1.0)
+    assert records[1]['memory_length'] == 1025
+    assert records[1]['joint_outcome'] == 'null'
+    assert records[1]['top_real_outcome'] == 'negative'
+    assert records[1]['max_real_null_margin'] == pytest.approx(-1.0)
+    assert records[1]['oracle_gate_action_loss'] == pytest.approx(9.0)
+
+    buckets = compute_memory_length_diagnostics(records)
+    assert buckets['up_to_320']['num_samples'] == 1
+    assert buckets['up_to_320']['revisit_top_real_match_accuracy'] == pytest.approx(1.0)
+    assert buckets['321_to_1024']['num_samples'] == 0
+    assert buckets['1025_to_2048']['num_samples'] == 1
+    assert buckets['1025_to_2048']['novel_null_accuracy'] == pytest.approx(1.0)
+
+
+def test_gate_threshold_sweep_finds_balanced_separator():
+    records = [
+        {'is_revisit': True, 'gate': 0.9},
+        {'is_revisit': True, 'gate': 0.8},
+        {'is_revisit': False, 'gate': 0.7},
+        {'is_revisit': False, 'gate': 0.1},
+    ]
+
+    sweep = compute_gate_threshold_sweep(records)
+
+    assert sweep['reference']['balanced_accuracy'] == pytest.approx(0.75)
+    assert 0.7 < sweep['best']['threshold'] < 0.8
+    assert sweep['best']['balanced_accuracy'] == pytest.approx(1.0)
+    assert sweep['best']['revisit_recall'] == pytest.approx(1.0)
+    assert sweep['best']['novel_recall'] == pytest.approx(1.0)

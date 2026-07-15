@@ -213,10 +213,20 @@ class MemNavNet(nn.Module):
 
         noise_mg = self.predict_noise(noisy, timesteps, current_state, revisit, novel, gate, "mg")
         noise_ng = self.predict_noise(noisy, timesteps, current_state, revisit, novel, gate, "ng")
-        return dict(
+        outputs = dict(
             noise_ng=noise_ng, noise_mg=noise_mg, noise=noise,
             aux_pose=aux_pose, ret_logits=enc["ret_logits"], revisit_gate=gate,
         )
+        # Evaluation-only ablation: keep the retrieved frame and all branch
+        # features fixed, but replace the learned gate with the semantic label.
+        # The key is absent in training, so this adds no training compute.
+        if batch.get("diagnostic_oracle_gate", False):
+            semantic_gate = batch["batch_is_revisit"].to(dev).float()
+            outputs["noise_oracle_gate"] = self.predict_noise(
+                noisy, timesteps, current_state, revisit, novel,
+                semantic_gate, "mg",
+            )
+        return outputs
 
     @torch.no_grad()
     def _load_cache(self, path, rgb_dir):

@@ -12,6 +12,9 @@ from torch.utils.data import DataLoader, Subset
 
 from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset, memnav_collate_fn
 from internnav.model.basemodel.memnav.metrics import (
+    compute_gate_threshold_sweep,
+    compute_memory_length_diagnostics,
+    compute_memnav_batch_records,
     compute_memnav_batch_totals,
     finalize_memnav_metrics,
     merge_memnav_totals,
@@ -33,6 +36,16 @@ def parse_args():
     parser.add_argument('--log-every', type=int, default=10)
     parser.add_argument('--dataset-role', default='train-diagnostic')
     parser.add_argument('--scene-split', default=None)
+    parser.add_argument(
+        '--oracle-gate',
+        action='store_true',
+        help='Run one extra decoder pass with the semantic revisit/novel gate',
+    )
+    parser.add_argument(
+        '--save-per-sample',
+        action='store_true',
+        help='Include per-sample scores and failure classifications in the JSON',
+    )
     return parser.parse_args()
 
 
@@ -116,12 +129,19 @@ def main():
     model.eval()
 
     totals = {}
+    records = []
     start = time.time()
     torch.cuda.reset_peak_memory_stats()
     with torch.inference_mode():
         for batch_index, batch in enumerate(loader):
+            if args.oracle_gate:
+                batch['diagnostic_oracle_gate'] = True
             outputs = model(batch)
             merge_memnav_totals(totals, compute_memnav_batch_totals(outputs, batch))
+            batch_records = compute_memnav_batch_records(outputs, batch)
+            for record in batch_records:
+                record['sample_index'] = len(records)
+                records.append(record)
             if batch_index % args.log_every == 0 or batch_index + 1 == len(loader):
                 print(
                     f'[eval] batch={batch_index + 1}/{len(loader)} '
@@ -134,6 +154,22 @@ def main():
         w_retrieval=config.il.w_retrieval,
         w_aux_pose=config.il.w_aux_pose,
     )
+    if len(records) != len(eval_dataset):
+        raise RuntimeError(
+            f'per-sample record mismatch: records={len(records)} '
+            f'dataset={len(eval_dataset)}'
+        )
+    diagnostics = {
+        'memory_length_buckets': compute_memory_length_diagnostics(records),
+        'gate_threshold_sweep': compute_gate_threshold_sweep(
+            records, score_key='gate', reference_threshold=0.5
+        ),
+        'max_real_null_margin_threshold_sweep': compute_gate_threshold_sweep(
+            records,
+            score_key='max_real_null_margin',
+            reference_threshold=0.0,
+        ),
+    }
     result = {
         'evaluation_type': 'offline-checkpoint-diagnostic',
         'dataset_role': args.dataset_role,
@@ -154,8 +190,12 @@ def main():
         'elapsed_seconds': elapsed,
         'samples_per_second': len(eval_dataset) / elapsed,
         'peak_cuda_memory_gib': torch.cuda.max_memory_allocated() / 2**30,
+        'oracle_gate': args.oracle_gate,
         'metrics': metrics,
+        'diagnostics': diagnostics,
     }
+    if args.save_per_sample:
+        result['per_sample'] = records
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2) + '\n')

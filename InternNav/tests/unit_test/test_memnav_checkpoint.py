@@ -53,6 +53,8 @@ class _LossModel(nn.Module):
             'gate_feature': torch.tensor([0.9, 0.4], device=self.device),
             'gate_effective_threshold': torch.tensor(0.94, device=self.device),
             'gate_normalized_slope': torch.tensor(1.6, device=self.device),
+            'match_idx': torch.tensor([0, 1], device=self.device),
+            'anchor_idx': torch.tensor([0, 1], device=self.device),
             'R_rel': torch.eye(3, device=self.device).repeat(batch_size, 1, 1),
         }
 
@@ -142,6 +144,9 @@ class MemNavCheckpointTest(unittest.TestCase):
                     [1.0, 2.0, 0.0], [0.0, 1.0, 0.0]
                 ]),
                 'batch_goal_rel_rotation': torch.eye(3).repeat(2, 1, 1),
+                'batch_goal_j': torch.tensor([0, -1]),
+                'cur_steps': [319, 1024],
+                'goal_steps': [400, 1100],
             }
             model.eval()
             eval_loss, _, _ = trainer.prediction_step(
@@ -162,6 +167,12 @@ class MemNavCheckpointTest(unittest.TestCase):
             self.assertAlmostEqual(logged['gate_revisit_recall'], 1.0)
             self.assertAlmostEqual(logged['gate_novel_recall'], 1.0)
             self.assertGreater(logged['gate_sep'], 0.0)
+            self.assertAlmostEqual(logged['goal_A_fraction'], 0.5)
+            self.assertAlmostEqual(logged['goal_B_fraction'], 0.5)
+            self.assertIn('action_loss_goal_A', logged)
+            self.assertIn('action_loss_goal_B', logged)
+            self.assertIn('aux_direction_err_deg_goal_B_revisit', logged)
+            self.assertIn('aux_mse_y_anchor_gap_256_511', logged)
 
             model.zero_grad(set_to_none=True)
             novel_inputs = dict(inputs)

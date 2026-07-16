@@ -224,6 +224,10 @@ normalized independently before concatenation.
   subset builder and fingerprint, so checkpoint comparisons cannot silently use
   different 16-sample populations. It is explicitly not a closed-loop Habitat
   navigation score.
+- Trainer/W&B mirrors the important strata without changing the objective:
+  action and gate by goal A/B/C, plus revisit aux direction/x/y by goal type,
+  teacher-forced anchor-gap bin, and remaining-path-span bin. Every bin includes
+  a support fraction so an empty or rare group cannot be mistaken for a trend.
 
 ---
 

@@ -152,6 +152,7 @@ class MemNavTrainer(BaseTrainer):
         dev = next(model.parameters()).device
         fwd = model(inputs)
         phase = 'train' if model.training else 'eval'
+        stratified_accumulations = []
 
         # Diffusion action objective. Keep per-coordinate errors so W&B can show
         # whether x, y, or wrapped theta is the coordinate that stopped learning.
@@ -183,6 +184,7 @@ class MemNavTrainer(BaseTrainer):
 
         n_rev = is_rev.sum()
         n_novel = (1.0 - is_rev).sum()
+        B = float(is_rev.numel())
         # Do not estimate class weights from a four-sample batch: that makes the
         # objective itself jump between batches (all-revisit previously used 0.1,
         # mixed batches used a different value). The dataset is approximately
@@ -274,6 +276,112 @@ class MemNavTrainer(BaseTrainer):
             gt_x2 = self._masked_mean(gt_xy[:, 0].square(), rev_mask)
             gt_y2 = self._masked_mean(gt_xy[:, 1].square(), rev_mask)
 
+            # Preserve composition in W&B.  Aggregate aux y MSE was previously
+            # dominated by two long C-leg rows and looked like a global axis bug.
+            # These diagnostics never enter the loss; they expose goal type and
+            # temporal support together with an explicit support fraction.
+            goal_j = inputs.get('batch_goal_j')
+            if goal_j is not None:
+                goal_j = goal_j.to(dev)
+                per_sample_action = action_sq.mean(dim=(1, 2))
+                for goal_index, goal_label in ((-1, 'A'), (0, 'B'), (1, 'C')):
+                    goal_mask = goal_j == goal_index
+                    goal_count = goal_mask.float().sum()
+                    stratified_accumulations.extend([
+                        (
+                            f'goal_{goal_label}_fraction',
+                            goal_count / B,
+                            B,
+                        ),
+                        (
+                            f'action_loss_goal_{goal_label}',
+                            self._masked_mean(per_sample_action, goal_mask),
+                            goal_count,
+                        ),
+                        (
+                            f'gate_goal_{goal_label}',
+                            self._masked_mean(gate_prob, goal_mask),
+                            goal_count,
+                        ),
+                    ])
+                    goal_aux_mask = goal_mask & aux_valid
+                    goal_aux_count = goal_aux_mask.float().sum()
+                    stratified_accumulations.extend([
+                        (
+                            f'aux_direction_loss_goal_{goal_label}_revisit',
+                            self._masked_mean(1.0 - direction_cos, goal_aux_mask),
+                            goal_aux_count,
+                        ),
+                        (
+                            f'aux_direction_err_deg_goal_{goal_label}_revisit',
+                            self._masked_mean(direction_err_deg, goal_aux_mask),
+                            goal_aux_count,
+                        ),
+                        (
+                            f'aux_mse_x_goal_{goal_label}_revisit',
+                            self._masked_mean(xy_sq[:, 0], goal_aux_mask),
+                            goal_aux_count,
+                        ),
+                        (
+                            f'aux_mse_y_goal_{goal_label}_revisit',
+                            self._masked_mean(xy_sq[:, 1], goal_aux_mask),
+                            goal_aux_count,
+                        ),
+                    ])
+
+            def add_aux_bins(values, bins, prefix):
+                for lower, upper, label in bins:
+                    bin_mask = aux_valid & (values >= lower)
+                    if upper is not None:
+                        bin_mask = bin_mask & (values < upper)
+                    count = bin_mask.float().sum()
+                    stratified_accumulations.extend([
+                        (
+                            f'aux_{prefix}_{label}_fraction_revisit',
+                            count / n_rev.clamp(min=1.0),
+                            n_rev,
+                        ),
+                        (
+                            f'aux_direction_err_deg_{prefix}_{label}',
+                            self._masked_mean(direction_err_deg, bin_mask),
+                            count,
+                        ),
+                        (
+                            f'aux_mse_x_{prefix}_{label}',
+                            self._masked_mean(xy_sq[:, 0], bin_mask),
+                            count,
+                        ),
+                        (
+                            f'aux_mse_y_{prefix}_{label}',
+                            self._masked_mean(xy_sq[:, 1], bin_mask),
+                            count,
+                        ),
+                    ])
+
+            anchor_idx = fwd.get('anchor_idx')
+            if anchor_idx is not None and inputs.get('cur_steps') is not None:
+                cur_steps = torch.as_tensor(inputs['cur_steps'], device=dev)
+                anchor_gap = cur_steps - anchor_idx.to(dev)
+                add_aux_bins(
+                    anchor_gap,
+                    ((0, 256, 'gap_000_255'),
+                     (256, 512, 'gap_256_511'),
+                     (512, None, 'gap_512_plus')),
+                    'anchor',
+                )
+            if (inputs.get('cur_steps') is not None
+                    and inputs.get('goal_steps') is not None):
+                cur_steps = torch.as_tensor(inputs['cur_steps'], device=dev)
+                goal_steps = torch.as_tensor(inputs['goal_steps'], device=dev)
+                remaining_span = goal_steps - cur_steps
+                add_aux_bins(
+                    remaining_span,
+                    ((0, 128, 'span_000_127'),
+                     (128, 256, 'span_128_255'),
+                     (256, None, 'span_256_plus')),
+                    'path',
+                )
+
         outputs = {
             'loss': loss,
             'action_loss': action_loss,
@@ -301,7 +409,6 @@ class MemNavTrainer(BaseTrainer):
         }
 
         # Accumulate over exactly the same interval as Trainer's own train/loss.
-        B = float(is_rev.numel())
         action_value_count = float(action_target.shape[0] * action_target.shape[1])
         self._accumulate('action_loss', action_loss, action_value_count * 3.0, phase)
         for axis, value in zip(('x', 'y', 'theta'), action_axis_mse):
@@ -345,6 +452,8 @@ class MemNavTrainer(BaseTrainer):
             ('aux_gt_x_sq_mean', gt_x2), ('aux_gt_y_sq_mean', gt_y2),
         ):
             self._accumulate(name, value, n_rev, phase)
+        for name, value, weight in stratified_accumulations:
+            self._accumulate(name, value, weight, phase)
 
         return (loss, outputs) if return_outputs else loss
 

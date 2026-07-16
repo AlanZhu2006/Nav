@@ -86,6 +86,9 @@ memnav_exp_cfg = ExpCfg(
         eval_interval_steps=int(os.environ.get('MEMNAV_EVAL_STEPS', '25')),
         eval_batch_size=int(os.environ.get('MEMNAV_EVAL_BATCH_SIZE', '4')),
         eval_seed=int(os.environ.get('MEMNAV_EVAL_SEED', '0')),
+        # -1 keeps epoch-based production behavior.  A small positive value is
+        # reserved for clean, bounded optimizer/gradient smoke runs.
+        max_train_steps=int(os.environ.get('MEMNAV_MAX_TRAIN_STEPS', '-1')),
         bf16=_env_bool('MEMNAV_BF16', False),
         tf32=_env_bool('MEMNAV_TF32', True),
         save_filter_frozen_weights=True,

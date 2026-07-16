@@ -76,6 +76,7 @@ import os
 
 import numpy as np
 import torch
+from torch.utils.data import Subset
 
 from internnav.dataset.memnav_pose_conventions import (
     GENERATED_ZUP_FRAME_CONVENTION,
@@ -708,6 +709,53 @@ class MemNav_Dataset(NavDP_Base_Datset):
             'leg_start': int(s.get('leg_start', 0)),
             'sample_identity': str(s['sample_identity']),
         }
+
+
+def build_fixed_memnav_eval_subset(dataset, sample_count, selection_seed=0):
+    """Reproduce the balanced, deterministic validation subset used in training.
+
+    Revisit/novel is dynamic in MemNav, so stratification must evaluate the exact
+    fixed ``k`` selected by the dataset rather than inspect only goal metadata.
+    The returned ``Subset`` carries a fingerprint over both the parent population
+    and selected indices, making checkpoint/evaluator comparisons auditable.
+    """
+    if getattr(dataset, 'sampling_mode', None) != 'fixed_leg':
+        raise ValueError('fixed MemNav evaluation requires sampling_mode="fixed_leg"')
+    eval_count = min(max(int(sample_count), 0), len(dataset))
+    if eval_count == 0:
+        raise ValueError('fixed MemNav evaluation subset must contain at least one sample')
+
+    revisit_indices, novel_indices = [], []
+    for index, sample in enumerate(dataset.samples):
+        k, _ = dataset._sample_k_and_digit(
+            sample, int(sample['k_lo']), int(sample['k_hi'])
+        )
+        *_masks, null_pos = dataset._build_label(sample, k)
+        (novel_indices if null_pos else revisit_indices).append(index)
+
+    generator = torch.Generator().manual_seed(int(selection_seed))
+    target_revisit = min(eval_count // 2, len(revisit_indices))
+    target_novel = min(eval_count - target_revisit, len(novel_indices))
+    if target_revisit + target_novel < eval_count:
+        target_revisit = min(len(revisit_indices), eval_count - target_novel)
+    rev_order = torch.randperm(len(revisit_indices), generator=generator)[:target_revisit]
+    nov_order = torch.randperm(len(novel_indices), generator=generator)[:target_novel]
+    indices = sorted(
+        [revisit_indices[index] for index in rev_order.tolist()]
+        + [novel_indices[index] for index in nov_order.tolist()]
+    )
+    subset = Subset(dataset, indices)
+    subset_manifest = (
+        f'{dataset.dataset_fingerprint}\n'
+        + ','.join(str(index) for index in indices)
+    )
+    subset.dataset_fingerprint = hashlib.sha256(
+        subset_manifest.encode('utf-8')
+    ).hexdigest()
+    subset.memnav_selection_indices = indices
+    subset.memnav_num_revisit = target_revisit
+    subset.memnav_num_novel = target_novel
+    return subset
 
 
 def memnav_collate_fn(batch):

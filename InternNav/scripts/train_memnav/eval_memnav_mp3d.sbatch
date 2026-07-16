@@ -37,6 +37,7 @@ export SAMPLING_SEED=${SAMPLING_SEED:-0}
 export BATCH_SIZE=${BATCH_SIZE:-4}
 export NUM_WORKERS=${NUM_WORKERS:-4}
 export MAX_SAMPLES=${MAX_SAMPLES:-0}
+export SUBSET_MODE=${SUBSET_MODE:-balanced-fixed}
 export ORACLE_POSITIVE=${ORACLE_POSITIVE:-1}
 export FULL_DIFFUSION_GOAL_SHUFFLE=${FULL_DIFFUSION_GOAL_SHUFFLE:-0}
 export DIFFUSION_SEED=${DIFFUSION_SEED:-104729}
@@ -68,5 +69,6 @@ apptainer exec --nv --overlay "${IMG}:ro" -B /scratch "${BASE_SIF}" bash -c '
         --split-seed "${SPLIT_SEED}" --sampling-seed "${SAMPLING_SEED}" \
         --diffusion-seed "${DIFFUSION_SEED}" \
         --batch-size "${BATCH_SIZE}" --num-workers "${NUM_WORKERS}" \
+        --subset-mode "${SUBSET_MODE}" \
         "${extra[@]}"
 '

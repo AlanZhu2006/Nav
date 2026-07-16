@@ -99,6 +99,19 @@ sbatch --time=00:30:00 --export=ALL \
 fingerprint、权重加载、模型/Trainer 构造以及零步退出。只有最终状态为
 `COMPLETED, ExitCode=0:0` 才通过。
 
+需要验证真实 backward/optimizer/checkpoint 时，使用有界短跑而不是等待任务超时：
+
+```bash
+MEMNAV_MAX_TRAIN_STEPS=10 \
+MEMNAV_LOGGING_STEPS=1 MEMNAV_SAVE_STEPS=5 \
+MEMNAV_REPORT_TO=none RESUME_FROM_CHECKPOINT=none \
+sbatch --time=00:30:00 --export=ALL \
+  scripts/train_memnav/train_memnav_mp3d.sbatch
+```
+
+`MEMNAV_MAX_TRAIN_STEPS=-1`（默认）保持正式任务按 epoch 训练；任何正式长跑都应在
+任务记录中明确写出该值。
+
 ## 5. 长任务必须依赖预检
 
 ```bash

@@ -5,7 +5,10 @@ import unittest
 
 import numpy as np
 
-from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset
+from internnav.dataset.memnav_dataset_lerobot import (
+    MemNav_Dataset,
+    build_fixed_memnav_eval_subset,
+)
 from internnav.dataset.memnav_pose_conventions import GENERATED_ZUP_FRAME_CONVENTION
 
 
@@ -33,6 +36,37 @@ def _source_episode(root: Path, convention=GENERATED_ZUP_FRAME_CONVENTION,
 
 
 class MemNavInputCoverageTest(unittest.TestCase):
+    def test_fixed_eval_subset_is_balanced_deterministic_and_fingerprinted(self):
+        class FakeDataset:
+            sampling_mode = 'fixed_leg'
+            dataset_fingerprint = 'parent-fingerprint'
+            samples = [
+                {'k_lo': 0, 'k_hi': 0, 'novel': index >= 5}
+                for index in range(10)
+            ]
+
+            def __len__(self):
+                return len(self.samples)
+
+            def __getitem__(self, index):
+                return self.samples[index]
+
+            @staticmethod
+            def _sample_k_and_digit(sample, k_lo, k_hi):
+                return 0, 4
+
+            @staticmethod
+            def _build_label(sample, k):
+                return None, None, None, sample['novel']
+
+        first = build_fixed_memnav_eval_subset(FakeDataset(), 4, selection_seed=7)
+        second = build_fixed_memnav_eval_subset(FakeDataset(), 4, selection_seed=7)
+        self.assertEqual(first.memnav_num_revisit, 2)
+        self.assertEqual(first.memnav_num_novel, 2)
+        self.assertEqual(first.memnav_selection_indices, second.memnav_selection_indices)
+        self.assertEqual(first.dataset_fingerprint, second.dataset_fingerprint)
+        self.assertNotEqual(first.dataset_fingerprint, FakeDataset.dataset_fingerprint)
+
     def test_aux_goal_translation_uses_the_actual_endpoint(self):
         dataset = object.__new__(MemNav_Dataset)
         points = np.array([

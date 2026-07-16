@@ -219,8 +219,11 @@ normalized independently before concatenation.
   `--full-diffusion-goal-shuffle`, it also runs the complete DDPM reverse process
   for correct and cyclically shuffled goal images using identical initial and
   intermediate randomness. Per-sample metrics are stratified by goal A/B/C,
-  retrieval time gap, and remaining path span. It is explicitly not a closed-
-  loop Habitat navigation score.
+  retrieval time gap, and remaining path span. When `--max-samples` is used,
+  evaluator and Trainer share the same deterministic revisit/novel-balanced
+  subset builder and fingerprint, so checkpoint comparisons cannot silently use
+  different 16-sample populations. It is explicitly not a closed-loop Habitat
+  navigation score.
 
 ---
 

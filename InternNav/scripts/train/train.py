@@ -1,4 +1,3 @@
-import hashlib
 import os
 import sys
 
@@ -12,7 +11,6 @@ from typing import Optional
 import torch
 import tyro
 from pydantic import BaseModel
-from torch.utils.data import Subset
 from transformers import TrainerCallback, TrainingArguments
 
 from internnav.model.utils.logger import MyLogger
@@ -244,7 +242,10 @@ def main(config, model_class, model_config_class):
                 depth_min=config.il.depth_min,
             )
         elif config.model_name == "memnav":
-            from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset
+            from internnav.dataset.memnav_dataset_lerobot import (
+                MemNav_Dataset,
+                build_fixed_memnav_eval_subset,
+            )
             train_dataset_data = MemNav_Dataset(
                 config.il.root_dir,
                 predict_size=config.il.predict_size,
@@ -300,38 +301,15 @@ def main(config, model_class, model_config_class):
                 sampling_mode='fixed_leg',
                 sampling_seed=getattr(config.il, 'eval_seed', 0),
             )
-            eval_count = min(int(config.il.eval_samples), len(fixed_val))
-            generator = torch.Generator().manual_seed(int(getattr(config.il, 'eval_seed', 0)))
-            revisit_indices, novel_indices = [], []
-            for index, sample in enumerate(fixed_val.samples):
-                k, _ = fixed_val._sample_k_and_digit(
-                    sample, int(sample['k_lo']), int(sample['k_hi'])
-                )
-                *_masks, null_pos = fixed_val._build_label(sample, k)
-                (novel_indices if null_pos else revisit_indices).append(index)
-            target_revisit = min(eval_count // 2, len(revisit_indices))
-            target_novel = min(eval_count - target_revisit, len(novel_indices))
-            if target_revisit + target_novel < eval_count:
-                target_revisit = min(
-                    len(revisit_indices), eval_count - target_novel
-                )
-            rev_order = torch.randperm(len(revisit_indices), generator=generator)[:target_revisit]
-            nov_order = torch.randperm(len(novel_indices), generator=generator)[:target_novel]
-            indices = sorted(
-                [revisit_indices[i] for i in rev_order.tolist()]
-                + [novel_indices[i] for i in nov_order.tolist()]
+            eval_dataset_data = build_fixed_memnav_eval_subset(
+                fixed_val,
+                int(config.il.eval_samples),
+                selection_seed=int(getattr(config.il, 'eval_seed', 0)),
             )
-            eval_dataset_data = Subset(fixed_val, indices)
-            subset_manifest = (
-                f'{fixed_val.dataset_fingerprint}\n'
-                + ','.join(str(index) for index in indices)
-            )
-            eval_dataset_data.dataset_fingerprint = hashlib.sha256(
-                subset_manifest.encode('utf-8')
-            ).hexdigest()
             print(
-                f'[eval] fixed held-out subset: {len(indices)}/{len(fixed_val)} samples; '
-                f'revisit={target_revisit}, novel={target_novel}; '
+                f'[eval] fixed held-out subset: {len(eval_dataset_data)}/{len(fixed_val)} samples; '
+                f'revisit={eval_dataset_data.memnav_num_revisit}, '
+                f'novel={eval_dataset_data.memnav_num_novel}; '
                 f'fingerprint={eval_dataset_data.dataset_fingerprint}'
             )
 
@@ -409,6 +387,9 @@ def main(config, model_class, model_config_class):
             max_grad_norm=float(getattr(config.il, 'max_grad_norm', 1.0) or 1.0),
             logging_steps=(int(getattr(config.il, 'logging_steps', 10)) if is_memnav else 10),
             num_train_epochs=config.il.epochs,
+            max_steps=(
+                int(getattr(config.il, 'max_train_steps', -1)) if is_memnav else -1
+            ),
             eval_strategy=('steps' if is_memnav and eval_dataset_data is not None else 'no'),
             eval_steps=(int(getattr(config.il, 'eval_interval_steps', 25)) if is_memnav else None),
             save_strategy='steps' if is_memnav else 'epoch',

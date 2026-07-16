@@ -41,6 +41,7 @@
 #   EPOCHS=1
 #   NUM_WORKERS=4
 #   RESUME_FROM_CHECKPOINT=auto
+#   MEMNAV_MAX_TRAIN_STEPS=-1  (-1 = epoch-based; positive = bounded smoke)
 #   MEMNAV_SAVE_STEPS=25
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
 #
@@ -87,6 +88,7 @@ export MEMNAV_LOGGING_STEPS=${MEMNAV_LOGGING_STEPS:-10}
 export MEMNAV_EVAL_SAMPLES=${MEMNAV_EVAL_SAMPLES:-16}
 export MEMNAV_EVAL_STEPS=${MEMNAV_EVAL_STEPS:-25}
 export MEMNAV_EVAL_BATCH_SIZE=${MEMNAV_EVAL_BATCH_SIZE:-4}
+export MEMNAV_MAX_TRAIN_STEPS=${MEMNAV_MAX_TRAIN_STEPS:--1}
 export MEMNAV_REPORT_TO=${MEMNAV_REPORT_TO:-wandb}
 export WANDB_PROJECT=${WANDB_PROJECT:-memnav}
 export WANDB_NAME=${WANDB_NAME:-${NAME}}
@@ -140,7 +142,7 @@ apptainer exec --nv \
         echo "===== TRAIN ENV CHECK ====="
         command -v python; python -V
         python -c "import torch, transformers, diffusers; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available(), \"transformers\", transformers.__version__, \"diffusers\", diffusers.__version__); assert torch.cuda.is_available()"
-        echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} wk=${NUM_WORKERS} resume=${RESUME_FROM_CHECKPOINT}"
+        echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} max_steps=${MEMNAV_MAX_TRAIN_STEPS} wk=${NUM_WORKERS} resume=${RESUME_FROM_CHECKPOINT}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"

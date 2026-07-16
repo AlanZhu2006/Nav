@@ -6,6 +6,7 @@ closed-loop Habitat navigation benchmark.
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import subprocess
@@ -16,7 +17,11 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset, memnav_collate_fn
+from internnav.dataset.memnav_dataset_lerobot import (
+    MemNav_Dataset,
+    build_fixed_memnav_eval_subset,
+    memnav_collate_fn,
+)
 from internnav.model.basemodel.memnav.memnav_policy import MemNavModelConfig, MemNavPolicy
 from internnav.model.basemodel.memnav.metrics import (
     attach_full_diffusion_records,
@@ -42,6 +47,12 @@ def parse_args():
     parser.add_argument('--batch-size', type=int, default=4)
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--max-samples', type=int, default=0)
+    parser.add_argument(
+        '--subset-mode',
+        choices=('balanced-fixed', 'random'),
+        default='balanced-fixed',
+        help='selection rule when --max-samples is smaller than the dataset',
+    )
     parser.add_argument('--log-every', type=int, default=10)
     parser.add_argument('--oracle-positive', action='store_true')
     parser.add_argument(
@@ -161,10 +172,32 @@ def main():
         sampling_seed=args.sampling_seed,
     )
     dataset_size = len(dataset)
+    selection_indices = list(range(dataset_size))
     if 0 < args.max_samples < dataset_size:
-        rng = np.random.default_rng(args.seed)
-        indices = sorted(rng.choice(dataset_size, args.max_samples, replace=False).tolist())
-        eval_dataset = Subset(dataset, indices)
+        if args.subset_mode == 'balanced-fixed':
+            eval_dataset = build_fixed_memnav_eval_subset(
+                dataset, args.max_samples, selection_seed=args.seed
+            )
+            selection_indices = eval_dataset.memnav_selection_indices
+            print(
+                f'[subset] balanced fixed: {len(eval_dataset)}/{dataset_size}; '
+                f'revisit={eval_dataset.memnav_num_revisit}, '
+                f'novel={eval_dataset.memnav_num_novel}; '
+                f'fingerprint={eval_dataset.dataset_fingerprint}'
+            )
+        else:
+            rng = np.random.default_rng(args.seed)
+            selection_indices = sorted(
+                rng.choice(dataset_size, args.max_samples, replace=False).tolist()
+            )
+            eval_dataset = Subset(dataset, selection_indices)
+            subset_manifest = (
+                f'{dataset.dataset_fingerprint}\n'
+                + ','.join(str(index) for index in selection_indices)
+            )
+            eval_dataset.dataset_fingerprint = hashlib.sha256(
+                subset_manifest.encode('utf-8')
+            ).hexdigest()
     else:
         eval_dataset = dataset
     loader = DataLoader(
@@ -249,6 +282,11 @@ def main():
         'random_seed': args.seed,
         'dataset_fingerprint': dataset.dataset_fingerprint,
         'dataset_size': dataset_size,
+        'subset_mode': args.subset_mode if len(eval_dataset) < dataset_size else 'full',
+        'selection_indices': selection_indices,
+        'eval_dataset_fingerprint': getattr(
+            eval_dataset, 'dataset_fingerprint', dataset.dataset_fingerprint
+        ),
         'evaluated_samples': len(records),
         'oracle_positive': args.oracle_positive,
         'full_diffusion_goal_shuffle': args.full_diffusion_goal_shuffle,

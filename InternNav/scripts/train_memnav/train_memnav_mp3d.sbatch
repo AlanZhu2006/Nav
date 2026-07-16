@@ -137,7 +137,7 @@ apptainer exec --nv \
         fi
 
         echo "===== TRAIN ENV CHECK ====="
-        which python; python -V
+        command -v python; python -V
         python -c "import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available())"
         echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} wk=${NUM_WORKERS} resume=${RESUME_FROM_CHECKPOINT}"
         echo "root=${MEMNAV_ROOT_DIR}"

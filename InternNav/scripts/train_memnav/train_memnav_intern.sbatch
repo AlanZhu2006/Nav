@@ -120,7 +120,7 @@ fi
 
 echo "===== TRAIN ENV CHECK ====="
 echo "host:        $(hostname)"
-which python; python -V
+command -v python; python -V
 echo "torch:       $(python -c 'import torch; print(torch.__version__, "cuda", torch.cuda.is_available())')"
 echo "exp:         ${NAME}"
 echo "root:        ${MEMNAV_ROOT_DIR}"

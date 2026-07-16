@@ -154,8 +154,20 @@ def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
         converted_rotation, batch['batch_goal_rel_rotation'].to(device)
     )
     gate = outputs['revisit_gate']
+    effective_gate = outputs.get('effective_revisit_gate', gate)
     gate_feature = outputs['gate_feature']
     gate_bce = F.binary_cross_entropy(gate, revisit.float(), reduction='none')
+    pose_reliability = outputs.get('pose_reliability')
+    pose_range_steps = outputs.get('pose_range_steps')
+    raw_pose_direction = outputs.get('raw_pose_direction')
+    if raw_pose_direction is not None:
+        gt_norm = torch.linalg.vector_norm(aux_gt, dim=-1)
+        gt_direction = aux_gt / gt_norm.clamp_min(1e-6).unsqueeze(-1)
+        raw_pose_cos = (raw_pose_direction * gt_direction).sum(-1).clamp(-1, 1)
+        raw_pose_direction_error = torch.rad2deg(torch.arccos(raw_pose_cos))
+        pose_quality = raw_pose_cos.clamp(0, 1)
+    else:
+        raw_pose_direction_error = pose_quality = None
 
     oracle_action = oracle_aux_pred = oracle_aux_sq = oracle_direction_error = None
     oracle_anchor_positive = None
@@ -213,6 +225,7 @@ def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
             'match_outcome': outcome,
             'match_correct': bool(selected_positive[index]) if bool(revisit[index]) else None,
             'gate': float(gate[index].item()),
+            'effective_gate': float(effective_gate[index].item()),
             'gate_feature': float(gate_feature[index].item()),
             'gate_bce': float(gate_bce[index].item()),
             'action_mse': float(action[index].item()),
@@ -232,6 +245,15 @@ def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
                 converted_rotation_error[index].item()
             ),
         }
+        if pose_reliability is not None:
+            record['pose_reliability'] = float(pose_reliability[index].item())
+        if pose_range_steps is not None:
+            record['pose_range_steps'] = float(pose_range_steps[index].item())
+        if raw_pose_direction_error is not None:
+            record['raw_pose_direction_error_deg'] = float(
+                raw_pose_direction_error[index].item()
+            )
+            record['pose_quality'] = float(pose_quality[index].item())
         if oracle_outputs is not None:
             record.update({
                 'oracle_anchor_positive': bool(oracle_anchor_positive[index]),
@@ -306,10 +328,15 @@ _GROUP_METRIC_KEYS = (
     'action_noise_mse_y',
     'action_noise_mse_theta',
     'gate',
+    'effective_gate',
     'gate_feature',
     'aux_mse_x',
     'aux_mse_y',
     'aux_direction_error_deg',
+    'raw_pose_direction_error_deg',
+    'pose_reliability',
+    'pose_quality',
+    'pose_range_steps',
     'rotation_error_converted_deg',
     'full_diffusion_action_mse',
     'full_diffusion_shuffled_goal_action_mse',
@@ -332,7 +359,8 @@ def _summarize_group(records):
         # interface.  Never let them contaminate B/C group diagnostics.
         source = (
             revisit_records
-            if key.startswith('aux_') or key.startswith('rotation_')
+            if (key.startswith('aux_') or key.startswith('rotation_')
+                or key.startswith('pose_') or key.startswith('raw_pose_'))
             else records
         )
         value = _mean(source, key)
@@ -406,6 +434,8 @@ def summarize_memnav_records(records):
         'gate_bce': _mean(records, 'gate_bce'),
         'gate_revisit': _mean(records, 'gate', revisit),
         'gate_novel': _mean(records, 'gate', novel),
+        'effective_gate_revisit': _mean(records, 'effective_gate', revisit),
+        'effective_gate_novel': _mean(records, 'effective_gate', novel),
         'gate_feature_revisit': _mean(records, 'gate_feature', revisit),
         'gate_feature_novel': _mean(records, 'gate_feature', novel),
         'aux_mse_x_revisit': _mean(records, 'aux_mse_x', revisit),
@@ -413,6 +443,11 @@ def summarize_memnav_records(records):
         'aux_direction_error_deg_revisit': _mean(
             records, 'aux_direction_error_deg', revisit
         ),
+        'raw_pose_direction_error_deg_revisit': _mean(
+            records, 'raw_pose_direction_error_deg', revisit
+        ),
+        'pose_reliability_revisit': _mean(records, 'pose_reliability', revisit),
+        'pose_quality_revisit': _mean(records, 'pose_quality', revisit),
         'aux_pred_x_mean_revisit': _mean(records, 'aux_pred_x', revisit),
         'aux_pred_x_std_revisit': _std(records, 'aux_pred_x', revisit),
         'aux_pred_y_mean_revisit': _mean(records, 'aux_pred_y', revisit),

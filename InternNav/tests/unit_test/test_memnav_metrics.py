@@ -30,11 +30,18 @@ def _batch():
 
 
 def _outputs():
+    raw_direction = torch.nn.functional.normalize(
+        torch.tensor([[1.0, 2.0], [1.0, 0.0]]), dim=-1
+    )
     return {
         'ret_logits': torch.tensor([[3.0, 0.0], [0.0, 2.0]]),
         'match_idx': torch.tensor([0, 1]),
         'anchor_idx': torch.tensor([0, 1]),
         'revisit_gate': torch.tensor([0.9, 0.2]),
+        'effective_revisit_gate': torch.tensor([0.72, 0.10]),
+        'pose_reliability': torch.tensor([0.8, 0.5]),
+        'pose_range_steps': torch.tensor([120.0, 20.0]),
+        'raw_pose_direction': raw_direction,
         'gate_feature': torch.tensor([0.95, 0.60]),
         'noise': torch.zeros(2, 1, 3),
         'noise_pred': torch.tensor([[[1.0, 1.0, 1.0]], [[2.0, 2.0, 2.0]]]),
@@ -60,6 +67,9 @@ class MemNavMetricsTest(unittest.TestCase):
         self.assertAlmostEqual(metrics['revisit_match_accuracy'], 1.0)
         self.assertAlmostEqual(metrics['gate_revisit'], 0.9, places=6)
         self.assertAlmostEqual(metrics['gate_novel'], 0.2, places=6)
+        self.assertAlmostEqual(metrics['effective_gate_revisit'], 0.72, places=6)
+        self.assertAlmostEqual(metrics['pose_reliability_revisit'], 0.8, places=6)
+        self.assertAlmostEqual(metrics['pose_quality_revisit'], 1.0, places=6)
         self.assertAlmostEqual(metrics['gate_separation'], 0.7, places=6)
         self.assertAlmostEqual(metrics['aux_mse_x_revisit'], 0.0)
         self.assertLess(metrics['aux_direction_error_deg_revisit'], 0.03)

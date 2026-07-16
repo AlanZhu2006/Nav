@@ -19,11 +19,21 @@ from internnav.trainer.base import BaseTrainer
 class MemNavTrainer(BaseTrainer):
     """Trainer for the frozen LingBot front-end and trainable MemNav policy.
 
-    The objective has three policy terms (diffusion action, retrieval ranking,
-    revisit gate) plus a bounded, scale-invariant translation-direction
-    auxiliary that shares ``rel_adapter`` with the revisit policy tokens.
+    The objective has diffusion action, retrieval ranking, semantic revisit gate,
+    scale-invariant translation direction, and geometric pose-reliability terms.
+    Semantic match existence and geometric trust are supervised separately.
     Metric x/y and camera-rotation errors are diagnostics only.
     """
+
+    POSE_RELIABILITY_FEATURE_NAMES = (
+        'range_code',
+        'anchor_gap_code',
+        'step_scale_drift',
+        'goal_anchor_range_code',
+        'vertical_ratio',
+        'rotation_tilt',
+        'semantic_score_z_scaled',
+    )
 
     def __init__(self, config, **kwargs):
         super().__init__(**kwargs)
@@ -34,6 +44,7 @@ class MemNavTrainer(BaseTrainer):
         self.w_retr = getattr(config.il, 'w_retrieval', 1.0)
         self.w_gate = getattr(config.il, 'w_gate', 1.0)
         self.w_aux = getattr(config.il, 'w_aux_direction', 0.2)
+        self.w_pose_reliability = getattr(config.il, 'w_pose_reliability', 0.2)
         self._metric_accumulators = {'train': {}, 'eval': {}}
         self.eval_seed = int(getattr(config.il, 'eval_seed', 0))
         model = self.model.module if hasattr(self.model, 'module') else self.model
@@ -51,7 +62,7 @@ class MemNavTrainer(BaseTrainer):
         print(f'[Rank {rank}] Dataset fingerprint: {fingerprint}')
 
     def create_optimizer(self):
-        """Give the normalized gate calibration its own learning-rate group.
+        """Give small calibration heads their own learning-rate groups.
 
         The raw-cosine feature is frozen and already discriminative; only two
         scalar calibration parameters need to move.  A multiplier avoids tying
@@ -65,9 +76,17 @@ class MemNavTrainer(BaseTrainer):
 
         opt_model = self.model
         multiplier = float(getattr(self.config.il, 'gate_lr_multiplier', 10.0))
+        pose_multiplier = float(
+            getattr(self.config.il, 'pose_reliability_lr_multiplier', 5.0)
+        )
         if multiplier <= 0:
             raise ValueError(
                 f'gate_lr_multiplier must be positive, got {multiplier}'
+            )
+        if pose_multiplier <= 0:
+            raise ValueError(
+                'pose_reliability_lr_multiplier must be positive, got '
+                f'{pose_multiplier}'
             )
         gate_suffixes = (
             'retrieval.gate_log_slope',
@@ -82,23 +101,32 @@ class MemNavTrainer(BaseTrainer):
             name for name, _ in named_trainable
             if name.endswith(gate_suffixes)
         }
+        pose_reliability_names = {
+            name for name, _ in named_trainable
+            if '.pose_encoder.reliability_head.' in name
+        }
+        calibration_names = gate_names | pose_reliability_names
         # Tiny test models and non-MemNav reuse should retain BaseTrainer's exact
         # optimizer behavior.
-        if not gate_names:
+        if not calibration_names:
             return super().create_optimizer()
 
         decay_names = set(get_parameter_names(opt_model, ALL_LAYERNORM_LAYERS))
         decay_names = {name for name in decay_names if 'bias' not in name}
         regular_decay = [
             parameter for name, parameter in named_trainable
-            if name not in gate_names and name in decay_names
+            if name not in calibration_names and name in decay_names
         ]
         regular_no_decay = [
             parameter for name, parameter in named_trainable
-            if name not in gate_names and name not in decay_names
+            if name not in calibration_names and name not in decay_names
         ]
         gate_parameters = [
             parameter for name, parameter in named_trainable if name in gate_names
+        ]
+        pose_reliability_parameters = [
+            parameter for name, parameter in named_trainable
+            if name in pose_reliability_names
         ]
         optimizer_groups = [
             {'params': regular_decay, 'weight_decay': self.args.weight_decay},
@@ -109,6 +137,13 @@ class MemNavTrainer(BaseTrainer):
                 'lr': self.args.learning_rate * multiplier,
                 'memnav_group': 'gate_calibration',
                 'lr_multiplier': multiplier,
+            },
+            {
+                'params': pose_reliability_parameters,
+                'weight_decay': 0.0,
+                'lr': self.args.learning_rate * pose_multiplier,
+                'memnav_group': 'pose_reliability_calibration',
+                'lr_multiplier': pose_multiplier,
             },
         ]
         optimizer_groups = [group for group in optimizer_groups if group['params']]
@@ -210,19 +245,38 @@ class MemNavTrainer(BaseTrainer):
             (1.0 - direction_cos) * aux_valid
         ).sum() / aux_count.clamp(min=1.0)
 
+        # Calibrate whether a semantically correct revisit pose is geometrically
+        # useful.  The target is continuous raw-bearing quality: 1 for agreement,
+        # 0 at/after 90 degrees.  It supervises only revisit rows and is detached so
+        # the confidence head cannot improve its label by changing the pose code.
+        raw_pose_direction = fwd['raw_pose_direction']
+        raw_direction_cos = (raw_pose_direction * gt_unit).sum(-1).clamp(-1.0, 1.0)
+        pose_quality_target = raw_direction_cos.clamp(0.0, 1.0).detach()
+        pose_reliability = fwd['pose_reliability'].clamp(1e-5, 1.0 - 1e-5)
+        pose_reliability_per_row = F.binary_cross_entropy(
+            pose_reliability, pose_quality_target, reduction='none'
+        )
+        pose_reliability_loss = (
+            pose_reliability_per_row * aux_valid
+        ).sum() / aux_count.clamp(min=1.0)
+
         loss = (
             action_loss
             + self.w_retr * rank_loss
             + self.w_gate * gate_loss
             + self.w_aux * aux_direction_loss
+            + self.w_pose_reliability * pose_reliability_loss
         )
 
         with torch.no_grad():
             rev_mask = is_rev > 0.5
             novel_mask = ~rev_mask
             gate_prob = torch.sigmoid(gate_logit)
+            effective_gate = fwd['effective_revisit_gate']
             gate_seen = self._masked_mean(gate_prob, rev_mask)
             gate_unseen = self._masked_mean(gate_prob, novel_mask)
+            effective_gate_seen = self._masked_mean(effective_gate, rev_mask)
+            effective_gate_unseen = self._masked_mean(effective_gate, novel_mask)
             gate_sep = gate_seen - gate_unseen
             gate_acc = ((gate_prob > 0.5) == rev_mask).float().mean()
             gate_revisit_recall = self._masked_mean(gate_prob > 0.5, rev_mask)
@@ -242,6 +296,18 @@ class MemNavTrainer(BaseTrainer):
             # small-norm guard to avoid an unstable gradient near a zero vector.
             direction_err_deg = torch.rad2deg(torch.arccos(metric_direction_cos))
             direction_err = self._masked_mean(direction_err_deg, aux_valid)
+            raw_direction_err_deg = torch.rad2deg(torch.arccos(raw_direction_cos))
+            raw_direction_err = self._masked_mean(raw_direction_err_deg, aux_valid)
+            pose_reliability_mean = self._masked_mean(pose_reliability, aux_valid)
+            pose_quality_mean = self._masked_mean(pose_quality_target, aux_valid)
+            pose_reliability_brier = self._masked_mean(
+                (pose_reliability - pose_quality_target).square(), aux_valid
+            )
+            pose_reliability_features = fwd['pose_reliability_features']
+            if pose_reliability_features.shape[-1] != len(
+                self.POSE_RELIABILITY_FEATURE_NAMES
+            ):
+                raise ValueError('unexpected pose reliability feature width')
 
             gate_feature = fwd['gate_feature']
             gate_feature_seen = self._masked_mean(gate_feature, rev_mask)
@@ -280,10 +346,10 @@ class MemNavTrainer(BaseTrainer):
             # dominated by two long C-leg rows and looked like a global axis bug.
             # These diagnostics never enter the loss; they expose goal type and
             # temporal support together with an explicit support fraction.
+            per_sample_action = action_sq.mean(dim=(1, 2))
             goal_j = inputs.get('batch_goal_j')
             if goal_j is not None:
                 goal_j = goal_j.to(dev)
-                per_sample_action = action_sq.mean(dim=(1, 2))
                 for goal_index, goal_label in ((-1, 'A'), (0, 'B'), (1, 'C')):
                     goal_mask = goal_j == goal_index
                     goal_count = goal_mask.float().sum()
@@ -301,6 +367,11 @@ class MemNavTrainer(BaseTrainer):
                         (
                             f'gate_goal_{goal_label}',
                             self._masked_mean(gate_prob, goal_mask),
+                            goal_count,
+                        ),
+                        (
+                            f'effective_gate_goal_{goal_label}',
+                            self._masked_mean(effective_gate, goal_mask),
                             goal_count,
                         ),
                     ])
@@ -325,6 +396,21 @@ class MemNavTrainer(BaseTrainer):
                         (
                             f'aux_mse_y_goal_{goal_label}_revisit',
                             self._masked_mean(xy_sq[:, 1], goal_aux_mask),
+                            goal_aux_count,
+                        ),
+                        (
+                            f'pose_reliability_goal_{goal_label}_revisit',
+                            self._masked_mean(pose_reliability, goal_aux_mask),
+                            goal_aux_count,
+                        ),
+                        (
+                            f'pose_quality_goal_{goal_label}_revisit',
+                            self._masked_mean(pose_quality_target, goal_aux_mask),
+                            goal_aux_count,
+                        ),
+                        (
+                            f'raw_pose_direction_err_deg_goal_{goal_label}_revisit',
+                            self._masked_mean(raw_direction_err_deg, goal_aux_mask),
                             goal_aux_count,
                         ),
                     ])
@@ -354,6 +440,26 @@ class MemNavTrainer(BaseTrainer):
                         (
                             f'aux_mse_y_{prefix}_{label}',
                             self._masked_mean(xy_sq[:, 1], bin_mask),
+                            count,
+                        ),
+                        (
+                            f'raw_pose_direction_err_deg_{prefix}_{label}',
+                            self._masked_mean(raw_direction_err_deg, bin_mask),
+                            count,
+                        ),
+                        (
+                            f'pose_reliability_{prefix}_{label}',
+                            self._masked_mean(pose_reliability, bin_mask),
+                            count,
+                        ),
+                        (
+                            f'pose_quality_{prefix}_{label}',
+                            self._masked_mean(pose_quality_target, bin_mask),
+                            count,
+                        ),
+                        (
+                            f'action_loss_{prefix}_{label}',
+                            self._masked_mean(per_sample_action, bin_mask),
                             count,
                         ),
                     ])
@@ -391,8 +497,11 @@ class MemNavTrainer(BaseTrainer):
             'retrieval_loss': rank_loss,
             'gate_loss': gate_loss,
             'aux_direction_loss': aux_direction_loss,
+            'pose_reliability_loss': pose_reliability_loss,
             'gate_seen': gate_seen,
             'gate_unseen': gate_unseen,
+            'effective_gate_seen': effective_gate_seen,
+            'effective_gate_unseen': effective_gate_unseen,
             'gate_sep': gate_sep,
             'gate_acc': gate_acc,
             'gate_revisit_recall': gate_revisit_recall,
@@ -406,6 +515,10 @@ class MemNavTrainer(BaseTrainer):
             'aux_mse_y': aux_mse_y,
             'aux_xy_l2': aux_xy_l2,
             'aux_direction_err_deg': direction_err,
+            'raw_pose_direction_err_deg': raw_direction_err,
+            'pose_reliability': pose_reliability_mean,
+            'pose_quality': pose_quality_mean,
+            'pose_reliability_brier': pose_reliability_brier,
         }
 
         # Accumulate over exactly the same interval as Trainer's own train/loss.
@@ -427,6 +540,9 @@ class MemNavTrainer(BaseTrainer):
         self._accumulate('retrieval_loss', rank_loss, rank_count, phase)
         self._accumulate('gate_loss', gate_loss, B, phase)
         self._accumulate('aux_direction_loss', aux_direction_loss, aux_count, phase)
+        self._accumulate(
+            'pose_reliability_loss', pose_reliability_loss, aux_count, phase
+        )
         self._accumulate('revisit_fraction', n_rev / B, B, phase)
         self._accumulate('rank_row_fraction', rank_count / B, B, phase)
         self._accumulate('gate_acc', gate_acc, B, phase)
@@ -434,6 +550,8 @@ class MemNavTrainer(BaseTrainer):
         self._accumulate('gate_novel_recall', gate_novel_recall, n_novel, phase)
         self._accumulate('gate_seen', gate_seen, n_rev, phase)
         self._accumulate('gate_unseen', gate_unseen, n_novel, phase)
+        self._accumulate('effective_gate_seen', effective_gate_seen, n_rev, phase)
+        self._accumulate('effective_gate_unseen', effective_gate_unseen, n_novel, phase)
         self._accumulate('seen_match_acc', seen_match, n_rev, phase)
         self._accumulate('gate_feature_seen', gate_feature_seen, n_rev, phase)
         self._accumulate('gate_feature_unseen', gate_feature_unseen, n_novel, phase)
@@ -443,6 +561,25 @@ class MemNavTrainer(BaseTrainer):
         self._accumulate('aux_mse_y', aux_mse_y, n_rev, phase)
         self._accumulate('aux_xy_l2', aux_xy_l2, n_rev, phase)
         self._accumulate('aux_direction_err_deg', direction_err, aux_count, phase)
+        self._accumulate(
+            'raw_pose_direction_err_deg', raw_direction_err, aux_count, phase
+        )
+        self._accumulate('pose_reliability', pose_reliability_mean, aux_count, phase)
+        self._accumulate('pose_quality', pose_quality_mean, aux_count, phase)
+        self._accumulate(
+            'pose_reliability_brier', pose_reliability_brier, aux_count, phase
+        )
+        for feature_index, feature_name in enumerate(
+            self.POSE_RELIABILITY_FEATURE_NAMES
+        ):
+            self._accumulate(
+                f'pose_cue_{feature_name}',
+                self._masked_mean(
+                    pose_reliability_features[:, feature_index], aux_valid
+                ),
+                aux_count,
+                phase,
+            )
         self._accumulate('rot_err_raw_deg', rot_err_raw, n_rev, phase)
         self._accumulate('rot_err_converted_deg', rot_err_converted, n_rev, phase)
         for name, value in (
@@ -474,6 +611,7 @@ class MemNavTrainer(BaseTrainer):
         if had_components:
             component_logs.setdefault('retrieval_loss', 0.0)
             component_logs.setdefault('aux_direction_loss', 0.0)
+            component_logs.setdefault('pose_reliability_loss', 0.0)
 
         # Convert accumulated first/second moments into an interval-level std.
         for entity in (
@@ -516,7 +654,8 @@ class MemNavTrainer(BaseTrainer):
                 f"act={display(action_key)} "
                 f"rank={display('eval_retrieval_loss' if phase == 'eval' else 'retrieval_loss')} "
                 f"gate={display('eval_gate_loss' if phase == 'eval' else 'gate_loss')} "
-                f"aux_dir={display('eval_aux_direction_loss' if phase == 'eval' else 'aux_direction_loss')}"
+                f"aux_dir={display('eval_aux_direction_loss' if phase == 'eval' else 'aux_direction_loss')} "
+                f"pose_rel={display('eval_pose_reliability_loss' if phase == 'eval' else 'pose_reliability_loss')}"
             )
         return super().log(logs, start_time)
 
@@ -559,8 +698,10 @@ class MemNavTrainer(BaseTrainer):
         os.makedirs(output_dir, exist_ok=True)
         torch.save(state, os.path.join(output_dir, 'memnav.ckpt'))
         retrieval = getattr(getattr(model, 'core', None), 'retrieval', None)
+        revisit_merge = getattr(getattr(model, 'core', None), 'revisit_merge', None)
+        pose_encoder = getattr(revisit_merge, 'pose_encoder', None)
         metadata = {
-            'format_version': 3,
+            'format_version': 4,
             'dataset_fingerprint': self._dataset_fingerprint(self.train_dataset),
             'eval_dataset_fingerprint': self._dataset_fingerprint(self.eval_dataset),
             'gate_parameterization': 'normalized_raw_cosine_v1',
@@ -570,6 +711,7 @@ class MemNavTrainer(BaseTrainer):
             'gate_width': (
                 float(retrieval.gate_width.detach().cpu()) if retrieval is not None else None
             ),
+            'revisit_pose_code': getattr(pose_encoder, 'CODE_VERSION', None),
         }
         with open(os.path.join(output_dir, 'memnav_metadata.json'), 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2, sort_keys=True)
@@ -591,10 +733,10 @@ class MemNavTrainer(BaseTrainer):
             )
         with open(metadata_path, encoding='utf-8') as f:
             metadata = json.load(f)
-        if metadata.get('format_version') != 3:
+        if metadata.get('format_version') != 4:
             raise ValueError(
                 'Cannot resume this MemNav checkpoint safely: expected metadata '
-                'format 3 (normalized gate optimizer units), got '
+                'format 4 (normalized gate + gauge-invariant pose code), got '
                 f"{metadata.get('format_version')!r}. Legacy checkpoints remain "
                 'available for offline evaluation, but training must start a new run.'
             )
@@ -619,6 +761,14 @@ class MemNavTrainer(BaseTrainer):
 
         target = model if model is not None else self.model
         target = target.module if hasattr(target, 'module') else target
+        target_revisit = getattr(getattr(target, 'core', None), 'revisit_merge', None)
+        target_pose_encoder = getattr(target_revisit, 'pose_encoder', None)
+        target_pose_code = getattr(target_pose_encoder, 'CODE_VERSION', None)
+        if metadata.get('revisit_pose_code') != target_pose_code:
+            raise ValueError(
+                'Revisit pose-code version changed since the checkpoint was written: '
+                f"{metadata.get('revisit_pose_code')!r} != {target_pose_code!r}."
+            )
         try:
             state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
         except TypeError:

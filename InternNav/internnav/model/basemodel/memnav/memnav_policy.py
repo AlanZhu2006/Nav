@@ -25,6 +25,7 @@ from transformers import PretrainedConfig, PreTrainedModel
 
 from internnav.model.basemodel.memnav.lingbot_stream import LingBotStream
 from internnav.model.basemodel.memnav.retrieval_head import RetrievalHead
+from internnav.model.basemodel.memnav.revisit_pose import GaugeInvariantRevisitPose
 from internnav.model.encoder.navdp_backbone import (
     LearnablePositionalEncoding,
     NavDP_ImageGoal_Backbone,
@@ -98,10 +99,12 @@ class RevisitMerge(nn.Module):
     synthesize that cross term. So it's computed here in closed form (`_relative_pose`),
     same reasoning as VGGT/Pi3 supervising relative pose directly.
 
+      - pose_encoder → a gauge-invariant planar bearing, stream-normalized bounded
+        range, and separately calibrated geometric reliability.  The raw long-range
+        translation and endpoint camera rotation never enter the action token.
       - revisit_head  → revisit_readout (the diffusion goal slot). TRAINABLE: a plain
-        Linear on [t_rel, R_rel.flatten()] (12-d) — no attention needed for a single
-        input feature vector (TokenCompressor would degenerate to per-slot linear reads
-        of it anyway).
+        Linear on the four-dimensional robust pose code — no attention needed for a
+        single input feature vector.
       - aux_pose_head → translation direction in (x, y), not metric scale and not θ.
         The direction loss is invariant to LingBot's per-sequence canonical scale and,
         through ``rel_adapter``, shapes the same relative feature consumed by the
@@ -120,36 +123,39 @@ class RevisitMerge(nn.Module):
         A global affine head cannot repair sequence-dependent monocular scale or
         accumulated VO drift, which is why metric x/y MSE is diagnostic rather than a
         training loss. ``rel_adapter`` is shared by the auxiliary direction head and
-        ``revisit_head``, so this supervision is no longer an isolated sidecar.
-        The initial signed-axis mapping is derived from the corrected generated-data
-        convention. Metric scale is deliberately left for training instead of baking in
-        the former two-episode fit, which was measured against legacy labels that dropped
-        one horizontal coordinate.
+        ``revisit_head``, so this supervision is no longer an isolated sidecar.  The
+        reliability head is supervised against raw-bearing agreement with GT and later
+        ANDed with semantic retrieval confidence: "seen before" and "pose trustworthy"
+        are deliberately different probabilities.
     """
 
-    # LingBot local -> corrected NavDP planar axes. Legacy generated labels used
-    # [up, -right, back]; the fixed camera mount produces [-back, -right, up].
-    # The previously validated LingBot->legacy mapping was
-    # [old_x, old_y, old_z] = [-l_y, -l_x, -l_z], hence corrected
-    # [x, y] = [-old_z, old_y] = [l_z, -l_x].
-    _AUX_XY_INIT = ((0.0, 0.0, 1.0), (-1.0, 0.0, 0.0))
-
-    def __init__(self, dim=384, n_out=4):
+    def __init__(self, dim=384, n_out=4, distance_unit_steps=32,
+                 max_frame_num=4096, reliability_hidden=16,
+                 reliability_init=0.95):
         super().__init__()
-        self.rel_adapter = nn.Sequential(
-            nn.Linear(12, 12), nn.GELU(), nn.Linear(12, 12)
+        self.pose_encoder = GaugeInvariantRevisitPose(
+            distance_unit_steps=distance_unit_steps,
+            max_frame_num=max_frame_num,
+            reliability_hidden=reliability_hidden,
+            reliability_init=reliability_init,
         )
-        # Residual identity at initialization keeps old behavior and checkpoint
-        # compatibility while allowing both action and auxiliary gradients to
-        # reshape the relative representation.
+        pose_dim = 4
+        self.rel_adapter = nn.Sequential(
+            nn.Linear(pose_dim, pose_dim), nn.GELU(), nn.Linear(pose_dim, pose_dim)
+        )
+        # Residual identity at initialization lets both action and auxiliary
+        # gradients reshape the robust representation without perturbing it at
+        # step zero.  The dimension change intentionally prevents unsafe resume
+        # from raw-t_rel checkpoints.
         nn.init.zeros_(self.rel_adapter[-1].weight)
         nn.init.zeros_(self.rel_adapter[-1].bias)
-        self.revisit_head = nn.Linear(12, n_out * dim)       # [t_rel(3), R_rel.flatten(9)] -> n_out tokens
+        self.revisit_head = nn.Linear(pose_dim, n_out * dim)
         self.n_out, self.dim = n_out, dim
-        # Trainable global affine calibration, initialized with the known axis map.
-        self.aux_pose_head = nn.Linear(3, 2)
+        # The first two robust-code coordinates already are corrected NavDP bearing.
+        self.aux_pose_head = nn.Linear(pose_dim, 2)
         with torch.no_grad():
-            self.aux_pose_head.weight.copy_(torch.tensor(self._AUX_XY_INIT))
+            self.aux_pose_head.weight.zero_()
+            self.aux_pose_head.weight[:, :2].copy_(torch.eye(2))
             self.aux_pose_head.bias.zero_()
 
     @staticmethod
@@ -181,18 +187,27 @@ class RevisitMerge(nn.Module):
         R_rel = R_cur_T @ R_goal                                         # R_cur^T R_goal
         return t_rel, R_rel
 
-    def forward(self, cur_pose, goal_pose):
+    def forward(self, cur_pose, goal_pose, pose_context=None):
         """cur_pose, goal_pose: [B, 9] absolute camera poses (map frame)."""
         t_rel, R_rel = self._relative_pose(cur_pose, goal_pose)          # [B,3], [B,3,3]
-        rel_feat = torch.cat([t_rel, R_rel.flatten(-2)], dim=-1)         # [B,12]
+        encoded = self.pose_encoder(t_rel, R_rel, pose_context)
+        rel_feat = encoded['pose_code']                                  # [B,4]
         rel_feat = rel_feat + self.rel_adapter(rel_feat)
-        aux_pose = self.aux_pose_head(rel_feat[..., :3])                 # [B,2] raw translation proxy
+        aux_pose = self.aux_pose_head(rel_feat)                           # [B,2] direction proxy
         revisit_readout = self.revisit_head(rel_feat).view(-1, self.n_out, self.dim)
         # R_rel returned too — not for any loss (no head/calibration needed for it, it's a
         # raw feature into revisit_head), just so the trainer can log a rotation-accuracy
         # diagnostic against GT (batch_goal_rel_rotation), same treatment as the gate/match
         # diagnostics already logged under no_grad in MemNavTrainer.compute_loss.
-        return revisit_readout, aux_pose, R_rel
+        return (
+            revisit_readout,
+            aux_pose,
+            R_rel,
+            encoded['raw_direction'],
+            encoded['reliability'],
+            encoded['reliability_features'],
+            encoded['range_steps'],
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -203,7 +218,9 @@ class MemNavNet(nn.Module):
                  token_dim=384, heads=8, m_rgbd=4, m_depth=4, m_revisit=4, m_novel=4,
                  predict_size=24, temporal_depth=8, num_diffusion_iters=10, goal_warm=64,
                  novel_backbone_weights=None, gate_center=0.94, gate_width=0.04,
-                 gate_slope_init=1.6, gate_bias_init=0.0, device="cuda"):
+                 gate_slope_init=1.6, gate_bias_init=0.0,
+                 pose_scale_window=64, pose_reliability_hidden=16,
+                 pose_reliability_init=0.95, device="cuda"):
         super().__init__()
         self.lingbot = LingBotStream(device=device, **(lingbot_kwargs or {}))
         self.window = self.lingbot.window
@@ -215,6 +232,9 @@ class MemNavNet(nn.Module):
         # `window` on purpose (see LingBotStream.goal_append_warm); validated against a
         # continuous-stream oracle in scripts/diag_lingbot_pose_accuracy.py.
         self.goal_warm = goal_warm
+        self.pose_scale_window = int(pose_scale_window)
+        if self.pose_scale_window < 2:
+            raise ValueError('pose_scale_window must be at least two frames')
 
         # trainable heads
         self.retrieval = RetrievalHead(
@@ -237,7 +257,14 @@ class MemNavNet(nn.Module):
         self.compress_rgbd = TokenCompressor(token_dim, heads, m_rgbd)
         self.compress_depth = TokenCompressor(token_dim, heads, m_depth)
         # revisit: analytic relative pose from current + goal absolute camera poses (+ aux pose head)
-        self.revisit_merge = RevisitMerge(token_dim, m_revisit)
+        self.revisit_merge = RevisitMerge(
+            token_dim,
+            m_revisit,
+            distance_unit_steps=self.window,
+            max_frame_num=int((lingbot_kwargs or {}).get('max_frame_num', 4096)),
+            reliability_hidden=pose_reliability_hidden,
+            reliability_init=pose_reliability_init,
+        )
 
         # --- NavDP DDPM decoder (no critic) ---
         # memory layout: [ time(1) | current_state(n_cs) | revisit(n_rev) | novel(n_nov) ]
@@ -274,10 +301,10 @@ class MemNavNet(nn.Module):
         geom = self.compress_depth(self.proj_depth(depth_feat))  # [B, m_depth, token_dim]
         return torch.cat([rgbd, geom], dim=1)
 
-    def build_revisit(self, cur_pose, goal_pose):
+    def build_revisit(self, cur_pose, goal_pose, pose_context=None):
         """cur_pose/goal_pose [B, 9] absolute camera poses (current frame + goal_append_warm)
-        -> (revisit_readout [B,m_revisit,token_dim], aux_pose [B,2] (x,y) only, R_rel [B,3,3])."""
-        return self.revisit_merge(cur_pose, goal_pose)
+        -> robust revisit tokens, auxiliary direction, and pose diagnostics."""
+        return self.revisit_merge(cur_pose, goal_pose, pose_context)
 
     # ----- DDPM decoder ------------------------------------------------ #
     def _memory(self, current_state, revisit, novel, timestep):
@@ -319,17 +346,36 @@ class MemNavNet(nn.Module):
         dev = self.device
         enc = self.encode_memory(batch)
         current_state = self.build_current_state(enc["current"], enc["depth_feat"])
-        revisit, aux_pose, R_rel = self.build_revisit(enc["cur_pose"], enc["goal_pose"])
+        (
+            revisit,
+            aux_pose,
+            R_rel,
+            raw_pose_direction,
+            pose_reliability,
+            pose_reliability_features,
+            pose_range_steps,
+        ) = self.build_revisit(
+            enc["cur_pose"], enc["goal_pose"], enc["pose_context"]
+        )
         novel = self.novel(batch["batch_window_images"][:, -1].to(dev),   # current frame [B,3,H,W]
                            batch["batch_goal_image"].to(dev))             # goal frame
+        # Joint probability that the goal is a semantic revisit AND its geometry
+        # is trustworthy.  Retrieval BCE continues to supervise the first factor;
+        # a separate calibration target supervises the second.
+        effective_revisit_gate = enc['revisit_gate'] * pose_reliability
         return dict(
             current_state=current_state,
             revisit=revisit,
             novel=novel,
             aux_pose=aux_pose,
             R_rel=R_rel,
+            raw_pose_direction=raw_pose_direction,
+            pose_reliability=pose_reliability,
+            pose_reliability_features=pose_reliability_features,
+            pose_range_steps=pose_range_steps,
             ret_logits=enc['ret_logits'],
             revisit_gate=enc['revisit_gate'],
+            effective_revisit_gate=effective_revisit_gate,
             gate_logit=enc['gate_logit'],
             gate_feature=enc['gate_feature'],
             match_idx=enc['match_idx'],
@@ -361,13 +407,18 @@ class MemNavNet(nn.Module):
             condition["current_state"],
             condition["revisit"],
             condition["novel"],
-            condition["revisit_gate"],
+            condition["effective_revisit_gate"],
         )
         return dict(
             noise_pred=noise_pred, noise=noise, timesteps=timesteps,
             aux_pose=condition["aux_pose"], R_rel=condition["R_rel"],
+            raw_pose_direction=condition["raw_pose_direction"],
+            pose_reliability=condition["pose_reliability"],
+            pose_reliability_features=condition["pose_reliability_features"],
+            pose_range_steps=condition["pose_range_steps"],
             ret_logits=condition["ret_logits"],
             revisit_gate=condition["revisit_gate"],
+            effective_revisit_gate=condition["effective_revisit_gate"],
             gate_logit=condition["gate_logit"],
             gate_feature=condition["gate_feature"],
             match_idx=condition["match_idx"], anchor_idx=condition["anchor_idx"],
@@ -434,7 +485,7 @@ class MemNavNet(nn.Module):
                 condition['current_state'],
                 condition['revisit'],
                 condition['novel'],
-                condition['revisit_gate'],
+                condition['effective_revisit_gate'],
             )
             sample = self.noise_scheduler.step(
                 model_output=noise_pred,
@@ -473,6 +524,48 @@ class MemNavNet(nn.Module):
         # the goal image is newly inserted and has no trajectory entry.
         return dict(scale_k=sk, scale_v=sv, anchor_k=ak, anchor_v=av, cam_k=ck, cam_v=cv,
                    cam_pose_enc=cam_pose_enc)
+
+    @torch.no_grad()
+    def _pose_consistency_context(self, cam_pose_enc, k, anchor, goal_pose, semantic_score_z):
+        """Observable, gauge-invariant cues for long-range pose reliability.
+
+        No GT or future trajectory is used.  A uniform map rescaling cancels from
+        every ratio; disagreement between the recent and prefix step scales is a
+        direct signal of the time-varying drift seen in long 3-leg streams.
+        """
+        positions = cam_pose_enc[: k + 1, :3]
+        planar_steps = torch.linalg.vector_norm(
+            positions[1:, (0, 2)] - positions[:-1, (0, 2)], dim=-1
+        )
+        valid = torch.isfinite(planar_steps) & (planar_steps > 1e-6)
+        if bool(valid.any()):
+            prefix_scale = planar_steps[valid].median()
+        else:
+            prefix_scale = planar_steps.new_tensor(1.0)
+
+        recent_start = max(0, len(planar_steps) - self.pose_scale_window)
+        recent_steps = planar_steps[recent_start:]
+        recent_valid = torch.isfinite(recent_steps) & (recent_steps > 1e-6)
+        recent_scale = (
+            recent_steps[recent_valid].median()
+            if bool(recent_valid.any())
+            else prefix_scale
+        )
+        prefix_scale = prefix_scale.clamp_min(1e-6)
+        recent_scale = recent_scale.clamp_min(1e-6)
+        step_scale_drift = (recent_scale / prefix_scale).log().abs()
+
+        anchor_position = cam_pose_enc[anchor, :3]
+        goal_anchor_raw = torch.linalg.vector_norm(
+            (goal_pose[:3] - anchor_position)[[0, 2]]
+        )
+        return {
+            'step_scale': prefix_scale,
+            'step_scale_drift': step_scale_drift,
+            'anchor_gap': prefix_scale.new_tensor(float(k - anchor)),
+            'goal_anchor_steps': goal_anchor_raw / prefix_scale,
+            'semantic_score_z': semantic_score_z.to(prefix_scale),
+        }
 
     def encode_memory(self, batch):
         """Frozen front-end orchestration. Retrieval (trainable, batched) picks the
@@ -514,6 +607,7 @@ class MemNavNet(nn.Module):
         B = len(batch["cache_paths"])
         lo = self.num_scale + self.window - 1
         cur_t, dfeat_t, curp, goalp = [], [], [], []
+        pose_context_rows = []
         for b in range(B):
             k = int(batch["cur_steps"][b])
             rgb_dir = batch["rgb_dirs"][b]
@@ -541,14 +635,28 @@ class MemNavNet(nn.Module):
                 _, goal_agg = self.lingbot.goal_append_warm(goal_img, cache, m, rgb_dir,
                                                             self.goal_warm, return_agg=True)
                 goal_pose = self.lingbot.camera_pose(ck, cv, m + 1, goal_agg)[-1]   # [9] goal abs pose
+                semantic_score_z = (
+                    (gate_feature[b] - self.retrieval.gate_center)
+                    / self.retrieval.gate_width
+                )
+                pose_context_rows.append(
+                    self._pose_consistency_context(
+                        cache['cam_pose_enc'], k, m, goal_pose, semantic_score_z
+                    )
+                )
                 # (3) novel branch runs on raw images (batched, in forward) — no live dino needed
             cur_t.append(cur); dfeat_t.append(dfeat); curp.append(cur_pose); goalp.append(goal_pose)
 
+        pose_context = {
+            name: torch.stack([row[name] for row in pose_context_rows])
+            for name in pose_context_rows[0]
+        }
         return dict(
             current=torch.stack(cur_t),      # [B, P, 2C]    post-GCT (RGBD branch)
             depth_feat=torch.stack(dfeat_t), # [B, Pf, Cd]   depth-head geometry
             cur_pose=torch.stack(curp),      # [B, 9]        current absolute camera pose (map frame)
             goal_pose=torch.stack(goalp),    # [B, 9]        goal absolute camera pose (map frame)
+            pose_context=pose_context,
             match_idx=match_idx, anchor_idx=anchor, revisit_gate=revisit_gate,
             gate_logit=gate_logit, gate_feature=gate_feature, ret_logits=ret_logits,
         )
@@ -617,6 +725,9 @@ class MemNavPolicy(PreTrainedModel):
             gate_width=il.get('gate_width', 0.04),
             gate_slope_init=il.get('gate_slope_init', 1.6),
             gate_bias_init=il.get('gate_bias_init', 0.0),
+            pose_scale_window=il.get('pose_scale_window', 64),
+            pose_reliability_hidden=il.get('pose_reliability_hidden', 16),
+            pose_reliability_init=il.get('pose_reliability_init', 0.95),
             lingbot_kwargs=lingbot_kwargs or None, device=str(self._device),
         )
 
@@ -692,7 +803,9 @@ if __name__ == "__main__":
         print(f"  cur_steps={batch['cur_steps']} goal_steps={batch['goal_steps']} match_idx={out['match_idx'].tolist()}")
         cs = net.build_current_state(out["current"], out["depth_feat"])
         nov = net.novel(batch["batch_window_images"][:, -1].to(net.device), batch["batch_goal_image"].to(net.device))
-        rr, ap, _R_rel = net.build_revisit(out["cur_pose"], out["goal_pose"])
+        rr, ap, _R_rel, *_pose_diag = net.build_revisit(
+            out["cur_pose"], out["goal_pose"], out.get("pose_context")
+        )
         print(f"  current_state (RGBD+depth Perceiver): {tuple(cs.shape)} req_grad={cs.requires_grad}")
         print(f"  novel readout: {tuple(nov.shape)} req_grad={nov.requires_grad}")
         print(f"  revisit_readout: {tuple(rr.shape)} | aux_pose: {tuple(ap.shape)} req_grad={rr.requires_grad}")

@@ -45,7 +45,7 @@ class MemNavDiffusionSamplingTest(unittest.TestCase):
             'current_state': torch.zeros(batch_size, 1, 1),
             'revisit': torch.zeros(batch_size, 1, 1),
             'novel': torch.full((batch_size, 1, 1), float(goal_signal)),
-            'revisit_gate': torch.zeros(batch_size),
+            'effective_revisit_gate': torch.zeros(batch_size),
         }
 
     def test_complete_sampling_is_reproducible_with_paired_randomness(self):

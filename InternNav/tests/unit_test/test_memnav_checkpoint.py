@@ -43,13 +43,29 @@ class _LossModel(nn.Module):
         aux_pose = self.scale * torch.tensor(
             [[1.0, 2.0], [0.5, 0.5]], device=self.device
         )
+        raw_pose_direction = torch.tensor(
+            [[1.0, 2.0], [1.0, 0.0]], device=self.device
+        )
+        raw_pose_direction = torch.nn.functional.normalize(
+            raw_pose_direction, dim=-1
+        )
+        pose_reliability = torch.sigmoid(
+            self.scale * torch.tensor([2.0, 1.0], device=self.device)
+        )
+        revisit_gate = torch.sigmoid(gate_logit)
         return {
             'noise': noise,
             'noise_pred': noise_pred,
             'gate_logit': gate_logit,
-            'revisit_gate': torch.sigmoid(gate_logit),
+            'revisit_gate': revisit_gate,
+            'effective_revisit_gate': revisit_gate * pose_reliability,
             'ret_logits': ret_logits,
             'aux_pose': aux_pose,
+            'raw_pose_direction': raw_pose_direction,
+            'pose_reliability': pose_reliability,
+            'pose_reliability_features': torch.zeros(
+                batch_size, 7, device=self.device
+            ),
             'gate_feature': torch.tensor([0.9, 0.4], device=self.device),
             'gate_effective_threshold': torch.tensor(0.94, device=self.device),
             'gate_normalized_slope': torch.tensor(1.6, device=self.device),
@@ -67,6 +83,11 @@ class _OptimizerModel(nn.Module):
         self.core.retrieval = nn.Module()
         self.core.retrieval.gate_log_slope = nn.Parameter(torch.tensor(0.0))
         self.core.retrieval.gate_bias = nn.Parameter(torch.tensor(0.0))
+        self.core.revisit_merge = nn.Module()
+        self.core.revisit_merge.pose_encoder = nn.Module()
+        self.core.revisit_merge.pose_encoder.reliability_head = nn.Sequential(
+            nn.Linear(3, 4), nn.GELU(), nn.Linear(4, 1)
+        )
 
     @property
     def device(self):
@@ -93,10 +114,12 @@ class MemNavCheckpointTest(unittest.TestCase):
             w_retrieval=1.0,
             w_gate=1.0,
             w_aux_direction=0.2,
+            w_pose_reliability=0.2,
             batch_size=1,
             num_workers=0,
             eval_seed=0,
             gate_lr_multiplier=10.0,
+            pose_reliability_lr_multiplier=5.0,
         ))
 
     def _trainer(self, directory, eval_fingerprint=None):
@@ -247,6 +270,20 @@ class MemNavCheckpointTest(unittest.TestCase):
             }
             self.assertEqual(
                 {id(parameter) for parameter in gate_group['params']}, expected_ids
+            )
+            pose_groups = [
+                group for group in optimizer.param_groups
+                if group.get('memnav_group') == 'pose_reliability_calibration'
+            ]
+            self.assertEqual(len(pose_groups), 1)
+            self.assertAlmostEqual(pose_groups[0]['lr'], 1.0e-3)
+            self.assertEqual(pose_groups[0]['weight_decay'], 0.0)
+            self.assertEqual(
+                {id(parameter) for parameter in pose_groups[0]['params']},
+                {
+                    id(parameter) for parameter in
+                    model.core.revisit_merge.pose_encoder.reliability_head.parameters()
+                },
             )
 
     def test_compact_checkpoint_guards_fixed_eval_population(self):

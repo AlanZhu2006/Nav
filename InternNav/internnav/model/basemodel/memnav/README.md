@@ -110,27 +110,33 @@ t_rel = R_cur^T (t_goal - t_cur)
 R_rel = R_cur^T R_goal
 ```
 
-via `quat_to_mat` (`lingbot_map.utils.rotation`, lazy import — needs
-`lingbot_repo` on `sys.path`, guaranteed by the time this runs since
-`LingBotStream.__init__` already did it). `R_rel` is kept as a flattened
-3×3 matrix rather than converted back to a quaternion — nothing downstream
-needs the compact 4-d form, and `mat_to_quat`'s branch-selection has known
-numerical rough edges near 180° rotations that a plain matrix avoids.
+via `quat_to_mat` (`lingbot_map.utils.rotation`, lazy import). `R_rel` remains
+available for diagnostics, but neither raw `t_rel` nor the full endpoint
+rotation is sent directly to the action decoder.
 
-- **shared `rel_adapter`**: residual MLP on
-  `[t_rel, R_rel.flatten()]`, initialized as an exact identity. Both the
-  action-facing revisit tokens and the auxiliary direction head consume this
-  representation, so the auxiliary is no longer a disconnected sidecar.
-- **`revisit_head`**: trainable `Linear(12, n_out·token_dim)` on the adapted
-  relative feature, reshaped to the decoder's revisit tokens.
-  Replaces the old `pose_encoder(7,dim) + TokenCompressor` pipeline — no
-  attention machinery needed for a single input feature vector
-  (`TokenCompressor` degenerates to per-slot linear reads of one token
-  anyway).
-- **`aux_pose_head`**: `Linear(3, 2)`, supervised by planar **direction**
-  only. Path `θ` is dropped (see §1), and metric magnitude is diagnostic
-  rather than a loss because LingBot's raw translation uses per-sequence
-  canonical scale.
+`GaugeInvariantRevisitPose` converts the analytic pose into four values:
+
+```text
+bearing = normalize([t_rel.z, -t_rel.x])
+range   = asinh(||planar t_rel|| / robust_stream_step / window)
+code    = [bearing_x, bearing_y, range, pose_reliability]
+```
+
+Uniformly rescaling the LingBot map leaves this code unchanged. The corrected
+`[z,-x]` mapping is explicit instead of asking a global affine head to rediscover
+it. The endpoint camera yaw is excluded from the action code because the data
+generator deliberately makes goal-render yaw independent of path-arrival
+heading. It is still returned as `R_rel` for pose diagnostics.
+
+- **shared `rel_adapter`**: residual MLP on the four-dimensional robust code,
+  initialized as an exact identity.
+- **`revisit_head`**: trainable `Linear(4, n_out·token_dim)` on that shared code.
+- **`aux_pose_head`**: `Linear(4,2)`, initialized to read the two bearing
+  coordinates directly and supervised only by planar direction.
+- **`reliability_head`**: predicts whether the long-range geometry is useful
+  from online-only cues: normalized range, retrieval gap, recent-vs-prefix step
+  scale drift, goal-to-anchor range, vertical leakage, non-yaw rotation, and
+  semantic-match strength.
 
 ### 2.4 The auxiliary is scale-invariant and policy-shared
 
@@ -140,13 +146,13 @@ its input can be constant while its own weight and bias still receive
 gradients. The previous freeze made `w_aux * aux_loss` a constant offset in
 the reported total loss and did not change any parameter update.
 
-The head remains initialized with the known signed-axis mapping:
+The head remains initialized with the known signed-axis mapping, now performed
+before the trainable head:
 
 ```python
-rel_feat = rel_feat + rel_adapter(rel_feat)
-aux_pose = aux_pose_head(rel_feat[..., :3])
-aux_pose_head.weight = [[0, 0, 1], [-1, 0, 0]]
-aux_pose_head.bias = [0, 0]
+raw_bearing = normalize([t_rel.z, -t_rel.x])
+pose_code = [raw_bearing.x, raw_bearing.y, bounded_range, reliability]
+aux_pose = aux_pose_head(pose_code + rel_adapter(pose_code))
 ```
 
 The mapping follows from the generated-data camera-mount correction. Legacy
@@ -154,23 +160,41 @@ labels represented `[up, -right, back]`; corrected NavDP coordinates are
 `[-back, -right, up]`. Combined with the validated LingBot-to-legacy mapping,
 the corrected planar coordinates are `[lingbot_z, -lingbot_x]`.
 
-No fixed metric scale is baked in. The former `1 / 0.541` value came from two
-episodes evaluated against legacy labels that omitted one horizontal axis, so
-it is not a valid calibration target. A single affine head cannot remove
-LingBot's sequence-dependent monocular scale or accumulated VO drift. The
-training loss is therefore `1 - cosine(pred_xy, gt_xy)` on revisit rows,
-bounded and invariant to magnitude. Raw x/y MSE, per-axis prediction/GT std,
-and L2 error remain logged specifically to reveal metric mismatch or collapse.
+No fixed metric scale is baked in. Robust median stream step is used only as an
+internal gauge, not as a conversion to metres. The direction loss remains
+`1-cosine(pred_xy,gt_xy)` on revisit rows. Raw x/y MSE, per-axis prediction/GT
+std, and L2 error remain diagnostics.
 
 The residual `rel_adapter` is shared with `revisit_head`; direction gradients
 therefore shape features used by the diffusion policy. This removes the old
 failure mode where a large y MSE participated in global gradient clipping but
 could update only an isolated calibration head.
 
-`MemNavTrainer.compute_loss`'s `gt_pose` is now sliced to
-`inputs["batch_goal_rel_pose"][..., :2]` to match.
+### 2.5 Semantic retrieval and geometric trust are separate
 
-### 2.5 Novel branch starts from the intended pretrained DINO-S
+The raw-DINO gate estimates `P(goal has a historical match)`. A correct match
+does not guarantee that a long monocular trajectory still has a usable bearing.
+The decoder therefore uses
+
+```text
+effective_revisit_gate = semantic_revisit_gate * pose_reliability
+```
+
+The reliability target is `clamp(cos(raw_bearing, GT_bearing), 0, 1)` on revisit
+rows. GT is used only to supervise calibration; inference uses the observable
+cues listed above. This makes fallback to the current-goal visual branch
+evidence-driven rather than a hard-coded temporal-gap threshold. Training logs
+reliability, target quality, Brier error, effective gate, raw bearing error, and
+action error by goal/gap/span.
+
+The cue choice was checked before implementation on 576 current→goal pairs from
+the 12 locally retained full-stream episodes. Recent-vs-prefix step-scale drift
+correlated with raw bearing error at Pearson `r=0.57` (Spearman `0.54`), while
+normalizing distance by that step scale did **not** improve distance correlation.
+Accordingly, scale drift is used as a confidence cue, not as a claimed metric
+correction; no threshold was fitted to those episodes.
+
+### 2.6 Novel branch starts from the intended pretrained DINO-S
 
 The six-channel current+goal encoder previously constructed a fresh
 `DepthAnythingV2` model but never loaded its checkpoint. It also passed raw
@@ -187,7 +211,7 @@ the expanded convolution exactly reproduces the pretrained RGB response while
 both halves remain independently trainable. Current and goal are ImageNet-
 normalized independently before concatenation.
 
-### 2.6 Training and W&B correctness
+### 2.7 Training and W&B correctness
 
 - Action heading deltas are wrapped to `[-pi, pi)` before NavDP's x4 scaling;
   W&B reports diffusion error separately as `action_noise_mse_x/y/theta` and
@@ -235,10 +259,11 @@ normalized independently before concatenation.
 
 | file | change |
 |---|---|
-| `internnav/model/basemodel/memnav/memnav_policy.py` | `_load_cache` loads `cam_pose_enc`; `cur_pose` reads it directly; analytic relative pose; normalized, pretrained novel branch |
+| `internnav/model/basemodel/memnav/memnav_policy.py` | `_load_cache` loads `cam_pose_enc`; analytic relative pose; semantic/geometric dual gate; normalized pretrained novel branch |
+| `internnav/model/basemodel/memnav/revisit_pose.py` | gauge-invariant planar code and observable-cue geometric reliability head |
 | `internnav/model/encoder/navdp_backbone.py` | validates DINO-S weights and expands the pretrained RGB patch projection to six-channel early fusion |
 | `internnav/model/basemodel/memnav/lingbot_stream.py` | new `goal_append_warm` method |
-| `internnav/trainer/memnav_trainer.py` | scale-invariant direction auxiliary, interval-averaged diagnostics, fixed validation |
+| `internnav/trainer/memnav_trainer.py` | direction + reliability supervision, long-range stratified diagnostics, fixed validation |
 | `scripts/train/configs/memnav.py` | explicit `goal_warm=64`, required DINO weights, held-out split/eval and resumable step checkpoint defaults |
 | `internnav/model/basemodel/memnav/retrieval_head.py` | separately testable projected ranking and normalized/calibrated raw-cosine revisit gate |
 | `internnav/model/basemodel/memnav/metrics.py` | deterministic per-sample, B/C/time-stratified, and paired full-diffusion diagnostics |
@@ -255,8 +280,9 @@ normalized independently before concatenation.
   per-trajectory KV work), not a code fix, and out of scope for this round.
 - **Metric translation has an irreducible residual** because LingBot's
   monocular scale varies by sequence and long trajectories accumulate drift.
-  It remains an evaluator diagnostic; do not interpret aggregate x/y MSE as
-  the optimized auxiliary or as direct policy quality.
+  The policy now sees a gauge-invariant bounded code and can fall back when
+  reliability is low, but this does not repair the underlying map. A submap
+  Sim(2)/SE(2) pose graph remains the structural next step.
 - Frozen VO accuracy has a real, separate ceiling on long/turn-heavy
   trajectories (measured 2.5 m ATE on a 744-frame, 2-turn episode even for
   the trusted continuous-stream reference) — not something any of the

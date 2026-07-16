@@ -143,7 +143,10 @@ def main():
                     device=dev).to(dev)
     net.train()
     fwd = net(batch)
-    for k in ("ret_logits", "gate_logit", "revisit_gate", "aux_pose"):
+    for k in (
+        "ret_logits", "gate_logit", "revisit_gate",
+        "effective_revisit_gate", "pose_reliability", "aux_pose",
+    ):
         v = fwd[k]
         finite = bool(torch.isfinite(v).all())
         print(f"  {k}: {tuple(v.shape)} finite={finite}")
@@ -182,9 +185,19 @@ def main():
     direction_cos = ((fwd["aux_pose"] / pred_norm[:, None])
                      * (aux_gt / gt_norm[:, None])).sum(-1).clamp(-1, 1)
     aux = ((1 - direction_cos) * is_rev).sum() / is_rev.sum().clamp(min=1)
-    loss = action_loss + rank + gate + 0.2 * aux
+    gt_unit = aux_gt / gt_norm[:, None]
+    raw_cos = (fwd['raw_pose_direction'] * gt_unit).sum(-1).clamp(-1, 1)
+    pose_quality = raw_cos.clamp(0, 1).detach()
+    pose_rel = F.binary_cross_entropy(
+        fwd['pose_reliability'].clamp(1e-5, 1 - 1e-5),
+        pose_quality,
+        reduction='none',
+    )
+    pose_rel = (pose_rel * is_rev).sum() / is_rev.sum().clamp(min=1)
+    loss = action_loss + rank + gate + 0.2 * aux + 0.2 * pose_rel
     print(f"[B] loss={loss.item():.4f} act={action_loss.item():.4f} rank={rank.item():.4f} "
-          f"gate={gate.item():.4f} aux_direction={aux.item():.4f}")
+          f"gate={gate.item():.4f} aux_direction={aux.item():.4f} "
+          f"pose_reliability={pose_rel.item():.4f}")
     assert torch.isfinite(loss), "non-finite loss"
     loss.backward()
     for nm_ in ("gate_log_slope", "gate_bias", "log_temp"):
@@ -202,6 +215,9 @@ def main():
         shared_grad = net.revisit_merge.rel_adapter[-1].weight.grad
         assert (shared_grad is not None and torch.isfinite(shared_grad).all()
                 and shared_grad.abs().sum() > 0), "aux/action grad did not reach shared rel_adapter"
+        reliability_grad = net.revisit_merge.pose_encoder.reliability_head[-1].weight.grad
+        assert (reliability_grad is not None and torch.isfinite(reliability_grad).all()
+                and reliability_grad.abs().sum() > 0), "no reliability calibration gradient"
     else:
         print("  (no revisit rows in this batch -> aux weight 0, grad check skipped)")
     print("OK (Part B): forward + decoupled loss + backward, grads reach gate, temp, and shared aux path.")

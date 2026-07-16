@@ -44,6 +44,8 @@
 #   MEMNAV_MAX_TRAIN_STEPS=-1  (-1 = epoch-based; positive = bounded smoke)
 #   MEMNAV_SAVE_STEPS=25
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
+#   MEMNAV_W_POSE_RELIABILITY=0.2
+#   MEMNAV_POSE_SCALE_WINDOW=64
 #
 # Submit:
 #   sbatch InternNav/scripts/train_memnav/train_memnav_mp3d.sbatch
@@ -89,6 +91,11 @@ export MEMNAV_EVAL_SAMPLES=${MEMNAV_EVAL_SAMPLES:-16}
 export MEMNAV_EVAL_STEPS=${MEMNAV_EVAL_STEPS:-25}
 export MEMNAV_EVAL_BATCH_SIZE=${MEMNAV_EVAL_BATCH_SIZE:-4}
 export MEMNAV_MAX_TRAIN_STEPS=${MEMNAV_MAX_TRAIN_STEPS:--1}
+export MEMNAV_W_POSE_RELIABILITY=${MEMNAV_W_POSE_RELIABILITY:-0.2}
+export MEMNAV_POSE_SCALE_WINDOW=${MEMNAV_POSE_SCALE_WINDOW:-64}
+export MEMNAV_POSE_RELIABILITY_HIDDEN=${MEMNAV_POSE_RELIABILITY_HIDDEN:-16}
+export MEMNAV_POSE_RELIABILITY_INIT=${MEMNAV_POSE_RELIABILITY_INIT:-0.95}
+export MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER=${MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER:-5.0}
 export MEMNAV_REPORT_TO=${MEMNAV_REPORT_TO:-wandb}
 export WANDB_PROJECT=${WANDB_PROJECT:-memnav}
 export WANDB_NAME=${WANDB_NAME:-${NAME}}
@@ -147,6 +154,7 @@ apptainer exec --nv \
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"
         echo "strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE} require_pose_marker=${MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION}"
+        echo "pose_scale_window=${MEMNAV_POSE_SCALE_WINDOW} pose_rel_weight=${MEMNAV_W_POSE_RELIABILITY} pose_rel_hidden=${MEMNAV_POSE_RELIABILITY_HIDDEN} pose_rel_init=${MEMNAV_POSE_RELIABILITY_INIT} pose_rel_lr_mult=${MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER}"
         echo "dino_weights=${MEMNAV_DINO_WEIGHTS}"
 
         exec python scripts/train/train.py \

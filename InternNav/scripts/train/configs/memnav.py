@@ -142,12 +142,28 @@ memnav_exp_cfg = ExpCfg(
         gate_lr_multiplier=float(
             os.environ.get('MEMNAV_GATE_LR_MULTIPLIER', '10.0')
         ),
+        # Long-range geometry confidence is separate from semantic revisit
+        # confidence.  It sees only online consistency cues and is supervised by
+        # raw-bearing agreement during training.
+        pose_scale_window=int(os.environ.get('MEMNAV_POSE_SCALE_WINDOW', '64')),
+        pose_reliability_hidden=int(
+            os.environ.get('MEMNAV_POSE_RELIABILITY_HIDDEN', '16')
+        ),
+        pose_reliability_init=float(
+            os.environ.get('MEMNAV_POSE_RELIABILITY_INIT', '0.95')
+        ),
+        pose_reliability_lr_multiplier=float(
+            os.environ.get('MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER', '5.0')
+        ),
         # loss weights (consumed by MemNavTrainer)
         w_retrieval=1.0,   # ranking InfoNCE (which candidate frame matches)
         w_gate=1.0,        # revisit/novel gate BCE (is there a match at all)
         # Scale-invariant translation-direction auxiliary. Metric x/y remains a
         # diagnostic because LingBot pose has a per-sequence canonical scale.
         w_aux_direction=0.2,
+        w_pose_reliability=float(
+            os.environ.get('MEMNAV_W_POSE_RELIABILITY', '0.2')
+        ),
         ddp_find_unused_parameters=True,
     ),
     model=memnav_cfg,

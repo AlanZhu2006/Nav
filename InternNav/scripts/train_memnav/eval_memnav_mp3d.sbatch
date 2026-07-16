@@ -11,6 +11,7 @@
 #SBATCH --partition=a100_tandon,h100_tandon,h200_tandon
 #SBATCH --gres=gpu:1
 #SBATCH --export=ALL
+# REQUIRED: complete scripts/train_memnav/README.md before every sbatch submission.
 set -euo pipefail
 
 REPO_ROOT=${REPO_ROOT:-/scratch/lg154/Research/Nav/InternNav}

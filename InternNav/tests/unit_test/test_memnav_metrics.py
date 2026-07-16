@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from internnav.model.basemodel.memnav.metrics import (
+    attach_full_diffusion_records,
     compute_memnav_batch_records,
     summarize_memnav_records,
 )
@@ -20,6 +21,11 @@ def _batch():
         'cur_steps': [319, 1024],
         'goal_steps': [400, 1100],
         'cache_paths': ['revisit.npz', 'novel.npz'],
+        'batch_goal_j': torch.tensor([0, -1]),
+        'goal_labels': ['B', 'A'],
+        'batch_has_covis': torch.tensor([True, False]),
+        'leg_starts': [200, 0],
+        'sample_identities': ['sample-b', 'sample-a'],
     }
 
 
@@ -63,6 +69,44 @@ class MemNavMetricsTest(unittest.TestCase):
         self.assertAlmostEqual(
             metrics['gate_threshold_sweep']['best']['balanced_accuracy'], 1.0
         )
+        self.assertEqual(metrics['by_goal_label']['B']['num_revisit'], 1)
+        self.assertEqual(
+            metrics['revisit_by_retrieval_gap']['256-511']['num_samples'], 1
+        )
+
+    def test_full_diffusion_goal_shuffle_metrics_are_paired_and_stratified(self):
+        batch = _batch()
+        batch['batch_labels'] = torch.zeros(2, 1, 3)
+        records = compute_memnav_batch_records(_outputs(), batch)
+        sampled = torch.zeros(2, 1, 3)
+        shuffled = torch.ones(2, 1, 3)
+        attach_full_diffusion_records(
+            records, sampled, shuffled, batch, torch.tensor([1, 0])
+        )
+        metrics = summarize_memnav_records(records)
+        self.assertAlmostEqual(metrics['full_diffusion_action_mse'], 0.0)
+        self.assertAlmostEqual(
+            metrics['full_diffusion_shuffled_goal_action_mse'], 1.0
+        )
+        self.assertAlmostEqual(metrics['full_diffusion_shuffled_goal_penalty'], 1.0)
+        self.assertAlmostEqual(
+            metrics['by_goal_label']['B']['full_diffusion_shuffled_goal_penalty'],
+            1.0,
+        )
+        self.assertEqual(records[0]['shuffled_goal_source_identity'], 'sample-a')
+
+    def test_full_diffusion_shuffle_rejects_unchanged_goal_rows(self):
+        batch = _batch()
+        batch['batch_labels'] = torch.zeros(2, 1, 3)
+        records = compute_memnav_batch_records(_outputs(), batch)
+        with self.assertRaisesRegex(ValueError, 'derangement'):
+            attach_full_diffusion_records(
+                records,
+                torch.zeros(2, 1, 3),
+                torch.ones(2, 1, 3),
+                batch,
+                torch.tensor([0, 1]),
+            )
 
     def test_rejects_dynamic_label_mismatch(self):
         batch = _batch()

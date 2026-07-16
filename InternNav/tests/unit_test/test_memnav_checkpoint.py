@@ -51,8 +51,27 @@ class _LossModel(nn.Module):
             'ret_logits': ret_logits,
             'aux_pose': aux_pose,
             'gate_feature': torch.tensor([0.9, 0.4], device=self.device),
+            'gate_effective_threshold': torch.tensor(0.94, device=self.device),
+            'gate_normalized_slope': torch.tensor(1.6, device=self.device),
             'R_rel': torch.eye(3, device=self.device).repeat(batch_size, 1, 1),
         }
+
+
+class _OptimizerModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(3, 2)
+        self.core = nn.Module()
+        self.core.retrieval = nn.Module()
+        self.core.retrieval.gate_log_slope = nn.Parameter(torch.tensor(0.0))
+        self.core.retrieval.gate_bias = nn.Parameter(torch.tensor(0.0))
+
+    @property
+    def device(self):
+        return self.linear.weight.device
+
+    def forward(self, batch):
+        return {'loss': self.linear(batch['x']).square().mean()}
 
 
 class _TinyDataset(torch.utils.data.Dataset):
@@ -75,6 +94,7 @@ class MemNavCheckpointTest(unittest.TestCase):
             batch_size=1,
             num_workers=0,
             eval_seed=0,
+            gate_lr_multiplier=10.0,
         ))
 
     def _trainer(self, directory, eval_fingerprint=None):
@@ -183,6 +203,41 @@ class MemNavCheckpointTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Dataset fingerprint changed'):
                 trainer._load_from_checkpoint(str(checkpoint))
 
+    def test_gate_calibration_has_separate_lr_and_no_weight_decay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config()
+            config.il.gate_lr_multiplier = 7.0
+            args = TrainingArguments(
+                output_dir=tmp,
+                report_to='none',
+                per_device_train_batch_size=1,
+                learning_rate=2e-4,
+                weight_decay=0.1,
+            )
+            model = _OptimizerModel()
+            trainer = MemNavTrainer(
+                config=config,
+                model=model,
+                args=args,
+                train_dataset=_TinyDataset(),
+            )
+            optimizer = trainer.create_optimizer()
+            gate_groups = [
+                group for group in optimizer.param_groups
+                if group.get('memnav_group') == 'gate_calibration'
+            ]
+            self.assertEqual(len(gate_groups), 1)
+            gate_group = gate_groups[0]
+            self.assertAlmostEqual(gate_group['lr'], 1.4e-3)
+            self.assertEqual(gate_group['weight_decay'], 0.0)
+            expected_ids = {
+                id(model.core.retrieval.gate_log_slope),
+                id(model.core.retrieval.gate_bias),
+            }
+            self.assertEqual(
+                {id(parameter) for parameter in gate_group['params']}, expected_ids
+            )
+
     def test_compact_checkpoint_guards_fixed_eval_population(self):
         with tempfile.TemporaryDirectory() as tmp:
             checkpoint = Path(tmp) / 'checkpoint-5'
@@ -190,6 +245,15 @@ class MemNavCheckpointTest(unittest.TestCase):
             trainer.save_model(str(checkpoint))
             trainer.eval_dataset.dataset_fingerprint = 'eval-population-v2'
             with self.assertRaisesRegex(ValueError, 'Evaluation fingerprint changed'):
+                trainer._load_from_checkpoint(str(checkpoint))
+
+    def test_resume_requires_checkpoint_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = Path(tmp) / 'checkpoint-5'
+            trainer = self._trainer(tmp)
+            trainer.save_model(str(checkpoint))
+            (checkpoint / 'memnav_metadata.json').unlink()
+            with self.assertRaisesRegex(ValueError, 'missing .*memnav_metadata.json'):
                 trainer._load_from_checkpoint(str(checkpoint))
 
     def test_component_logs_are_windowed_and_not_double_prefixed(self):

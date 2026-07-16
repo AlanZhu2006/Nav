@@ -5,6 +5,12 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, DistributedSampler
+import transformers
+from transformers.trainer import (
+    ALL_LAYERNORM_LAYERS,
+    get_parameter_names,
+    is_sagemaker_mp_enabled,
+)
 
 from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
 from internnav.trainer.base import BaseTrainer
@@ -43,6 +49,74 @@ class MemNavTrainer(BaseTrainer):
         fingerprint = self._dataset_fingerprint(self.train_dataset) or '<unavailable>'
         print(f'[Rank {rank}] Model device: {self.model_device}')
         print(f'[Rank {rank}] Dataset fingerprint: {fingerprint}')
+
+    def create_optimizer(self):
+        """Give the normalized gate calibration its own learning-rate group.
+
+        The raw-cosine feature is frozen and already discriminative; only two
+        scalar calibration parameters need to move.  A multiplier avoids tying
+        their convergence to the much slower policy-wide cosine schedule, while
+        zero weight decay prevents the slope from being pulled toward a flat gate.
+        """
+        if is_sagemaker_mp_enabled():
+            return super().create_optimizer()
+        if self.optimizer is not None:
+            return self.optimizer
+
+        opt_model = self.model
+        multiplier = float(getattr(self.config.il, 'gate_lr_multiplier', 10.0))
+        if multiplier <= 0:
+            raise ValueError(
+                f'gate_lr_multiplier must be positive, got {multiplier}'
+            )
+        gate_suffixes = (
+            'retrieval.gate_log_slope',
+            'retrieval.gate_bias',
+        )
+        named_trainable = [
+            (name, parameter)
+            for name, parameter in opt_model.named_parameters()
+            if parameter.requires_grad
+        ]
+        gate_names = {
+            name for name, _ in named_trainable
+            if name.endswith(gate_suffixes)
+        }
+        # Tiny test models and non-MemNav reuse should retain BaseTrainer's exact
+        # optimizer behavior.
+        if not gate_names:
+            return super().create_optimizer()
+
+        decay_names = set(get_parameter_names(opt_model, ALL_LAYERNORM_LAYERS))
+        decay_names = {name for name in decay_names if 'bias' not in name}
+        regular_decay = [
+            parameter for name, parameter in named_trainable
+            if name not in gate_names and name in decay_names
+        ]
+        regular_no_decay = [
+            parameter for name, parameter in named_trainable
+            if name not in gate_names and name not in decay_names
+        ]
+        gate_parameters = [
+            parameter for name, parameter in named_trainable if name in gate_names
+        ]
+        optimizer_groups = [
+            {'params': regular_decay, 'weight_decay': self.args.weight_decay},
+            {'params': regular_no_decay, 'weight_decay': 0.0},
+            {
+                'params': gate_parameters,
+                'weight_decay': 0.0,
+                'lr': self.args.learning_rate * multiplier,
+                'memnav_group': 'gate_calibration',
+                'lr_multiplier': multiplier,
+            },
+        ]
+        optimizer_groups = [group for group in optimizer_groups if group['params']]
+        optimizer_cls, optimizer_kwargs = (
+            transformers.Trainer.get_optimizer_cls_and_kwargs(self.args)
+        )
+        self.optimizer = optimizer_cls(optimizer_groups, **optimizer_kwargs)
+        return self.optimizer
 
     def _accumulate(self, name, mean_value, weight=1.0, phase='train'):
         """Accumulate a weighted scalar mean on-device until HF's log boundary."""
@@ -170,6 +244,8 @@ class MemNavTrainer(BaseTrainer):
             gate_feature = fwd['gate_feature']
             gate_feature_seen = self._masked_mean(gate_feature, rev_mask)
             gate_feature_unseen = self._masked_mean(gate_feature, novel_mask)
+            gate_effective_threshold = fwd['gate_effective_threshold']
+            gate_normalized_slope = fwd['gate_normalized_slope']
 
             # Compare actual relative camera rotation, separately from path theta.
             R_rel = fwd['R_rel']
@@ -213,6 +289,8 @@ class MemNavTrainer(BaseTrainer):
             'gate_acc': gate_acc,
             'gate_revisit_recall': gate_revisit_recall,
             'gate_novel_recall': gate_novel_recall,
+            'gate_effective_threshold': gate_effective_threshold,
+            'gate_normalized_slope': gate_normalized_slope,
             'seen_match_acc': seen_match,
             'rot_err_raw_deg': rot_err_raw,
             'rot_err_converted_deg': rot_err_converted,
@@ -252,6 +330,8 @@ class MemNavTrainer(BaseTrainer):
         self._accumulate('seen_match_acc', seen_match, n_rev, phase)
         self._accumulate('gate_feature_seen', gate_feature_seen, n_rev, phase)
         self._accumulate('gate_feature_unseen', gate_feature_unseen, n_novel, phase)
+        self._accumulate('gate_effective_threshold', gate_effective_threshold, B, phase)
+        self._accumulate('gate_normalized_slope', gate_normalized_slope, B, phase)
         self._accumulate('aux_mse_x', aux_mse_x, n_rev, phase)
         self._accumulate('aux_mse_y', aux_mse_y, n_rev, phase)
         self._accumulate('aux_xy_l2', aux_xy_l2, n_rev, phase)
@@ -369,10 +449,18 @@ class MemNavTrainer(BaseTrainer):
         state = {key: value for key, value in full_state.items() if 'lingbot.' not in key}
         os.makedirs(output_dir, exist_ok=True)
         torch.save(state, os.path.join(output_dir, 'memnav.ckpt'))
+        retrieval = getattr(getattr(model, 'core', None), 'retrieval', None)
         metadata = {
-            'format_version': 2,
+            'format_version': 3,
             'dataset_fingerprint': self._dataset_fingerprint(self.train_dataset),
             'eval_dataset_fingerprint': self._dataset_fingerprint(self.eval_dataset),
+            'gate_parameterization': 'normalized_raw_cosine_v1',
+            'gate_center': (
+                float(retrieval.gate_center.detach().cpu()) if retrieval is not None else None
+            ),
+            'gate_width': (
+                float(retrieval.gate_width.detach().cpu()) if retrieval is not None else None
+            ),
         }
         with open(os.path.join(output_dir, 'memnav_metadata.json'), 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2, sort_keys=True)
@@ -387,32 +475,38 @@ class MemNavTrainer(BaseTrainer):
             )
 
         metadata_path = os.path.join(resume_from_checkpoint, 'memnav_metadata.json')
-        if os.path.isfile(metadata_path):
-            with open(metadata_path, encoding='utf-8') as f:
-                metadata = json.load(f)
-            if metadata.get('format_version') != 2:
-                raise ValueError(
-                    'Unsupported MemNav checkpoint metadata format: '
-                    f"{metadata.get('format_version')!r}"
-                )
-            saved_fingerprint = metadata.get('dataset_fingerprint')
-            current_fingerprint = self._dataset_fingerprint(self.train_dataset)
-            if (saved_fingerprint and current_fingerprint
-                    and saved_fingerprint != current_fingerprint):
-                raise ValueError(
-                    'Dataset fingerprint changed since the checkpoint was written: '
-                    f'{saved_fingerprint} != {current_fingerprint}. Refusing to resume '
-                    'with a different training population.'
-                )
-            saved_eval_fingerprint = metadata.get('eval_dataset_fingerprint')
-            current_eval_fingerprint = self._dataset_fingerprint(self.eval_dataset)
-            if (saved_eval_fingerprint and current_eval_fingerprint
-                    and saved_eval_fingerprint != current_eval_fingerprint):
-                raise ValueError(
-                    'Evaluation fingerprint changed since the checkpoint was written: '
-                    f'{saved_eval_fingerprint} != {current_eval_fingerprint}. '
-                    'Refusing to resume with a different fixed validation population.'
-                )
+        if not os.path.isfile(metadata_path):
+            raise ValueError(
+                f'MemNav checkpoint is missing {metadata_path}; cannot verify gate '
+                'optimizer units or dataset identity for a safe resume.'
+            )
+        with open(metadata_path, encoding='utf-8') as f:
+            metadata = json.load(f)
+        if metadata.get('format_version') != 3:
+            raise ValueError(
+                'Cannot resume this MemNav checkpoint safely: expected metadata '
+                'format 3 (normalized gate optimizer units), got '
+                f"{metadata.get('format_version')!r}. Legacy checkpoints remain "
+                'available for offline evaluation, but training must start a new run.'
+            )
+        saved_fingerprint = metadata.get('dataset_fingerprint')
+        current_fingerprint = self._dataset_fingerprint(self.train_dataset)
+        if (saved_fingerprint and current_fingerprint
+                and saved_fingerprint != current_fingerprint):
+            raise ValueError(
+                'Dataset fingerprint changed since the checkpoint was written: '
+                f'{saved_fingerprint} != {current_fingerprint}. Refusing to resume '
+                'with a different training population.'
+            )
+        saved_eval_fingerprint = metadata.get('eval_dataset_fingerprint')
+        current_eval_fingerprint = self._dataset_fingerprint(self.eval_dataset)
+        if (saved_eval_fingerprint and current_eval_fingerprint
+                and saved_eval_fingerprint != current_eval_fingerprint):
+            raise ValueError(
+                'Evaluation fingerprint changed since the checkpoint was written: '
+                f'{saved_eval_fingerprint} != {current_eval_fingerprint}. '
+                'Refusing to resume with a different fixed validation population.'
+            )
 
         target = model if model is not None else self.model
         target = target.module if hasattr(target, 'module') else target
@@ -420,6 +514,8 @@ class MemNavTrainer(BaseTrainer):
             state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
         except TypeError:
             state = torch.load(checkpoint_path, map_location='cpu')
+        if hasattr(target, 'upgrade_checkpoint_state_dict'):
+            state = target.upgrade_checkpoint_state_dict(state)
         current = target.state_dict()
         unexpected = sorted(key for key in state if key not in current)
         mismatched = sorted(

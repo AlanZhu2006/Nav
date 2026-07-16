@@ -196,9 +196,15 @@ normalized independently before concatenation.
   negative. Novel-only batches produce an exact zero ranking term, without
   first forming a near-float-limit masked value.
 - The supervised gate uses raw frozen-DINO maximum cosine, while ranking keeps
-  its trainable projection. Gate loss has fixed semantics (no four-sample
-  batch-derived class weight), and logs class-specific recall plus window-level
-  separation.
+  its trainable projection. The old `a*cos+b` scalars placed the useful
+  0.90–0.97 cosine band in poorly conditioned coordinates and barely moved at
+  the shared policy LR. The gate now operates on `(cos-center)/width` (training-
+  split defaults `center=0.94`, `width=0.04`), learns an O(1) positive slope and
+  bias in a separate 10× LR group, and logs its effective raw-cosine threshold.
+  Legacy `gate_a/gate_b` checkpoints are converted algebraically without
+  changing their logits, but their optimizer state is deliberately not resumed.
+  Gate loss has fixed semantics (no four-sample batch-derived class weight), and
+  logs class-specific recall plus window-level separation.
 - Component metrics are accumulated over the exact Hugging Face logging
   interval. A deterministic, scene-held-out validation subset is evaluated with
   fixed k/noise/timesteps, so changes across checkpoints are comparable.
@@ -209,8 +215,12 @@ normalized independently before concatenation.
   trainer state, and train/eval fingerprints. Slurm jobs auto-resume rather than
   losing an eight-hour run at the wall-time boundary.
 - `scripts/eval/eval_memnav_offline.py` provides a fixed current-architecture
-  diagnostic, including oracle-positive retrieval. It is explicitly not a
-  closed-loop Habitat navigation score.
+  diagnostic, including oracle-positive retrieval. With
+  `--full-diffusion-goal-shuffle`, it also runs the complete DDPM reverse process
+  for correct and cyclically shuffled goal images using identical initial and
+  intermediate randomness. Per-sample metrics are stratified by goal A/B/C,
+  retrieval time gap, and remaining path span. It is explicitly not a closed-
+  loop Habitat navigation score.
 
 ---
 
@@ -223,9 +233,9 @@ normalized independently before concatenation.
 | `internnav/model/basemodel/memnav/lingbot_stream.py` | new `goal_append_warm` method |
 | `internnav/trainer/memnav_trainer.py` | scale-invariant direction auxiliary, interval-averaged diagnostics, fixed validation |
 | `scripts/train/configs/memnav.py` | explicit `goal_warm=64`, required DINO weights, held-out split/eval and resumable step checkpoint defaults |
-| `internnav/model/basemodel/memnav/retrieval_head.py` | separately testable projected ranking and raw-cosine revisit gate |
-| `internnav/model/basemodel/memnav/metrics.py` | deterministic per-sample and aggregate offline diagnostics |
-| `scripts/eval/eval_memnav_offline.py` | strict fixed-split checkpoint evaluator with optional oracle-positive pass |
+| `internnav/model/basemodel/memnav/retrieval_head.py` | separately testable projected ranking and normalized/calibrated raw-cosine revisit gate |
+| `internnav/model/basemodel/memnav/metrics.py` | deterministic per-sample, B/C/time-stratified, and paired full-diffusion diagnostics |
+| `scripts/eval/eval_memnav_offline.py` | strict fixed-split evaluator with optional oracle-positive and full-DDPM goal-shuffle passes |
 | `scripts/diag_lingbot_pose_accuracy.py` | new diagnostic harness (GT vs. official-continuous-stream vs. ours; `warm_forward`/`warm_goal_pose`/`oracle_goal_pose`) used to find and validate all of the above |
 
 ## 4. Open items

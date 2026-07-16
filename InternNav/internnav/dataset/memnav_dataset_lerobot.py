@@ -91,6 +91,17 @@ from internnav.dataset.navdp_dataset_lerobot import NavDP_Base_Datset
 _MW_HAB2DATA = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
 
 
+def _goal_label(goal_j):
+    """Human-readable milestone label used only by offline diagnostics."""
+    goal_j = int(goal_j)
+    if goal_j < 0:
+        return 'A'
+    alphabet_index = goal_j + 1  # covis goal_j=0 is milestone B
+    if alphabet_index < 26:
+        return chr(ord('A') + alphabet_index)
+    return f'goal_{goal_j + 1}'
+
+
 def _yaw_habitat_to_R_data(yaw):
     """gen_meta.json's per-goal `yaw_habitat` -> rotation matrix in the dataset's data
     frame. `yaw_habitat` is explicitly the RAW habitat-frame yaw ("in render frame" per
@@ -688,6 +699,14 @@ class MemNav_Dataset(NavDP_Base_Datset):
             'rgb_dir': rgb_dir,
             'cur_step': int(k),
             'goal_step': int(goal_step),
+            # Diagnostic metadata.  None of these fields enter the policy or loss;
+            # they prevent a small number of long C-leg samples from being hidden
+            # inside a single aggregate aux/action number.
+            'goal_j': int(s.get('goal_j', -1)),
+            'goal_label': _goal_label(s.get('goal_j', -1)),
+            'has_covis': bool(s['has_covis']),
+            'leg_start': int(s.get('leg_start', 0)),
+            'sample_identity': str(s['sample_identity']),
         }
 
 
@@ -734,6 +753,12 @@ def memnav_collate_fn(batch):
         'rgb_dirs':              [b['rgb_dir'] for b in batch],
         'cur_steps':             [b['cur_step'] for b in batch],
         'goal_steps':            [b['goal_step'] for b in batch],
+        # Offline stratification metadata (never consumed by the policy loss).
+        'batch_goal_j':          torch.tensor([b['goal_j'] for b in batch], dtype=torch.long),
+        'goal_labels':           [b['goal_label'] for b in batch],
+        'batch_has_covis':       torch.tensor([b['has_covis'] for b in batch], dtype=torch.bool),
+        'leg_starts':            [b['leg_start'] for b in batch],
+        'sample_identities':     [b['sample_identity'] for b in batch],
     }
 
 

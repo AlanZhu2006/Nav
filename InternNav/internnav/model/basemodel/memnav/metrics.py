@@ -33,6 +33,78 @@ def _aux_vectors(outputs, batch):
     return prediction, target, (prediction - target).square(), torch.rad2deg(torch.arccos(cosine))
 
 
+def attach_full_diffusion_records(
+    records,
+    sampled_actions,
+    shuffled_goal_actions,
+    batch,
+    shuffle_indices,
+):
+    """Attach paired complete-DDPM metrics to existing per-sample records.
+
+    Both trajectories must have been generated from identical initial and
+    intermediate DDPM randomness.  A positive shuffled-goal penalty means the
+    correct goal produces an action closer to the target.
+    """
+    target = batch['batch_labels'].to(sampled_actions.device)
+    shuffled_goal_actions = shuffled_goal_actions.to(sampled_actions.device)
+    if sampled_actions.shape != target.shape:
+        raise ValueError(
+            f'sampled action shape {tuple(sampled_actions.shape)} does not match '
+            f'target {tuple(target.shape)}'
+        )
+    if shuffled_goal_actions.shape != target.shape:
+        raise ValueError('shuffled-goal action shape must match the target')
+    if len(records) != target.shape[0]:
+        raise ValueError('record count must match the diffusion batch size')
+
+    correct_sq = (sampled_actions - target).square()
+    shuffled_sq = (shuffled_goal_actions - target).square()
+    sensitivity_sq = (sampled_actions - shuffled_goal_actions).square()
+    correct_mse = correct_sq.mean(dim=(1, 2))
+    shuffled_mse = shuffled_sq.mean(dim=(1, 2))
+    sensitivity_mse = sensitivity_sq.mean(dim=(1, 2))
+    correct_axis = correct_sq.mean(dim=1)
+    shuffled_axis = shuffled_sq.mean(dim=1)
+    sensitivity_ratio = torch.sqrt(sensitivity_mse) / torch.sqrt(correct_mse).clamp(min=1e-8)
+
+    if torch.is_tensor(shuffle_indices):
+        shuffle_indices = shuffle_indices.detach().cpu().tolist()
+    shuffle_indices = [int(index) for index in shuffle_indices]
+    if sorted(shuffle_indices) != list(range(len(records))):
+        raise ValueError('shuffle_indices must be a batch permutation')
+    if any(index == source for index, source in enumerate(shuffle_indices)):
+        raise ValueError('goal shuffle must be a derangement (no unchanged rows)')
+    identities = batch.get('sample_identities') or [None] * len(records)
+
+    for index, record in enumerate(records):
+        record.update({
+            'full_diffusion_action_mse': float(correct_mse[index].item()),
+            'full_diffusion_shuffled_goal_action_mse': float(
+                shuffled_mse[index].item()
+            ),
+            'full_diffusion_shuffled_goal_penalty': float(
+                (shuffled_mse[index] - correct_mse[index]).item()
+            ),
+            'full_diffusion_goal_sensitivity_mse': float(
+                sensitivity_mse[index].item()
+            ),
+            'full_diffusion_goal_sensitivity_ratio': float(
+                sensitivity_ratio[index].item()
+            ),
+            'shuffled_goal_source_batch_index': shuffle_indices[index],
+            'shuffled_goal_source_identity': identities[shuffle_indices[index]],
+        })
+        for axis_index, axis in enumerate(('x', 'y', 'theta')):
+            record[f'full_diffusion_action_mse_{axis}'] = float(
+                correct_axis[index, axis_index].item()
+            )
+            record[f'full_diffusion_shuffled_goal_action_mse_{axis}'] = float(
+                shuffled_axis[index, axis_index].item()
+            )
+    return records
+
+
 def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
     """Return JSON-serializable, per-sample records for one fixed batch."""
     logits = outputs['ret_logits']
@@ -100,6 +172,11 @@ def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
     cur_steps = batch.get('cur_steps') or [logits.shape[1] - 1] * logits.shape[0]
     goal_steps = batch.get('goal_steps') or [None] * logits.shape[0]
     cache_paths = batch.get('cache_paths') or [None] * logits.shape[0]
+    goal_labels = batch.get('goal_labels') or [None] * logits.shape[0]
+    sample_identities = batch.get('sample_identities') or [None] * logits.shape[0]
+    leg_starts = batch.get('leg_starts') or [None] * logits.shape[0]
+    goal_js = batch.get('batch_goal_j')
+    has_covis = batch.get('batch_has_covis')
     records = []
     for index in range(logits.shape[0]):
         if bool(selected_positive[index]):
@@ -112,15 +189,27 @@ def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
             raise ValueError('unclassified retrieval result')
         record = {
             'cache_path': cache_paths[index],
+            'sample_identity': sample_identities[index],
             'cur_step': int(cur_steps[index]),
             'goal_step': int(goal_steps[index]) if goal_steps[index] is not None else None,
+            'goal_j': int(goal_js[index]) if goal_js is not None else None,
+            'goal_label': goal_labels[index],
+            'has_covis': bool(has_covis[index]) if has_covis is not None else None,
+            'leg_start': int(leg_starts[index]) if leg_starts[index] is not None else None,
             'memory_length': int(cur_steps[index]) + 1,
+            'remaining_path_span': (
+                int(goal_steps[index]) - int(cur_steps[index])
+                if goal_steps[index] is not None else None
+            ),
             'is_revisit': bool(revisit[index]),
             'num_candidates': int(candidate[index].sum().item()),
             'num_positive': int(pos[index].sum().item()),
             'num_negative': int(neg[index].sum().item()),
             'rank_loss': float(rank_loss[index].item()) if bool(rank_rows[index]) else None,
             'match_index': int(prediction[index].item()),
+            'retrieval_temporal_gap': (
+                int(cur_steps[index]) - int(prediction[index].item())
+            ),
             'match_outcome': outcome,
             'match_correct': bool(selected_positive[index]) if bool(revisit[index]) else None,
             'gate': float(gate[index].item()),
@@ -134,6 +223,7 @@ def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
             'aux_pred_y': float(aux_pred[index, 1].item()),
             'aux_gt_x': float(aux_gt[index, 0].item()),
             'aux_gt_y': float(aux_gt[index, 1].item()),
+            'goal_distance': float(torch.linalg.norm(aux_gt[index]).item()),
             'aux_mse_x': float(aux_sq[index, 0].item()),
             'aux_mse_y': float(aux_sq[index, 1].item()),
             'aux_direction_error_deg': float(aux_direction_error[index].item()),
@@ -210,6 +300,79 @@ def compute_gate_threshold_sweep(records):
     return {'reference': _binary_metrics(records, 0.5), 'best': best}
 
 
+_GROUP_METRIC_KEYS = (
+    'action_mse',
+    'action_noise_mse_x',
+    'action_noise_mse_y',
+    'action_noise_mse_theta',
+    'gate',
+    'gate_feature',
+    'aux_mse_x',
+    'aux_mse_y',
+    'aux_direction_error_deg',
+    'rotation_error_converted_deg',
+    'full_diffusion_action_mse',
+    'full_diffusion_shuffled_goal_action_mse',
+    'full_diffusion_shuffled_goal_penalty',
+    'full_diffusion_goal_sensitivity_mse',
+    'full_diffusion_goal_sensitivity_ratio',
+)
+
+
+def _summarize_group(records):
+    revisit_records = [record for record in records if record['is_revisit']]
+    result = {
+        'num_samples': len(records),
+        'num_revisit': len(revisit_records),
+        'num_novel': len(records) - len(revisit_records),
+    }
+    for key in _GROUP_METRIC_KEYS:
+        # Aux pose and camera-rotation values are intentionally unsupported on
+        # novel rows; the tensors exist only because the decoder has a fixed
+        # interface.  Never let them contaminate B/C group diagnostics.
+        source = (
+            revisit_records
+            if key.startswith('aux_') or key.startswith('rotation_')
+            else records
+        )
+        value = _mean(source, key)
+        if value is not None:
+            result[key] = value
+    return result
+
+
+def _group_records(records, key_fn):
+    groups = {}
+    for record in records:
+        key = key_fn(record)
+        if key is not None:
+            groups.setdefault(str(key), []).append(record)
+    return {
+        key: _summarize_group(selected)
+        for key, selected in sorted(groups.items())
+    }
+
+
+def _gap_bin(value):
+    if value is None:
+        return None
+    if value < 256:
+        return '000-255'
+    if value < 512:
+        return '256-511'
+    return '512+'
+
+
+def _span_bin(value):
+    if value is None:
+        return None
+    if value < 128:
+        return '000-127'
+    if value < 256:
+        return '128-255'
+    return '256+'
+
+
 def summarize_memnav_records(records):
     if not records:
         raise ValueError('cannot summarize empty records')
@@ -263,7 +426,33 @@ def summarize_memnav_records(records):
             records, 'rotation_error_converted_deg', revisit
         ),
         'gate_threshold_sweep': compute_gate_threshold_sweep(records),
+        'by_goal_label': _group_records(records, lambda record: record.get('goal_label')),
+        'revisit_by_retrieval_gap': _group_records(
+            [record for record in records if record['is_revisit']],
+            lambda record: _gap_bin(record.get('retrieval_temporal_gap')),
+        ),
+        'revisit_by_remaining_path_span': _group_records(
+            [record for record in records if record['is_revisit']],
+            lambda record: _span_bin(record.get('remaining_path_span')),
+        ),
     }
+    for key in (
+        'full_diffusion_action_mse',
+        'full_diffusion_shuffled_goal_action_mse',
+        'full_diffusion_shuffled_goal_penalty',
+        'full_diffusion_goal_sensitivity_mse',
+        'full_diffusion_goal_sensitivity_ratio',
+        'full_diffusion_action_mse_x',
+        'full_diffusion_action_mse_y',
+        'full_diffusion_action_mse_theta',
+        'full_diffusion_shuffled_goal_action_mse_x',
+        'full_diffusion_shuffled_goal_action_mse_y',
+        'full_diffusion_shuffled_goal_action_mse_theta',
+    ):
+        if any(record.get(key) is not None for record in records):
+            metrics[key] = _mean(records, key)
+            metrics[f'{key}_revisit'] = _mean(records, key, revisit)
+            metrics[f'{key}_novel'] = _mean(records, key, novel)
     if metrics['gate_revisit'] is not None and metrics['gate_novel'] is not None:
         metrics['gate_separation'] = metrics['gate_revisit'] - metrics['gate_novel']
     if any('oracle_action_mse' in record for record in records):

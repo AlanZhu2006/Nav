@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader, Subset
 from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset, memnav_collate_fn
 from internnav.model.basemodel.memnav.memnav_policy import MemNavModelConfig, MemNavPolicy
 from internnav.model.basemodel.memnav.metrics import (
+    attach_full_diffusion_records,
     compute_memnav_batch_records,
     summarize_memnav_records,
 )
@@ -43,6 +44,15 @@ def parse_args():
     parser.add_argument('--max-samples', type=int, default=0)
     parser.add_argument('--log-every', type=int, default=10)
     parser.add_argument('--oracle-positive', action='store_true')
+    parser.add_argument(
+        '--full-diffusion-goal-shuffle',
+        action='store_true',
+        help=(
+            'run complete paired DDPM sampling for correct and cyclically shuffled '
+            'goal images; substantially slower than the training-noise diagnostic'
+        ),
+    )
+    parser.add_argument('--diffusion-seed', type=int, default=104729)
     parser.add_argument('--save-per-sample', action='store_true')
     return parser.parse_args()
 
@@ -74,6 +84,7 @@ def load_checkpoint(config, checkpoint):
     state = _torch_load(checkpoint)
     if isinstance(state, dict) and 'state_dict' in state:
         state = state['state_dict']
+    state = model.upgrade_checkpoint_state_dict(state)
     current = model.state_dict()
     unexpected = [key for key in state if key not in current]
     mismatched = [
@@ -89,6 +100,31 @@ def load_checkpoint(config, checkpoint):
     model.load_state_dict(state, strict=False)
     print(f'[checkpoint] loaded {checkpoint} ({len(state)} non-LingBot tensors)')
     return model, checkpoint
+
+
+def _goal_derangement(batch_size):
+    if batch_size < 2:
+        raise ValueError(
+            'full-diffusion goal shuffle needs at least two samples per batch; '
+            'increase --batch-size or evaluate more samples'
+        )
+    return torch.roll(torch.arange(batch_size), shifts=-1)
+
+
+def _shuffle_goal_condition(batch, permutation):
+    """Change only goal inputs; current observation, memory, and GT stay fixed."""
+    shuffled = dict(batch)
+    for key in ('batch_goal_image', 'batch_goal_cls'):
+        value = batch.get(key)
+        if value is not None:
+            shuffled[key] = value.index_select(0, permutation.to(value.device))
+    return shuffled
+
+
+def _cuda_generator(device, seed):
+    generator = torch.Generator(device=device)
+    generator.manual_seed(int(seed))
+    return generator
 
 
 def main():
@@ -148,7 +184,12 @@ def main():
     started = time.time()
     with torch.inference_mode():
         for batch_index, batch in enumerate(loader):
-            outputs = model(batch)
+            condition = None
+            if args.full_diffusion_goal_shuffle:
+                condition = model.prepare_condition(batch)
+                outputs = model.forward_with_condition(batch, condition)
+            else:
+                outputs = model(batch)
             oracle_outputs = None
             if args.oracle_positive:
                 oracle_batch = dict(batch)
@@ -157,6 +198,35 @@ def main():
                 oracle_batch['diagnostic_timesteps'] = outputs['timesteps']
                 oracle_outputs = model(oracle_batch)
             batch_records = compute_memnav_batch_records(outputs, batch, oracle_outputs)
+            if args.full_diffusion_goal_shuffle:
+                batch_size = batch['batch_labels'].shape[0]
+                permutation = _goal_derangement(batch_size)
+                shuffled_batch = _shuffle_goal_condition(batch, permutation)
+                shuffled_condition = model.prepare_condition(shuffled_batch)
+                device = next(model.parameters()).device
+                paired_seed = args.diffusion_seed + 3 * batch_index
+                initial_noise = torch.randn(
+                    batch['batch_labels'].shape,
+                    device=device,
+                    generator=_cuda_generator(device, paired_seed),
+                )
+                sampled_actions = model.sample_actions_from_condition(
+                    condition,
+                    initial_noise=initial_noise,
+                    generator=_cuda_generator(device, paired_seed + 1),
+                )
+                shuffled_actions = model.sample_actions_from_condition(
+                    shuffled_condition,
+                    initial_noise=initial_noise,
+                    generator=_cuda_generator(device, paired_seed + 1),
+                )
+                attach_full_diffusion_records(
+                    batch_records,
+                    sampled_actions,
+                    shuffled_actions,
+                    batch,
+                    permutation,
+                )
             for record in batch_records:
                 record['sample_index'] = len(records)
                 records.append(record)
@@ -181,6 +251,13 @@ def main():
         'dataset_size': dataset_size,
         'evaluated_samples': len(records),
         'oracle_positive': args.oracle_positive,
+        'full_diffusion_goal_shuffle': args.full_diffusion_goal_shuffle,
+        'diffusion_seed': args.diffusion_seed,
+        'goal_shuffle_scope': (
+            'within_batch_cyclic_derangement'
+            if args.full_diffusion_goal_shuffle else None
+        ),
+        'paired_diffusion_randomness': bool(args.full_diffusion_goal_shuffle),
         'elapsed_seconds': elapsed,
         'samples_per_second': len(records) / elapsed,
         'peak_cuda_memory_gib': torch.cuda.max_memory_allocated() / 2**30,

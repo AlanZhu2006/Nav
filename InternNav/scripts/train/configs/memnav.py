@@ -129,6 +129,16 @@ memnav_exp_cfg = ExpCfg(
         heads=8,
         token_dim=384,
         num_diffusion_iters=10,
+        # Raw-DINO revisit gate calibration.  These defaults were measured on
+        # the training split; the learnable slope/bias operate on
+        # (cosine - center) / width so both have healthy O(1) gradients.
+        gate_center=float(os.environ.get('MEMNAV_GATE_CENTER', '0.94')),
+        gate_width=float(os.environ.get('MEMNAV_GATE_WIDTH', '0.04')),
+        gate_slope_init=float(os.environ.get('MEMNAV_GATE_SLOPE_INIT', '1.6')),
+        gate_bias_init=float(os.environ.get('MEMNAV_GATE_BIAS_INIT', '0.0')),
+        gate_lr_multiplier=float(
+            os.environ.get('MEMNAV_GATE_LR_MULTIPLIER', '10.0')
+        ),
         # loss weights (consumed by MemNavTrainer)
         w_retrieval=1.0,   # ranking InfoNCE (which candidate frame matches)
         w_gate=1.0,        # revisit/novel gate BCE (is there a match at all)

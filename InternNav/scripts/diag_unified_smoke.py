@@ -187,7 +187,7 @@ def main():
           f"gate={gate.item():.4f} aux_direction={aux.item():.4f}")
     assert torch.isfinite(loss), "non-finite loss"
     loss.backward()
-    for nm_ in ("gate_a", "gate_b", "log_temp"):
+    for nm_ in ("gate_log_slope", "gate_bias", "log_temp"):
         g = getattr(net.retrieval, nm_).grad
         print(f"  retrieval.{nm_}.grad = {None if g is None else round(g.item(), 6)}")
         assert g is not None, f"no grad to retrieval.{nm_}"

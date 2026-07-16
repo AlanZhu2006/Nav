@@ -202,7 +202,8 @@ class MemNavNet(nn.Module):
     def __init__(self, lingbot_kwargs=None, dino_dim=1024, lingbot_dim=2048, depth_feat_dim=256,
                  token_dim=384, heads=8, m_rgbd=4, m_depth=4, m_revisit=4, m_novel=4,
                  predict_size=24, temporal_depth=8, num_diffusion_iters=10, goal_warm=64,
-                 novel_backbone_weights=None, device="cuda"):
+                 novel_backbone_weights=None, gate_center=0.94, gate_width=0.04,
+                 gate_slope_init=1.6, gate_bias_init=0.0, device="cuda"):
         super().__init__()
         self.lingbot = LingBotStream(device=device, **(lingbot_kwargs or {}))
         self.window = self.lingbot.window
@@ -216,7 +217,13 @@ class MemNavNet(nn.Module):
         self.goal_warm = goal_warm
 
         # trainable heads
-        self.retrieval = RetrievalHead(dino_dim=dino_dim)
+        self.retrieval = RetrievalHead(
+            dino_dim=dino_dim,
+            gate_center=gate_center,
+            gate_width=gate_width,
+            gate_slope_init=gate_slope_init,
+            gate_bias_init=gate_bias_init,
+        )
         self.novel = NovelBranch(
             dim=token_dim, heads=heads, out_tokens=m_novel,
             pretrained_checkpoint=novel_backbone_weights, device=device,
@@ -302,15 +309,36 @@ class MemNavNet(nn.Module):
                            memory_mask=self._gate_mask(gate))
         return self.action_head(self.layernorm(out))
 
-    def forward(self, batch):
+    def prepare_condition(self, batch):
+        """Encode every goal-conditioned memory input once.
+
+        Keeping this separate from the random training-noise draw lets offline
+        diagnostics reuse the exact condition for a complete reverse-diffusion
+        trajectory.  It does not change the training forward path.
+        """
         dev = self.device
         enc = self.encode_memory(batch)
         current_state = self.build_current_state(enc["current"], enc["depth_feat"])
         revisit, aux_pose, R_rel = self.build_revisit(enc["cur_pose"], enc["goal_pose"])
         novel = self.novel(batch["batch_window_images"][:, -1].to(dev),   # current frame [B,3,H,W]
                            batch["batch_goal_image"].to(dev))             # goal frame
-        gate = enc["revisit_gate"]
+        return dict(
+            current_state=current_state,
+            revisit=revisit,
+            novel=novel,
+            aux_pose=aux_pose,
+            R_rel=R_rel,
+            ret_logits=enc['ret_logits'],
+            revisit_gate=enc['revisit_gate'],
+            gate_logit=enc['gate_logit'],
+            gate_feature=enc['gate_feature'],
+            match_idx=enc['match_idx'],
+            anchor_idx=enc['anchor_idx'],
+        )
 
+    def forward_with_condition(self, batch, condition):
+        """Training-noise prediction from an already encoded condition."""
+        dev = self.device
         labels = batch["batch_labels"].to(dev)          # [B, predict_size, 3]
         B = labels.shape[0]
         noise = batch.get('diagnostic_noise')
@@ -327,13 +355,94 @@ class MemNavNet(nn.Module):
             timesteps = timesteps.to(dev)
         noisy = self.noise_scheduler.add_noise(labels, noise, timesteps)
 
-        noise_pred = self.predict_noise(noisy, timesteps, current_state, revisit, novel, gate)
+        noise_pred = self.predict_noise(
+            noisy,
+            timesteps,
+            condition["current_state"],
+            condition["revisit"],
+            condition["novel"],
+            condition["revisit_gate"],
+        )
         return dict(
             noise_pred=noise_pred, noise=noise, timesteps=timesteps,
-            aux_pose=aux_pose, R_rel=R_rel, ret_logits=enc["ret_logits"], revisit_gate=gate,
-            gate_logit=enc["gate_logit"], gate_feature=enc["gate_feature"],
-            match_idx=enc["match_idx"], anchor_idx=enc["anchor_idx"],
+            aux_pose=condition["aux_pose"], R_rel=condition["R_rel"],
+            ret_logits=condition["ret_logits"],
+            revisit_gate=condition["revisit_gate"],
+            gate_logit=condition["gate_logit"],
+            gate_feature=condition["gate_feature"],
+            match_idx=condition["match_idx"], anchor_idx=condition["anchor_idx"],
+            gate_effective_threshold=self.retrieval.effective_gate_threshold,
+            gate_normalized_slope=self.retrieval.gate_slope,
         )
+
+    def forward(self, batch):
+        return self.forward_with_condition(batch, self.prepare_condition(batch))
+
+    @torch.no_grad()
+    def sample_actions_from_condition(
+        self,
+        condition,
+        initial_noise=None,
+        generator=None,
+        num_inference_steps=None,
+    ):
+        """Run the complete DDPM reverse process for a prepared condition.
+
+        A caller can pass the same ``initial_noise`` and two generators with the
+        same seed to obtain a paired correct-goal vs shuffled-goal comparison.
+        DDPM injects variance at intermediate steps, so sharing only the initial
+        noise would not be a controlled comparison.
+        """
+        current_state = condition['current_state']
+        batch_size = current_state.shape[0]
+        device = current_state.device
+        shape = (batch_size, self.predict_size, 3)
+        if initial_noise is None:
+            sample = torch.randn(shape, device=device, generator=generator)
+        else:
+            if tuple(initial_noise.shape) != shape:
+                raise ValueError(
+                    f'initial_noise shape must be {shape}, got {tuple(initial_noise.shape)}'
+                )
+            sample = initial_noise.to(device=device).clone()
+
+        steps = int(
+            num_inference_steps
+            if num_inference_steps is not None
+            else self.noise_scheduler.config.num_train_timesteps
+        )
+        if not 1 <= steps <= self.noise_scheduler.config.num_train_timesteps:
+            raise ValueError(
+                f'num_inference_steps must be in [1, '
+                f'{self.noise_scheduler.config.num_train_timesteps}], got {steps}'
+            )
+        try:
+            self.noise_scheduler.set_timesteps(steps, device=device)
+        except TypeError:
+            # Compatibility with older diffusers; individual timesteps are moved
+            # below before entering the model.
+            self.noise_scheduler.set_timesteps(steps)
+
+        for scheduler_timestep in self.noise_scheduler.timesteps:
+            timestep = torch.as_tensor(
+                scheduler_timestep, device=device, dtype=torch.long
+            )
+            batch_timestep = timestep.expand(batch_size)
+            noise_pred = self.predict_noise(
+                sample,
+                batch_timestep,
+                condition['current_state'],
+                condition['revisit'],
+                condition['novel'],
+                condition['revisit_gate'],
+            )
+            sample = self.noise_scheduler.step(
+                model_output=noise_pred,
+                timestep=timestep,
+                sample=sample,
+                generator=generator,
+            ).prev_sample
+        return sample
 
     @torch.no_grad()
     def _load_cache(self, path, camera_path, rgb_dir):
@@ -471,6 +580,7 @@ class MemNavPolicy(PreTrainedModel):
         if path and len(str(path)) > 0 and os.path.exists(path):
             sd = torch.load(path, map_location='cpu')
             sd = sd.get('state_dict', sd) if isinstance(sd, dict) else sd
+            sd = model.upgrade_checkpoint_state_dict(sd)
             inc = model.load_state_dict(sd, strict=False)
             print(f"[memnav] loaded {path}: missing={len(inc.missing_keys)} unexpected={len(inc.unexpected_keys)}")
         return model
@@ -503,11 +613,30 @@ class MemNavPolicy(PreTrainedModel):
             temporal_depth=il['temporal_depth'], num_diffusion_iters=il.get('num_diffusion_iters', 10),
             goal_warm=il.get('goal_warm', 64),
             novel_backbone_weights=novel_backbone_weights,
+            gate_center=il.get('gate_center', 0.94),
+            gate_width=il.get('gate_width', 0.04),
+            gate_slope_init=il.get('gate_slope_init', 1.6),
+            gate_bias_init=il.get('gate_bias_init', 0.0),
             lingbot_kwargs=lingbot_kwargs or None, device=str(self._device),
         )
 
     def forward(self, batch):
         return self.core(batch)
+
+    def prepare_condition(self, batch):
+        return self.core.prepare_condition(batch)
+
+    def forward_with_condition(self, batch, condition):
+        return self.core.forward_with_condition(batch, condition)
+
+    def sample_actions_from_condition(self, condition, **kwargs):
+        return self.core.sample_actions_from_condition(condition, **kwargs)
+
+    def upgrade_checkpoint_state_dict(self, state_dict):
+        """Upgrade legacy gate tensors before strict checkpoint validation."""
+        return self.core.retrieval.upgrade_legacy_state_dict(
+            state_dict, prefix='core.retrieval.', copy=True
+        )
 
 
 if __name__ == "__main__":

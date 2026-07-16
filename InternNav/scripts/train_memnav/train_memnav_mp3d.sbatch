@@ -11,6 +11,7 @@
 #SBATCH --partition=a100_tandon,h100_tandon,h200_tandon
 #SBATCH --gres=gpu:1
 #SBATCH --export=ALL
+# REQUIRED: complete scripts/train_memnav/README.md before every sbatch submission.
 #
 # MemNav training on the PACKED mp3d revisit data (scenes 0-53).
 #
@@ -110,7 +111,7 @@ apptainer exec --nv \
         conda activate "${CONDA_ENV}"
         cd '"${REPO_ROOT}"'
 
-        export PYTHONPATH="'"${REPO_ROOT}"'/src/diffusion-policy:${PYTHONPATH:-}"
+        export PYTHONPATH="'"${REPO_ROOT}"':'"${REPO_ROOT}"'/src/diffusion-policy:${PYTHONPATH:-}"
 
         # per-job scratch (isolated TMP/XDG/wandb so concurrent jobs do not collide)
         JOB_TMP_ROOT="/tmp/${USER}/memnav_${SLURM_JOB_ID:-$$}"
@@ -138,7 +139,7 @@ apptainer exec --nv \
 
         echo "===== TRAIN ENV CHECK ====="
         command -v python; python -V
-        python -c "import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available())"
+        python -c "import torch, transformers, diffusers; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available(), \"transformers\", transformers.__version__, \"diffusers\", diffusers.__version__); assert torch.cuda.is_available()"
         echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} wk=${NUM_WORKERS} resume=${RESUME_FROM_CHECKPOINT}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"

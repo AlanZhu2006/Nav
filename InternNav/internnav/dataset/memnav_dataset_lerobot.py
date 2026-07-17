@@ -84,6 +84,7 @@ from internnav.dataset.memnav_pose_conventions import (
     wrap_radians,
 )
 from internnav.dataset.navdp_dataset_lerobot import NavDP_Base_Datset
+from internnav.model.basemodel.memnav.cache_schema import validate_cache_files
 
 # Habitat (Y-up) -> dataset "data" world frame (Z-up): data = MW @ habitat. Exact transform
 # used when the parquet/gen_meta.json were written (MemNavData/generate_twoleg.py:save_traj:
@@ -142,6 +143,8 @@ class MemNav_Dataset(NavDP_Base_Datset):
         camera_feature_filename='lingbot_cam_cache.npz',
         feature_root=None,
         strict_feature_coverage=False,
+        require_versioned_cache=False,
+        expected_cache_signature='',
         require_generated_pose_convention=False,
         data_split='all',
         validation_fraction=0.1,
@@ -195,6 +198,13 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.camera_feature_filename = camera_feature_filename
         self.feature_root = feature_root
         self.strict_feature_coverage = bool(strict_feature_coverage)
+        self.require_versioned_cache = bool(require_versioned_cache)
+        self.expected_cache_signature = str(expected_cache_signature or '')
+        if self.require_versioned_cache and not self.expected_cache_signature:
+            raise ValueError(
+                'require_versioned_cache=True also requires an explicit '
+                'expected_cache_signature from the audited precompute run'
+            )
         self.require_generated_pose_convention = bool(require_generated_pose_convention)
         if data_split not in {'all', 'train', 'val'}:
             raise ValueError(f"data_split must be all/train/val, got {data_split!r}")
@@ -361,6 +371,54 @@ class MemNav_Dataset(NavDP_Base_Datset):
                 f"Examples: {examples}"
             )
 
+        self.cache_keyframe_intervals = []
+        if self.require_versioned_cache:
+            cache_errors = []
+            for episode, aggregator_path, camera_path, rgb_dir in zip(
+                self.trajectory_dirs,
+                self.trajectory_feature_path,
+                self.trajectory_camera_feature_path,
+                self.trajectory_rgb_dir,
+            ):
+                rgb_names = [
+                    name for name in os.listdir(rgb_dir) if name.endswith('.jpg')
+                ]
+                try:
+                    frame_indices = sorted(
+                        int(os.path.splitext(name)[0]) for name in rgb_names
+                    )
+                    if frame_indices != list(range(len(frame_indices))):
+                        raise ValueError(
+                            'RGB filenames must be contiguous integer frames from zero'
+                        )
+                    expected_frames = len(frame_indices)
+                    layout = validate_cache_files(
+                        aggregator_path,
+                        camera_path,
+                        expected_num_frames=expected_frames,
+                        expected_num_scale_frames=self.num_scale,
+                        expected_sliding_window=self.window_size,
+                        require_versioned=True,
+                    )
+                    if layout.precompute_signature != self.expected_cache_signature:
+                        raise ValueError(
+                            'precompute signature mismatch: '
+                            f'{layout.precompute_signature} != '
+                            f'{self.expected_cache_signature}'
+                        )
+                    self.cache_keyframe_intervals.append(layout.keyframe_interval)
+                except Exception as error:  # report several episodes in one preflight
+                    cache_errors.append((episode, str(error)))
+            if cache_errors:
+                examples = '; '.join(
+                    f'{episode} [{error}]'
+                    for episode, error in cache_errors[:5]
+                )
+                raise RuntimeError(
+                    f'Invalid versioned LingBot cache in {len(cache_errors)} '
+                    f'episode(s). Examples: {examples}'
+                )
+
         self.repeat = max(1, int(repeat))
         n_traj = len(self.trajectory_dirs)
         n_samp = len(self.samples)
@@ -374,6 +432,11 @@ class MemNav_Dataset(NavDP_Base_Datset):
               f"revisit/novel dynamic per-k, exclude_recent={self.exclude_recent}, repeat={self.repeat})")
         if self.input_stats:
             print(f"[MemNav_Dataset] skipped episode inputs: {dict(self.input_stats)}")
+        if self.cache_keyframe_intervals:
+            interval_counts = Counter(self.cache_keyframe_intervals)
+            print(
+                f"[MemNav_Dataset] versioned cache intervals: {dict(interval_counts)}"
+            )
         if n_samp == 0:
             raise RuntimeError(
                 f"No goal-samples found under {root_dirs}. Need '{self.feature_filename}' "
@@ -403,6 +466,8 @@ class MemNav_Dataset(NavDP_Base_Datset):
             'covis_pos_lo': self.covis_pos_lo,
             'feature_filename': self.feature_filename,
             'camera_feature_filename': self.camera_feature_filename,
+            'require_versioned_cache': self.require_versioned_cache,
+            'expected_cache_signature': self.expected_cache_signature,
         }
         fingerprint_payload = (
             json.dumps(fingerprint_config, sort_keys=True, separators=(',', ':'))

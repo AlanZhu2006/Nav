@@ -73,6 +73,9 @@ export MEMNAV_WINDOW=32
 export MEMNAV_NUM_SCALE=8
 export MEMNAV_MAX_FRAME_NUM=4096
 export MEMNAV_STRICT_FEATURE_COVERAGE=1
+export MEMNAV_REQUIRE_VERSIONED_CACHE=${MEMNAV_REQUIRE_VERSIONED_CACHE:-0}
+export MEMNAV_EXPECTED_CACHE_SIGNATURE=${MEMNAV_EXPECTED_CACHE_SIGNATURE:-}
+export MEMNAV_EXPECTED_CODE_COMMIT=${MEMNAV_EXPECTED_CODE_COMMIT:-}
 export MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION=1
 export MEMNAV_DATA_SPLIT=${MEMNAV_DATA_SPLIT:-train}
 export MEMNAV_VALIDATION_FRACTION=${MEMNAV_VALIDATION_FRACTION:-0.1}
@@ -91,10 +94,11 @@ export MEMNAV_EVAL_SAMPLES=${MEMNAV_EVAL_SAMPLES:-16}
 export MEMNAV_EVAL_STEPS=${MEMNAV_EVAL_STEPS:-25}
 export MEMNAV_EVAL_BATCH_SIZE=${MEMNAV_EVAL_BATCH_SIZE:-4}
 export MEMNAV_MAX_TRAIN_STEPS=${MEMNAV_MAX_TRAIN_STEPS:--1}
-export MEMNAV_W_POSE_RELIABILITY=${MEMNAV_W_POSE_RELIABILITY:-0.2}
+export MEMNAV_USE_POSE_RELIABILITY_CONDITIONING=${MEMNAV_USE_POSE_RELIABILITY_CONDITIONING:-0}
+export MEMNAV_W_POSE_RELIABILITY=${MEMNAV_W_POSE_RELIABILITY:-0.0}
 export MEMNAV_POSE_SCALE_WINDOW=${MEMNAV_POSE_SCALE_WINDOW:-64}
 export MEMNAV_POSE_RELIABILITY_HIDDEN=${MEMNAV_POSE_RELIABILITY_HIDDEN:-16}
-export MEMNAV_POSE_RELIABILITY_INIT=${MEMNAV_POSE_RELIABILITY_INIT:-0.95}
+export MEMNAV_POSE_RELIABILITY_INIT=${MEMNAV_POSE_RELIABILITY_INIT:-0.99}
 export MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER=${MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER:-5.0}
 export MEMNAV_REPORT_TO=${MEMNAV_REPORT_TO:-wandb}
 export WANDB_PROJECT=${WANDB_PROJECT:-memnav}
@@ -115,10 +119,33 @@ apptainer exec --nv \
         [[ -d "${MEMNAV_FEATURE_ROOT}" ]] || { echo "ABORT: feature tree missing ${MEMNAV_FEATURE_ROOT}"; exit 1; }
         [[ -f "${LINGBOT_WEIGHTS}" ]]     || { echo "ABORT: weights missing ${LINGBOT_WEIGHTS}"; exit 1; }
         [[ -f "${MEMNAV_DINO_WEIGHTS}" ]] || { echo "ABORT: DINO weights missing ${MEMNAV_DINO_WEIGHTS}"; exit 1; }
+        if [[ "${MEMNAV_REQUIRE_VERSIONED_CACHE}" == "1" && -z "${MEMNAV_EXPECTED_CACHE_SIGNATURE}" ]]; then
+          echo "ABORT: versioned cache requires MEMNAV_EXPECTED_CACHE_SIGNATURE" >&2
+          exit 1
+        fi
+        if [[ "${MEMNAV_REQUIRE_VERSIONED_CACHE}" == "1" && -z "${MEMNAV_EXPECTED_CODE_COMMIT}" ]]; then
+          echo "ABORT: versioned cache run requires MEMNAV_EXPECTED_CODE_COMMIT" >&2
+          exit 1
+        fi
 
         source "${CONDA_SH}"
         conda activate "${CONDA_ENV}"
         cd '"${REPO_ROOT}"'
+
+        [[ -z "$(git status --porcelain --untracked-files=no)" ]] || {
+          echo "ABORT: deployed InternNav has tracked modifications" >&2; exit 1;
+        }
+        [[ -z "$(git -C "${LINGBOT_REPO}" status --porcelain --untracked-files=no)" ]] || {
+          echo "ABORT: LingBot checkout has tracked modifications" >&2; exit 1;
+        }
+        ACTUAL_CODE_COMMIT=$(git rev-parse HEAD)
+        if [[ -n "${MEMNAV_EXPECTED_CODE_COMMIT}" && "${ACTUAL_CODE_COMMIT}" != "${MEMNAV_EXPECTED_CODE_COMMIT}" ]]; then
+          echo "ABORT: deployed commit ${ACTUAL_CODE_COMMIT} != expected ${MEMNAV_EXPECTED_CODE_COMMIT}" >&2
+          exit 1
+        fi
+        LINGBOT_COMMIT=$(git -C "${LINGBOT_REPO}" rev-parse HEAD)
+        echo "code_commit=${ACTUAL_CODE_COMMIT} lingbot_commit=${LINGBOT_COMMIT}"
+        sha256sum "${LINGBOT_WEIGHTS}" "${MEMNAV_DINO_WEIGHTS}"
 
         export PYTHONPATH="'"${REPO_ROOT}"':'"${REPO_ROOT}"'/src/diffusion-policy:${PYTHONPATH:-}"
 
@@ -153,8 +180,8 @@ apptainer exec --nv \
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"
-        echo "strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE} require_pose_marker=${MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION}"
-        echo "pose_scale_window=${MEMNAV_POSE_SCALE_WINDOW} pose_rel_weight=${MEMNAV_W_POSE_RELIABILITY} pose_rel_hidden=${MEMNAV_POSE_RELIABILITY_HIDDEN} pose_rel_init=${MEMNAV_POSE_RELIABILITY_INIT} pose_rel_lr_mult=${MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER}"
+        echo "strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE} require_versioned_cache=${MEMNAV_REQUIRE_VERSIONED_CACHE} expected_cache_signature=${MEMNAV_EXPECTED_CACHE_SIGNATURE} expected_code_commit=${MEMNAV_EXPECTED_CODE_COMMIT} require_pose_marker=${MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION}"
+        echo "pose_scale_window=${MEMNAV_POSE_SCALE_WINDOW} pose_rel_conditioning=${MEMNAV_USE_POSE_RELIABILITY_CONDITIONING} pose_rel_weight=${MEMNAV_W_POSE_RELIABILITY} pose_rel_hidden=${MEMNAV_POSE_RELIABILITY_HIDDEN} pose_rel_init=${MEMNAV_POSE_RELIABILITY_INIT} pose_rel_lr_mult=${MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER}"
         echo "dino_weights=${MEMNAV_DINO_WEIGHTS}"
 
         exec python scripts/train/train.py \

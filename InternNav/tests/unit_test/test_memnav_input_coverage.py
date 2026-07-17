@@ -10,6 +10,10 @@ from internnav.dataset.memnav_dataset_lerobot import (
     build_fixed_memnav_eval_subset,
 )
 from internnav.dataset.memnav_pose_conventions import GENERATED_ZUP_FRAME_CONVENTION
+from internnav.model.basemodel.memnav.cache_schema import (
+    CACHE_SCHEMA_VERSION,
+    KEYFRAME_POLICY,
+)
 
 
 def _source_episode(root: Path, convention=GENERATED_ZUP_FRAME_CONVENTION,
@@ -36,6 +40,35 @@ def _source_episode(root: Path, convention=GENERATED_ZUP_FRAME_CONVENTION,
 
 
 class MemNavInputCoverageTest(unittest.TestCase):
+    @staticmethod
+    def _write_versioned_cache_pair(feature_dir, num_frames=130, scale=8):
+        shared = {
+            'cache_schema_version': np.array([CACHE_SCHEMA_VERSION]),
+            'keyframe_policy': np.array([KEYFRAME_POLICY]),
+            'num_frames': np.array([num_frames]),
+            'num_scale_frames': np.array([scale]),
+            'keyframe_interval': np.array([1]),
+            'kv_cache_sliding_window': np.array([32]),
+            'precompute_signature': np.array(['test-signature']),
+        }
+        np.savez(
+            feature_dir / 'lingbot_cache.npz',
+            **shared,
+            anchor_frame_indices=np.arange(scale, num_frames),
+            dino_cls=np.zeros((num_frames, 1), np.float16),
+            anchor_k=np.zeros((num_frames - scale, 1), np.float16),
+            anchor_v=np.zeros((num_frames - scale, 1), np.float16),
+            meta=np.array([scale, 6, 1, 1, 1]),
+        )
+        np.savez(
+            feature_dir / 'lingbot_cam_cache.npz',
+            **shared,
+            cam_frame_indices=np.arange(num_frames),
+            cam_pose_enc=np.zeros((num_frames, 9), np.float32),
+            cam_k=np.zeros((num_frames, 1), np.float16),
+            cam_v=np.zeros((num_frames, 1), np.float16),
+        )
+
     def test_fixed_eval_subset_is_balanced_deterministic_and_fingerprinted(self):
         class FakeDataset:
             sampling_mode = 'fixed_leg'
@@ -120,6 +153,42 @@ class MemNavInputCoverageTest(unittest.TestCase):
                     feature_root=features,
                     strict_feature_coverage=True,
                     require_generated_pose_convention=True,
+                )
+
+    def test_versioned_cache_is_checked_eagerly_for_zero_step_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'raw'
+            features = Path(tmp) / 'features'
+            episode = _source_episode(root)
+            rgb_dir = episode / 'videos/chunk-000/observation.images.rgb'
+            for index in range(130):
+                (rgb_dir / f'{index}.jpg').touch()
+            feature_dir = features / episode.relative_to(root) / 'videos/chunk-000'
+            feature_dir.mkdir(parents=True)
+            self._write_versioned_cache_pair(feature_dir)
+
+            dataset = MemNav_Dataset(
+                root,
+                feature_root=features,
+                window_size=32,
+                strict_feature_coverage=True,
+                require_versioned_cache=True,
+                expected_cache_signature='test-signature',
+            )
+            self.assertEqual(dataset.cache_keyframe_intervals, [1])
+
+            with np.load(feature_dir / 'lingbot_cam_cache.npz') as current:
+                broken = {name: current[name] for name in current.files}
+            broken['precompute_signature'] = np.array(['wrong-run'])
+            np.savez(feature_dir / 'lingbot_cam_cache.npz', **broken)
+            with self.assertRaisesRegex(RuntimeError, 'precompute_signature mismatch'):
+                MemNav_Dataset(
+                    root,
+                    feature_root=features,
+                    window_size=32,
+                    strict_feature_coverage=True,
+                    require_versioned_cache=True,
+                    expected_cache_signature='test-signature',
                 )
 
     def test_scene_split_has_no_leakage_and_fixed_k_is_repeatable(self):

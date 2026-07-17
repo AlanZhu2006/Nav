@@ -50,6 +50,7 @@ class GaugeInvariantRevisitPose(nn.Module):
         max_frame_num=4096,
         reliability_hidden=16,
         reliability_init=0.95,
+        condition_on_reliability=True,
     ):
         super().__init__()
         if distance_unit_steps <= 0:
@@ -61,6 +62,12 @@ class GaugeInvariantRevisitPose(nn.Module):
 
         self.distance_unit_steps = float(distance_unit_steps)
         self.max_frame_num = int(max_frame_num)
+        self.condition_on_reliability = bool(condition_on_reliability)
+        self.CODE_VERSION = (
+            "gauge_invariant_bearing_reliability_v1"
+            if self.condition_on_reliability
+            else "gauge_invariant_bearing_diagnostic_reliability_v2"
+        )
         self.reliability_head = nn.Sequential(
             nn.Linear(len(self.RELIABILITY_FEATURES), reliability_hidden),
             nn.GELU(),
@@ -166,11 +173,18 @@ class GaugeInvariantRevisitPose(nn.Module):
             self.reliability_head(reliability_features).squeeze(-1)
         )
 
-        # Reliability is part of the token as well as the semantic/geometric AND
-        # gate.  This lets the decoder distinguish a weak pose from a short but
-        # genuinely close target without seeing raw gauge-dependent translation.
+        # Reliability remains observable for diagnostics.  It only enters the
+        # pose token (and the semantic/geometric AND gate in MemNavNet) when the
+        # explicitly opt-in conditioning mode is enabled.
+        conditioning_reliability = (
+            reliability if self.condition_on_reliability else torch.ones_like(reliability)
+        )
         pose_code = torch.cat(
-            (raw_direction, range_code.unsqueeze(-1), reliability.unsqueeze(-1)),
+            (
+                raw_direction,
+                range_code.unsqueeze(-1),
+                conditioning_reliability.unsqueeze(-1),
+            ),
             dim=-1,
         )
         return {

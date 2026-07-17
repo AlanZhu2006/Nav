@@ -255,6 +255,12 @@ def main(config, model_class, model_config_class):
                 window_size=getattr(config.il, 'window_size', 8),
                 num_scale=getattr(config.il, 'num_scale', 8),
                 strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
+                require_versioned_cache=getattr(
+                    config.il, 'require_versioned_cache', False
+                ),
+                expected_cache_signature=getattr(
+                    config.il, 'expected_cache_signature', ''
+                ),
                 require_generated_pose_convention=getattr(
                     config.il, 'require_generated_pose_convention', False
                 ),
@@ -292,6 +298,12 @@ def main(config, model_class, model_config_class):
                 window_size=getattr(config.il, 'window_size', 8),
                 num_scale=getattr(config.il, 'num_scale', 8),
                 strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
+                require_versioned_cache=getattr(
+                    config.il, 'require_versioned_cache', False
+                ),
+                expected_cache_signature=getattr(
+                    config.il, 'expected_cache_signature', ''
+                ),
                 require_generated_pose_convention=getattr(
                     config.il, 'require_generated_pose_convention', False
                 ),

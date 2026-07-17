@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from transformers import PretrainedConfig, PreTrainedModel
 
+from internnav.model.basemodel.memnav.cache_schema import validate_cache_pair
 from internnav.model.basemodel.memnav.lingbot_stream import LingBotStream
 from internnav.model.basemodel.memnav.retrieval_head import RetrievalHead
 from internnav.model.basemodel.memnav.revisit_pose import GaugeInvariantRevisitPose
@@ -100,7 +101,7 @@ class RevisitMerge(nn.Module):
     same reasoning as VGGT/Pi3 supervising relative pose directly.
 
       - pose_encoder → a gauge-invariant planar bearing, stream-normalized bounded
-        range, and separately calibrated geometric reliability.  The raw long-range
+        range, and an optional separately calibrated geometric reliability.  The raw long-range
         translation and endpoint camera rotation never enter the action token.
       - revisit_head  → revisit_readout (the diffusion goal slot). TRAINABLE: a plain
         Linear on the four-dimensional robust pose code — no attention needed for a
@@ -124,20 +125,22 @@ class RevisitMerge(nn.Module):
         accumulated VO drift, which is why metric x/y MSE is diagnostic rather than a
         training loss. ``rel_adapter`` is shared by the auxiliary direction head and
         ``revisit_head``, so this supervision is no longer an isolated sidecar.  The
-        reliability head is supervised against raw-bearing agreement with GT and later
-        ANDed with semantic retrieval confidence: "seen before" and "pose trustworthy"
-        are deliberately different probabilities.
+        reliability head remains available as a diagnostic, but it is not allowed to
+        attenuate conditioning unless explicitly enabled.  Local sparse-cache probes
+        showed that it was nearly constant and failed on wrong anchors, while the
+        semantic gate already rejected those anchors.
     """
 
     def __init__(self, dim=384, n_out=4, distance_unit_steps=32,
                  max_frame_num=4096, reliability_hidden=16,
-                 reliability_init=0.95):
+                 reliability_init=0.95, condition_on_reliability=True):
         super().__init__()
         self.pose_encoder = GaugeInvariantRevisitPose(
             distance_unit_steps=distance_unit_steps,
             max_frame_num=max_frame_num,
             reliability_hidden=reliability_hidden,
             reliability_init=reliability_init,
+            condition_on_reliability=condition_on_reliability,
         )
         pose_dim = 4
         self.rel_adapter = nn.Sequential(
@@ -220,7 +223,10 @@ class MemNavNet(nn.Module):
                  novel_backbone_weights=None, gate_center=0.94, gate_width=0.04,
                  gate_slope_init=1.6, gate_bias_init=0.0,
                  pose_scale_window=64, pose_reliability_hidden=16,
-                 pose_reliability_init=0.95, device="cuda"):
+                 pose_reliability_init=0.95,
+                 use_pose_reliability_conditioning=True,
+                 require_versioned_cache=False,
+                 device="cuda"):
         super().__init__()
         self.lingbot = LingBotStream(device=device, **(lingbot_kwargs or {}))
         self.window = self.lingbot.window
@@ -231,7 +237,13 @@ class MemNavNet(nn.Module):
         # goal_append_warm's live-recompute depth before streaming the goal — deeper than
         # `window` on purpose (see LingBotStream.goal_append_warm); validated against a
         # continuous-stream oracle in scripts/diag_lingbot_pose_accuracy.py.
-        self.goal_warm = goal_warm
+        self.goal_warm = int(goal_warm)
+        if self.goal_warm < 0:
+            raise ValueError('goal_warm must be non-negative')
+        self.require_versioned_cache = bool(require_versioned_cache)
+        self.use_pose_reliability_conditioning = bool(
+            use_pose_reliability_conditioning
+        )
         self.pose_scale_window = int(pose_scale_window)
         if self.pose_scale_window < 2:
             raise ValueError('pose_scale_window must be at least two frames')
@@ -264,6 +276,7 @@ class MemNavNet(nn.Module):
             max_frame_num=int((lingbot_kwargs or {}).get('max_frame_num', 4096)),
             reliability_hidden=pose_reliability_hidden,
             reliability_init=pose_reliability_init,
+            condition_on_reliability=self.use_pose_reliability_conditioning,
         )
 
         # --- NavDP DDPM decoder (no critic) ---
@@ -336,6 +349,11 @@ class MemNavNet(nn.Module):
                            memory_mask=self._gate_mask(gate))
         return self.action_head(self.layernorm(out))
 
+    def _effective_revisit_gate(self, revisit_gate, pose_reliability):
+        if self.use_pose_reliability_conditioning:
+            return revisit_gate * pose_reliability
+        return revisit_gate
+
     def prepare_condition(self, batch):
         """Encode every goal-conditioned memory input once.
 
@@ -359,10 +377,12 @@ class MemNavNet(nn.Module):
         )
         novel = self.novel(batch["batch_window_images"][:, -1].to(dev),   # current frame [B,3,H,W]
                            batch["batch_goal_image"].to(dev))             # goal frame
-        # Joint probability that the goal is a semantic revisit AND its geometry
-        # is trustworthy.  Retrieval BCE continues to supervise the first factor;
-        # a separate calibration target supervises the second.
-        effective_revisit_gate = enc['revisit_gate'] * pose_reliability
+        # A pose-reliability multiplier is opt-in.  The sparse-cache diagnostic
+        # found it nearly constant and unable to identify a wrong semantic anchor;
+        # by default the calibrated semantic gate alone chooses revisit vs novel.
+        effective_revisit_gate = self._effective_revisit_gate(
+            enc['revisit_gate'], pose_reliability
+        )
         return dict(
             current_state=current_state,
             revisit=revisit,
@@ -501,29 +521,53 @@ class MemNavNet(nn.Module):
         ``scale_k/scale_v`` (--skip_scale precompute mode), compute it on the
         fly from the first ``num_scale`` RGB frames of ``rgb_dir`` — bf16 output,
         LRU-cached per trajectory inside LingBotStream."""
-        with np.load(path) as c:
-            keys = set(c.files)
+        with np.load(path) as c, np.load(camera_path) as cc:
+            # Materialize once: validation and GPU conversion otherwise cause
+            # np.load to reread the large ZIP_STORED KV arrays independently.
+            aggregator = {name: c[name] for name in c.files}
+            camera = {name: cc[name] for name in cc.files}
+            layout = validate_cache_pair(
+                aggregator,
+                camera,
+                expected_num_scale_frames=self.num_scale,
+                expected_sliding_window=self.window,
+                require_versioned=self.require_versioned_cache,
+            )
+            keys = set(aggregator)
             if "scale_k" in keys and "scale_v" in keys:
                 sk, sv, ak, av = LingBotStream._cache_to_layered(
-                    c["scale_k"], c["scale_v"], c["anchor_k"], c["anchor_v"], self.device)
+                    aggregator["scale_k"], aggregator["scale_v"],
+                    aggregator["anchor_k"], aggregator["anchor_v"], self.device)
             else:
                 sk, sv = self.lingbot.get_scale_kv(rgb_dir)
-                ak = torch.as_tensor(c["anchor_k"], device=self.device, dtype=torch.bfloat16)\
+                ak = torch.as_tensor(aggregator["anchor_k"], device=self.device, dtype=torch.bfloat16)\
                     .permute(1, 2, 0, 3, 4).contiguous()
-                av = torch.as_tensor(c["anchor_v"], device=self.device, dtype=torch.bfloat16)\
+                av = torch.as_tensor(aggregator["anchor_v"], device=self.device, dtype=torch.bfloat16)\
                     .permute(1, 2, 0, 3, 4).contiguous()
-        with np.load(camera_path) as cc:
-            ck, cv = LingBotStream._cam_to_device(cc["cam_k"], cc["cam_v"], self.device)
+            ck, cv = LingBotStream._cam_to_device(
+                camera["cam_k"], camera["cam_v"], self.device
+            )
             # cam_pose_enc [S,9]: the frozen camera head's own pose for every REAL
             # trajectory frame, captured during the continuous precompute stream.
             cam_pose_enc = torch.as_tensor(
-                cc["cam_pose_enc"], device=self.device, dtype=torch.float32
+                camera["cam_pose_enc"], device=self.device, dtype=torch.float32
             )
         # cur_pose reads cam_pose_enc directly instead of reconstructing it from a
         # cold-start window. goal_pose still needs a live camera_pose() call because
         # the goal image is newly inserted and has no trajectory entry.
-        return dict(scale_k=sk, scale_v=sv, anchor_k=ak, anchor_v=av, cam_k=ck, cam_v=cv,
-                   cam_pose_enc=cam_pose_enc)
+        return dict(
+            scale_k=sk, scale_v=sv, anchor_k=ak, anchor_v=av,
+            anchor_frame_indices=torch.as_tensor(
+                layout.anchor_frame_indices, dtype=torch.long
+            ),
+            cam_k=ck, cam_v=cv,
+            cam_frame_indices=torch.as_tensor(
+                layout.cam_frame_indices, dtype=torch.long
+            ),
+            cam_pose_enc=cam_pose_enc,
+            keyframe_interval=layout.keyframe_interval,
+            cache_schema_version=layout.schema_version,
+        )
 
     @torch.no_grad()
     def _pose_consistency_context(self, cam_pose_enc, k, anchor, goal_pose, semantic_score_z):
@@ -634,7 +678,9 @@ class MemNavNet(nn.Module):
                 m = int(anchor[b].clamp(lo, k - 1).item())
                 _, goal_agg = self.lingbot.goal_append_warm(goal_img, cache, m, rgb_dir,
                                                             self.goal_warm, return_agg=True)
-                goal_pose = self.lingbot.camera_pose(ck, cv, m + 1, goal_agg)[-1]   # [9] goal abs pose
+                goal_pose = self.lingbot.camera_pose(
+                    ck, cv, m + 1, goal_agg, cache["cam_frame_indices"]
+                )[-1]   # [9] goal abs pose
                 semantic_score_z = (
                     (gate_feature[b] - self.retrieval.gate_center)
                     / self.retrieval.gate_width
@@ -728,6 +774,10 @@ class MemNavPolicy(PreTrainedModel):
             pose_scale_window=il.get('pose_scale_window', 64),
             pose_reliability_hidden=il.get('pose_reliability_hidden', 16),
             pose_reliability_init=il.get('pose_reliability_init', 0.95),
+            use_pose_reliability_conditioning=il.get(
+                'use_pose_reliability_conditioning', True
+            ),
+            require_versioned_cache=il.get('require_versioned_cache', False),
             lingbot_kwargs=lingbot_kwargs or None, device=str(self._device),
         )
 

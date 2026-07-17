@@ -4,6 +4,9 @@
 包，还包括代码版本、容器/Conda、数据和缓存、权重、输出路径，以及 Slurm
 前置任务依赖。
 
+本轮 sparse-keyframe 的实验结果、可靠性消融和结论边界见仓库根目录
+[`MEMNAV_SPARSE_KEYFRAME_VALIDATION.md`](../../../MEMNAV_SPARSE_KEYFRAME_VALIDATION.md)。
+
 长任务不得直接裸提交。必须先运行与正式任务使用同一部署目录、容器、Conda、
 数据、权重和脚本的零步预检；正式任务必须通过 `afterok` 依赖预检成功。
 
@@ -12,6 +15,8 @@
 - 只从个人子目录的独立分支修改；不要直接修改母目录工作树。
 - 提交和推送后记录完整 commit SHA。
 - 集群使用独立、不可变的部署目录；记录其中的 `DEPLOY_COMMIT`。
+- 任务入口会拒绝部署仓库或 LingBot checkout 中任何 tracked modification；
+  commit SHA 相同但文件被现场修改也不能运行。
 - 本地与部署端的关键脚本 SHA256 必须一致。
 - 提交前至少运行：
 
@@ -67,9 +72,20 @@ MEMNAV_DINO_WEIGHTS
   标签。
 - 每个 source-ready episode 必须同时有 `lingbot_cache.npz` 和
   `lingbot_cam_cache.npz`。
+- 稀疏 keyframe 训练必须设置 `MEMNAV_REQUIRE_VERSIONED_CACHE=1`。预计算的
+  两个文件必须具有相同的 schema、precompute signature、interval、原始帧数和
+  sliding-window；训练不得把旧 dense aggregator 与新 sparse camera cache 混用。
+- 同时把预计算日志中的完整 SHA256 写入
+  `MEMNAV_EXPECTED_CACHE_SIGNATURE`；零步预检会扫描全部 episode 的小型 metadata
+  和 `.npy` header，并在加载模型前拒绝不同生成批次或截断 payload。
+- 正式预检还必须设置 `MEMNAV_EXPECTED_CODE_COMMIT`；任务会把部署目录的
+  `git rev-parse HEAD` 与它比较，并打印 LingBot commit 及两份权重 SHA256。
 - parquet、RGB、DINO CLS、`cam_pose_enc` 的帧数及 goal 索引必须一致。
 - `MEMNAV_WINDOW`、`MEMNAV_NUM_SCALE`、`MEMNAV_MAX_FRAME_NUM` 必须与预计算
   几何一致，且最大帧数能覆盖最长 episode。
+- 新 sparse 训练默认 `MEMNAV_USE_POSE_RELIABILITY_CONDITIONING=0` 且
+  `MEMNAV_W_POSE_RELIABILITY=0`：旧 head 在 30 个 paired 样本上近似常数，且不能
+  识别错误 retrieval anchor；它只保留为日志诊断，不再无依据地乘低 semantic gate。
 - 预计算必须同时满足应用日志 `errors=0` 和 Slurm
   `COMPLETED, ExitCode=0:0`；脚本捕获错误后继续运行不算成功。
 - stdout、checkpoint、W&B 和诊断输出目录必须在 `sbatch` 前存在且可写，

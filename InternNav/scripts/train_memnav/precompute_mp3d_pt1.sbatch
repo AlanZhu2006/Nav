@@ -38,6 +38,9 @@ export LIMIT="${LIMIT:-0}"
 export SHARD="${SLURM_ARRAY_TASK_ID:-0}"
 export MAX_FRAME_NUM="${MAX_FRAME_NUM:-4096}"
 export TRAJECTORY_LIST="${TRAJECTORY_LIST:-}"
+export AUTO_KEYFRAME_INTERVAL="${AUTO_KEYFRAME_INTERVAL:-0}"
+export KEYFRAME_BUDGET="${KEYFRAME_BUDGET:-320}"
+export EXPECTED_CODE_COMMIT="${EXPECTED_CODE_COMMIT:-}"
 
 IMG=${IMG:-/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf}
 BASE_SIF=${BASE_SIF:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}
@@ -49,7 +52,7 @@ export REPO_ROOT=${REPO_ROOT:-/scratch/lg154/Research/Nav/InternNav}
 export CONDA_SH=${CONDA_SH:-/scratch/lg154/miniconda3/etc/profile.d/conda.sh}
 export CONDA_ENV=${CONDA_ENV:-/scratch/lg154/conda-envs/memnav}
 
-echo "host: $(hostname); shard ${SHARD}/${NUM_SHARDS}; limit=${LIMIT}; start: $(date)"
+echo "host: $(hostname); shard ${SHARD}/${NUM_SHARDS}; limit=${LIMIT}; auto_keyframes=${AUTO_KEYFRAME_INTERVAL}; keyframe_budget=${KEYFRAME_BUDGET}; start: $(date)"
 mkdir -p "${OUT_ROOT}"
 
 apptainer exec --nv \
@@ -62,11 +65,41 @@ apptainer exec --nv \
         source "${CONDA_SH}"
         conda activate "${CONDA_ENV}"
         cd "${REPO_ROOT}"
+        [[ -z "$(git status --porcelain --untracked-files=no)" ]] || {
+            echo "ABORT: deployed InternNav has tracked modifications" >&2; exit 1;
+        }
+        [[ -z "$(git -C "${LINGBOT_REPO}" status --porcelain --untracked-files=no)" ]] || {
+            echo "ABORT: LingBot checkout has tracked modifications" >&2; exit 1;
+        }
+        ACTUAL_CODE_COMMIT=$(git rev-parse HEAD)
+        if [[ "${AUTO_KEYFRAME_INTERVAL}" == "1" && -z "${EXPECTED_CODE_COMMIT}" ]]; then
+            echo "ABORT: sparse precompute requires EXPECTED_CODE_COMMIT" >&2
+            exit 1
+        fi
+        if [[ -n "${EXPECTED_CODE_COMMIT}" && "${ACTUAL_CODE_COMMIT}" != "${EXPECTED_CODE_COMMIT}" ]]; then
+            echo "ABORT: deployed commit ${ACTUAL_CODE_COMMIT} != expected ${EXPECTED_CODE_COMMIT}" >&2
+            exit 1
+        fi
+        echo "code_commit=${ACTUAL_CODE_COMMIT} lingbot_commit=$(git -C "${LINGBOT_REPO}" rev-parse HEAD)"
         extra_args=()
         if [[ -n "${TRAJECTORY_LIST}" ]]; then
             [[ -f "${TRAJECTORY_LIST}" ]] || { echo "ABORT: trajectory list missing ${TRAJECTORY_LIST}"; exit 1; }
             extra_args+=(--trajectory_list "${TRAJECTORY_LIST}")
         fi
+        keyframe_args=()
+        if [[ "${AUTO_KEYFRAME_INTERVAL}" == "1" ]]; then
+            keyframe_args+=(--auto_keyframe_interval --keyframe_budget "${KEYFRAME_BUDGET}")
+        elif [[ "${AUTO_KEYFRAME_INTERVAL}" != "0" ]]; then
+            echo "ABORT: AUTO_KEYFRAME_INTERVAL must be 0 or 1" >&2
+            exit 1
+        fi
+        python - <<PY
+import sys
+sys.path.insert(0, "${LINGBOT_REPO}")
+from lingbot_map.models.gct_stream import GCTStream
+assert hasattr(GCTStream, "_set_skip_append"), "LingBot lacks sparse-cache support"
+print("LingBot sparse-cache dependency: OK")
+PY
         python scripts/dataset_converters/precompute_lingbot_features.py \
             --root_dirs "${ROOT_DIRS}" \
             --out_root  "${OUT_ROOT}" \
@@ -77,6 +110,7 @@ apptainer exec --nv \
             --max_frame_num "${MAX_FRAME_NUM}" \
             --num_shards "${NUM_SHARDS}" --shard "${SHARD}" \
             --limit "${LIMIT}" \
+            "${keyframe_args[@]}" \
             "${extra_args[@]}"
     '
 

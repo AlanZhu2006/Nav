@@ -1,7 +1,9 @@
 import unittest
 
 import torch
+import torch.nn as nn
 
+from internnav.model.basemodel.memnav.memnav_policy import MemNavNet
 from internnav.model.basemodel.memnav.revisit_pose import (
     GaugeInvariantRevisitPose,
 )
@@ -69,6 +71,34 @@ class GaugeInvariantRevisitPoseTest(unittest.TestCase):
         output['pose_code'].sum().backward()
         self.assertTrue(torch.isfinite(translation.grad).all())
         self.assertIsNotNone(encoder.reliability_head[-1].bias.grad)
+
+    def test_diagnostic_reliability_does_not_attenuate_pose_code(self):
+        encoder = GaugeInvariantRevisitPose(
+            reliability_init=0.2, condition_on_reliability=False
+        )
+        output = encoder(
+            torch.tensor([[1.0, 0.0, 3.0]]),
+            torch.eye(3).unsqueeze(0),
+            self._context(),
+        )
+        self.assertAlmostEqual(float(output['reliability'].detach()), 0.2, places=5)
+        torch.testing.assert_close(output['pose_code'][:, -1], torch.ones(1))
+        self.assertIn('diagnostic_reliability_v2', encoder.CODE_VERSION)
+
+    def test_diagnostic_reliability_does_not_attenuate_semantic_gate(self):
+        net = MemNavNet.__new__(MemNavNet)
+        nn.Module.__init__(net)
+        semantic = torch.tensor([0.2, 0.8])
+        reliability = torch.tensor([0.1, 0.5])
+        net.use_pose_reliability_conditioning = False
+        torch.testing.assert_close(
+            net._effective_revisit_gate(semantic, reliability), semantic
+        )
+        net.use_pose_reliability_conditioning = True
+        torch.testing.assert_close(
+            net._effective_revisit_gate(semantic, reliability),
+            semantic * reliability,
+        )
 
     def test_context_shape_mismatch_fails_closed(self):
         encoder = GaugeInvariantRevisitPose()

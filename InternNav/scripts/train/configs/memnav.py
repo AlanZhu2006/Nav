@@ -40,6 +40,11 @@ _WINDOW_SIZE = int(os.environ.get('MEMNAV_WINDOW', '32'))
 _NUM_SCALE = int(os.environ.get('MEMNAV_NUM_SCALE', '8'))
 _MAX_FRAME_NUM = int(os.environ.get('MEMNAV_MAX_FRAME_NUM', '4096'))
 _STRICT_FEATURE_COVERAGE = _env_bool('MEMNAV_STRICT_FEATURE_COVERAGE', True)
+_REQUIRE_VERSIONED_CACHE = _env_bool('MEMNAV_REQUIRE_VERSIONED_CACHE', False)
+_EXPECTED_CACHE_SIGNATURE = os.environ.get('MEMNAV_EXPECTED_CACHE_SIGNATURE', '')
+_USE_POSE_RELIABILITY_CONDITIONING = _env_bool(
+    'MEMNAV_USE_POSE_RELIABILITY_CONDITIONING', False
+)
 _REQUIRE_GENERATED_POSE_CONVENTION = _env_bool(
     'MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION', False
 )
@@ -99,6 +104,8 @@ memnav_exp_cfg = ExpCfg(
         root_dir=_ROOT_DIR,
         feature_root=_FEATURE_ROOT,
         strict_feature_coverage=_STRICT_FEATURE_COVERAGE,
+        require_versioned_cache=_REQUIRE_VERSIONED_CACHE,
+        expected_cache_signature=_EXPECTED_CACHE_SIGNATURE,
         require_generated_pose_convention=_REQUIRE_GENERATED_POSE_CONVENTION,
         data_split=_DATA_SPLIT,
         validation_fraction=_VALIDATION_FRACTION,
@@ -150,8 +157,9 @@ memnav_exp_cfg = ExpCfg(
             os.environ.get('MEMNAV_POSE_RELIABILITY_HIDDEN', '16')
         ),
         pose_reliability_init=float(
-            os.environ.get('MEMNAV_POSE_RELIABILITY_INIT', '0.95')
+            os.environ.get('MEMNAV_POSE_RELIABILITY_INIT', '0.99')
         ),
+        use_pose_reliability_conditioning=_USE_POSE_RELIABILITY_CONDITIONING,
         pose_reliability_lr_multiplier=float(
             os.environ.get('MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER', '5.0')
         ),
@@ -162,7 +170,10 @@ memnav_exp_cfg = ExpCfg(
         # diagnostic because LingBot pose has a per-sequence canonical scale.
         w_aux_direction=0.2,
         w_pose_reliability=float(
-            os.environ.get('MEMNAV_W_POSE_RELIABILITY', '0.2')
+            os.environ.get(
+                'MEMNAV_W_POSE_RELIABILITY',
+                '0.2' if _USE_POSE_RELIABILITY_CONDITIONING else '0.0',
+            )
         ),
         ddp_find_unused_parameters=True,
     ),

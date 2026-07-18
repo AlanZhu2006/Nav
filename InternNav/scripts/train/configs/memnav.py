@@ -168,7 +168,25 @@ memnav_exp_cfg = ExpCfg(
         w_gate=1.0,        # revisit/novel gate BCE (is there a match at all)
         # Scale-invariant translation-direction auxiliary. Metric x/y remains a
         # diagnostic because LingBot pose has a per-sequence canonical scale.
-        w_aux_direction=0.2,
+        w_aux_direction=float(os.environ.get('MEMNAV_W_AUX_DIRECTION', '0.2')),
+        # Optional supervision for the *adapted* range coordinate consumed by
+        # revisit_head.  It targets asinh(GT endpoint distance / observed-prefix
+        # step / window), never a global LingBot-units-to-metres conversion.
+        # Default-off preserves exact behavior of existing checkpoints/runs.
+        w_aux_range=float(os.environ.get('MEMNAV_W_AUX_RANGE', '0.0')),
+        aux_range_beta=float(os.environ.get('MEMNAV_AUX_RANGE_BETA', '0.1')),
+        # Scheduled exposure to retrieval's live anchor closes the train/eval
+        # mismatch.  1->1 is the legacy all-positive teacher-forcing baseline;
+        # experiments can decay toward a lower probability without a code edit.
+        anchor_teacher_forcing_start=float(
+            os.environ.get('MEMNAV_ANCHOR_TF_START', '1.0')
+        ),
+        anchor_teacher_forcing_end=float(
+            os.environ.get('MEMNAV_ANCHOR_TF_END', '1.0')
+        ),
+        anchor_teacher_forcing_decay_steps=int(
+            os.environ.get('MEMNAV_ANCHOR_TF_DECAY_STEPS', '0')
+        ),
         w_pose_reliability=float(
             os.environ.get(
                 'MEMNAV_W_POSE_RELIABILITY',

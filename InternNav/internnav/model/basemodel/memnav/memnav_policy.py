@@ -197,6 +197,10 @@ class RevisitMerge(nn.Module):
         rel_feat = encoded['pose_code']                                  # [B,4]
         rel_feat = rel_feat + self.rel_adapter(rel_feat)
         aux_pose = self.aux_pose_head(rel_feat)                           # [B,2] direction proxy
+        # Supervise the exact adapted range coordinate consumed by revisit_head.
+        # This adds no checkpoint parameters: old checkpoints remain loadable and
+        # the loss can be enabled independently by the trainer.
+        aux_range_code = rel_feat[..., 2]
         revisit_readout = self.revisit_head(rel_feat).view(-1, self.n_out, self.dim)
         # R_rel returned too — not for any loss (no head/calibration needed for it, it's a
         # raw feature into revisit_head), just so the trainer can log a rotation-accuracy
@@ -210,6 +214,7 @@ class RevisitMerge(nn.Module):
             encoded['reliability'],
             encoded['reliability_features'],
             encoded['range_steps'],
+            aux_range_code,
         )
 
 
@@ -372,6 +377,7 @@ class MemNavNet(nn.Module):
             pose_reliability,
             pose_reliability_features,
             pose_range_steps,
+            aux_range_code,
         ) = self.build_revisit(
             enc["cur_pose"], enc["goal_pose"], enc["pose_context"]
         )
@@ -393,6 +399,7 @@ class MemNavNet(nn.Module):
             pose_reliability=pose_reliability,
             pose_reliability_features=pose_reliability_features,
             pose_range_steps=pose_range_steps,
+            aux_range_code=aux_range_code,
             ret_logits=enc['ret_logits'],
             revisit_gate=enc['revisit_gate'],
             effective_revisit_gate=effective_revisit_gate,
@@ -400,6 +407,7 @@ class MemNavNet(nn.Module):
             gate_feature=enc['gate_feature'],
             match_idx=enc['match_idx'],
             anchor_idx=enc['anchor_idx'],
+            anchor_teacher_forced=enc['anchor_teacher_forced'],
         )
 
     def forward_with_condition(self, batch, condition):
@@ -436,12 +444,14 @@ class MemNavNet(nn.Module):
             pose_reliability=condition["pose_reliability"],
             pose_reliability_features=condition["pose_reliability_features"],
             pose_range_steps=condition["pose_range_steps"],
+            aux_range_code=condition["aux_range_code"],
             ret_logits=condition["ret_logits"],
             revisit_gate=condition["revisit_gate"],
             effective_revisit_gate=condition["effective_revisit_gate"],
             gate_logit=condition["gate_logit"],
             gate_feature=condition["gate_feature"],
             match_idx=condition["match_idx"], anchor_idx=condition["anchor_idx"],
+            anchor_teacher_forced=condition["anchor_teacher_forced"],
             gate_effective_threshold=self.retrieval.effective_gate_threshold,
             gate_normalized_slope=self.retrieval.gate_slope,
         )
@@ -611,6 +621,48 @@ class MemNavNet(nn.Module):
             'semantic_score_z': semantic_score_z.to(prefix_scale),
         }
 
+    @staticmethod
+    def _select_revisit_anchor(
+        ret_logits,
+        match_idx,
+        pos_mask,
+        *,
+        training,
+        force_oracle_positive=False,
+        teacher_mask=None,
+    ):
+        """Choose a live or best-positive anchor and report actual TF rows."""
+        if pos_mask is None:
+            return match_idx, torch.zeros_like(match_idx, dtype=torch.bool)
+        pos_mask = pos_mask.to(device=ret_logits.device, dtype=torch.bool)
+        has_positive = pos_mask.any(-1)
+        negative_inf = torch.finfo(ret_logits.dtype).min
+        best_positive = ret_logits.masked_fill(
+            ~pos_mask, negative_inf
+        ).argmax(-1)
+        if force_oracle_positive:
+            request_teacher = torch.ones_like(has_positive)
+        elif training:
+            if teacher_mask is None:
+                request_teacher = torch.ones_like(has_positive)
+            else:
+                request_teacher = torch.as_tensor(
+                    teacher_mask,
+                    device=ret_logits.device,
+                    dtype=torch.bool,
+                )
+                if request_teacher.shape != has_positive.shape:
+                    raise ValueError(
+                        'anchor_teacher_forcing_mask must have shape '
+                        f'{tuple(has_positive.shape)}, got '
+                        f'{tuple(request_teacher.shape)}'
+                    )
+        else:
+            request_teacher = torch.zeros_like(has_positive)
+        teacher_forced = request_teacher & has_positive
+        anchor = torch.where(teacher_forced, best_positive, match_idx)
+        return anchor, teacher_forced
+
     def encode_memory(self, batch):
         """Frozen front-end orchestration. Retrieval (trainable, batched) picks the
         match index; a per-sample loop runs the frozen LingBot ops. Returns the
@@ -633,20 +685,21 @@ class MemNavNet(nn.Module):
         )
         revisit_gate = torch.sigmoid(gate_logit)       # P(revisit) for the decoder soft-gate
 
-        # goal_append anchor: at TRAIN time teacher-force it to a GT co-visible frame so the
-        # goal_pose (-> aux + revisit token) is well-anchored from step 1, decoupling those
-        # heads from retrieval convergence. At EVAL (no pos_mask / self.eval()) fall back to
-        # the live match_idx — the same anchor a converged retrieval produces. Novel rows have
-        # no positive -> keep match_idx (aux weight is 0 for them anyway).
+        # goal_append anchor: training defaults to the legacy all-positive teacher
+        # forcing, but the trainer may provide a per-row mask for scheduled exposure
+        # to live retrieval anchors. Evaluation always uses match_idx unless an
+        # explicit oracle-positive diagnostic is requested.
         pos_mask = batch.get("batch_pos_mask")
         force_oracle_positive = bool(batch.get('diagnostic_oracle_positive', False))
-        if (self.training or force_oracle_positive) and pos_mask is not None:
-            pos_mask = pos_mask.to(dev).bool()
-            NEG_INF = torch.finfo(ret_logits.dtype).min
-            tf_idx = ret_logits.masked_fill(~pos_mask, NEG_INF).argmax(-1)   # best-scoring positive
-            anchor = torch.where(pos_mask.any(-1), tf_idx, match_idx)
-        else:
-            anchor = match_idx
+        teacher_mask = batch.get('anchor_teacher_forcing_mask')
+        anchor, anchor_teacher_forced = self._select_revisit_anchor(
+            ret_logits,
+            match_idx,
+            pos_mask,
+            training=self.training,
+            force_oracle_positive=force_oracle_positive,
+            teacher_mask=teacher_mask,
+        )
 
         B = len(batch["cache_paths"])
         lo = self.num_scale + self.window - 1
@@ -704,6 +757,7 @@ class MemNavNet(nn.Module):
             goal_pose=torch.stack(goalp),    # [B, 9]        goal absolute camera pose (map frame)
             pose_context=pose_context,
             match_idx=match_idx, anchor_idx=anchor, revisit_gate=revisit_gate,
+            anchor_teacher_forced=anchor_teacher_forced,
             gate_logit=gate_logit, gate_feature=gate_feature, ret_logits=ret_logits,
         )
 
@@ -722,6 +776,32 @@ class MemNavModelConfig(PretrainedConfig):
 class MemNavPolicy(PreTrainedModel):
     config_class = MemNavModelConfig
 
+    @staticmethod
+    def _validate_checkpoint_incompatibility(incompatible, path):
+        """Allow compact checkpoints to omit frozen LingBot tensors only."""
+        missing_frozen = [
+            key for key in incompatible.missing_keys if 'lingbot.' in key
+        ]
+        missing_trainable = [
+            key for key in incompatible.missing_keys if 'lingbot.' not in key
+        ]
+        unexpected = list(incompatible.unexpected_keys)
+        if missing_trainable or unexpected:
+            raise ValueError(
+                f"Unsafe MemNav checkpoint {path}: "
+                f"missing non-LingBot={missing_trainable[:8]}, "
+                f"unexpected={unexpected[:8]}"
+            )
+        return len(missing_frozen)
+
+    @staticmethod
+    def _validate_checkpoint_path(path):
+        """Fail before model construction when an explicitly requested file is absent."""
+        if path and len(str(path)) > 0 and not os.path.isfile(path):
+            raise FileNotFoundError(
+                f"Requested MemNav initialization checkpoint is not a file: {path}"
+            )
+
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         config = kwargs.pop('config', None)
@@ -729,14 +809,22 @@ class MemNavPolicy(PreTrainedModel):
             config = cls.config_class.from_pretrained(pretrained_model_name_or_path, **kwargs)
         if hasattr(config, 'model_dump'):                  # pydantic ExpCfg -> wrap
             config = cls.config_class(model_cfg=config)
-        model = cls(config)
         path = pretrained_model_name_or_path
-        if path and len(str(path)) > 0 and os.path.exists(path):
-            sd = torch.load(path, map_location='cpu')
+        cls._validate_checkpoint_path(path)
+        model = cls(config)
+        if path and len(str(path)) > 0:
+            try:
+                sd = torch.load(path, map_location='cpu', weights_only=True)
+            except TypeError:
+                sd = torch.load(path, map_location='cpu')
             sd = sd.get('state_dict', sd) if isinstance(sd, dict) else sd
             sd = model.upgrade_checkpoint_state_dict(sd)
             inc = model.load_state_dict(sd, strict=False)
-            print(f"[memnav] loaded {path}: missing={len(inc.missing_keys)} unexpected={len(inc.unexpected_keys)}")
+            missing_frozen = model._validate_checkpoint_incompatibility(inc, path)
+            print(
+                f"[memnav] loaded {path}: all non-LingBot tensors present; "
+                f"omitted frozen LingBot tensors={missing_frozen}"
+            )
         return model
 
     def __init__(self, config: MemNavModelConfig):

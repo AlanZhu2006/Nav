@@ -147,6 +147,7 @@ def collect(args) -> dict:
                     reliability,
                     features,
                     _range_steps,
+                    _aux_range_code,
                 ) = core.build_revisit(
                     encoded['cur_pose'],
                     encoded['goal_pose'],

@@ -17,6 +17,7 @@ def _batch():
         'batch_pos_mask': torch.tensor([[True, False], [False, False]]),
         'batch_neg_mask': torch.tensor([[False, True], [True, True]]),
         'batch_goal_rel_pose': torch.tensor([[1.0, 2.0, 0.0], [0.0, 1.0, 0.0]]),
+        'batch_goal_range_code': torch.tensor([0.6, 0.1]),
         'batch_goal_rel_rotation': torch.eye(3).repeat(2, 1, 1),
         'cur_steps': [319, 1024],
         'goal_steps': [400, 1100],
@@ -41,6 +42,7 @@ def _outputs():
         'effective_revisit_gate': torch.tensor([0.72, 0.10]),
         'pose_reliability': torch.tensor([0.8, 0.5]),
         'pose_range_steps': torch.tensor([120.0, 20.0]),
+        'aux_range_code': torch.tensor([0.5, 0.2]),
         'raw_pose_direction': raw_direction,
         'gate_feature': torch.tensor([0.95, 0.60]),
         'noise': torch.zeros(2, 1, 3),
@@ -72,6 +74,8 @@ class MemNavMetricsTest(unittest.TestCase):
         self.assertAlmostEqual(metrics['pose_quality_revisit'], 1.0, places=6)
         self.assertAlmostEqual(metrics['gate_separation'], 0.7, places=6)
         self.assertAlmostEqual(metrics['aux_mse_x_revisit'], 0.0)
+        self.assertAlmostEqual(metrics['aux_range_code_mae_revisit'], 0.1)
+        self.assertAlmostEqual(records[0]['aux_range_code'], 0.5)
         self.assertLess(metrics['aux_direction_error_deg_revisit'], 0.03)
         self.assertAlmostEqual(metrics['oracle_action_mse_revisit'], 0.25)
         self.assertAlmostEqual(metrics['oracle_action_delta_revisit'], -0.75)

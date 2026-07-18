@@ -100,6 +100,44 @@ class GaugeInvariantRevisitPoseTest(unittest.TestCase):
             semantic * reliability,
         )
 
+    def test_revisit_anchor_teacher_mask_closes_train_eval_exposure_explicitly(self):
+        logits = torch.tensor([
+            [0.0, 3.0, 2.0],
+            [2.0, 1.0, 0.0],
+            [0.0, 1.0, 2.0],
+        ])
+        match = logits.argmax(-1)
+        positives = torch.tensor([
+            [False, False, True],
+            [False, False, False],
+            [False, True, False],
+        ])
+        anchor, forced = MemNavNet._select_revisit_anchor(
+            logits,
+            match,
+            positives,
+            training=True,
+            teacher_mask=torch.tensor([True, True, False]),
+        )
+        torch.testing.assert_close(anchor, torch.tensor([2, 0, 2]))
+        torch.testing.assert_close(forced, torch.tensor([True, False, False]))
+
+        live_anchor, live_forced = MemNavNet._select_revisit_anchor(
+            logits, match, positives, training=False
+        )
+        torch.testing.assert_close(live_anchor, match)
+        self.assertFalse(bool(live_forced.any()))
+
+        oracle_anchor, oracle_forced = MemNavNet._select_revisit_anchor(
+            logits,
+            match,
+            positives,
+            training=False,
+            force_oracle_positive=True,
+        )
+        torch.testing.assert_close(oracle_anchor, torch.tensor([2, 0, 1]))
+        torch.testing.assert_close(oracle_forced, torch.tensor([True, False, True]))
+
     def test_context_shape_mismatch_fails_closed(self):
         encoder = GaugeInvariantRevisitPose()
         context = self._context()

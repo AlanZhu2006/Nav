@@ -159,6 +159,10 @@ def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
     gate_bce = F.binary_cross_entropy(gate, revisit.float(), reduction='none')
     pose_reliability = outputs.get('pose_reliability')
     pose_range_steps = outputs.get('pose_range_steps')
+    aux_range_code = outputs.get('aux_range_code')
+    goal_range_code = batch.get('batch_goal_range_code')
+    if goal_range_code is not None:
+        goal_range_code = goal_range_code.to(device)
     raw_pose_direction = outputs.get('raw_pose_direction')
     if raw_pose_direction is not None:
         gt_norm = torch.linalg.vector_norm(aux_gt, dim=-1)
@@ -249,6 +253,19 @@ def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
             record['pose_reliability'] = float(pose_reliability[index].item())
         if pose_range_steps is not None:
             record['pose_range_steps'] = float(pose_range_steps[index].item())
+        if aux_range_code is not None and goal_range_code is not None:
+            record['aux_range_code'] = float(aux_range_code[index].item())
+            record['goal_range_code'] = float(goal_range_code[index].item())
+            finite_range = bool(
+                torch.isfinite(aux_range_code[index])
+                & torch.isfinite(goal_range_code[index])
+            )
+            record['aux_range_code_abs_error'] = (
+                float(
+                    (aux_range_code[index] - goal_range_code[index]).abs().item()
+                )
+                if finite_range else None
+            )
         if raw_pose_direction_error is not None:
             record['raw_pose_direction_error_deg'] = float(
                 raw_pose_direction_error[index].item()
@@ -333,6 +350,7 @@ _GROUP_METRIC_KEYS = (
     'aux_mse_x',
     'aux_mse_y',
     'aux_direction_error_deg',
+    'aux_range_code_abs_error',
     'raw_pose_direction_error_deg',
     'pose_reliability',
     'pose_quality',
@@ -442,6 +460,9 @@ def summarize_memnav_records(records):
         'aux_mse_y_revisit': _mean(records, 'aux_mse_y', revisit),
         'aux_direction_error_deg_revisit': _mean(
             records, 'aux_direction_error_deg', revisit
+        ),
+        'aux_range_code_mae_revisit': _mean(
+            records, 'aux_range_code_abs_error', revisit
         ),
         'raw_pose_direction_error_deg_revisit': _mean(
             records, 'raw_pose_direction_error_deg', revisit

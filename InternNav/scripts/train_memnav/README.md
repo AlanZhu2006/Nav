@@ -49,6 +49,8 @@ PY
 - 使用 `command -v python`，不要依赖集群可能包装过的 `which`。
 - 运行单元测试的环境还必须能 `import pytest`；生产环境不应因缺少纯测试依赖
   而被误报为模型代码失败。
+- 正式 `.sbatch` 在模型构造前执行 `python -m pip check`；任何缺包或版本冲突都
+  必须使预检失败，不能只因为 `import torch` 成功就继续提交长任务。
 - 必须验证 `PYTHONPATH` 包含部署目录的 `InternNav` 和
   `InternNav/src/diffusion-policy`。
 - 容器、overlay、Conda 初始化脚本及环境目录必须可读。
@@ -75,6 +77,8 @@ MEMNAV_DINO_WEIGHTS
 - 稀疏 keyframe 训练必须设置 `MEMNAV_REQUIRE_VERSIONED_CACHE=1`。预计算的
   两个文件必须具有相同的 schema、precompute signature、interval、原始帧数和
   sliding-window；训练不得把旧 dense aggregator 与新 sparse camera cache 混用。
+  `train_memnav_mp3d.sbatch` 已将它设为 fail-closed 默认值；缺少 signature 或
+  expected commit 时任务会主动终止。
 - 同时把预计算日志中的完整 SHA256 写入
   `MEMNAV_EXPECTED_CACHE_SIGNATURE`；零步预检会扫描全部 episode 的小型 metadata
   和 `.npy` header，并在加载模型前拒绝不同生成批次或截断 payload。
@@ -86,6 +90,11 @@ MEMNAV_DINO_WEIGHTS
 - 新 sparse 训练默认 `MEMNAV_USE_POSE_RELIABILITY_CONDITIONING=0` 且
   `MEMNAV_W_POSE_RELIABILITY=0`：旧 head 在 30 个 paired 样本上近似常数，且不能
   识别错误 retrieval anchor；它只保留为日志诊断，不再无依据地乘低 semantic gate。
+- 新增的 range auxiliary 默认保持关闭（`MEMNAV_W_AUX_RANGE=0`），anchor 仍为
+  全 teacher-forced（`MEMNAV_ANCHOR_TF_START=1`、`END=1`）。启用实验时必须同时
+  记录 `MEMNAV_AUX_RANGE_BETA` 和完整 teacher-forcing schedule；checkpoint
+  metadata 会保存这些值。2026-07-18 的本机 20-step 对照只显示约 0.22% 的
+  revisit DDPM MSE 改善，尚不足以把实验选项改成生产默认值。
 - 预计算必须同时满足应用日志 `errors=0` 和 Slurm
   `COMPLETED, ExitCode=0:0`；脚本捕获错误后继续运行不算成功。
 - stdout、checkpoint、W&B 和诊断输出目录必须在 `sbatch` 前存在且可写，

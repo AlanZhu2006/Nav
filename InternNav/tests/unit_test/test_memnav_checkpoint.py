@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -7,6 +8,7 @@ import torch
 from torch import nn
 from transformers import TrainingArguments
 
+from internnav.model.basemodel.memnav.memnav_policy import MemNavPolicy
 from internnav.trainer.memnav_trainer import MemNavTrainer
 
 
@@ -43,6 +45,9 @@ class _LossModel(nn.Module):
         aux_pose = self.scale * torch.tensor(
             [[1.0, 2.0], [0.5, 0.5]], device=self.device
         )
+        aux_range_code = self.scale * torch.tensor(
+            [0.3, 0.4], device=self.device
+        )
         raw_pose_direction = torch.tensor(
             [[1.0, 2.0], [1.0, 0.0]], device=self.device
         )
@@ -61,6 +66,7 @@ class _LossModel(nn.Module):
             'effective_revisit_gate': revisit_gate * pose_reliability,
             'ret_logits': ret_logits,
             'aux_pose': aux_pose,
+            'aux_range_code': aux_range_code,
             'raw_pose_direction': raw_pose_direction,
             'pose_reliability': pose_reliability,
             'pose_reliability_features': torch.zeros(
@@ -71,6 +77,9 @@ class _LossModel(nn.Module):
             'gate_normalized_slope': torch.tensor(1.6, device=self.device),
             'match_idx': torch.tensor([0, 1], device=self.device),
             'anchor_idx': torch.tensor([0, 1], device=self.device),
+            'anchor_teacher_forced': torch.tensor(
+                [True, False], device=self.device
+            ),
             'R_rel': torch.eye(3, device=self.device).repeat(batch_size, 1, 1),
         }
 
@@ -114,7 +123,12 @@ class MemNavCheckpointTest(unittest.TestCase):
             w_retrieval=1.0,
             w_gate=1.0,
             w_aux_direction=0.2,
+            w_aux_range=0.2,
+            aux_range_beta=0.1,
             w_pose_reliability=0.2,
+            anchor_teacher_forcing_start=1.0,
+            anchor_teacher_forcing_end=1.0,
+            anchor_teacher_forcing_decay_steps=0,
             batch_size=1,
             num_workers=0,
             eval_seed=0,
@@ -141,6 +155,40 @@ class MemNavCheckpointTest(unittest.TestCase):
             eval_dataset=eval_dataset,
         )
 
+    def test_compact_checkpoint_may_only_omit_frozen_lingbot(self):
+        compatible = SimpleNamespace(
+            missing_keys=['core.lingbot.aggregator.weight'],
+            unexpected_keys=[],
+        )
+        self.assertEqual(
+            MemNavPolicy._validate_checkpoint_incompatibility(
+                compatible, 'compact.ckpt'
+            ),
+            1,
+        )
+        missing_trainable = SimpleNamespace(
+            missing_keys=['core.revisit_merge.revisit_head.weight'],
+            unexpected_keys=[],
+        )
+        with self.assertRaisesRegex(ValueError, 'missing non-LingBot'):
+            MemNavPolicy._validate_checkpoint_incompatibility(
+                missing_trainable, 'broken.ckpt'
+            )
+        unexpected = SimpleNamespace(
+            missing_keys=[], unexpected_keys=['obsolete.weight']
+        )
+        with self.assertRaisesRegex(ValueError, 'unexpected'):
+            MemNavPolicy._validate_checkpoint_incompatibility(
+                unexpected, 'broken.ckpt'
+            )
+
+    def test_requested_initialization_checkpoint_must_exist(self):
+        MemNavPolicy._validate_checkpoint_path('')
+        with tempfile.NamedTemporaryFile() as checkpoint:
+            MemNavPolicy._validate_checkpoint_path(checkpoint.name)
+        with self.assertRaisesRegex(FileNotFoundError, 'not a file'):
+            MemNavPolicy._validate_checkpoint_path('/definitely/missing/memnav.ckpt')
+
     def test_full_loss_logs_action_axes_and_class_balanced_gate_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             model = _LossModel()
@@ -166,6 +214,9 @@ class MemNavCheckpointTest(unittest.TestCase):
                 'batch_goal_rel_pose': torch.tensor([
                     [1.0, 2.0, 0.0], [0.0, 1.0, 0.0]
                 ]),
+                'batch_goal_range_code': torch.tensor([0.2, 0.5]),
+                'batch_goal_range_steps': torch.tensor([6.4, 16.0]),
+                'batch_gt_prefix_step_m': torch.tensor([0.25, 0.25]),
                 'batch_goal_rel_rotation': torch.eye(3).repeat(2, 1, 1),
                 'batch_goal_j': torch.tensor([0, -1]),
                 'cur_steps': [319, 1024],
@@ -181,6 +232,7 @@ class MemNavCheckpointTest(unittest.TestCase):
             loss, outputs = trainer.compute_loss(model, inputs, return_outputs=True)
             self.assertTrue(torch.isfinite(loss))
             self.assertIn('action_noise_mse_theta', outputs)
+            self.assertIn('aux_range_loss', outputs)
             loss.backward()
             self.assertTrue(torch.isfinite(model.scale.grad))
             trainer.log({'loss': float(loss.detach())})
@@ -195,6 +247,8 @@ class MemNavCheckpointTest(unittest.TestCase):
             self.assertIn('action_loss_goal_A', logged)
             self.assertIn('action_loss_goal_B', logged)
             self.assertIn('aux_direction_err_deg_goal_B_revisit', logged)
+            self.assertIn('aux_range_code_mae_goal_B_revisit', logged)
+            self.assertAlmostEqual(logged['anchor_tf_probability'], 1.0)
             self.assertIn('aux_mse_y_anchor_gap_256_511', logged)
 
             model.zero_grad(set_to_none=True)
@@ -213,10 +267,57 @@ class MemNavCheckpointTest(unittest.TestCase):
             novel_logged = trainer.state.log_history[-1]
             self.assertEqual(novel_logged['retrieval_loss'], 0.0)
             self.assertEqual(novel_logged['aux_direction_loss'], 0.0)
+            self.assertEqual(novel_logged['aux_range_loss'], 0.0)
             self.assertTrue(all(
                 not isinstance(value, float) or torch.isfinite(torch.tensor(value))
                 for value in novel_logged.values()
             ))
+
+    def test_anchor_teacher_forcing_schedule_and_endpoint_masks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config()
+            config.il.anchor_teacher_forcing_start = 1.0
+            config.il.anchor_teacher_forcing_end = 0.25
+            config.il.anchor_teacher_forcing_decay_steps = 10
+            trainer = MemNavTrainer(
+                config=config,
+                model=_TinyModel(),
+                args=TrainingArguments(
+                    output_dir=tmp,
+                    report_to='none',
+                    per_device_train_batch_size=1,
+                ),
+                train_dataset=_TinyDataset(),
+            )
+            self.assertAlmostEqual(trainer._anchor_teacher_forcing_probability(), 1.0)
+            trainer.state.global_step = 5
+            self.assertAlmostEqual(trainer._anchor_teacher_forcing_probability(), 0.625)
+            trainer.state.global_step = 20
+            self.assertAlmostEqual(trainer._anchor_teacher_forcing_probability(), 0.25)
+
+            positives = torch.tensor([
+                [True, False], [False, False], [False, True]
+            ])
+            torch.testing.assert_close(
+                trainer._sample_anchor_teacher_mask(positives, 1.0),
+                torch.tensor([True, False, True]),
+            )
+            self.assertFalse(bool(
+                trainer._sample_anchor_teacher_mask(positives, 0.0).any()
+            ))
+            first = trainer._sample_anchor_teacher_mask(
+                positives, 0.5, seed=123
+            )
+            second = trainer._sample_anchor_teacher_mask(
+                positives, 0.5, seed=123
+            )
+            torch.testing.assert_close(first, second)
+
+            torch.manual_seed(99)
+            expected_global_draw = torch.rand(3)
+            torch.manual_seed(99)
+            trainer._sample_anchor_teacher_mask(positives, 0.5, seed=123)
+            torch.testing.assert_close(torch.rand(3), expected_global_draw)
 
     def test_compact_checkpoint_round_trip_and_dataset_guard(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -226,12 +327,25 @@ class MemNavCheckpointTest(unittest.TestCase):
                 key: value.detach().clone() for key, value in trainer.model.state_dict().items()
             }
             trainer.save_model(str(checkpoint))
+            metadata = json.loads(
+                (checkpoint / 'memnav_metadata.json').read_text(encoding='utf-8')
+            )
+            self.assertEqual(metadata['training_objective']['w_aux_range'], 0.2)
+            self.assertEqual(
+                metadata['training_objective']['anchor_teacher_forcing_start'],
+                1.0,
+            )
             with torch.no_grad():
                 for parameter in trainer.model.parameters():
                     parameter.zero_()
             trainer._load_from_checkpoint(str(checkpoint))
             for key, value in trainer.model.state_dict().items():
                 torch.testing.assert_close(value, expected[key])
+
+            trainer.w_aux_range = 0.3
+            with self.assertRaisesRegex(ValueError, 'Training objective changed'):
+                trainer._load_from_checkpoint(str(checkpoint))
+            trainer.w_aux_range = 0.2
 
             trainer.train_dataset.dataset_fingerprint = 'different-population'
             with self.assertRaisesRegex(ValueError, 'Dataset fingerprint changed'):

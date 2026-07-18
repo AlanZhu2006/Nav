@@ -44,7 +44,13 @@
 #   MEMNAV_MAX_TRAIN_STEPS=-1  (-1 = epoch-based; positive = bounded smoke)
 #   MEMNAV_SAVE_STEPS=25
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
-#   MEMNAV_W_POSE_RELIABILITY=0.2
+#   MEMNAV_W_AUX_DIRECTION=0.2
+#   MEMNAV_W_AUX_RANGE=0.0   (default-off experimental range supervision)
+#   MEMNAV_AUX_RANGE_BETA=0.1
+#   MEMNAV_ANCHOR_TF_START=1.0
+#   MEMNAV_ANCHOR_TF_END=1.0
+#   MEMNAV_ANCHOR_TF_DECAY_STEPS=0
+#   MEMNAV_W_POSE_RELIABILITY=0.0
 #   MEMNAV_POSE_SCALE_WINDOW=64
 #
 # Submit:
@@ -73,7 +79,7 @@ export MEMNAV_WINDOW=32
 export MEMNAV_NUM_SCALE=8
 export MEMNAV_MAX_FRAME_NUM=4096
 export MEMNAV_STRICT_FEATURE_COVERAGE=1
-export MEMNAV_REQUIRE_VERSIONED_CACHE=${MEMNAV_REQUIRE_VERSIONED_CACHE:-0}
+export MEMNAV_REQUIRE_VERSIONED_CACHE=${MEMNAV_REQUIRE_VERSIONED_CACHE:-1}
 export MEMNAV_EXPECTED_CACHE_SIGNATURE=${MEMNAV_EXPECTED_CACHE_SIGNATURE:-}
 export MEMNAV_EXPECTED_CODE_COMMIT=${MEMNAV_EXPECTED_CODE_COMMIT:-}
 export MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION=1
@@ -94,6 +100,12 @@ export MEMNAV_EVAL_SAMPLES=${MEMNAV_EVAL_SAMPLES:-16}
 export MEMNAV_EVAL_STEPS=${MEMNAV_EVAL_STEPS:-25}
 export MEMNAV_EVAL_BATCH_SIZE=${MEMNAV_EVAL_BATCH_SIZE:-4}
 export MEMNAV_MAX_TRAIN_STEPS=${MEMNAV_MAX_TRAIN_STEPS:--1}
+export MEMNAV_W_AUX_DIRECTION=${MEMNAV_W_AUX_DIRECTION:-0.2}
+export MEMNAV_W_AUX_RANGE=${MEMNAV_W_AUX_RANGE:-0.0}
+export MEMNAV_AUX_RANGE_BETA=${MEMNAV_AUX_RANGE_BETA:-0.1}
+export MEMNAV_ANCHOR_TF_START=${MEMNAV_ANCHOR_TF_START:-1.0}
+export MEMNAV_ANCHOR_TF_END=${MEMNAV_ANCHOR_TF_END:-1.0}
+export MEMNAV_ANCHOR_TF_DECAY_STEPS=${MEMNAV_ANCHOR_TF_DECAY_STEPS:-0}
 export MEMNAV_USE_POSE_RELIABILITY_CONDITIONING=${MEMNAV_USE_POSE_RELIABILITY_CONDITIONING:-0}
 export MEMNAV_W_POSE_RELIABILITY=${MEMNAV_W_POSE_RELIABILITY:-0.0}
 export MEMNAV_POSE_SCALE_WINDOW=${MEMNAV_POSE_SCALE_WINDOW:-64}
@@ -175,12 +187,14 @@ apptainer exec --nv \
 
         echo "===== TRAIN ENV CHECK ====="
         command -v python; python -V
+        python -m pip check
         python -c "import torch, transformers, diffusers; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available(), \"transformers\", transformers.__version__, \"diffusers\", diffusers.__version__); assert torch.cuda.is_available()"
         echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} max_steps=${MEMNAV_MAX_TRAIN_STEPS} wk=${NUM_WORKERS} resume=${RESUME_FROM_CHECKPOINT}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"
         echo "strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE} require_versioned_cache=${MEMNAV_REQUIRE_VERSIONED_CACHE} expected_cache_signature=${MEMNAV_EXPECTED_CACHE_SIGNATURE} expected_code_commit=${MEMNAV_EXPECTED_CODE_COMMIT} require_pose_marker=${MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION}"
+        echo "aux_direction_weight=${MEMNAV_W_AUX_DIRECTION} aux_range_weight=${MEMNAV_W_AUX_RANGE} aux_range_beta=${MEMNAV_AUX_RANGE_BETA} anchor_tf=${MEMNAV_ANCHOR_TF_START}->${MEMNAV_ANCHOR_TF_END}@${MEMNAV_ANCHOR_TF_DECAY_STEPS}"
         echo "pose_scale_window=${MEMNAV_POSE_SCALE_WINDOW} pose_rel_conditioning=${MEMNAV_USE_POSE_RELIABILITY_CONDITIONING} pose_rel_weight=${MEMNAV_W_POSE_RELIABILITY} pose_rel_hidden=${MEMNAV_POSE_RELIABILITY_HIDDEN} pose_rel_init=${MEMNAV_POSE_RELIABILITY_INIT} pose_rel_lr_mult=${MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER}"
         echo "dino_weights=${MEMNAV_DINO_WEIGHTS}"
 

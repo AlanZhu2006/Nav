@@ -121,6 +121,22 @@ class MemNavInputCoverageTest(unittest.TestCase):
         np.testing.assert_allclose(goal, [2.0, 0.5, 0.25])
         self.assertEqual(actions.shape, (1, 3))
 
+    def test_range_target_uses_only_observed_prefix_scale_and_matches_pose_code(self):
+        prefix = np.repeat(np.eye(4)[None], 5, axis=0)
+        prefix[:, 0, 3] = np.arange(5) * 0.25
+        code, step_m, range_steps = MemNav_Dataset._build_range_target(
+            prefix, np.array([2.0, 0.0, 0.0]), distance_unit_steps=32
+        )
+        self.assertAlmostEqual(float(step_m), 0.25)
+        self.assertAlmostEqual(float(range_steps), 8.0)
+        self.assertAlmostEqual(float(code), float(np.arcsinh(8.0 / 32.0)))
+
+        stationary = np.repeat(np.eye(4)[None], 3, axis=0)
+        missing = MemNav_Dataset._build_range_target(
+            stationary, np.array([1.0, 0.0, 0.0]), distance_unit_steps=32
+        )
+        self.assertTrue(all(np.isnan(value) for value in missing))
+
     def test_strict_coverage_requires_both_lingbot_caches(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'raw'

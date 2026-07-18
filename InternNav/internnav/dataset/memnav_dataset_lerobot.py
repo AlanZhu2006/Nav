@@ -628,6 +628,33 @@ class MemNav_Dataset(NavDP_Base_Datset):
         pred_actions *= 4.0
         return pred_actions, goal_rel_pose
 
+    @staticmethod
+    def _build_range_target(prefix_extrinsics, goal_rel_pose, distance_unit_steps):
+        """Gauge-invariant GT range in the same units as RevisitMerge.
+
+        LingBot's raw translation has a per-stream canonical scale, so a global
+        metres-per-unit target is not identifiable.  Instead, normalize the GT
+        endpoint displacement by the robust median motion of the *observed past*
+        and apply the same ``asinh(range_steps / window)`` compression used by
+        :class:`GaugeInvariantRevisitPose`.  Future poses enter only through the
+        ordinary supervised endpoint label, never through the scale estimate.
+        """
+        if float(distance_unit_steps) <= 0:
+            raise ValueError('distance_unit_steps must be positive')
+        positions = np.asarray(prefix_extrinsics)[:, :2, 3]
+        steps = np.linalg.norm(np.diff(positions, axis=0), axis=-1)
+        valid = np.isfinite(steps) & (steps > 1e-6)
+        if not np.any(valid):
+            return np.float32(np.nan), np.float32(np.nan), np.float32(np.nan)
+        prefix_step_m = float(np.median(steps[valid]))
+        range_steps = float(np.linalg.norm(np.asarray(goal_rel_pose)[:2])) / prefix_step_m
+        range_code = np.arcsinh(range_steps / float(distance_unit_steps))
+        return (
+            np.float32(min(range_code, 5.0)),
+            np.float32(prefix_step_m),
+            np.float32(range_steps),
+        )
+
     # ------------------------------------------------------------------ #
     def _build_label(self, s, k):
         """Unified revisit label over the candidate region ``E(k) = [amargin .. k-t]``
@@ -722,6 +749,9 @@ class MemNav_Dataset(NavDP_Base_Datset):
         # --- action segment: forward path current(k) -> goal(goal_step) ---
         seg = extrinsics[k : goal_step + 1].copy()         # seg[0] == current frame k
         pred_actions, goal_rel_pose = self._build_actions(seg, base_extrinsic, pred_digit)
+        goal_range_code, gt_prefix_step_m, goal_range_steps = self._build_range_target(
+            extrinsics[: k + 1], goal_rel_pose, self.window_size
+        )
 
         # --- GT relative ROTATION current->goal, for the rotation-accuracy diagnostic
         # only (NOT the action label — goal_rel_pose's θ is path-tangent, unrelated to
@@ -750,6 +780,11 @@ class MemNav_Dataset(NavDP_Base_Datset):
             'is_revisit': torch.tensor(float(not null_pos), dtype=torch.float32),
             'pred_actions': torch.tensor(pred_actions, dtype=torch.float32),
             'goal_rel_pose': torch.tensor(goal_rel_pose, dtype=torch.float32),   # aux pose GT
+            # Gauge-normalized endpoint range.  These are labels/diagnostics only;
+            # inference still consumes solely the online LingBot pose code.
+            'goal_range_code': torch.tensor(goal_range_code, dtype=torch.float32),
+            'goal_range_steps': torch.tensor(goal_range_steps, dtype=torch.float32),
+            'gt_prefix_step_m': torch.tensor(gt_prefix_step_m, dtype=torch.float32),
             'goal_rel_rotation': torch.tensor(goal_rel_rotation, dtype=torch.float32),  # [3,3] rotation diagnostic GT
             # raw images for the on-the-fly dense DINO + GCT window-forward.
             #   goal_cls is NOT cached for real goal images — the policy computes it
@@ -856,6 +891,9 @@ def memnav_collate_fn(batch):
         'batch_is_revisit':      torch.stack([b['is_revisit'] for b in batch]),        # [B] float
         'batch_labels':          torch.stack([b['pred_actions'] for b in batch]),
         'batch_goal_rel_pose':   torch.stack([b['goal_rel_pose'] for b in batch]),     # aux pose GT
+        'batch_goal_range_code': torch.stack([b['goal_range_code'] for b in batch]),
+        'batch_goal_range_steps': torch.stack([b['goal_range_steps'] for b in batch]),
+        'batch_gt_prefix_step_m': torch.stack([b['gt_prefix_step_m'] for b in batch]),
         'batch_goal_rel_rotation': torch.stack([b['goal_rel_rotation'] for b in batch]),  # [B,3,3] rotation diagnostic GT
         # raw images (goal_cls is computed from batch_goal_image in the policy)
         'batch_goal_image':      torch.stack([b['goal_image'] for b in batch]),        # [B, 3, H, W]

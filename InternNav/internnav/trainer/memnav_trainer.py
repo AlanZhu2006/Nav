@@ -44,7 +44,34 @@ class MemNavTrainer(BaseTrainer):
         self.w_retr = getattr(config.il, 'w_retrieval', 1.0)
         self.w_gate = getattr(config.il, 'w_gate', 1.0)
         self.w_aux = getattr(config.il, 'w_aux_direction', 0.2)
+        self.w_aux_range = float(getattr(config.il, 'w_aux_range', 0.0))
+        self.aux_range_beta = float(getattr(config.il, 'aux_range_beta', 0.1))
         self.w_pose_reliability = getattr(config.il, 'w_pose_reliability', 0.2)
+        self.anchor_tf_start = float(
+            getattr(config.il, 'anchor_teacher_forcing_start', 1.0)
+        )
+        self.anchor_tf_end = float(
+            getattr(config.il, 'anchor_teacher_forcing_end', 1.0)
+        )
+        self.anchor_tf_decay_steps = int(
+            getattr(config.il, 'anchor_teacher_forcing_decay_steps', 0)
+        )
+        if self.w_aux_range < 0.0:
+            raise ValueError('w_aux_range must be non-negative')
+        if self.aux_range_beta <= 0.0:
+            raise ValueError('aux_range_beta must be positive')
+        if not (0.0 <= self.anchor_tf_start <= 1.0):
+            raise ValueError('anchor_teacher_forcing_start must be in [0, 1]')
+        if not (0.0 <= self.anchor_tf_end <= 1.0):
+            raise ValueError('anchor_teacher_forcing_end must be in [0, 1]')
+        if self.anchor_tf_decay_steps < 0:
+            raise ValueError('anchor_teacher_forcing_decay_steps must be non-negative')
+        if (self.anchor_tf_start != self.anchor_tf_end
+                and self.anchor_tf_decay_steps == 0):
+            raise ValueError(
+                'anchor_teacher_forcing_decay_steps must be positive when the '
+                'start and end probabilities differ'
+            )
         self._metric_accumulators = {'train': {}, 'eval': {}}
         self.eval_seed = int(getattr(config.il, 'eval_seed', 0))
         model = self.model.module if hasattr(self.model, 'module') else self.model
@@ -183,10 +210,78 @@ class MemNavTrainer(BaseTrainer):
             return direct
         return getattr(getattr(dataset, 'dataset', None), 'dataset_fingerprint', None)
 
+    def _training_objective_metadata(self):
+        return {
+            'w_retrieval': float(self.w_retr),
+            'w_gate': float(self.w_gate),
+            'w_aux_direction': float(self.w_aux),
+            'w_aux_range': float(self.w_aux_range),
+            'aux_range_beta': float(self.aux_range_beta),
+            'w_pose_reliability': float(self.w_pose_reliability),
+            'anchor_teacher_forcing_start': float(self.anchor_tf_start),
+            'anchor_teacher_forcing_end': float(self.anchor_tf_end),
+            'anchor_teacher_forcing_decay_steps': int(
+                self.anchor_tf_decay_steps
+            ),
+        }
+
+    def _anchor_teacher_forcing_probability(self):
+        """Linear train-time schedule; defaults to the legacy constant 1.0."""
+        if self.anchor_tf_start == self.anchor_tf_end:
+            return self.anchor_tf_start
+        progress = min(
+            max(float(self.state.global_step), 0.0)
+            / float(self.anchor_tf_decay_steps),
+            1.0,
+        )
+        return self.anchor_tf_start + progress * (
+            self.anchor_tf_end - self.anchor_tf_start
+        )
+
+    @staticmethod
+    def _sample_anchor_teacher_mask(pos_mask, probability, seed=None):
+        """Bernoulli teacher exposure without perturbing diffusion's global RNG."""
+        eligible = pos_mask.bool().any(-1)
+        probability = float(probability)
+        if probability <= 0.0:
+            return torch.zeros_like(eligible)
+        if probability >= 1.0:
+            return eligible
+        generator = None
+        if seed is not None:
+            generator = torch.Generator(device=eligible.device)
+            generator.manual_seed(int(seed))
+        draw = torch.rand(
+            eligible.shape,
+            device=eligible.device,
+            dtype=torch.float32,
+            generator=generator,
+        )
+        return eligible & (draw < probability)
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         dev = next(model.parameters()).device
-        fwd = model(inputs)
         phase = 'train' if model.training else 'eval'
+        anchor_tf_probability = (
+            self._anchor_teacher_forcing_probability() if model.training else 0.0
+        )
+        model_inputs = inputs
+        if model.training and inputs.get('batch_pos_mask') is not None:
+            process_rank = dist.get_rank() if dist.is_initialized() else 0
+            anchor_mask_seed = (
+                int(self.args.seed)
+                + 1_000_003 * int(self.state.global_step)
+                + 97 * process_rank
+            )
+            model_inputs = dict(inputs)
+            model_inputs['anchor_teacher_forcing_mask'] = (
+                self._sample_anchor_teacher_mask(
+                    inputs['batch_pos_mask'],
+                    anchor_tf_probability,
+                    seed=anchor_mask_seed,
+                )
+            )
+        fwd = model(model_inputs)
         stratified_accumulations = []
 
         # Diffusion action objective. Keep per-coordinate errors so W&B can show
@@ -226,8 +321,12 @@ class MemNavTrainer(BaseTrainer):
         # balanced and fixed validation reports both class recalls explicitly.
         gate_loss = F.binary_cross_entropy_with_logits(gate_logit, is_rev)
 
-        # LingBot translations have a per-sequence canonical scale. Supervise only
-        # direction, the identifiable signal, and keep raw metric error diagnostic.
+        # LingBot translations have a per-sequence canonical scale. Supervise
+        # direction plus a gauge-normalized, compressed range coordinate; raw
+        # metric x/y remains diagnostic only.  When scheduled live retrieval picks
+        # a known-negative anchor, do not ask the shared pose adapter to repair that
+        # semantically wrong measurement.  The action and reliability objectives
+        # still see it, which is precisely the desired train/eval exposure.
         pred_xy = fwd['aux_pose']
         gt_xy = inputs['batch_goal_rel_pose'][..., :2].to(dev)
         gt_norm = torch.linalg.norm(gt_xy, dim=-1)
@@ -239,11 +338,32 @@ class MemNavTrainer(BaseTrainer):
         metric_direction_cos = (
             metric_pred_unit * gt_unit
         ).sum(-1).clamp(-1.0, 1.0)
-        aux_valid = (is_rev > 0.5) & (gt_norm > 1e-4)
+        anchor_idx = fwd['anchor_idx'].to(dev).long()
+        anchor_positive = pos.gather(1, anchor_idx.unsqueeze(1)).squeeze(1)
+        revisit_pose_valid = (is_rev > 0.5) & (gt_norm > 1e-4)
+        aux_valid = revisit_pose_valid & anchor_positive
         aux_count = aux_valid.float().sum()
         aux_direction_loss = (
             (1.0 - direction_cos) * aux_valid
         ).sum() / aux_count.clamp(min=1.0)
+
+        pred_range_code = fwd['aux_range_code']
+        target_range_code = inputs['batch_goal_range_code'].to(dev)
+        finite_range = torch.isfinite(pred_range_code) & torch.isfinite(target_range_code)
+        range_valid = aux_valid & finite_range
+        range_count = range_valid.float().sum()
+        safe_range_target = torch.where(
+            finite_range, target_range_code, pred_range_code.detach()
+        )
+        range_per_row = F.smooth_l1_loss(
+            pred_range_code,
+            safe_range_target,
+            reduction='none',
+            beta=self.aux_range_beta,
+        )
+        aux_range_loss = (
+            range_per_row * range_valid
+        ).sum() / range_count.clamp(min=1.0)
 
         # Calibrate whether a semantically correct revisit pose is geometrically
         # useful.  The target is continuous raw-bearing quality: 1 for agreement,
@@ -256,15 +376,17 @@ class MemNavTrainer(BaseTrainer):
         pose_reliability_per_row = F.binary_cross_entropy(
             pose_reliability, pose_quality_target, reduction='none'
         )
+        reliability_count = revisit_pose_valid.float().sum()
         pose_reliability_loss = (
-            pose_reliability_per_row * aux_valid
-        ).sum() / aux_count.clamp(min=1.0)
+            pose_reliability_per_row * revisit_pose_valid
+        ).sum() / reliability_count.clamp(min=1.0)
 
         loss = (
             action_loss
             + self.w_retr * rank_loss
             + self.w_gate * gate_loss
             + self.w_aux * aux_direction_loss
+            + self.w_aux_range * aux_range_loss
             + self.w_pose_reliability * pose_reliability_loss
         )
 
@@ -273,6 +395,11 @@ class MemNavTrainer(BaseTrainer):
             novel_mask = ~rev_mask
             gate_prob = torch.sigmoid(gate_logit)
             effective_gate = fwd['effective_revisit_gate']
+            anchor_teacher_forced = fwd['anchor_teacher_forced'].to(dev).bool()
+            anchor_positive_fraction = self._masked_mean(anchor_positive, rev_mask)
+            anchor_teacher_forced_fraction = self._masked_mean(
+                anchor_teacher_forced, rev_mask
+            )
             gate_seen = self._masked_mean(gate_prob, rev_mask)
             gate_unseen = self._masked_mean(gate_prob, novel_mask)
             effective_gate_seen = self._masked_mean(effective_gate, rev_mask)
@@ -297,17 +424,47 @@ class MemNavTrainer(BaseTrainer):
             direction_err_deg = torch.rad2deg(torch.arccos(metric_direction_cos))
             direction_err = self._masked_mean(direction_err_deg, aux_valid)
             raw_direction_err_deg = torch.rad2deg(torch.arccos(raw_direction_cos))
-            raw_direction_err = self._masked_mean(raw_direction_err_deg, aux_valid)
-            pose_reliability_mean = self._masked_mean(pose_reliability, aux_valid)
-            pose_quality_mean = self._masked_mean(pose_quality_target, aux_valid)
+            raw_direction_err = self._masked_mean(
+                raw_direction_err_deg, revisit_pose_valid
+            )
+            pose_reliability_mean = self._masked_mean(
+                pose_reliability, revisit_pose_valid
+            )
+            pose_quality_mean = self._masked_mean(
+                pose_quality_target, revisit_pose_valid
+            )
             pose_reliability_brier = self._masked_mean(
-                (pose_reliability - pose_quality_target).square(), aux_valid
+                (pose_reliability - pose_quality_target).square(), revisit_pose_valid
             )
             pose_reliability_features = fwd['pose_reliability_features']
             if pose_reliability_features.shape[-1] != len(
                 self.POSE_RELIABILITY_FEATURE_NAMES
             ):
                 raise ValueError('unexpected pose reliability feature width')
+            raw_range_code = pose_reliability_features[:, 0]
+            range_code_abs_error = (pred_range_code - safe_range_target).abs()
+            raw_range_finite = torch.isfinite(raw_range_code) & torch.isfinite(
+                target_range_code
+            )
+            raw_range_valid = aux_valid & raw_range_finite
+            safe_raw_range_target = torch.where(
+                raw_range_finite, target_range_code, raw_range_code
+            )
+            raw_range_code_abs_error = (
+                raw_range_code - safe_raw_range_target
+            ).abs()
+            aux_range_code_mae = self._masked_mean(
+                range_code_abs_error, range_valid
+            )
+            raw_range_code_mae = self._masked_mean(
+                raw_range_code_abs_error, raw_range_valid
+            )
+            target_range_code_mean = self._masked_mean(
+                safe_range_target, range_valid
+            )
+            target_range_code_sq_mean = self._masked_mean(
+                safe_range_target.square(), range_valid
+            )
 
             gate_feature = fwd['gate_feature']
             gate_feature_seen = self._masked_mean(gate_feature, rev_mask)
@@ -377,6 +534,8 @@ class MemNavTrainer(BaseTrainer):
                     ])
                     goal_aux_mask = goal_mask & aux_valid
                     goal_aux_count = goal_aux_mask.float().sum()
+                    goal_range_mask = goal_mask & range_valid
+                    goal_range_count = goal_range_mask.float().sum()
                     stratified_accumulations.extend([
                         (
                             f'aux_direction_loss_goal_{goal_label}_revisit',
@@ -387,6 +546,18 @@ class MemNavTrainer(BaseTrainer):
                             f'aux_direction_err_deg_goal_{goal_label}_revisit',
                             self._masked_mean(direction_err_deg, goal_aux_mask),
                             goal_aux_count,
+                        ),
+                        (
+                            f'aux_range_loss_goal_{goal_label}_revisit',
+                            self._masked_mean(range_per_row, goal_range_mask),
+                            goal_range_count,
+                        ),
+                        (
+                            f'aux_range_code_mae_goal_{goal_label}_revisit',
+                            self._masked_mean(
+                                range_code_abs_error, goal_range_mask
+                            ),
+                            goal_range_count,
                         ),
                         (
                             f'aux_mse_x_goal_{goal_label}_revisit',
@@ -421,6 +592,8 @@ class MemNavTrainer(BaseTrainer):
                     if upper is not None:
                         bin_mask = bin_mask & (values < upper)
                     count = bin_mask.float().sum()
+                    range_bin_mask = bin_mask & range_valid
+                    range_bin_count = range_bin_mask.float().sum()
                     stratified_accumulations.extend([
                         (
                             f'aux_{prefix}_{label}_fraction_revisit',
@@ -431,6 +604,13 @@ class MemNavTrainer(BaseTrainer):
                             f'aux_direction_err_deg_{prefix}_{label}',
                             self._masked_mean(direction_err_deg, bin_mask),
                             count,
+                        ),
+                        (
+                            f'aux_range_code_mae_{prefix}_{label}',
+                            self._masked_mean(
+                                range_code_abs_error, range_bin_mask
+                            ),
+                            range_bin_count,
                         ),
                         (
                             f'aux_mse_x_{prefix}_{label}',
@@ -497,7 +677,13 @@ class MemNavTrainer(BaseTrainer):
             'retrieval_loss': rank_loss,
             'gate_loss': gate_loss,
             'aux_direction_loss': aux_direction_loss,
+            'aux_range_loss': aux_range_loss,
+            'aux_range_code_mae': aux_range_code_mae,
+            'raw_range_code_mae': raw_range_code_mae,
             'pose_reliability_loss': pose_reliability_loss,
+            'anchor_tf_probability': loss.new_tensor(anchor_tf_probability),
+            'anchor_teacher_forced_fraction': anchor_teacher_forced_fraction,
+            'anchor_positive_fraction': anchor_positive_fraction,
             'gate_seen': gate_seen,
             'gate_unseen': gate_unseen,
             'effective_gate_seen': effective_gate_seen,
@@ -540,10 +726,36 @@ class MemNavTrainer(BaseTrainer):
         self._accumulate('retrieval_loss', rank_loss, rank_count, phase)
         self._accumulate('gate_loss', gate_loss, B, phase)
         self._accumulate('aux_direction_loss', aux_direction_loss, aux_count, phase)
+        self._accumulate('aux_range_loss', aux_range_loss, range_count, phase)
         self._accumulate(
-            'pose_reliability_loss', pose_reliability_loss, aux_count, phase
+            'aux_range_code_mae', aux_range_code_mae, range_count, phase
+        )
+        self._accumulate(
+            'raw_range_code_mae', raw_range_code_mae,
+            raw_range_valid.float().sum(), phase,
+        )
+        self._accumulate(
+            'aux_range_target_mean', target_range_code_mean, range_count, phase
+        )
+        self._accumulate(
+            'aux_range_target_sq_mean', target_range_code_sq_mean,
+            range_count, phase,
+        )
+        self._accumulate(
+            'pose_reliability_loss', pose_reliability_loss,
+            reliability_count, phase,
         )
         self._accumulate('revisit_fraction', n_rev / B, B, phase)
+        self._accumulate(
+            'anchor_tf_probability', loss.new_tensor(anchor_tf_probability), B, phase
+        )
+        self._accumulate(
+            'anchor_teacher_forced_fraction', anchor_teacher_forced_fraction,
+            n_rev, phase,
+        )
+        self._accumulate(
+            'anchor_positive_fraction', anchor_positive_fraction, n_rev, phase
+        )
         self._accumulate('rank_row_fraction', rank_count / B, B, phase)
         self._accumulate('gate_acc', gate_acc, B, phase)
         self._accumulate('gate_revisit_recall', gate_revisit_recall, n_rev, phase)
@@ -562,12 +774,16 @@ class MemNavTrainer(BaseTrainer):
         self._accumulate('aux_xy_l2', aux_xy_l2, n_rev, phase)
         self._accumulate('aux_direction_err_deg', direction_err, aux_count, phase)
         self._accumulate(
-            'raw_pose_direction_err_deg', raw_direction_err, aux_count, phase
+            'raw_pose_direction_err_deg', raw_direction_err,
+            reliability_count, phase,
         )
-        self._accumulate('pose_reliability', pose_reliability_mean, aux_count, phase)
-        self._accumulate('pose_quality', pose_quality_mean, aux_count, phase)
         self._accumulate(
-            'pose_reliability_brier', pose_reliability_brier, aux_count, phase
+            'pose_reliability', pose_reliability_mean, reliability_count, phase
+        )
+        self._accumulate('pose_quality', pose_quality_mean, reliability_count, phase)
+        self._accumulate(
+            'pose_reliability_brier', pose_reliability_brier,
+            reliability_count, phase,
         )
         for feature_index, feature_name in enumerate(
             self.POSE_RELIABILITY_FEATURE_NAMES
@@ -575,9 +791,10 @@ class MemNavTrainer(BaseTrainer):
             self._accumulate(
                 f'pose_cue_{feature_name}',
                 self._masked_mean(
-                    pose_reliability_features[:, feature_index], aux_valid
+                    pose_reliability_features[:, feature_index],
+                    revisit_pose_valid,
                 ),
-                aux_count,
+                reliability_count,
                 phase,
             )
         self._accumulate('rot_err_raw_deg', rot_err_raw, n_rev, phase)
@@ -611,12 +828,14 @@ class MemNavTrainer(BaseTrainer):
         if had_components:
             component_logs.setdefault('retrieval_loss', 0.0)
             component_logs.setdefault('aux_direction_loss', 0.0)
+            component_logs.setdefault('aux_range_loss', 0.0)
             component_logs.setdefault('pose_reliability_loss', 0.0)
 
         # Convert accumulated first/second moments into an interval-level std.
         for entity in (
             'action_target_x', 'action_target_y', 'action_target_theta',
             'aux_pred_x', 'aux_pred_y', 'aux_gt_x', 'aux_gt_y',
+            'aux_range_target',
         ):
             mean_key = f'{entity}_mean'
             sq_key = f'{entity}_sq_mean'
@@ -655,6 +874,7 @@ class MemNavTrainer(BaseTrainer):
                 f"rank={display('eval_retrieval_loss' if phase == 'eval' else 'retrieval_loss')} "
                 f"gate={display('eval_gate_loss' if phase == 'eval' else 'gate_loss')} "
                 f"aux_dir={display('eval_aux_direction_loss' if phase == 'eval' else 'aux_direction_loss')} "
+                f"aux_range={display('eval_aux_range_loss' if phase == 'eval' else 'aux_range_loss')} "
                 f"pose_rel={display('eval_pose_reliability_loss' if phase == 'eval' else 'pose_reliability_loss')}"
             )
         return super().log(logs, start_time)
@@ -712,6 +932,10 @@ class MemNavTrainer(BaseTrainer):
                 float(retrieval.gate_width.detach().cpu()) if retrieval is not None else None
             ),
             'revisit_pose_code': getattr(pose_encoder, 'CODE_VERSION', None),
+            # These values do not change checkpoint architecture, so format 4
+            # remains load-compatible. Persist them for exact objective/schedule
+            # provenance across resumes and comparisons.
+            'training_objective': self._training_objective_metadata(),
         }
         with open(os.path.join(output_dir, 'memnav_metadata.json'), 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2, sort_keys=True)
@@ -739,6 +963,18 @@ class MemNavTrainer(BaseTrainer):
                 'format 4 (normalized gate + gauge-invariant pose code), got '
                 f"{metadata.get('format_version')!r}. Legacy checkpoints remain "
                 'available for offline evaluation, but training must start a new run.'
+            )
+        saved_objective = metadata.get('training_objective')
+        current_objective = self._training_objective_metadata()
+        if saved_objective is not None and saved_objective != current_objective:
+            changed = sorted(
+                key for key in set(saved_objective) | set(current_objective)
+                if saved_objective.get(key) != current_objective.get(key)
+            )
+            raise ValueError(
+                'Training objective changed since the checkpoint was written: '
+                f'{changed}. Start a new run with ckpt_to_load instead of resuming '
+                'optimizer/scheduler state under a different objective.'
             )
         saved_fingerprint = metadata.get('dataset_fingerprint')
         current_fingerprint = self._dataset_fingerprint(self.train_dataset)

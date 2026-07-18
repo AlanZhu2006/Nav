@@ -90,11 +90,19 @@ MEMNAV_DINO_WEIGHTS
 - 新 sparse 训练默认 `MEMNAV_USE_POSE_RELIABILITY_CONDITIONING=0` 且
   `MEMNAV_W_POSE_RELIABILITY=0`：旧 head 在 30 个 paired 样本上近似常数，且不能
   识别错误 retrieval anchor；它只保留为日志诊断，不再无依据地乘低 semantic gate。
-- 新增的 range auxiliary 默认保持关闭（`MEMNAV_W_AUX_RANGE=0`），anchor 仍为
-  全 teacher-forced（`MEMNAV_ANCHOR_TF_START=1`、`END=1`）。启用实验时必须同时
-  记录 `MEMNAV_AUX_RANGE_BETA` 和完整 teacher-forcing schedule；checkpoint
-  metadata 会保存这些值。2026-07-18 的本机 20-step 对照只显示约 0.22% 的
-  revisit DDPM MSE 改善，尚不足以把实验选项改成生产默认值。
+- Range auxiliary 默认保持关闭（`MEMNAV_W_AUX_RANGE=0`），anchor 仍默认为全
+  teacher-forced（`MEMNAV_ANCHOR_TF_START=1`、`END=1`）。2026-07-18 的 400-step
+  range+live 对照虽然把 range-code MAE 降低约 9.6%，同一 fixed-64 上的 action
+  noise MSE 却恶化约 28.8%。随后在正式 batch size 4 的本机梯度诊断中，已乘
+  `0.2` 权重的 range 梯度在共享 adapter 上仍是 action 梯度的约 29 倍（中位数），
+  且 7 个含 revisit 的 batch 中有 2 个方向冲突。
+- 新实验可显式设置 `MEMNAV_AUX_RANGE_GRAD_CAP_RATIO`：正值会投影掉与 action
+  反向的 range 梯度，再把剩余范数限制为 action 梯度的指定比例；`0` 保留旧
+  backward。启用时必须同时记录 range weight、SmoothL1 beta、gradient cap 和完整
+  teacher-forcing schedule。checkpoint metadata 会保存这些值，W&B 必须记录 raw
+  cosine、raw/corrected norm ratio、cap scale 和 conflict fraction。该机制仍是实验
+  选项，当前只支持单进程训练（多进程 DDP 会 fail closed），不能在完整 DDPM 和
+  最终导航评测前改成生产默认值。
 - 预计算必须同时满足应用日志 `errors=0` 和 Slurm
   `COMPLETED, ExitCode=0:0`；脚本捕获错误后继续运行不算成功。
 - stdout、checkpoint、W&B 和诊断输出目录必须在 `sbatch` 前存在且可写，

@@ -47,6 +47,7 @@
 #   MEMNAV_W_AUX_DIRECTION=0.2
 #   MEMNAV_W_AUX_RANGE=0.0   (default-off experimental range supervision)
 #   MEMNAV_AUX_RANGE_BETA=0.1
+#   MEMNAV_AUX_RANGE_GRAD_CAP_RATIO=0.0 (0 = legacy gradients; positive = action-safe cap)
 #   MEMNAV_ANCHOR_TF_START=1.0
 #   MEMNAV_ANCHOR_TF_END=1.0
 #   MEMNAV_ANCHOR_TF_DECAY_STEPS=0
@@ -103,6 +104,7 @@ export MEMNAV_MAX_TRAIN_STEPS=${MEMNAV_MAX_TRAIN_STEPS:--1}
 export MEMNAV_W_AUX_DIRECTION=${MEMNAV_W_AUX_DIRECTION:-0.2}
 export MEMNAV_W_AUX_RANGE=${MEMNAV_W_AUX_RANGE:-0.0}
 export MEMNAV_AUX_RANGE_BETA=${MEMNAV_AUX_RANGE_BETA:-0.1}
+export MEMNAV_AUX_RANGE_GRAD_CAP_RATIO=${MEMNAV_AUX_RANGE_GRAD_CAP_RATIO:-0.0}
 export MEMNAV_ANCHOR_TF_START=${MEMNAV_ANCHOR_TF_START:-1.0}
 export MEMNAV_ANCHOR_TF_END=${MEMNAV_ANCHOR_TF_END:-1.0}
 export MEMNAV_ANCHOR_TF_DECAY_STEPS=${MEMNAV_ANCHOR_TF_DECAY_STEPS:-0}
@@ -194,7 +196,7 @@ apptainer exec --nv \
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"
         echo "strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE} require_versioned_cache=${MEMNAV_REQUIRE_VERSIONED_CACHE} expected_cache_signature=${MEMNAV_EXPECTED_CACHE_SIGNATURE} expected_code_commit=${MEMNAV_EXPECTED_CODE_COMMIT} require_pose_marker=${MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION}"
-        echo "aux_direction_weight=${MEMNAV_W_AUX_DIRECTION} aux_range_weight=${MEMNAV_W_AUX_RANGE} aux_range_beta=${MEMNAV_AUX_RANGE_BETA} anchor_tf=${MEMNAV_ANCHOR_TF_START}->${MEMNAV_ANCHOR_TF_END}@${MEMNAV_ANCHOR_TF_DECAY_STEPS}"
+        echo "aux_direction_weight=${MEMNAV_W_AUX_DIRECTION} aux_range_weight=${MEMNAV_W_AUX_RANGE} aux_range_beta=${MEMNAV_AUX_RANGE_BETA} aux_range_grad_cap_ratio=${MEMNAV_AUX_RANGE_GRAD_CAP_RATIO} anchor_tf=${MEMNAV_ANCHOR_TF_START}->${MEMNAV_ANCHOR_TF_END}@${MEMNAV_ANCHOR_TF_DECAY_STEPS}"
         echo "pose_scale_window=${MEMNAV_POSE_SCALE_WINDOW} pose_rel_conditioning=${MEMNAV_USE_POSE_RELIABILITY_CONDITIONING} pose_rel_weight=${MEMNAV_W_POSE_RELIABILITY} pose_rel_hidden=${MEMNAV_POSE_RELIABILITY_HIDDEN} pose_rel_init=${MEMNAV_POSE_RELIABILITY_INIT} pose_rel_lr_mult=${MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER}"
         echo "dino_weights=${MEMNAV_DINO_WEIGHTS}"
 

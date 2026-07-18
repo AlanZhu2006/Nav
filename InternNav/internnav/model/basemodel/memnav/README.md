@@ -170,6 +170,18 @@ therefore shape features used by the diffusion policy. This removes the old
 failure mode where a large y MSE participated in global gradient clipping but
 could update only an isolated calibration head.
 
+Optional range supervision also reaches this adapter, but its SmoothL1 gradient
+can be much larger than the action gradient even when its scalar loss looks
+small. `MEMNAV_AUX_RANGE_GRAD_CAP_RATIO > 0` enables action-safe gradient
+surgery on the range term only: a component opposing the diffusion action
+gradient is projected away, and the remaining global adapter-gradient norm is
+capped to the configured fraction of the action norm. The added surrogate has
+exactly zero forward value, so reported loss values retain their ordinary
+meaning. The legacy behavior remains the default (`0`). Training reports the
+raw action/range cosine, raw and corrected norm ratios, cap scale, and conflict
+fraction. This experimental path is fail-closed for multi-process DDP; the
+current production arm uses one GPU.
+
 ### 2.5 Semantic retrieval and geometric trust are separate
 
 The raw-DINO gate estimates `P(goal has a historical match)`. A correct match

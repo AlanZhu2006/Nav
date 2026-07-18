@@ -175,6 +175,13 @@ memnav_exp_cfg = ExpCfg(
         # Default-off preserves exact behavior of existing checkpoints/runs.
         w_aux_range=float(os.environ.get('MEMNAV_W_AUX_RANGE', '0.0')),
         aux_range_beta=float(os.environ.get('MEMNAV_AUX_RANGE_BETA', '0.1')),
+        # Optional action-safe gradient surgery for the shared range coordinate.
+        # A positive ratio removes range-gradient components that oppose the
+        # diffusion action gradient, then caps the remainder relative to it.
+        # Default-off preserves previous objective/backward behavior exactly.
+        aux_range_grad_cap_ratio=float(
+            os.environ.get('MEMNAV_AUX_RANGE_GRAD_CAP_RATIO', '0.0')
+        ),
         # Scheduled exposure to retrieval's live anchor closes the train/eval
         # mismatch.  1->1 is the legacy all-positive teacher-forcing baseline;
         # experiments can decay toward a lower probability without a code edit.

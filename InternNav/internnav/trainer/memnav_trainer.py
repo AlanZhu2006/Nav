@@ -16,6 +16,81 @@ from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
 from internnav.trainer.base import BaseTrainer
 
 
+def project_auxiliary_gradients(
+    action_gradients,
+    auxiliary_gradients,
+    max_norm_ratio,
+    eps=1e-12,
+):
+    """Project conflicting auxiliary gradients and cap their global norm.
+
+    The returned gradients have a non-negative dot product with the action
+    gradients.  Their norm is at most ``max_norm_ratio`` times the action norm.
+    Both operations use one norm/dot product over the complete parameter group,
+    rather than projecting each tensor independently.
+    """
+    if len(action_gradients) != len(auxiliary_gradients):
+        raise ValueError('action and auxiliary gradient lists must have equal length')
+    if not action_gradients:
+        raise ValueError('at least one gradient tensor is required')
+    if max_norm_ratio < 0.0:
+        raise ValueError('max_norm_ratio must be non-negative')
+    for action_gradient, auxiliary_gradient in zip(
+        action_gradients, auxiliary_gradients
+    ):
+        if action_gradient.shape != auxiliary_gradient.shape:
+            raise ValueError('paired action/auxiliary gradient shapes must match')
+
+    action_norm_sq = sum(
+        gradient.float().square().sum() for gradient in action_gradients
+    )
+    auxiliary_norm_sq = sum(
+        gradient.float().square().sum() for gradient in auxiliary_gradients
+    )
+    dot = sum(
+        (action.float() * auxiliary.float()).sum()
+        for action, auxiliary in zip(action_gradients, auxiliary_gradients)
+    )
+    action_norm = action_norm_sq.sqrt()
+    auxiliary_norm = auxiliary_norm_sq.sqrt()
+    cosine_denominator = action_norm * auxiliary_norm
+    raw_cosine = torch.where(
+        cosine_denominator > eps,
+        dot / cosine_denominator.clamp_min(eps),
+        dot.new_zeros(()),
+    ).clamp(-1.0, 1.0)
+
+    # Removing only the negative parallel component makes the auxiliary update
+    # first-order non-adversarial to the action objective.
+    projection_coefficient = torch.minimum(dot, dot.new_zeros(())) / (
+        action_norm_sq.clamp_min(eps)
+    )
+    projected = [
+        auxiliary - projection_coefficient.to(auxiliary.dtype) * action
+        for action, auxiliary in zip(action_gradients, auxiliary_gradients)
+    ]
+    projected_norm = sum(
+        gradient.float().square().sum() for gradient in projected
+    ).sqrt()
+    max_auxiliary_norm = float(max_norm_ratio) * action_norm
+    cap_scale = torch.minimum(
+        projected_norm.new_ones(()),
+        max_auxiliary_norm / projected_norm.clamp_min(eps),
+    )
+    corrected = [
+        gradient * cap_scale.to(gradient.dtype) for gradient in projected
+    ]
+    corrected_norm = projected_norm * cap_scale
+    diagnostics = {
+        'raw_cosine': raw_cosine,
+        'raw_norm_ratio': auxiliary_norm / action_norm.clamp_min(eps),
+        'corrected_norm_ratio': corrected_norm / action_norm.clamp_min(eps),
+        'cap_scale': cap_scale,
+        'conflict': (dot < 0.0).to(dot.dtype),
+    }
+    return corrected, diagnostics
+
+
 class MemNavTrainer(BaseTrainer):
     """Trainer for the frozen LingBot front-end and trainable MemNav policy.
 
@@ -46,6 +121,9 @@ class MemNavTrainer(BaseTrainer):
         self.w_aux = getattr(config.il, 'w_aux_direction', 0.2)
         self.w_aux_range = float(getattr(config.il, 'w_aux_range', 0.0))
         self.aux_range_beta = float(getattr(config.il, 'aux_range_beta', 0.1))
+        self.aux_range_grad_cap_ratio = float(
+            getattr(config.il, 'aux_range_grad_cap_ratio', 0.0)
+        )
         self.w_pose_reliability = getattr(config.il, 'w_pose_reliability', 0.2)
         self.anchor_tf_start = float(
             getattr(config.il, 'anchor_teacher_forcing_start', 1.0)
@@ -60,6 +138,18 @@ class MemNavTrainer(BaseTrainer):
             raise ValueError('w_aux_range must be non-negative')
         if self.aux_range_beta <= 0.0:
             raise ValueError('aux_range_beta must be positive')
+        if self.aux_range_grad_cap_ratio < 0.0:
+            raise ValueError('aux_range_grad_cap_ratio must be non-negative')
+        if self.aux_range_grad_cap_ratio > 0.0 and self.w_aux_range == 0.0:
+            raise ValueError(
+                'aux_range_grad_cap_ratio requires a positive w_aux_range'
+            )
+        if (self.aux_range_grad_cap_ratio > 0.0
+                and dist.is_initialized() and dist.get_world_size() > 1):
+            raise ValueError(
+                'action-safe range gradients currently require single-process '
+                'training; the inner gradient queries are not DDP-reducer safe'
+            )
         if not (0.0 <= self.anchor_tf_start <= 1.0):
             raise ValueError('anchor_teacher_forcing_start must be in [0, 1]')
         if not (0.0 <= self.anchor_tf_end <= 1.0):
@@ -217,6 +307,9 @@ class MemNavTrainer(BaseTrainer):
             'w_aux_direction': float(self.w_aux),
             'w_aux_range': float(self.w_aux_range),
             'aux_range_beta': float(self.aux_range_beta),
+            'aux_range_grad_cap_ratio': float(
+                self.aux_range_grad_cap_ratio
+            ),
             'w_pose_reliability': float(self.w_pose_reliability),
             'anchor_teacher_forcing_start': float(self.anchor_tf_start),
             'anchor_teacher_forcing_end': float(self.anchor_tf_end),
@@ -237,6 +330,55 @@ class MemNavTrainer(BaseTrainer):
         return self.anchor_tf_start + progress * (
             self.anchor_tf_end - self.anchor_tf_start
         )
+
+    def _action_safe_range_correction(self, model, action_loss, range_loss):
+        """Replace the range gradient on the shared adapter without changing loss value."""
+        parameters = [
+            parameter
+            for name, parameter in model.named_parameters()
+            if '.revisit_merge.rel_adapter.' in name and parameter.requires_grad
+        ]
+        if not parameters:
+            raise RuntimeError(
+                'range gradient control could not find revisit_merge.rel_adapter'
+            )
+        weighted_range_loss = self.w_aux_range * range_loss
+        action_gradients = torch.autograd.grad(
+            action_loss,
+            parameters,
+            retain_graph=True,
+            allow_unused=True,
+        )
+        range_gradients = torch.autograd.grad(
+            weighted_range_loss,
+            parameters,
+            retain_graph=True,
+            allow_unused=True,
+        )
+        safe_action_gradients = [
+            torch.zeros_like(parameter) if gradient is None else gradient.detach()
+            for parameter, gradient in zip(parameters, action_gradients)
+        ]
+        safe_range_gradients = [
+            torch.zeros_like(parameter) if gradient is None else gradient.detach()
+            for parameter, gradient in zip(parameters, range_gradients)
+        ]
+        corrected, diagnostics = project_auxiliary_gradients(
+            safe_action_gradients,
+            safe_range_gradients,
+            self.aux_range_grad_cap_ratio,
+        )
+        # This scalar is exactly zero in the forward pass.  Its backward replaces
+        # the raw weighted-range gradient with the projected/capped gradient.
+        correction = action_loss.new_zeros(())
+        for parameter, raw_gradient, corrected_gradient in zip(
+            parameters, safe_range_gradients, corrected
+        ):
+            gradient_delta = corrected_gradient - raw_gradient
+            correction = correction + (
+                (parameter - parameter.detach()) * gradient_delta
+            ).sum()
+        return correction, diagnostics
 
     @staticmethod
     def _sample_anchor_teacher_mask(pos_mask, probability, seed=None):
@@ -381,6 +523,28 @@ class MemNavTrainer(BaseTrainer):
             pose_reliability_per_row * revisit_pose_valid
         ).sum() / reliability_count.clamp(min=1.0)
 
+        range_gradient_correction = action_loss.new_zeros(())
+        range_gradient_diagnostics = {
+            'raw_cosine': action_loss.new_zeros(()),
+            'raw_norm_ratio': action_loss.new_zeros(()),
+            'corrected_norm_ratio': action_loss.new_zeros(()),
+            'cap_scale': action_loss.new_ones(()),
+            'conflict': action_loss.new_zeros(()),
+        }
+        range_gradient_control_enabled = bool(
+            model.training
+            and self.w_aux_range > 0.0
+            and self.aux_range_grad_cap_ratio > 0.0
+            and bool(range_count.detach() > 0.0)
+        )
+        if range_gradient_control_enabled:
+            (
+                range_gradient_correction,
+                range_gradient_diagnostics,
+            ) = self._action_safe_range_correction(
+                model, action_loss, aux_range_loss
+            )
+
         loss = (
             action_loss
             + self.w_retr * rank_loss
@@ -388,6 +552,7 @@ class MemNavTrainer(BaseTrainer):
             + self.w_aux * aux_direction_loss
             + self.w_aux_range * aux_range_loss
             + self.w_pose_reliability * pose_reliability_loss
+            + range_gradient_correction
         )
 
         with torch.no_grad():
@@ -680,6 +845,15 @@ class MemNavTrainer(BaseTrainer):
             'aux_range_loss': aux_range_loss,
             'aux_range_code_mae': aux_range_code_mae,
             'raw_range_code_mae': raw_range_code_mae,
+            'range_grad_action_cosine': range_gradient_diagnostics['raw_cosine'],
+            'range_grad_raw_to_action_norm': range_gradient_diagnostics[
+                'raw_norm_ratio'
+            ],
+            'range_grad_corrected_to_action_norm': range_gradient_diagnostics[
+                'corrected_norm_ratio'
+            ],
+            'range_grad_cap_scale': range_gradient_diagnostics['cap_scale'],
+            'range_grad_conflict': range_gradient_diagnostics['conflict'],
             'pose_reliability_loss': pose_reliability_loss,
             'anchor_tf_probability': loss.new_tensor(anchor_tf_probability),
             'anchor_teacher_forced_fraction': anchor_teacher_forced_fraction,
@@ -734,6 +908,21 @@ class MemNavTrainer(BaseTrainer):
             'raw_range_code_mae', raw_range_code_mae,
             raw_range_valid.float().sum(), phase,
         )
+        if range_gradient_control_enabled:
+            for name, value in (
+                ('range_grad_action_cosine', range_gradient_diagnostics['raw_cosine']),
+                (
+                    'range_grad_raw_to_action_norm',
+                    range_gradient_diagnostics['raw_norm_ratio'],
+                ),
+                (
+                    'range_grad_corrected_to_action_norm',
+                    range_gradient_diagnostics['corrected_norm_ratio'],
+                ),
+                ('range_grad_cap_scale', range_gradient_diagnostics['cap_scale']),
+                ('range_grad_conflict', range_gradient_diagnostics['conflict']),
+            ):
+                self._accumulate(name, value, B, phase)
         self._accumulate(
             'aux_range_target_mean', target_range_code_mean, range_count, phase
         )
@@ -966,6 +1155,11 @@ class MemNavTrainer(BaseTrainer):
             )
         saved_objective = metadata.get('training_objective')
         current_objective = self._training_objective_metadata()
+        if saved_objective is not None:
+            # Checkpoints written before action-safe range gradients existed are
+            # exactly equivalent to the new default-off value.
+            saved_objective = dict(saved_objective)
+            saved_objective.setdefault('aux_range_grad_cap_ratio', 0.0)
         if saved_objective is not None and saved_objective != current_objective:
             changed = sorted(
                 key for key in set(saved_objective) | set(current_objective)

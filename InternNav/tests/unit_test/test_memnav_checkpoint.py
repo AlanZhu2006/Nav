@@ -9,7 +9,10 @@ from torch import nn
 from transformers import TrainingArguments
 
 from internnav.model.basemodel.memnav.memnav_policy import MemNavPolicy
-from internnav.trainer.memnav_trainer import MemNavTrainer
+from internnav.trainer.memnav_trainer import (
+    MemNavTrainer,
+    project_auxiliary_gradients,
+)
 
 
 class _TinyModel(nn.Module):
@@ -106,6 +109,14 @@ class _OptimizerModel(nn.Module):
         return {'loss': self.linear(batch['x']).square().mean()}
 
 
+class _AdapterGradientModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.core = nn.Module()
+        self.core.revisit_merge = nn.Module()
+        self.core.revisit_merge.rel_adapter = nn.Linear(2, 2, bias=False)
+
+
 class _TinyDataset(torch.utils.data.Dataset):
     dataset_fingerprint = 'fixed-population-v1'
 
@@ -125,6 +136,7 @@ class MemNavCheckpointTest(unittest.TestCase):
             w_aux_direction=0.2,
             w_aux_range=0.2,
             aux_range_beta=0.1,
+            aux_range_grad_cap_ratio=0.0,
             w_pose_reliability=0.2,
             anchor_teacher_forcing_start=1.0,
             anchor_teacher_forcing_end=1.0,
@@ -319,6 +331,51 @@ class MemNavCheckpointTest(unittest.TestCase):
             trainer._sample_anchor_teacher_mask(positives, 0.5, seed=123)
             torch.testing.assert_close(torch.rand(3), expected_global_draw)
 
+    def test_action_safe_range_projection_removes_conflict_and_caps_norm(self):
+        action = [torch.tensor([1.0, 0.0])]
+        conflicting_range = [torch.tensor([-1.0, 2.0])]
+        corrected, diagnostics = project_auxiliary_gradients(
+            action, conflicting_range, max_norm_ratio=0.25
+        )
+        torch.testing.assert_close(corrected[0], torch.tensor([0.0, 0.25]))
+        self.assertLess(float(diagnostics['raw_cosine']), 0.0)
+        self.assertEqual(float(diagnostics['conflict']), 1.0)
+        self.assertAlmostEqual(
+            float(diagnostics['corrected_norm_ratio']), 0.25
+        )
+        self.assertGreaterEqual(float(torch.dot(action[0], corrected[0])), 0.0)
+
+        aligned_range = [torch.tensor([2.0, 0.0])]
+        aligned_corrected, aligned_diagnostics = project_auxiliary_gradients(
+            action, aligned_range, max_norm_ratio=0.25
+        )
+        torch.testing.assert_close(
+            aligned_corrected[0], torch.tensor([0.25, 0.0])
+        )
+        self.assertEqual(float(aligned_diagnostics['conflict']), 0.0)
+
+    def test_zero_value_correction_replaces_only_shared_range_gradient(self):
+        model = _AdapterGradientModel()
+        weight = model.core.revisit_merge.rel_adapter.weight
+        action_loss = weight[0, 0]
+        range_loss = -10.0 * weight[0, 0] + 10.0 * weight[0, 1]
+        controller = SimpleNamespace(
+            w_aux_range=0.2,
+            aux_range_grad_cap_ratio=0.25,
+        )
+        correction, diagnostics = MemNavTrainer._action_safe_range_correction(
+            controller, model, action_loss, range_loss
+        )
+        uncorrected_value = action_loss + controller.w_aux_range * range_loss
+        corrected_value = uncorrected_value + correction
+        torch.testing.assert_close(corrected_value, uncorrected_value)
+        corrected_value.backward()
+        expected = torch.zeros_like(weight)
+        expected[0, 0] = 1.0
+        expected[0, 1] = 0.25
+        torch.testing.assert_close(weight.grad, expected)
+        self.assertEqual(float(diagnostics['conflict']), 1.0)
+
     def test_compact_checkpoint_round_trip_and_dataset_guard(self):
         with tempfile.TemporaryDirectory() as tmp:
             checkpoint = Path(tmp) / 'checkpoint-5'
@@ -331,6 +388,9 @@ class MemNavCheckpointTest(unittest.TestCase):
                 (checkpoint / 'memnav_metadata.json').read_text(encoding='utf-8')
             )
             self.assertEqual(metadata['training_objective']['w_aux_range'], 0.2)
+            self.assertEqual(
+                metadata['training_objective']['aux_range_grad_cap_ratio'], 0.0
+            )
             self.assertEqual(
                 metadata['training_objective']['anchor_teacher_forcing_start'],
                 1.0,

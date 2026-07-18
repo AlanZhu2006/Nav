@@ -138,6 +138,31 @@ def _cuda_generator(device, seed):
     return generator
 
 
+def _dataset_cache_contract(config):
+    """Return the audited cache contract instead of silently weakening it.
+
+    Offline evaluation used to hard-code strict file coverage while dropping the
+    version/signature fields from ``memnav_exp_cfg``.  A run could therefore read
+    a complete but stale cache generation even when the Slurm environment asked
+    for a specific versioned cache.  Keep this helper small and independently
+    testable because evaluator provenance is part of the experiment result.
+    """
+    return {
+        'strict_feature_coverage': bool(
+            getattr(config.il, 'strict_feature_coverage', True)
+        ),
+        'require_versioned_cache': bool(
+            getattr(config.il, 'require_versioned_cache', False)
+        ),
+        'expected_cache_signature': str(
+            getattr(config.il, 'expected_cache_signature', '') or ''
+        ),
+        'require_generated_pose_convention': bool(
+            getattr(config.il, 'require_generated_pose_convention', False)
+        ),
+    }
+
+
 def main():
     args = parse_args()
     if not torch.cuda.is_available():
@@ -153,6 +178,7 @@ def main():
         config.il.lingbot_weights = args.lingbot_weights
     root_dir = args.root_dir or config.il.root_dir
     feature_root = args.feature_root or getattr(config.il, 'feature_root', None)
+    cache_contract = _dataset_cache_contract(config)
     dataset = MemNav_Dataset(
         root_dir,
         predict_size=config.il.predict_size,
@@ -161,10 +187,7 @@ def main():
         feature_root=feature_root,
         window_size=config.il.window_size,
         num_scale=config.il.num_scale,
-        strict_feature_coverage=True,
-        require_generated_pose_convention=getattr(
-            config.il, 'require_generated_pose_convention', False
-        ),
+        **cache_contract,
         data_split=args.data_split,
         validation_fraction=args.validation_fraction,
         split_seed=args.split_seed,
@@ -274,6 +297,7 @@ def main():
         'git_commit': _git_commit(),
         'root_dir': root_dir,
         'feature_root': feature_root,
+        'cache_contract': cache_contract,
         'data_split': args.data_split,
         'validation_fraction': args.validation_fraction,
         'split_seed': args.split_seed,

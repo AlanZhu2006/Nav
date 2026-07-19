@@ -180,7 +180,11 @@ exactly zero forward value, so reported loss values retain their ordinary
 meaning. The legacy behavior remains the default (`0`). Training reports the
 raw action/range cosine, raw and corrected norm ratios, cap scale, and conflict
 fraction. This experimental path is fail-closed for multi-process DDP; the
-current production arm uses one GPU.
+controlled arm used one GPU. The formal `rho=0.25` arm reduced the rejected
+range+live model's fixed-64 full-DDPM action MSE by `6.60%`, but remained
+`32.44%` worse than the range-free baseline and improved only 3 of 64 paired
+samples. It is therefore a diagnostic mechanism, not an accepted recipe; direct
+range supervision remains default-off.
 
 ### 2.5 Semantic retrieval and geometric trust are separate
 

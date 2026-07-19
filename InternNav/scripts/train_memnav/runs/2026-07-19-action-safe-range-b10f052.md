@@ -178,11 +178,85 @@ a failed check prevents the next stage from starting.
 - resume: none, using the same fresh initialization path as the baseline;
 - W&B project / run ID:
   `memnav / memnav_range_safe_b10f052_400`;
-- last verified scheduler state: `RUNNING` on H200 node `gh118` after the smoke
-  completed successfully. The job's final model-quality result is intentionally
-  left open until checkpoints and fixed evaluations are produced;
+- W&B URL:
+  `https://wandb.ai/yz11502-new-york-university/memnav/runs/memnav_range_safe_b10f052_400`;
+- final state: `COMPLETED`, exit code `0:0`, elapsed `03:50:11` on H200 node
+  `gh118`;
+- all four checkpoints at steps 100/200/300/400 contain model, metadata,
+  optimizer, scheduler, RNG, and Trainer state;
+- final `memnav.ckpt` SHA256:
+  `a9933609c6614f563a9ceea371dbeb6cd5f8cf5a4590a7048a010bcf1392a81c`;
+- final metadata SHA256:
+  `5aa2e5efd16a0248ef0c3cba83843e694d61d3d996e739b287e53cfc28d53bdd`;
+- train / validation / fixed-64 fingerprints matched the controlled baseline:
+  `aa4c6d1a1799ac5338f1fa7734404406b88e7afb732d396470b38a43082033a9` /
+  `414673cab0f1776e8c2f03c1c4dda60508b3a3735d0ad346e67ea6ea639a02ce` /
+  `c5bf140feb86a8863bbb65e46eb55cee39fa36b25a16504497679495328169df`;
+- over all 40 ten-step windows, the raw weighted range/action adapter-gradient
+  ratio had median `65.41` and mean `75.95`; mean conflict fraction was `50.8%`.
+  Every corrected ratio was exactly `0.25`, and no logged value was non-finite;
 - stdout/stderr:
   `logs/train_memnav/range-safe-train-14215557.{out,err}`.
+
+The fixed-64 single-timestep trajectory was:
+
+| Step | Action loss | Retrieval loss | Direction error | Range-code MAE |
+|---:|---:|---:|---:|---:|
+| 100 | 0.202598 | 0.689358 | 5.8070 deg | 0.194685 |
+| 200 | 0.191578 | 0.489251 | 6.0820 deg | 0.158404 |
+| 300 | 0.129267 | 0.454138 | 7.3492 deg | 0.174353 |
+| 400 | 0.115014 | 0.434202 | 9.6527 deg | 0.188160 |
+
+At step 400, action loss was `6.25%` below the rejected range+live arm but
+`20.78%` above the sparse baseline. This recovered `27.9%` of the old arm's
+baseline gap, but did not satisfy the acceptance criterion. Goal A/B/C action
+losses were all above baseline.
+
+### 4. Immutable fixed-64 paired full-DDPM acceptance evaluation
+
+- JobID: `14250526`;
+- name: `ddpm64-safe-b10f052`;
+- final state: `COMPLETED`, exit code `0:0`, elapsed `00:37:37` on A100 node
+  `ga040`;
+- evaluated code / checkpoint:
+  `b10f0522149c87b21ce889e453255af3583b6912` /
+  `checkpoint-400/memnav.ckpt`;
+- selection, fingerprint, cache signature, diffusion seed `104729`, oracle
+  diagnostic, and cyclic shuffled-goal randomness exactly matched both immutable
+  `e658fa3` comparison reports;
+- output:
+  `/scratch/yz11502/Research/eval_outputs/ddpm64-range-safe-b10f052.json`;
+- output SHA256:
+  `1067a64052a1ef685c2708040abb0f9d19a643c0233dfc3af378cc1fa2849d59`;
+- stdout/stderr:
+  `logs/eval_memnav/ddpm64-safe-14250526.{out,err}`.
+
+| Fixed-64 full-DDPM metric | Baseline | Range + live | Action-safe range |
+|---|---:|---:|---:|
+| all action MSE | 0.084969 | 0.120480 | 0.112534 |
+| revisit action MSE | 0.094307 | 0.135802 | 0.124235 |
+| novel action MSE | 0.075631 | 0.105158 | 0.100834 |
+| x action MSE | 0.079921 | 0.121904 | 0.112683 |
+| y action MSE | 0.062499 | 0.094274 | 0.085809 |
+| theta action MSE | 0.112487 | 0.145262 | 0.139112 |
+| goal-sensitivity MSE | 0.003396 | 0.001851 | 0.001980 |
+| shuffled-goal penalty | 0.006239 | 0.001775 | 0.001734 |
+| revisit range-code MAE | 0.211636 | 0.196399 | 0.199157 |
+
+Action-safe range improved the rejected arm by `6.60%` overall, but remained
+`32.44%` worse than baseline (`31.73%` revisit and `33.32%` novel). Only 3 of
+64 paired samples improved over baseline. Mean paired delta was `+0.027565`,
+with a 100,000-resample bootstrap 95% interval of
+`[+0.022543, +0.032802]`. In contrast, 46 of 64 samples improved over the old
+arm; that paired delta was `-0.007946`, interval
+`[-0.012797, -0.003343]`.
+
+Goal A/B/C full-DDPM MSE remained `33.9% / 38.8% / 26.3%` above baseline.
+Revisit remaining-path buckets `000-127 / 128-255 / 256+` were also all worse
+by `47.3% / 16.2% / 18.3%`. Therefore the residual regression is not confined
+to long-range or three-leg examples. Range MAE improved only `5.90%`, while
+goal sensitivity and shuffled-goal penalty remained `41.7%` and `72.2%` below
+baseline.
 
 ## Acceptance criteria
 
@@ -199,3 +273,14 @@ The run is not accepted from training loss alone. Required checks are:
 - range-code improvement alone is insufficient;
 - any production-default or closed-loop navigation claim requires a separate
   Habitat evaluation.
+
+## Decision
+
+The `0.25` controlled arm is rejected. The implementation correctly bounds and
+projects the auxiliary gradient and materially reduces the old treatment's
+damage, but a locally non-conflicting update still changes the shared pose code
+on every revisit batch and does not protect validation or future-batch action
+gradients. Direct range supervision must remain default-off. A future range
+experiment should give the auxiliary a detached calibration branch and let an
+action-trained, zero-initialized gate decide whether any calibrated range enters
+the policy; it should not directly shape the shared action coordinate.

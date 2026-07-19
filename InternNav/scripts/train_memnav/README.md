@@ -102,7 +102,11 @@ MEMNAV_DINO_WEIGHTS
   teacher-forcing schedule。checkpoint metadata 会保存这些值，W&B 必须记录 raw
   cosine、raw/corrected norm ratio、cap scale 和 conflict fraction。该机制仍是实验
   选项，当前只支持单进程训练（多进程 DDP 会 fail closed），不能在完整 DDPM 和
-  最终导航评测前改成生产默认值。
+  最终导航评测前改成生产默认值。2026-07-19 的正式 `cap=0.25` 对照虽然比旧
+  range+live arm 降低 `6.60%` 的 full-DDPM action MSE，仍比无 range baseline
+  恶化 `32.44%`，且只有 3/64 paired 样本改善；该配置已被拒绝，range loss 必须
+  继续默认关闭。后续任务不得复用 `0.25` 作为推荐值，除非先完成新的本机 paired
+  验证并建立不会由 auxiliary 直接改写 action 表示的隔离结构。
 - 预计算必须同时满足应用日志 `errors=0` 和 Slurm
   `COMPLETED, ExitCode=0:0`；脚本捕获错误后继续运行不算成功。
 - stdout、checkpoint、W&B 和诊断输出目录必须在 `sbatch` 前存在且可写，

@@ -181,6 +181,55 @@ and oracle-positive retrieval remains a diagnostic.
 - production fixed-64 full-DDPM baseline and range-live jobs: both completed
   `0:0`; range-live regressed on all 64 paired samples as reported above.
 
-The 8-hour arm is therefore justified only as a controlled test of whether bounded
+The 8-hour arm was therefore justified only as a controlled test of whether bounded
 range learning avoids the proven 400-step regression. No production default or
-navigation-quality claim is made from this diagnostic.
+navigation-quality claim was made before its paired acceptance evaluation.
+
+## Formal controlled-arm result
+
+The full dependency chain completed successfully:
+
+- zero-step preflight `14215548`: `COMPLETED 0:0`;
+- ten-step smoke `14215550`: `COMPLETED 0:0`;
+- 400-step H200 training `14215557`: `COMPLETED 0:0` in `03:50:11`;
+- fixed-64 paired full-DDPM evaluator `14250526`: `COMPLETED 0:0` in
+  `00:37:37`.
+
+The formal training run preserved the expected train, validation, and fixed-64
+fingerprints and wrote complete checkpoints at steps 100/200/300/400. Across 40
+ten-step windows, the already weighted raw range gradient was `65.41` times the
+action gradient in median and `75.95` times in mean on the shared adapter. Mean
+conflict fraction was `50.8%`; every corrected ratio was exactly `0.25`, with no
+non-finite value. The implementation therefore behaved as designed.
+
+The final single-timestep fixed-64 action loss was `0.115014`: `6.25%` below the
+rejected range+live arm but `20.78%` above baseline. The exact paired DDPM test
+used the same 64 sample identities, selection fingerprint, cache contract,
+diffusion seed `104729`, and shuffled-goal randomness as the two immutable
+comparison reports:
+
+| Fixed-64 full-DDPM metric | Baseline | Range + live | Action-safe range |
+|---|---:|---:|---:|
+| all action MSE | 0.084969 | 0.120480 | 0.112534 |
+| revisit action MSE | 0.094307 | 0.135802 | 0.124235 |
+| novel action MSE | 0.075631 | 0.105158 | 0.100834 |
+| x / y / theta MSE | 0.079921 / 0.062499 / 0.112487 | 0.121904 / 0.094274 / 0.145262 | 0.112683 / 0.085809 / 0.139112 |
+| goal-sensitivity MSE | 0.003396 | 0.001851 | 0.001980 |
+| shuffled-goal penalty | 0.006239 | 0.001775 | 0.001734 |
+| revisit range-code MAE | 0.211636 | 0.196399 | 0.199157 |
+
+Action-safe range recovered part of the old failure (`-6.60%` action MSE versus
+range+live), but still regressed `32.44%` versus baseline. Only 3 of 64 paired
+samples improved. Mean paired delta was `+0.027565`; its 100,000-resample
+bootstrap 95% interval was `[+0.022543, +0.032802]`. Revisit and novel regressed
+`31.73%` and `33.32%`, and Goal A/B/C regressed `33.9% / 38.8% / 26.3%`.
+All three remaining-path-span buckets also regressed, so the failure is not a
+long-range-only or LingBot-drift-only effect.
+
+The controlled arm is rejected. Projection guarantees only non-adversarial
+first-order alignment on the current batch; an orthogonal update repeated over
+400 steps can still hurt future batches and shared-decoder generalization. The
+range label should remain default-off. A stronger follow-up would train range in
+a detached calibration branch and expose it to the policy only through a
+zero-initialized gate optimized by action loss, so auxiliary supervision cannot
+directly rewrite the action representation.

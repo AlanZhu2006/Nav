@@ -13,20 +13,8 @@ import tyro
 from pydantic import BaseModel
 from transformers import TrainerCallback, TrainingArguments
 
-from internnav.dataset.cma_lerobot_dataset import CMALerobotDataset, cma_collate_fn
-from internnav.dataset.rdp_lerobot_dataset import RDP_LerobotDataset, rdp_collate_fn
-from internnav.dataset.navdp_dataset_lerobot import NavDP_Base_Datset, navdp_collate_fn
-from internnav.dataset.logoplanner_dataset_lerobot import LoGoPlanner_Dataset, logoplanner_collate_fn
-from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset, memnav_collate_fn
-from internnav.model.basemodel.cma.cma_policy import CMAModelConfig, CMANet
-from internnav.model.basemodel.rdp.rdp_policy import RDPModelConfig, RDPNet
-from internnav.model.basemodel.seq2seq.seq2seq_policy import Seq2SeqModelConfig, Seq2SeqNet
-from internnav.model.basemodel.navdp.navdp_policy import NavDPModelConfig, NavDPNet
-from internnav.model.basemodel.logoplanner.logoplanner_policy import LoGoPlannerModelConfig, LoGoPlannerNet
-from internnav.model.basemodel.memnav.memnav_policy import MemNavModelConfig, MemNavPolicy
 from internnav.model.utils.logger import MyLogger
 from internnav.model.utils.utils import load_dataset
-from internnav.trainer import CMATrainer, RDPTrainer, NavDPTrainer, LoGoPlannerTrainer, MemNavTrainer
 from scripts.train.configs import (
     cma_exp_cfg,
     cma_plus_exp_cfg,
@@ -49,7 +37,7 @@ class TrainCfg(BaseModel):
     """
 
     name: str = 'cma_train'  # Experiment name
-    model_name: str = 'cma'  # 'cma' | 'cma_plus' | 'seq2seq' | 'seq2seq_plus' | 'rdp' | 'navdp'
+    model_name: str = 'cma'  # includes cma/seq2seq/rdp/navdp/logoplanner/memnav variants
 
     # il.* overrides
     batch_size: Optional[int] = None
@@ -60,6 +48,7 @@ class TrainCfg(BaseModel):
     dataset_navdp: Optional[str] = None
     ckpt_to_load: Optional[str] = None
     load_from_ckpt: Optional[bool] = None
+    resume_from_checkpoint: Optional[str] = None
 
     # exp-level overrides
     torch_gpu_ids: Optional[list[int]] = None
@@ -71,6 +60,7 @@ def _apply_overrides(exp_cfg, cli: 'TrainCfg') -> None:
     il_fields = {
         'batch_size', 'num_workers', 'epochs', 'lr',
         'root_dir', 'dataset_navdp', 'ckpt_to_load', 'load_from_ckpt',
+        'resume_from_checkpoint',
     }
     exp_fields = {'torch_gpu_ids', 'seed'}
     for field in il_fields:
@@ -219,7 +209,9 @@ def main(config, model_class, model_config_class):
 
 
         # ------------ load dataset ------------
+        eval_dataset_data = None
         if config.model_name == "navdp":
+            from internnav.dataset.navdp_dataset_lerobot import NavDP_Base_Datset
             train_dataset_data = NavDP_Base_Datset(config.il.root_dir,
                                     config.il.dataset_navdp,
                                     config.il.memory_size,
@@ -231,6 +223,7 @@ def main(config, model_class, model_config_class):
                                     random_digit = config.il.random_digit,
                                     prior_sample = config.il.prior_sample)
         elif config.model_name == "logoplanner":
+            from internnav.dataset.logoplanner_dataset_lerobot import LoGoPlanner_Dataset
             train_dataset_data = LoGoPlanner_Dataset(
                 config.il.root_dir,
                 preload_path=config.il.dataset_navdp,
@@ -249,11 +242,33 @@ def main(config, model_class, model_config_class):
                 depth_min=config.il.depth_min,
             )
         elif config.model_name == "memnav":
+            from internnav.dataset.memnav_dataset_lerobot import (
+                MemNav_Dataset,
+                build_fixed_memnav_eval_subset,
+            )
             train_dataset_data = MemNav_Dataset(
                 config.il.root_dir,
                 predict_size=config.il.predict_size,
                 image_size=config.il.image_size,
                 lingbot_repo=config.il.lingbot_repo,
+                feature_root=getattr(config.il, 'feature_root', None),
+                window_size=getattr(config.il, 'window_size', 8),
+                num_scale=getattr(config.il, 'num_scale', 8),
+                strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
+                require_versioned_cache=getattr(
+                    config.il, 'require_versioned_cache', False
+                ),
+                expected_cache_signature=getattr(
+                    config.il, 'expected_cache_signature', ''
+                ),
+                require_generated_pose_convention=getattr(
+                    config.il, 'require_generated_pose_convention', False
+                ),
+                data_split=getattr(config.il, 'data_split', 'all'),
+                validation_fraction=getattr(config.il, 'validation_fraction', 0.1),
+                split_seed=getattr(config.il, 'split_seed', 0),
+                sampling_mode=getattr(config.il, 'sampling_mode', 'random_leg'),
+                sampling_seed=getattr(config.il, 'sampling_seed', 0),
             )
         else:
             if '3dgs' in config.il.lmdb_features_dir or '3dgs' in config.il.lmdb_features_dir:
@@ -268,8 +283,52 @@ def main(config, model_class, model_config_class):
             train_dataset_data = load_dataset(dataset_root_dir, 'train', logger=train_logger, dataset_type=dataset_type)
             global_batch_size = config.il.batch_size * len(config.torch_gpu_ids)
 
+        if config.model_name == 'memnav' and int(getattr(config.il, 'eval_samples', 0)) > 0:
+            if getattr(config.il, 'data_split', 'all') != 'train':
+                raise ValueError(
+                    'Fixed validation requires MEMNAV_DATA_SPLIT=train so held-out scenes '
+                    'are not present in the training population.'
+                )
+            fixed_val = MemNav_Dataset(
+                config.il.root_dir,
+                predict_size=config.il.predict_size,
+                image_size=config.il.image_size,
+                lingbot_repo=config.il.lingbot_repo,
+                feature_root=getattr(config.il, 'feature_root', None),
+                window_size=getattr(config.il, 'window_size', 8),
+                num_scale=getattr(config.il, 'num_scale', 8),
+                strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
+                require_versioned_cache=getattr(
+                    config.il, 'require_versioned_cache', False
+                ),
+                expected_cache_signature=getattr(
+                    config.il, 'expected_cache_signature', ''
+                ),
+                require_generated_pose_convention=getattr(
+                    config.il, 'require_generated_pose_convention', False
+                ),
+                data_split='val',
+                validation_fraction=getattr(config.il, 'validation_fraction', 0.1),
+                split_seed=getattr(config.il, 'split_seed', 0),
+                sampling_mode='fixed_leg',
+                sampling_seed=getattr(config.il, 'eval_seed', 0),
+            )
+            eval_dataset_data = build_fixed_memnav_eval_subset(
+                fixed_val,
+                int(config.il.eval_samples),
+                selection_seed=int(getattr(config.il, 'eval_seed', 0)),
+            )
+            print(
+                f'[eval] fixed held-out subset: {len(eval_dataset_data)}/{len(fixed_val)} samples; '
+                f'revisit={eval_dataset_data.memnav_num_revisit}, '
+                f'novel={eval_dataset_data.memnav_num_novel}; '
+                f'fingerprint={eval_dataset_data.dataset_fingerprint}'
+            )
+
         # ------------ data_loader ------------
         if config.model_name in ['cma', 'seq2seq']:
+            from internnav.dataset.cma_lerobot_dataset import CMALerobotDataset, cma_collate_fn
+            from internnav.trainer import CMATrainer
             policy_trainer = CMATrainer
             train_dataset = CMALerobotDataset(
                 config,
@@ -283,6 +342,8 @@ def main(config, model_class, model_config_class):
             collate_fn = cma_collate_fn
 
         elif config.model_name == 'rdp':
+            from internnav.dataset.rdp_lerobot_dataset import RDP_LerobotDataset, rdp_collate_fn
+            from internnav.trainer import RDPTrainer
             policy_trainer = RDPTrainer
             train_dataset = RDP_LerobotDataset(
                 config,
@@ -292,42 +353,69 @@ def main(config, model_class, model_config_class):
             )
             collate_fn = rdp_collate_fn(global_batch_size=global_batch_size)
         elif config.model_name == 'navdp':
+            from internnav.dataset.navdp_dataset_lerobot import navdp_collate_fn
+            from internnav.trainer import NavDPTrainer
             policy_trainer = NavDPTrainer
             train_dataset = train_dataset_data
             collate_fn = navdp_collate_fn
         elif config.model_name == 'logoplanner':
+            from internnav.dataset.logoplanner_dataset_lerobot import logoplanner_collate_fn
+            from internnav.trainer import LoGoPlannerTrainer
             policy_trainer = LoGoPlannerTrainer
             train_dataset = train_dataset_data
             collate_fn = logoplanner_collate_fn
         elif config.model_name == 'memnav':
+            from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
+            from internnav.trainer import MemNavTrainer
             policy_trainer = MemNavTrainer
             train_dataset = train_dataset_data
             collate_fn = memnav_collate_fn
 
         # ------------ training args ------------
+        is_memnav = config.model_name == 'memnav'
         training_args = TrainingArguments(
             output_dir=config.output_dir,
             run_name=config.name,
             remove_unused_columns=False,
             deepspeed='',
             gradient_checkpointing=False,
-            bf16=False,#fp16=False,
-            tf32=False,
+            bf16=bool(getattr(config.il, 'bf16', False)) if is_memnav else False,
+            tf32=bool(getattr(config.il, 'tf32', False)) if is_memnav else False,
             per_device_train_batch_size=config.il.batch_size,
-            gradient_accumulation_steps=1,
+            per_device_eval_batch_size=(
+                int(getattr(config.il, 'eval_batch_size', config.il.batch_size))
+                if is_memnav else config.il.batch_size
+            ),
+            gradient_accumulation_steps=(
+                int(getattr(config.il, 'gradient_accumulation_steps', 1)) if is_memnav else 1
+            ),
             dataloader_num_workers=config.il.num_workers,
             dataloader_pin_memory=False,
             optim='adamw_torch',
             learning_rate=config.il.lr,
-            lr_scheduler_type='cosine',
-            logging_steps=10.0,
+            weight_decay=float(getattr(config.il, 'weight_decay', 0.0) or 0.0),
+            warmup_ratio=float(getattr(config.il, 'warmup_ratio', 0.0) or 0.0),
+            lr_scheduler_type=(getattr(config.il, 'lr_scheduler_type', 'cosine') or 'cosine'),
+            max_grad_norm=float(getattr(config.il, 'max_grad_norm', 1.0) or 1.0),
+            logging_steps=(int(getattr(config.il, 'logging_steps', 10)) if is_memnav else 10),
             num_train_epochs=config.il.epochs,
-            save_strategy='epoch',# no
-            save_steps=config.il.save_interval_epochs,
-            save_total_limit=8,
+            max_steps=(
+                int(getattr(config.il, 'max_train_steps', -1)) if is_memnav else -1
+            ),
+            eval_strategy=('steps' if is_memnav and eval_dataset_data is not None else 'no'),
+            eval_steps=(int(getattr(config.il, 'eval_interval_steps', 25)) if is_memnav else None),
+            save_strategy='steps' if is_memnav else 'epoch',
+            save_steps=(int(getattr(config.il, 'save_interval_steps', 25)) if is_memnav else 500),
+            save_total_limit=(int(getattr(config.il, 'save_total_limit', 3)) if is_memnav else 8),
             report_to=config.il.report_to,
-            seed=0,
-            do_eval=False,
+            # Without an explicit label name, HF's prediction_step treats a
+            # MemNav batch as unlabeled and bypasses MemNavTrainer.compute_loss,
+            # calling model(**batch) directly during scheduled evaluation.
+            label_names=['batch_labels'] if is_memnav else None,
+            seed=config.seed,
+            data_seed=config.seed,
+            do_eval=is_memnav and eval_dataset_data is not None,
+            prediction_loss_only=is_memnav,
             ddp_find_unused_parameters=config.il.ddp_find_unused_parameters,
             ddp_bucket_cap_mb=100,
             torch_compile_mode=None,
@@ -338,7 +426,8 @@ def main(config, model_class, model_config_class):
 
         # Create the trainer
         trainer = policy_trainer(
-            config=config, model=model, args=training_args, train_dataset=train_dataset, data_collator=collate_fn
+            config=config, model=model, args=training_args, train_dataset=train_dataset,
+            eval_dataset=eval_dataset_data, data_collator=collate_fn
         )
 
         # Add checkpoint format callback to ensure experiment_cfg is copied to each checkpoint
@@ -346,7 +435,16 @@ def main(config, model_class, model_config_class):
         ckpt_format_callback = CheckpointFormatCallback(run_name=run_name, exp_cfg_dir=config.log_dir)
         trainer.add_callback(ckpt_format_callback)
 
-        trainer.train()
+        resume = getattr(config.il, 'resume_from_checkpoint', None)
+        if isinstance(resume, str):
+            normalized = resume.strip().lower()
+            if normalized in {'', 'none', 'false', '0'}:
+                resume = None
+            elif normalized == 'auto':
+                from transformers.trainer_utils import get_last_checkpoint
+                resume = get_last_checkpoint(config.output_dir)
+                print(f"[resume] auto -> {resume or 'no checkpoint; starting fresh'}")
+        trainer.train(resume_from_checkpoint=resume)
         if train_logger:
             for handler in train_logger.handlers:
                 handler.flush()
@@ -375,22 +473,38 @@ if __name__ == '__main__':
         print(f'{key}: {value}')
     print('=' * 50 + '\n')
 
-    # Select configuration based on model_name
-    supported_cfg = {
-        'seq2seq': [seq2seq_exp_cfg, Seq2SeqNet, Seq2SeqModelConfig],
-        'seq2seq_plus': [seq2seq_plus_exp_cfg, Seq2SeqNet, Seq2SeqModelConfig],
-        'cma': [cma_exp_cfg, CMANet, CMAModelConfig],
-        'cma_plus': [cma_plus_exp_cfg, CMANet, CMAModelConfig],
-        'rdp': [rdp_exp_cfg, RDPNet, RDPModelConfig],
-        'navdp': [navdp_exp_cfg, NavDPNet, NavDPModelConfig],
-        'logoplanner': [logoplanner_exp_cfg, LoGoPlannerNet, LoGoPlannerModelConfig],
-        'memnav': [memnav_exp_cfg, MemNavPolicy, MemNavModelConfig],
+    # Import only the selected policy. Several legacy policies use optional,
+    # ignored external repos (for example LongCLIP) that MemNav does not need.
+    supported = {
+        'seq2seq', 'seq2seq_plus', 'cma', 'cma_plus',
+        'rdp', 'navdp', 'logoplanner', 'memnav',
     }
-
-    if config.model_name not in supported_cfg:
-        raise ValueError(f'Invalid model name: {config.model_name}. Supported models are: {list(supported_cfg.keys())}')
-
-    exp_cfg, model_class, model_config_class = supported_cfg[config.model_name]
+    if config.model_name not in supported:
+        raise ValueError(
+            f'Invalid model name: {config.model_name}. Supported models are: {sorted(supported)}'
+        )
+    if config.model_name in {'seq2seq', 'seq2seq_plus'}:
+        from internnav.model.basemodel.seq2seq.seq2seq_policy import Seq2SeqModelConfig, Seq2SeqNet
+        exp_cfg = seq2seq_exp_cfg if config.model_name == 'seq2seq' else seq2seq_plus_exp_cfg
+        model_class, model_config_class = Seq2SeqNet, Seq2SeqModelConfig
+    elif config.model_name in {'cma', 'cma_plus'}:
+        from internnav.model.basemodel.cma.cma_policy import CMAModelConfig, CMANet
+        exp_cfg = cma_exp_cfg if config.model_name == 'cma' else cma_plus_exp_cfg
+        model_class, model_config_class = CMANet, CMAModelConfig
+    elif config.model_name == 'rdp':
+        from internnav.model.basemodel.rdp.rdp_policy import RDPModelConfig, RDPNet
+        exp_cfg, model_class, model_config_class = rdp_exp_cfg, RDPNet, RDPModelConfig
+    elif config.model_name == 'navdp':
+        from internnav.model.basemodel.navdp.navdp_policy import NavDPModelConfig, NavDPNet
+        exp_cfg, model_class, model_config_class = navdp_exp_cfg, NavDPNet, NavDPModelConfig
+    elif config.model_name == 'logoplanner':
+        from internnav.model.basemodel.logoplanner.logoplanner_policy import LoGoPlannerModelConfig, LoGoPlannerNet
+        exp_cfg, model_class, model_config_class = (
+            logoplanner_exp_cfg, LoGoPlannerNet, LoGoPlannerModelConfig
+        )
+    else:
+        from internnav.model.basemodel.memnav.memnav_policy import MemNavModelConfig, MemNavPolicy
+        exp_cfg, model_class, model_config_class = memnav_exp_cfg, MemNavPolicy, MemNavModelConfig
     exp_cfg.name = config.name
     _apply_overrides(exp_cfg, config)
     exp_cfg.num_gpus = len(exp_cfg.torch_gpu_ids)

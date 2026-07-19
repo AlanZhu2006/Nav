@@ -52,7 +52,7 @@ class LingBotStream(nn.Module):
         num_scale=8,
         window=8,
         enable_3d_rope=True,
-        max_frame_num=1024,
+        max_frame_num=4096,
         camera_num_iterations=4,
         use_sdpa=True,
         device="cuda",
@@ -103,6 +103,31 @@ class LingBotStream(nn.Module):
         for p in self.model.parameters():
             p.requires_grad_(False)
 
+        # 3D-RoPE table extension (mirrors precompute build_model): the aggregator
+        # sizes its WanRotaryPosEmbed table to max_frame_num, but the CAMERA HEAD
+        # hardcodes max_seq_len=1024. camera_pose() runs the camera head forward at
+        # the current frame index k (up to ~1917 for long 3leg episodes), so its
+        # table must be extended too or forward() slices past the end and crashes
+        # ("size of tensor a (32) must match b (22)"). Rebuild every rope table whose
+        # max_seq_len < max_frame_num up to max_frame_num; the overlap region is
+        # bit-identical (theta=10000, analytic), so <=1024 behavior is unchanged.
+        from lingbot_map.layers.rope import WanRotaryPosEmbed, get_1d_rotary_pos_embed
+        n_ext = 0
+        for mod in self.model.modules():
+            if isinstance(mod, WanRotaryPosEmbed) and mod.max_seq_len < max_frame_num:
+                t_dim, h_dim, w_dim = mod.fhw_dim
+                old = mod.freqs
+                new = torch.cat([get_1d_rotary_pos_embed(
+                                    d, max_frame_num, 10000.0, use_real=False,
+                                    repeat_interleave_real=False, freqs_dtype=torch.float64)
+                                 for d in (t_dim, h_dim, w_dim)], dim=1)
+                assert torch.allclose(new[:old.shape[0]].to(old.dtype), old.to(new.dtype).to(old.dtype),
+                                      atol=1e-6), "RoPE table rebuild changed the overlap region"
+                mod.freqs = new.to(old.device)
+                mod.max_seq_len = max_frame_num
+                n_ext += 1
+        print(f"[LingBotStream] extended {n_ext} RoPE table(s) to max_frame_num={max_frame_num}")
+
         self.agg = self.model.aggregator
         self.depth = self.agg.depth
 
@@ -137,15 +162,54 @@ class LingBotStream(nn.Module):
     # ------------------------------------------------------------------ #
     # KV-cache injection
     # ------------------------------------------------------------------ #
-    def _inject(self, scale_k, scale_v, anchor_k, anchor_v, n_hist, total_frames):
+    @staticmethod
+    def _prefix_count(frame_indices, raw_frame_exclusive):
+        """Number of sorted sparse KVs whose raw index is before a boundary."""
+        if frame_indices is None:
+            return None
+        if torch.is_tensor(frame_indices):
+            boundary = torch.as_tensor(
+                raw_frame_exclusive,
+                device=frame_indices.device,
+                dtype=frame_indices.dtype,
+            )
+            return int(torch.searchsorted(frame_indices, boundary).item())
+        return int(np.searchsorted(np.asarray(frame_indices), raw_frame_exclusive))
+
+    def _inject(
+        self,
+        scale_k,
+        scale_v,
+        anchor_k,
+        anchor_v,
+        n_hist=None,
+        total_frames=None,
+        *,
+        anchor_frame_indices=None,
+        raw_start=None,
+    ):
         """Populate the SDPA dict cache: scale (full) in k_i, history specials in
         k_i_special. Tensors expected on device, bfloat16.
 
           scale_k/v  : [L, H, num_scale, P, d]
           anchor_k/v : [L, H, n_hist, 6, d]   (history frames [num_scale .. ])
-        Sets total_frames_processed so subsequently-streamed frames get the right
-        temporal index under 3D RoPE.
+        For a versioned sparse cache, ``anchor_frame_indices`` are raw video
+        indices and ``raw_start`` is the first live-recomputed frame.  LingBot's
+        aggregator temporal counter advances only when a KV is appended, so its
+        next index is ``num_scale + number_of_injected_keyframes``.  Legacy dense
+        callers may continue to provide ``n_hist`` and ``total_frames`` directly.
         """
+        if anchor_frame_indices is not None:
+            if raw_start is None:
+                raise ValueError("raw_start is required with anchor_frame_indices")
+            n_hist = self._prefix_count(anchor_frame_indices, int(raw_start))
+            total_frames = self.num_scale + n_hist
+        if n_hist is None or total_frames is None:
+            raise ValueError("cache injection requires history length and temporal index")
+        if not 0 <= int(n_hist) <= int(anchor_k.shape[2]):
+            raise ValueError(
+                f"invalid anchor prefix {n_hist} for {anchor_k.shape[2]} cached rows"
+            )
         self.model.clean_kv_cache()
         kv = self.agg.kv_cache
         for i in range(self.depth):
@@ -156,15 +220,27 @@ class LingBotStream(nn.Module):
                 kv[f"v_{i}_special"] = anchor_v[i, :, :n_hist][None]
         self.agg.total_frames_processed = int(total_frames)
 
-    def _inject_camera(self, cam_k, cam_v, n):
-        """Inject the camera-head KV cache for frames [0..n-1] so the camera head
-        relocalizes a freshly-streamed frame against that history.
-          cam_k/v : [N, NI, TD, H, d] on device (bf16)
-        Sets frame_idx = n (the next streamed frame lands at temporal slot n)."""
+    def _inject_camera(self, cam_k, cam_v, n, cam_frame_indices=None):
+        """Inject camera KVs before raw frame ``n`` and set its raw RoPE time.
+
+        Sparse camera KVs retain their original raw temporal encoding.  Their row
+        count is therefore selected through ``cam_frame_indices < n`` while
+        ``frame_idx`` must still be the raw index ``n``; using the sparse row count
+        as time would silently shift every goal pose.
+        """
         ch = self.model.camera_head
         ch.clean_kv_cache()
         NI, TD = ch.num_iterations, ch.trunk_depth
-        K, V = cam_k[:n], cam_v[:n]                              # [n, NI, TD, H, d]
+        n_cached = (
+            int(n)
+            if cam_frame_indices is None
+            else self._prefix_count(cam_frame_indices, int(n))
+        )
+        if not 0 <= n_cached <= len(cam_k):
+            raise ValueError(
+                f"invalid camera prefix {n_cached} for {len(cam_k)} cached rows"
+            )
+        K, V = cam_k[:n_cached], cam_v[:n_cached]
         cc = []
         for it in range(NI):
             dd = {"_skip_append": False}
@@ -176,13 +252,13 @@ class LingBotStream(nn.Module):
         ch.frame_idx = int(n)
 
     @torch.no_grad()
-    def camera_pose(self, cam_k, cam_v, n, agg_tokens):
+    def camera_pose(self, cam_k, cam_v, n, agg_tokens, cam_frame_indices=None):
         """Absolute camera pose in LingBot's map frame: inject the camera-head cache
         [0..n-1], run the frozen camera head on `agg_tokens` (a frame's aggregated_tokens_list),
         return its accumulated output pose `pred_pose_enc_list[-1]` = [S, 9]
         (absT[3], quaR[4], FoV[2]; the sum of 4 delta-refinement iterations). Current + goal
         poses share the scale-frame anchor → their relative is the revisit/aux-pose signal."""
-        self._inject_camera(cam_k, cam_v, n)
+        self._inject_camera(cam_k, cam_v, n, cam_frame_indices)
         with torch.autocast("cuda", dtype=torch.bfloat16):
             pose_list = self.model.camera_head(agg_tokens, causal_inference=True,
                                                num_frame_per_block=1, num_frame_for_scale=self.num_scale)
@@ -271,9 +347,18 @@ class LingBotStream(nn.Module):
         return_multilayer, also returns (cur_agg, patch_start_idx) for the depth head.
         """
         W = self.window
-        n_hist = (k - W + 1) - self.num_scale     # frames [num_scale .. k-W] kept as specials
-        self._inject(cache["scale_k"], cache["scale_v"], cache["anchor_k"], cache["anchor_v"],
-                     n_hist=max(0, n_hist), total_frames=k - W + 1)
+        raw_start = k - W + 1
+        anchor_indices = cache.get("anchor_frame_indices")
+        if anchor_indices is None:
+            self._inject(
+                cache["scale_k"], cache["scale_v"], cache["anchor_k"], cache["anchor_v"],
+                n_hist=max(0, raw_start - self.num_scale), total_frames=raw_start,
+            )
+        else:
+            self._inject(
+                cache["scale_k"], cache["scale_v"], cache["anchor_k"], cache["anchor_v"],
+                anchor_frame_indices=anchor_indices, raw_start=raw_start,
+            )
         outs = []
         with torch.autocast("cuda", dtype=torch.bfloat16):
             for j in range(W):
@@ -339,6 +424,54 @@ class LingBotStream(nn.Module):
             # recompute [m-W+1..m] (leaves the cache at [0..m], counter = m+1)
             self.window_forward(cache, match_window_imgs, int(match_idx))
         return self._stream_one(goal_img, return_agg=return_agg)   # goal at time (m+1) or (k+1)
+
+    @torch.no_grad()
+    def goal_append_warm(self, goal_img, cache, m, rgb_dir, warm, return_agg=False):
+        """Like goal_append's revisit path, but optionally recomputes a warm-up window
+        ``[max(num_scale, m-warm+1) .. m]`` instead of just the nominal ``self.window``
+        frames, before streaming the goal at ``m+1``.
+
+        ``warm=0`` is the exact sparse-stream control: inject every cached
+        keyframe through raw frame ``m`` and append the goal without adding a
+        dense local replay.  Positive values implement the hybrid global-sparse /
+        local-dense memory used by MemNav.
+
+        window_forward's cold start at the nominal window boundary starves the goal's pose
+        estimate — the first live-recomputed frame (and everything causally downstream of
+        it, including the goal) has no real predecessors, only the injected specials-only
+        history. Empirically (scripts/diag_lingbot_pose_accuracy.py's goal-insertion test,
+        comparing against a true continuous-stream oracle and the goal's real GT position)
+        ``warm=64`` closes this gap almost entirely — matches oracle to within noise, while
+        ``warm=32`` (the nominal window) leaves ~30% avoidable error on the table and
+        ``warm=128`` buys nothing further. Cost is fixed at `warm` frames regardless of how
+        deep `m` is, unlike replaying the whole trajectory.
+        """
+        warm = int(warm)
+        if warm < 0:
+            raise ValueError(f"goal warm-up must be non-negative, got {warm}")
+        start = m + 1 if warm == 0 else max(self.num_scale, m - warm + 1)
+        anchor_indices = cache.get("anchor_frame_indices")
+        if anchor_indices is None:
+            self._inject(
+                cache["scale_k"], cache["scale_v"], cache["anchor_k"], cache["anchor_v"],
+                n_hist=start - self.num_scale, total_frames=start,
+            )
+        else:
+            self._inject(
+                cache["scale_k"], cache["scale_v"], cache["anchor_k"], cache["anchor_v"],
+                anchor_frame_indices=anchor_indices, raw_start=start,
+            )
+        if warm:
+            imgs = self.load_images(
+                [os.path.join(rgb_dir, f"{i}.jpg") for i in range(start, m + 1)]
+            )
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                for j in range(len(imgs)):
+                    self.model._aggregate_features(
+                        imgs[j:j + 1][None].to(self.device),
+                        num_frame_for_scale=self.num_scale, num_frame_per_block=1,
+                    )
+        return self._stream_one(goal_img, return_agg=return_agg)   # goal at time m+1
 
     # ------------------------------------------------------------------ #
     # context-free DINOv2 (retrieval / matching space)

@@ -1,0 +1,117 @@
+#!/bin/bash
+#SBATCH --job-name=lingbot_precompute_pt1
+#SBATCH --output=logs/mp3d_gen/precomp-%A_%a.out
+#SBATCH --error=logs/mp3d_gen/precomp-%A_%a.err
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=12:00:00
+#SBATCH --account=torch_pr_769_tandon_advanced
+#SBATCH --partition=h100_tandon,h200_tandon
+#SBATCH --gres=gpu:1
+#SBATCH --export=ALL
+# REQUIRED: complete scripts/train_memnav/README.md before every sbatch submission.
+#
+# Precompute frozen LingBot-Map KV caches for the PACKED mp3d 0-53 scenes.
+# Frames live in a read-only squashfs (pt1.sqf). We mount it the NYU-supported way:
+#   apptainer exec --overlay pt1.sqf:ro <base.sif>
+# Inside the container the tree appears at /mp3d_revisit_v0/vln_n1/traj_data (that is how the
+# image was packed with -keep-as-directory). We READ frames from there and WRITE caches to a
+# SEPARATE writable tree on host /scratch (--out_root), which is bind-mounted rw (the overlay
+# is :ro, so writes land on the real filesystem, not the image).
+# --skip_scale drops the ~1.08 GB/traj scale KV (policy recomputes it on GPU from the first 8
+# frames); the cache holds only dino_cls + anchor_k/v + cam_k/v.
+#
+# NOTE for training later: run training inside the SAME overlay so rgb paths resolve, i.e.
+#   root_dirs=/mp3d_revisit_v0/vln_n1/traj_data  (in-container overlay path)
+#   feature_root=/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data (host)
+#
+# Submit (from InternNav/, or with the full path shown):
+#   smoke (2 trajs, 1 shard):  sbatch --array=0 --export=ALL,NUM_SHARDS=1,LIMIT=2 scripts/train_memnav/precompute_mp3d_pt1.sbatch
+#   full  (8-way shard):       sbatch --array=0-7%8 --export=ALL,NUM_SHARDS=8 scripts/train_memnav/precompute_mp3d_pt1.sbatch
+# Idempotent (skips a traj whose out npz already exists), so re-submit fills gaps.
+set -euo pipefail
+
+export NUM_SHARDS="${NUM_SHARDS:-1}"
+export LIMIT="${LIMIT:-0}"
+export SHARD="${SLURM_ARRAY_TASK_ID:-0}"
+export MAX_FRAME_NUM="${MAX_FRAME_NUM:-4096}"
+export TRAJECTORY_LIST="${TRAJECTORY_LIST:-}"
+export AUTO_KEYFRAME_INTERVAL="${AUTO_KEYFRAME_INTERVAL:-0}"
+export KEYFRAME_BUDGET="${KEYFRAME_BUDGET:-320}"
+export EXPECTED_CODE_COMMIT="${EXPECTED_CODE_COMMIT:-}"
+
+IMG=${IMG:-/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf}
+BASE_SIF=${BASE_SIF:-/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif}
+export ROOT_DIRS=${ROOT_DIRS:-/mp3d_revisit_v0/vln_n1/traj_data}  # in-container overlay path
+export OUT_ROOT=${OUT_ROOT:-/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data}
+export LINGBOT_REPO=${LINGBOT_REPO:-/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map}
+export WEIGHTS=${WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
+export REPO_ROOT=${REPO_ROOT:-/scratch/lg154/Research/Nav/InternNav}
+export CONDA_SH=${CONDA_SH:-/scratch/lg154/miniconda3/etc/profile.d/conda.sh}
+export CONDA_ENV=${CONDA_ENV:-/scratch/lg154/conda-envs/memnav}
+
+echo "host: $(hostname); shard ${SHARD}/${NUM_SHARDS}; limit=${LIMIT}; auto_keyframes=${AUTO_KEYFRAME_INTERVAL}; keyframe_budget=${KEYFRAME_BUDGET}; start: $(date)"
+mkdir -p "${OUT_ROOT}"
+
+apptainer exec --nv \
+    --overlay "${IMG}:ro" \
+    -B /scratch \
+    "${BASE_SIF}" \
+    bash -c '
+        set -euo pipefail
+        ls "${ROOT_DIRS}" >/dev/null || { echo "ABORT: overlay missing ${ROOT_DIRS}"; exit 1; }
+        source "${CONDA_SH}"
+        conda activate "${CONDA_ENV}"
+        cd "${REPO_ROOT}"
+        [[ -z "$(git status --porcelain --untracked-files=no)" ]] || {
+            echo "ABORT: deployed InternNav has tracked modifications" >&2; exit 1;
+        }
+        [[ -z "$(git -C "${LINGBOT_REPO}" status --porcelain --untracked-files=no)" ]] || {
+            echo "ABORT: LingBot checkout has tracked modifications" >&2; exit 1;
+        }
+        ACTUAL_CODE_COMMIT=$(git rev-parse HEAD)
+        if [[ "${AUTO_KEYFRAME_INTERVAL}" == "1" && -z "${EXPECTED_CODE_COMMIT}" ]]; then
+            echo "ABORT: sparse precompute requires EXPECTED_CODE_COMMIT" >&2
+            exit 1
+        fi
+        if [[ -n "${EXPECTED_CODE_COMMIT}" && "${ACTUAL_CODE_COMMIT}" != "${EXPECTED_CODE_COMMIT}" ]]; then
+            echo "ABORT: deployed commit ${ACTUAL_CODE_COMMIT} != expected ${EXPECTED_CODE_COMMIT}" >&2
+            exit 1
+        fi
+        echo "code_commit=${ACTUAL_CODE_COMMIT} lingbot_commit=$(git -C "${LINGBOT_REPO}" rev-parse HEAD)"
+        extra_args=()
+        if [[ -n "${TRAJECTORY_LIST}" ]]; then
+            [[ -f "${TRAJECTORY_LIST}" ]] || { echo "ABORT: trajectory list missing ${TRAJECTORY_LIST}"; exit 1; }
+            extra_args+=(--trajectory_list "${TRAJECTORY_LIST}")
+        fi
+        keyframe_args=()
+        if [[ "${AUTO_KEYFRAME_INTERVAL}" == "1" ]]; then
+            keyframe_args+=(--auto_keyframe_interval --keyframe_budget "${KEYFRAME_BUDGET}")
+        elif [[ "${AUTO_KEYFRAME_INTERVAL}" != "0" ]]; then
+            echo "ABORT: AUTO_KEYFRAME_INTERVAL must be 0 or 1" >&2
+            exit 1
+        fi
+        python - <<PY
+import sys
+sys.path.insert(0, "${LINGBOT_REPO}")
+from lingbot_map.models.gct_stream import GCTStream
+assert hasattr(GCTStream, "_set_skip_append"), "LingBot lacks sparse-cache support"
+print("LingBot sparse-cache dependency: OK")
+PY
+        python scripts/dataset_converters/precompute_lingbot_features.py \
+            --root_dirs "${ROOT_DIRS}" \
+            --out_root  "${OUT_ROOT}" \
+            --lingbot_repo "${LINGBOT_REPO}" \
+            --weights "${WEIGHTS}" \
+            --skip_scale --use_sdpa \
+            --kv_cache_sliding_window 32 \
+            --max_frame_num "${MAX_FRAME_NUM}" \
+            --num_shards "${NUM_SHARDS}" --shard "${SHARD}" \
+            --limit "${LIMIT}" \
+            "${keyframe_args[@]}" \
+            "${extra_args[@]}"
+    '
+
+echo "=== shard ${SHARD} done: $(date) ==="

@@ -43,6 +43,11 @@
 #   RESUME_FROM_CHECKPOINT=auto
 #   MEMNAV_MAX_TRAIN_STEPS=-1  (-1 = epoch-based; positive = bounded smoke)
 #   MEMNAV_SAVE_STEPS=25
+#   MEMNAV_SAMPLING_MODE=random_leg (set decision_curriculum for the opt-in arm)
+#   MEMNAV_DECISION_CURRICULUM_PROB=0.5
+#   MEMNAV_DECISION_LOOKAHEAD_FRAMES=16
+#   MEMNAV_DECISION_MIN_REMAINING_FRAMES=128
+#   MEMNAV_DECISION_MIN_ANGLE_DEG=45.0
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
 #   MEMNAV_W_AUX_DIRECTION=0.2
 #   MEMNAV_W_AUX_RANGE=0.0   (default-off experimental range supervision)
@@ -88,6 +93,10 @@ export MEMNAV_DATA_SPLIT=${MEMNAV_DATA_SPLIT:-train}
 export MEMNAV_VALIDATION_FRACTION=${MEMNAV_VALIDATION_FRACTION:-0.1}
 export MEMNAV_SPLIT_SEED=${MEMNAV_SPLIT_SEED:-0}
 export MEMNAV_SAMPLING_MODE=${MEMNAV_SAMPLING_MODE:-random_leg}
+export MEMNAV_DECISION_CURRICULUM_PROB=${MEMNAV_DECISION_CURRICULUM_PROB:-0.5}
+export MEMNAV_DECISION_LOOKAHEAD_FRAMES=${MEMNAV_DECISION_LOOKAHEAD_FRAMES:-16}
+export MEMNAV_DECISION_MIN_REMAINING_FRAMES=${MEMNAV_DECISION_MIN_REMAINING_FRAMES:-128}
+export MEMNAV_DECISION_MIN_ANGLE_DEG=${MEMNAV_DECISION_MIN_ANGLE_DEG:-45.0}
 
 # training knobs
 export NAME=${NAME:-memnav_correctness}
@@ -196,6 +205,7 @@ apptainer exec --nv \
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"
         echo "strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE} require_versioned_cache=${MEMNAV_REQUIRE_VERSIONED_CACHE} expected_cache_signature=${MEMNAV_EXPECTED_CACHE_SIGNATURE} expected_code_commit=${MEMNAV_EXPECTED_CODE_COMMIT} require_pose_marker=${MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION}"
+        echo "sampling=${MEMNAV_SAMPLING_MODE} decision_prob=${MEMNAV_DECISION_CURRICULUM_PROB} decision_lookahead=${MEMNAV_DECISION_LOOKAHEAD_FRAMES} decision_min_remaining=${MEMNAV_DECISION_MIN_REMAINING_FRAMES} decision_min_angle_deg=${MEMNAV_DECISION_MIN_ANGLE_DEG}"
         echo "aux_direction_weight=${MEMNAV_W_AUX_DIRECTION} aux_range_weight=${MEMNAV_W_AUX_RANGE} aux_range_beta=${MEMNAV_AUX_RANGE_BETA} aux_range_grad_cap_ratio=${MEMNAV_AUX_RANGE_GRAD_CAP_RATIO} anchor_tf=${MEMNAV_ANCHOR_TF_START}->${MEMNAV_ANCHOR_TF_END}@${MEMNAV_ANCHOR_TF_DECAY_STEPS}"
         echo "pose_scale_window=${MEMNAV_POSE_SCALE_WINDOW} pose_rel_conditioning=${MEMNAV_USE_POSE_RELIABILITY_CONDITIONING} pose_rel_weight=${MEMNAV_W_POSE_RELIABILITY} pose_rel_hidden=${MEMNAV_POSE_RELIABILITY_HIDDEN} pose_rel_init=${MEMNAV_POSE_RELIABILITY_INIT} pose_rel_lr_mult=${MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER}"
         echo "dino_weights=${MEMNAV_DINO_WEIGHTS}"

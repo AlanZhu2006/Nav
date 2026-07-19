@@ -137,6 +137,102 @@ class MemNavInputCoverageTest(unittest.TestCase):
         )
         self.assertTrue(all(np.isnan(value) for value in missing))
 
+    def test_decision_curriculum_detects_long_route_disagreement(self):
+        extrinsics = np.repeat(np.eye(4)[None], 129, axis=0)
+        # At k=0 the short route initially goes left, while the endpoint is to
+        # the right: an unambiguous 180-degree long-horizon decision point.
+        extrinsics[16, 0, 3] = -1.0
+        extrinsics[128, 0, 3] = 1.0
+        hard = MemNav_Dataset._decision_curriculum_candidates(
+            extrinsics,
+            0,
+            0,
+            128,
+            lookahead_frames=16,
+            min_remaining_frames=128,
+            min_angle_deg=45.0,
+        )
+        np.testing.assert_array_equal(hard, [0])
+
+        extrinsics[16, 0, 3] = 0.5
+        easy = MemNav_Dataset._decision_curriculum_candidates(
+            extrinsics,
+            0,
+            0,
+            128,
+            lookahead_frames=16,
+            min_remaining_frames=128,
+            min_angle_deg=45.0,
+        )
+        self.assertEqual(len(easy), 0)
+
+    def test_decision_curriculum_is_opt_in_and_falls_back_to_uniform(self):
+        dataset = object.__new__(MemNav_Dataset)
+        dataset.sampling_mode = 'decision_curriculum'
+        dataset.decision_curriculum_prob = 1.0
+        dataset.decision_lookahead_frames = 16
+        dataset.decision_min_remaining_frames = 128
+        dataset.decision_min_angle_deg = 45.0
+        dataset.random_digit = False
+        dataset.pred_digit = 4
+        sample = {'goal_step': 128}
+        extrinsics = np.repeat(np.eye(4)[None], 129, axis=0)
+        extrinsics[16, 0, 3] = -1.0
+        extrinsics[128, 0, 3] = 1.0
+        k, digit = dataset._sample_k_and_digit(
+            sample, 0, 0, extrinsics=extrinsics
+        )
+        self.assertEqual((k, digit), (0, 4))
+
+        with self.assertRaisesRegex(ValueError, 'requires trajectory extrinsics'):
+            dataset._sample_k_and_digit(sample, 0, 0)
+
+    def test_dormant_curriculum_knobs_preserve_legacy_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'raw'
+            features = Path(tmp) / 'features'
+            episode = _source_episode(root)
+            feature_dir = (
+                features / episode.relative_to(root) / 'videos/chunk-000'
+            )
+            feature_dir.mkdir(parents=True)
+            (feature_dir / 'lingbot_cache.npz').touch()
+            (feature_dir / 'lingbot_cam_cache.npz').touch()
+
+            common = dict(
+                feature_root=features,
+                strict_feature_coverage=True,
+                sampling_mode='fixed_leg',
+            )
+            legacy = MemNav_Dataset(
+                root,
+                decision_curriculum_prob=0.5,
+                decision_min_angle_deg=45.0,
+                **common,
+            )
+            dormant_changed = MemNav_Dataset(
+                root,
+                decision_curriculum_prob=1.0,
+                decision_min_angle_deg=120.0,
+                **common,
+            )
+            self.assertEqual(
+                legacy.dataset_fingerprint,
+                dormant_changed.dataset_fingerprint,
+            )
+
+            enabled = MemNav_Dataset(
+                root,
+                feature_root=features,
+                strict_feature_coverage=True,
+                sampling_mode='decision_curriculum',
+                decision_curriculum_prob=0.5,
+                decision_min_angle_deg=45.0,
+            )
+            self.assertNotEqual(
+                legacy.dataset_fingerprint, enabled.dataset_fingerprint
+            )
+
     def test_strict_coverage_requires_both_lingbot_caches(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'raw'

@@ -107,6 +107,17 @@ MEMNAV_DINO_WEIGHTS
   恶化 `32.44%`，且只有 3/64 paired 样本改善；该配置已被拒绝，range loss 必须
   继续默认关闭。后续任务不得复用 `0.25` 作为推荐值，除非先完成新的本机 paired
   验证并建立不会由 auxiliary 直接改写 action 表示的隔离结构。
+- Long-route decision curriculum 是独立、默认关闭的数据采样实验。只有显式设置
+  `MEMNAV_SAMPLING_MODE=decision_curriculum` 才启用；默认 `random_leg` 和固定验证集
+  的采样及 fingerprint 与旧 checkpoint 保持一致。默认候选定义为：距目标至少
+  128 帧，且当前到未来 16 帧的近程位移方向与当前到最终目标的直线方向相差至少
+  45 度；有候选的 goal-sample 以 0.5 概率从候选池均匀抽 k，否则沿用原均匀采样。
+  该定义只读取训练标签选择 k，不进入模型输入，推理不需要未来轨迹。必须记录：
+  `MEMNAV_DECISION_CURRICULUM_PROB`、`MEMNAV_DECISION_LOOKAHEAD_FRAMES`、
+  `MEMNAV_DECISION_MIN_REMAINING_FRAMES`、`MEMNAV_DECISION_MIN_ANGLE_DEG`，以及 W&B 的
+  `decision_hard_fraction`、`decision_route_angle_deg`、
+  `action_loss_decision_hard/easy`。本机完整协议和结论边界见
+  [`runs/2026-07-20-long-decision-curriculum-local.md`](runs/2026-07-20-long-decision-curriculum-local.md)。
 - 预计算必须同时满足应用日志 `errors=0` 和 Slurm
   `COMPLETED, ExitCode=0:0`；脚本捕获错误后继续运行不算成功。
 - stdout、checkpoint、W&B 和诊断输出目录必须在 `sbatch` 前存在且可写，

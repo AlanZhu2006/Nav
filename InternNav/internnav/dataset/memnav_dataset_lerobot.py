@@ -151,6 +151,10 @@ class MemNav_Dataset(NavDP_Base_Datset):
         split_seed=0,
         sampling_mode='random_leg',
         sampling_seed=0,
+        decision_curriculum_prob=0.5,
+        decision_lookahead_frames=16,
+        decision_min_remaining_frames=128,
+        decision_min_angle_deg=45.0,
         rgb_subdir='videos/chunk-000/observation.images.rgb',
         meta_filename='meta/gen_meta.json',
         lingbot_repo='/home/asus/Research/Nav/NavDP/baselines/memnav/lingbot-map',
@@ -210,15 +214,32 @@ class MemNav_Dataset(NavDP_Base_Datset):
             raise ValueError(f"data_split must be all/train/val, got {data_split!r}")
         if not 0.0 < float(validation_fraction) < 1.0:
             raise ValueError('validation_fraction must be strictly between 0 and 1')
-        if sampling_mode not in {'random_leg', 'fixed_leg'}:
+        if sampling_mode not in {
+            'random_leg', 'fixed_leg', 'decision_curriculum'
+        }:
             raise ValueError(
-                f"sampling_mode must be random_leg/fixed_leg, got {sampling_mode!r}"
+                'sampling_mode must be random_leg/fixed_leg/'
+                f"decision_curriculum, got {sampling_mode!r}"
             )
+        if not 0.0 <= float(decision_curriculum_prob) <= 1.0:
+            raise ValueError('decision_curriculum_prob must be in [0, 1]')
+        if int(decision_lookahead_frames) < 1:
+            raise ValueError('decision_lookahead_frames must be positive')
+        if int(decision_min_remaining_frames) < 1:
+            raise ValueError('decision_min_remaining_frames must be positive')
+        if not 0.0 <= float(decision_min_angle_deg) <= 180.0:
+            raise ValueError('decision_min_angle_deg must be in [0, 180]')
         self.data_split = data_split
         self.validation_fraction = float(validation_fraction)
         self.split_seed = int(split_seed)
         self.sampling_mode = sampling_mode
         self.sampling_seed = int(sampling_seed)
+        self.decision_curriculum_prob = float(decision_curriculum_prob)
+        self.decision_lookahead_frames = int(decision_lookahead_frames)
+        self.decision_min_remaining_frames = int(
+            decision_min_remaining_frames
+        )
+        self.decision_min_angle_deg = float(decision_min_angle_deg)
         self.rgb_subdir = rgb_subdir
         self.batch_size = batch_size
         self.debug = debug
@@ -469,6 +490,20 @@ class MemNav_Dataset(NavDP_Base_Datset):
             'require_versioned_cache': self.require_versioned_cache,
             'expected_cache_signature': self.expected_cache_signature,
         }
+        # Keep the default random/fixed dataset identity byte-for-byte compatible
+        # with checkpoints written before the opt-in curriculum existed. Dormant
+        # knobs cannot change selection or labels, so including them would create
+        # a false resume incompatibility. Once enabled, every curriculum knob is
+        # part of the sampling contract.
+        if self.sampling_mode == 'decision_curriculum':
+            fingerprint_config.update({
+                'decision_curriculum_prob': self.decision_curriculum_prob,
+                'decision_lookahead_frames': self.decision_lookahead_frames,
+                'decision_min_remaining_frames': (
+                    self.decision_min_remaining_frames
+                ),
+                'decision_min_angle_deg': self.decision_min_angle_deg,
+            })
         fingerprint_payload = (
             json.dumps(fingerprint_config, sort_keys=True, separators=(',', ':'))
             + '\n'
@@ -563,8 +598,81 @@ class MemNav_Dataset(NavDP_Base_Datset):
     def __len__(self):
         return len(self.samples) * self.repeat
 
-    def _sample_k_and_digit(self, sample, k_lo, k_hi):
-        """Choose temporal position; fixed mode is host-path-independent."""
+    @staticmethod
+    def _decision_curriculum_candidates(
+        extrinsics,
+        k_lo,
+        k_hi,
+        goal_step,
+        *,
+        lookahead_frames,
+        min_remaining_frames,
+        min_angle_deg,
+    ):
+        """Return training positions where the local route is goal-dependent.
+
+        The score is label-side curriculum metadata only; it never enters the
+        policy.  A row is hard when it is still long-range and the displacement
+        over the next short lookahead differs substantially from the straight
+        endpoint bearing.  The angle is measured in the stored ground plane and
+        is invariant to the later NavDP local-frame rotation.
+        """
+        extrinsics = np.asarray(extrinsics)
+        goal_step = min(int(goal_step), len(extrinsics) - 1)
+        k_lo = max(0, int(k_lo))
+        k_hi = min(int(k_hi), goal_step - 1)
+        if k_hi < k_lo:
+            return np.empty(0, dtype=np.int64)
+        positions = extrinsics[:, :2, 3]
+        candidates = np.arange(k_lo, k_hi + 1, dtype=np.int64)
+        lookahead = np.minimum(
+            candidates + int(lookahead_frames), goal_step
+        )
+        local = positions[lookahead] - positions[candidates]
+        endpoint = positions[goal_step] - positions[candidates]
+        denominator = (
+            np.linalg.norm(local, axis=-1)
+            * np.linalg.norm(endpoint, axis=-1)
+        )
+        cosine = np.ones_like(denominator, dtype=np.float64)
+        valid = np.isfinite(denominator) & (denominator > 1e-9)
+        cosine[valid] = (
+            (local[valid] * endpoint[valid]).sum(-1)
+            / denominator[valid]
+        )
+        angle = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+        hard = (
+            (goal_step - candidates >= int(min_remaining_frames))
+            & (angle >= float(min_angle_deg))
+        )
+        return candidates[hard]
+
+    @staticmethod
+    def _decision_route_angle_deg(
+        extrinsics, k, goal_step, *, lookahead_frames
+    ):
+        """Angle between near-term route motion and straight endpoint bearing."""
+        extrinsics = np.asarray(extrinsics)
+        k = int(k)
+        goal_step = min(int(goal_step), len(extrinsics) - 1)
+        lookahead = min(k + int(lookahead_frames), goal_step)
+        positions = extrinsics[:, :2, 3]
+        local = positions[lookahead] - positions[k]
+        endpoint = positions[goal_step] - positions[k]
+        denominator = float(np.linalg.norm(local) * np.linalg.norm(endpoint))
+        if not np.isfinite(denominator) or denominator <= 1e-9:
+            return 0.0
+        cosine = float(np.dot(local, endpoint) / denominator)
+        return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+    def _sample_k_and_digit(self, sample, k_lo, k_hi, extrinsics=None):
+        """Choose temporal position; fixed mode is host-path-independent.
+
+        ``decision_curriculum`` is an opt-in training-only mixture.  It retains
+        the old uniform draw, but with configured probability draws from long
+        decision points when the current goal-sample contains any.  Fixed eval
+        never uses future trajectory geometry and remains bit-for-bit unchanged.
+        """
         if self.sampling_mode == 'fixed_leg':
             identity = f"{self.sampling_seed}:{sample['sample_identity']}"
             sample_seed = int.from_bytes(
@@ -573,6 +681,33 @@ class MemNav_Dataset(NavDP_Base_Datset):
             rng = np.random.default_rng(sample_seed)
             k = int(rng.integers(k_lo, k_hi + 1))
             pred_digit = int(rng.integers(2, 8)) if self.random_digit else self.pred_digit
+        elif self.sampling_mode == 'decision_curriculum':
+            if extrinsics is None:
+                raise ValueError(
+                    'decision_curriculum sampling requires trajectory extrinsics'
+                )
+            hard = self._decision_curriculum_candidates(
+                extrinsics,
+                k_lo,
+                k_hi,
+                sample['goal_step'],
+                lookahead_frames=self.decision_lookahead_frames,
+                min_remaining_frames=self.decision_min_remaining_frames,
+                min_angle_deg=self.decision_min_angle_deg,
+            )
+            use_hard = (
+                len(hard) > 0
+                and np.random.random() < self.decision_curriculum_prob
+            )
+            k = (
+                int(hard[np.random.randint(len(hard))])
+                if use_hard
+                else int(np.random.randint(k_lo, k_hi + 1))
+            )
+            pred_digit = (
+                np.random.randint(2, 8)
+                if self.random_digit else self.pred_digit
+            )
         else:
             k = int(np.random.randint(k_lo, k_hi + 1))
             pred_digit = np.random.randint(2, 8) if self.random_digit else self.pred_digit
@@ -739,7 +874,19 @@ class MemNav_Dataset(NavDP_Base_Datset):
         # --- sample the current step k inside the goal's own leg [k_lo .. k_hi] ---
         k_hi = min(int(s['k_hi']), goal_step - 1, T - 2)   # keep >=1 forward frame + defensive
         k_lo = min(int(s['k_lo']), k_hi)
-        k, pred_digit = self._sample_k_and_digit(s, k_lo, k_hi)
+        k, pred_digit = self._sample_k_and_digit(
+            s, k_lo, k_hi, extrinsics=extrinsics
+        )
+        decision_route_angle_deg = self._decision_route_angle_deg(
+            extrinsics,
+            k,
+            goal_step,
+            lookahead_frames=self.decision_lookahead_frames,
+        )
+        decision_curriculum_hard = bool(
+            goal_step - k >= self.decision_min_remaining_frames
+            and decision_route_angle_deg >= self.decision_min_angle_deg
+        )
 
         # --- retrieval keys: CLS of every observed frame [0..k] ---
         mem_cls = dino_cls[: k + 1].copy()                 # [k+1, 1024]
@@ -800,6 +947,14 @@ class MemNav_Dataset(NavDP_Base_Datset):
             'rgb_dir': rgb_dir,
             'cur_step': int(k),
             'goal_step': int(goal_step),
+            # Training-curriculum diagnostics only.  These are computed from
+            # labels after k is chosen and never enter any policy input.
+            'decision_route_angle_deg': torch.tensor(
+                decision_route_angle_deg, dtype=torch.float32
+            ),
+            'decision_curriculum_hard': torch.tensor(
+                decision_curriculum_hard, dtype=torch.bool
+            ),
             # Diagnostic metadata.  None of these fields enter the policy or loss;
             # they prevent a small number of long C-leg samples from being hidden
             # inside a single aggregate aux/action number.
@@ -904,6 +1059,12 @@ def memnav_collate_fn(batch):
         'rgb_dirs':              [b['rgb_dir'] for b in batch],
         'cur_steps':             [b['cur_step'] for b in batch],
         'goal_steps':            [b['goal_step'] for b in batch],
+        'batch_decision_route_angle_deg': torch.stack([
+            b['decision_route_angle_deg'] for b in batch
+        ]),
+        'batch_decision_curriculum_hard': torch.stack([
+            b['decision_curriculum_hard'] for b in batch
+        ]),
         # Offline stratification metadata (never consumed by the policy loss).
         'batch_goal_j':          torch.tensor([b['goal_j'] for b in batch], dtype=torch.long),
         'goal_labels':           [b['goal_label'] for b in batch],

@@ -264,6 +264,12 @@ normalized independently before concatenation.
   subset builder and fingerprint, so checkpoint comparisons cannot silently use
   different 16-sample populations. It is explicitly not a closed-loop Habitat
   navigation score.
+- `scripts/eval/compare_memnav_offline.py` compares two retained per-sample
+  reports only after their evaluator commit, data/cache fingerprints, sample
+  indices, seeds, DDPM protocol and per-row identities all match. It reports
+  paired deltas and bootstrap intervals for overall, 2/3-leg, Goal C,
+  long-span and hard-turn slices; a mismatched experiment fails closed instead
+  of producing an apparently paired table.
 - Trainer/W&B mirrors the important strata without changing the objective:
   action and gate by goal A/B/C, plus revisit aux direction/x/y by goal type,
   teacher-forced anchor-gap bin, and remaining-path-span bin. Every bin includes
@@ -284,6 +290,7 @@ normalized independently before concatenation.
 | `internnav/model/basemodel/memnav/retrieval_head.py` | separately testable projected ranking and normalized/calibrated raw-cosine revisit gate |
 | `internnav/model/basemodel/memnav/metrics.py` | deterministic per-sample, B/C/time-stratified, and paired full-diffusion diagnostics |
 | `scripts/eval/eval_memnav_offline.py` | strict fixed-split evaluator with optional oracle-positive and full-DDPM goal-shuffle passes |
+| `scripts/eval/compare_memnav_offline.py` | fail-closed paired comparison with long-route strata and bootstrap confidence intervals |
 | `scripts/diag_lingbot_pose_accuracy.py` | new diagnostic harness (GT vs. official-continuous-stream vs. ours; `warm_forward`/`warm_goal_pose`/`oracle_goal_pose`) used to find and validate all of the above |
 
 ## 4. Open items

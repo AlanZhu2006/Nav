@@ -669,6 +669,35 @@ class MemNavTrainer(BaseTrainer):
             # These diagnostics never enter the loss; they expose goal type and
             # temporal support together with an explicit support fraction.
             per_sample_action = action_sq.mean(dim=(1, 2))
+            decision_angle = inputs.get('batch_decision_route_angle_deg')
+            decision_hard = inputs.get('batch_decision_curriculum_hard')
+            if decision_angle is not None and decision_hard is not None:
+                decision_angle = decision_angle.to(dev)
+                decision_hard = decision_hard.to(dev).bool()
+                hard_count = decision_hard.float().sum()
+                easy_count = (~decision_hard).float().sum()
+                stratified_accumulations.extend([
+                    (
+                        'decision_hard_fraction',
+                        hard_count / B,
+                        B,
+                    ),
+                    (
+                        'decision_route_angle_deg',
+                        decision_angle.mean(),
+                        B,
+                    ),
+                    (
+                        'action_loss_decision_hard',
+                        self._masked_mean(per_sample_action, decision_hard),
+                        hard_count,
+                    ),
+                    (
+                        'action_loss_decision_easy',
+                        self._masked_mean(per_sample_action, ~decision_hard),
+                        easy_count,
+                    ),
+                ])
             goal_j = inputs.get('batch_goal_j')
             if goal_j is not None:
                 goal_j = goal_j.to(dev)

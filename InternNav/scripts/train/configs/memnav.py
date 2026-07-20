@@ -112,6 +112,21 @@ memnav_exp_cfg = ExpCfg(
         split_seed=_SPLIT_SEED,
         sampling_mode=os.environ.get('MEMNAV_SAMPLING_MODE', 'random_leg'),
         sampling_seed=int(os.environ.get('MEMNAV_SAMPLING_SEED', '0')),
+        # Training-only long-route decision curriculum.  It remains dormant
+        # unless MEMNAV_SAMPLING_MODE=decision_curriculum; fixed validation and
+        # inference never consume future trajectory geometry.
+        decision_curriculum_prob=float(
+            os.environ.get('MEMNAV_DECISION_CURRICULUM_PROB', '0.5')
+        ),
+        decision_lookahead_frames=int(
+            os.environ.get('MEMNAV_DECISION_LOOKAHEAD_FRAMES', '16')
+        ),
+        decision_min_remaining_frames=int(
+            os.environ.get('MEMNAV_DECISION_MIN_REMAINING_FRAMES', '128')
+        ),
+        decision_min_angle_deg=float(
+            os.environ.get('MEMNAV_DECISION_MIN_ANGLE_DEG', '45.0')
+        ),
         lingbot_repo=_LINGBOT_REPO,
         lingbot_weights=_LINGBOT_WEIGHTS,
         # Required pretrained initialization for the trainable six-channel

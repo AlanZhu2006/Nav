@@ -193,6 +193,8 @@ def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
     leg_starts = batch.get('leg_starts') or [None] * logits.shape[0]
     goal_js = batch.get('batch_goal_j')
     has_covis = batch.get('batch_has_covis')
+    decision_angles = batch.get('batch_decision_route_angle_deg')
+    decision_hard = batch.get('batch_decision_curriculum_hard')
     records = []
     for index in range(logits.shape[0]):
         if bool(selected_positive[index]):
@@ -216,6 +218,14 @@ def compute_memnav_batch_records(outputs, batch, oracle_outputs=None):
             'remaining_path_span': (
                 int(goal_steps[index]) - int(cur_steps[index])
                 if goal_steps[index] is not None else None
+            ),
+            'decision_route_angle_deg': (
+                float(decision_angles[index].item())
+                if decision_angles is not None else None
+            ),
+            'decision_curriculum_hard': (
+                bool(decision_hard[index].item())
+                if decision_hard is not None else None
             ),
             'is_revisit': bool(revisit[index]),
             'num_candidates': int(candidate[index].sum().item()),

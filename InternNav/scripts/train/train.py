@@ -11,7 +11,7 @@ from typing import Optional
 import torch
 import tyro
 from pydantic import BaseModel
-from transformers import TrainerCallback, TrainingArguments
+from transformers import TrainerCallback, TrainingArguments, set_seed
 
 from internnav.model.utils.logger import MyLogger
 from internnav.model.utils.utils import load_dataset
@@ -163,6 +163,15 @@ def main(config, model_class, model_config_class):
         else:
             print("Distributed NOT initialized")
 
+        # ``Trainer`` seeds RNGs in its constructor, but this repository builds
+        # the policy before constructing Trainer.  Without an explicit seed
+        # here, every nominally controlled fresh run starts from different
+        # randomly initialized trainable heads.  Seed CPU and every CUDA device
+        # before *any* model constructor so independent A/B jobs with the same
+        # config are actually paired at step zero.
+        set_seed(int(config.seed))
+        print(f"Model-initialization seed: {int(config.seed)}")
+
         # ------------ load model ------------
         model_cfg = model_config_class(model_cfg=config.model_dump())
         if config.il.ckpt_to_load:
@@ -269,6 +278,18 @@ def main(config, model_class, model_config_class):
                 split_seed=getattr(config.il, 'split_seed', 0),
                 sampling_mode=getattr(config.il, 'sampling_mode', 'random_leg'),
                 sampling_seed=getattr(config.il, 'sampling_seed', 0),
+                decision_curriculum_prob=getattr(
+                    config.il, 'decision_curriculum_prob', 0.5
+                ),
+                decision_lookahead_frames=getattr(
+                    config.il, 'decision_lookahead_frames', 16
+                ),
+                decision_min_remaining_frames=getattr(
+                    config.il, 'decision_min_remaining_frames', 128
+                ),
+                decision_min_angle_deg=getattr(
+                    config.il, 'decision_min_angle_deg', 45.0
+                ),
             )
         else:
             if '3dgs' in config.il.lmdb_features_dir or '3dgs' in config.il.lmdb_features_dir:
@@ -312,6 +333,18 @@ def main(config, model_class, model_config_class):
                 split_seed=getattr(config.il, 'split_seed', 0),
                 sampling_mode='fixed_leg',
                 sampling_seed=getattr(config.il, 'eval_seed', 0),
+                decision_curriculum_prob=getattr(
+                    config.il, 'decision_curriculum_prob', 0.5
+                ),
+                decision_lookahead_frames=getattr(
+                    config.il, 'decision_lookahead_frames', 16
+                ),
+                decision_min_remaining_frames=getattr(
+                    config.il, 'decision_min_remaining_frames', 128
+                ),
+                decision_min_angle_deg=getattr(
+                    config.il, 'decision_min_angle_deg', 45.0
+                ),
             )
             eval_dataset_data = build_fixed_memnav_eval_subset(
                 fixed_val,

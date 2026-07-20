@@ -150,7 +150,33 @@ On the two >=45-degree hard rows, zeroing the gate raises MSE from 0.225541 to
 0.272579. Therefore the next model must preserve the useful revisit/goal condition
 and add route information; replacing or attenuating it is not enough.
 
-## Recommended solution: residual hierarchical route tokens
+## Finding 5: an oracle route bearing cannot overwrite the endpoint token
+
+A final upper-bound test changes only the two bearing coordinates of the existing
+revisit pose code. It derives an oracle robot-frame route direction by summing the
+future expert action labels over 1, 2, 4, 8, or 24 action waypoints. Endpoint range,
+retrieval/gate, visual features, checkpoint weights, and DDPM random streams remain
+fixed. Rebuilding the original endpoint token has maximum absolute error exactly
+zero, so the control path is identical.
+
+| Bearing placed in the existing pose token | All-row MSE | Revisit MSE | 3-leg Goal-C MSE | Hard-turn MSE |
+| --- | ---: | ---: | ---: | ---: |
+| original endpoint bearing | 0.102461 | 0.139368 | 0.112371 | 0.225541 |
+| oracle 1-waypoint route | 0.108529 | 0.155084 | 0.118149 | 0.285643 |
+| oracle 4-waypoint route | 0.107438 | 0.152214 | 0.116588 | 0.285058 |
+| oracle 8-waypoint route | 0.105935 | 0.148040 | 0.114830 | 0.278723 |
+| oracle 24-waypoint route | 0.102274 | 0.139095 | 0.112805 | 0.227579 |
+
+Even a 25% circular interpolation toward the oracle four-waypoint direction worsens
+all ten revisit rows from 0.139368 to 0.140769; its paired 95% interval is entirely
+above zero. On the two hard-turn rows, every tested substitution is worse.
+
+This does not show that route information is useless. It shows that the frozen
+decoder has learned this slot as an endpoint token, so changing its semantics at
+inference is an out-of-distribution intervention. The endpoint token must remain,
+and any route sketch must enter through a separately trained residual pathway.
+
+## Recommended solution 1: residual hierarchical route tokens
 
 The next architectural arm should predict a coarse route sketch and append it to the
 existing diffusion memory. It should not feed A* ground truth at inference and should
@@ -178,6 +204,31 @@ goal, infer a coarse feasible route, then generate a local trajectory." It remai
 different from simply attaching revisit to NavDP, because global memory now supports
 an explicit hierarchical planning representation.
 
+## Recommended solution 2: goal-conditioned candidate ranker
+
+The existing candidate oracle provides a second, independent piece of evidence: the
+DDPM distribution already contains much better actions than a single draw. On the
+same fixed population, best-of-8 selected with unavailable GT action MSE reduced the
+all-row candidate mean from 0.10072 to 0.07002 and 3-leg Goal C from 0.10456 to
+0.06964. Best-of-32 reached 0.06427 on 3-leg Goal C. Thus generation diversity is
+present; selection is missing.
+
+The appropriate ranker is not NavDP's old no-goal collision critic. It should:
+
+1. score 4--8 complete DDPM candidates while cross-attending to current, revisit,
+   novel, endpoint, and future residual-route tokens;
+2. retain goal tokens instead of masking them;
+3. learn a listwise/pairwise target from training-only expert action distance plus a
+   collision penalty;
+4. never consume expert actions at inference;
+5. initially freeze the generator so a critic experiment cannot conceal a degraded
+   action distribution.
+
+This is the lower-risk execution improvement because its oracle headroom is already
+measured. Residual route tokens address the representation bottleneck; the
+goal-conditioned ranker addresses the single-sample selection bottleneck. They
+should be validated separately before a combined arm.
+
 ## Training and acceptance experiment
 
 Do not launch an 8-hour retrieval-only job. The next production comparison should be
@@ -186,9 +237,8 @@ single-variable:
 - A: current best checkpoint continued with the accepted baseline data schedule;
 - B: same initialization, batches, optimizer budget, and seeds, plus residual route
   head/tokens;
-- optionally C only after B works: B plus a goal/route-conditioned multi-candidate
-  critic. A previous best-of-32 oracle indicates substantial candidate-selection
-  headroom, but it uses unavailable action GT and is not an inference solution.
+- C, as a separate experiment rather than combined with B: freeze the current
+  generator and train a goal-conditioned best-of-8 ranker.
 
 Before the 8-hour run, require:
 
@@ -226,6 +276,6 @@ Run tests from the `InternNav` directory with the repository's `memnav` environm
 conda run -n memnav python -m pytest tests/unit_test -q
 ```
 
-Result: `87 passed in 2.60s`. All changed Python diagnostic/evaluator files also pass
+Result: `90 passed in 2.60s`. All changed Python diagnostic/evaluator files also pass
 `py_compile`. The default base environment has no pytest, so launching tests from it
 is a dependency error, not a test failure.

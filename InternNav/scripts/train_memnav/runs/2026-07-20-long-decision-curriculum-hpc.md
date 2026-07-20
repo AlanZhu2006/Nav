@@ -186,6 +186,22 @@ allowed to run.
 These jobs are acceptance diagnostics, not extra optimizer steps.  Their separate
 limits do not change the controlled 200-step training budget.
 
+After both reports complete, run the fail-closed comparator from this branch with
+`100000` bootstrap resamples.  It must accept all experiment- and row-level contract
+fields before any delta is reported:
+
+```bash
+python scripts/eval/compare_memnav_offline.py \
+  --control /path/to/ddpm64-ld-uniform-94eace0.json \
+  --treatment /path/to/ddpm64-ld-decision-94eace0.json \
+  --output /path/to/ddpm64-ld-paired-comparison.json \
+  --bootstrap-resamples 100000 --bootstrap-seed 0
+```
+
+Before use, the comparator passed four focused tests and the complete 69-test MemNav
+unittest suite.  A 100000-resample replay of the earlier fixed-28 pair reproduced the
+documented remaining-span >=256 delta exactly (`-14.07%`, all `4/4` rows improved).
+
 ## Acceptance and rejection rule
 
 Training loss alone is not sufficient.  After both jobs finish, compare fixed

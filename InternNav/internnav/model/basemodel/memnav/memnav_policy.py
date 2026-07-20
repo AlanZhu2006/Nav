@@ -27,6 +27,9 @@ from internnav.model.basemodel.memnav.cache_schema import validate_cache_pair
 from internnav.model.basemodel.memnav.lingbot_stream import LingBotStream
 from internnav.model.basemodel.memnav.retrieval_head import RetrievalHead
 from internnav.model.basemodel.memnav.revisit_pose import GaugeInvariantRevisitPose
+from internnav.model.basemodel.memnav.route_sketch import (
+    build_residual_route_sketch,
+)
 from internnav.model.encoder.navdp_backbone import (
     LearnablePositionalEncoding,
     NavDP_ImageGoal_Backbone,
@@ -230,6 +233,7 @@ class MemNavNet(nn.Module):
                  pose_scale_window=64, pose_reliability_hidden=16,
                  pose_reliability_init=0.95,
                  use_pose_reliability_conditioning=True,
+                 use_route_sketch=False, route_horizons=(2, 8, 24),
                  require_versioned_cache=False,
                  device="cuda"):
         super().__init__()
@@ -287,6 +291,21 @@ class MemNavNet(nn.Module):
         # --- NavDP DDPM decoder (no critic) ---
         # memory layout: [ time(1) | current_state(n_cs) | revisit(n_rev) | novel(n_nov) ]
         self.n_cs, self.n_rev, self.n_nov = m_rgbd + m_depth, m_revisit, m_novel
+        self.route_horizons = tuple(int(value) for value in route_horizons)
+        self.route_sketch = (
+            build_residual_route_sketch(token_dim, self.route_horizons)
+            if bool(use_route_sketch) else None
+        )
+        if self.route_sketch is not None and len(self.route_horizons) > self.n_cs:
+            raise ValueError(
+                'route horizon count cannot exceed current-state token count'
+            )
+        if self.route_sketch is not None and any(
+            value > self.predict_size for value in self.route_horizons
+        ):
+            raise ValueError(
+                'route horizons cannot exceed the action prediction length'
+            )
         self.mem_len = 1 + self.n_cs + self.n_rev + self.n_nov
         self.input_embed = nn.Linear(3, token_dim)            # noisy waypoints -> tokens
         self.time_emb = SinusoidalPosEmb(token_dim)
@@ -389,7 +408,13 @@ class MemNavNet(nn.Module):
         effective_revisit_gate = self._effective_revisit_gate(
             enc['revisit_gate'], pose_reliability
         )
-        return dict(
+        route = None
+        if self.route_sketch is not None:
+            route = self.route_sketch(
+                current_state, revisit, novel, effective_revisit_gate
+            )
+            current_state = route['current_state']
+        condition = dict(
             current_state=current_state,
             revisit=revisit,
             novel=novel,
@@ -409,6 +434,14 @@ class MemNavNet(nn.Module):
             anchor_idx=enc['anchor_idx'],
             anchor_teacher_forced=enc['anchor_teacher_forced'],
         )
+        if route is not None:
+            condition.update(
+                route_direction=route['direction'],
+                route_raw_direction_norm=route['raw_direction_norm'],
+                route_curvature_gate=route['curvature_gate'],
+                route_residual_scale=route['residual_scale'],
+            )
+        return condition
 
     def forward_with_condition(self, batch, condition):
         """Training-noise prediction from an already encoded condition."""
@@ -437,7 +470,7 @@ class MemNavNet(nn.Module):
             condition["novel"],
             condition["effective_revisit_gate"],
         )
-        return dict(
+        result = dict(
             noise_pred=noise_pred, noise=noise, timesteps=timesteps,
             aux_pose=condition["aux_pose"], R_rel=condition["R_rel"],
             raw_pose_direction=condition["raw_pose_direction"],
@@ -455,6 +488,15 @@ class MemNavNet(nn.Module):
             gate_effective_threshold=self.retrieval.effective_gate_threshold,
             gate_normalized_slope=self.retrieval.gate_slope,
         )
+        for name in (
+            'route_direction',
+            'route_raw_direction_norm',
+            'route_curvature_gate',
+            'route_residual_scale',
+        ):
+            if name in condition:
+                result[name] = condition[name]
+        return result
 
     def forward(self, batch):
         return self.forward_with_condition(batch, self.prepare_condition(batch))
@@ -888,6 +930,8 @@ class MemNavPolicy(PreTrainedModel):
             use_pose_reliability_conditioning=il.get(
                 'use_pose_reliability_conditioning', True
             ),
+            use_route_sketch=il.get('use_route_sketch', False),
+            route_horizons=il.get('route_horizons', (2, 8, 24)),
             require_versioned_cache=il.get('require_versioned_cache', False),
             lingbot_kwargs=lingbot_kwargs or None, device=str(self._device),
         )
@@ -905,10 +949,41 @@ class MemNavPolicy(PreTrainedModel):
         return self.core.sample_actions_from_condition(condition, **kwargs)
 
     def upgrade_checkpoint_state_dict(self, state_dict):
-        """Upgrade legacy gate tensors before strict checkpoint validation."""
-        return self.core.retrieval.upgrade_legacy_state_dict(
+        """Upgrade legacy gate tensors and optional zero-residual route state."""
+        upgraded = self.core.retrieval.upgrade_legacy_state_dict(
             state_dict, prefix='core.retrieval.', copy=True
         )
+        if self.core.route_sketch is not None:
+            current = self.state_dict()
+            prefix = 'core.route_sketch.'
+            route_keys = {
+                key: value for key, value in current.items()
+                if key.startswith(prefix)
+            }
+            present = [key for key in upgraded if key.startswith(prefix)]
+            if not present:
+                # A genuinely legacy checkpoint has no route namespace at all.
+                # Its newly constructed residual scale is exactly zero, so this
+                # migration is behavior preserving.
+                for key, value in route_keys.items():
+                    upgraded[key] = value.detach().cpu().clone()
+            else:
+                # Do not repair a partially written new checkpoint.  The normal
+                # strict missing-key check will reject it.  Validate horizon
+                # semantics here because equal-length horizon sets have equal
+                # tensor shapes and would otherwise load silently.
+                horizon_key = f'{prefix}horizon_code'
+                if horizon_key in upgraded:
+                    incoming = upgraded[horizon_key].detach().cpu()
+                    expected = route_keys[horizon_key].detach().cpu()
+                    if (
+                        incoming.shape != expected.shape
+                        or not torch.allclose(incoming, expected, atol=0.0, rtol=0.0)
+                    ):
+                        raise ValueError(
+                            'Route-sketch horizons do not match the checkpoint'
+                        )
+        return upgraded
 
 
 if __name__ == "__main__":

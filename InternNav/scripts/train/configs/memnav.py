@@ -13,6 +13,21 @@ def _env_bool(name, default=False):
         return bool(default)
     return value.strip().lower() in {'1', 'true', 'yes', 'on'}
 
+
+def _env_int_tuple(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return tuple(int(item) for item in default)
+    try:
+        result = tuple(
+            int(item.strip()) for item in value.split(',') if item.strip()
+        )
+    except ValueError as error:
+        raise ValueError(f'{name} must be a comma-separated integer list') from error
+    if not result:
+        raise ValueError(f'{name} must contain at least one horizon')
+    return result
+
 # HPC-friendly defaults: env vars override the developer-desktop paths so a
 # SLURM job only needs `export MEMNAV_ROOT_DIR / LINGBOT_REPO / LINGBOT_WEIGHTS`.
 _ROOT_DIR = os.environ.get(
@@ -45,6 +60,8 @@ _EXPECTED_CACHE_SIGNATURE = os.environ.get('MEMNAV_EXPECTED_CACHE_SIGNATURE', ''
 _USE_POSE_RELIABILITY_CONDITIONING = _env_bool(
     'MEMNAV_USE_POSE_RELIABILITY_CONDITIONING', False
 )
+_USE_ROUTE_SKETCH = _env_bool('MEMNAV_USE_ROUTE_SKETCH', False)
+_ROUTE_HORIZONS = _env_int_tuple('MEMNAV_ROUTE_HORIZONS', (2, 8, 24))
 _REQUIRE_GENERATED_POSE_CONVENTION = _env_bool(
     'MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION', False
 )
@@ -178,12 +195,28 @@ memnav_exp_cfg = ExpCfg(
         pose_reliability_lr_multiplier=float(
             os.environ.get('MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER', '5.0')
         ),
+        # Optional multi-horizon local-route representation.  It consumes only
+        # existing inference inputs and enters the decoder through an exactly
+        # zero-initialized residual, so the default-off path remains legacy-exact.
+        use_route_sketch=_USE_ROUTE_SKETCH,
+        route_horizons=_ROUTE_HORIZONS,
+        route_lr_multiplier=float(
+            os.environ.get('MEMNAV_ROUTE_LR_MULTIPLIER', '10.0')
+        ),
+        route_curvature_emphasis=float(os.environ.get(
+            'MEMNAV_ROUTE_CURVATURE_EMPHASIS',
+            '8.0' if _USE_ROUTE_SKETCH else '0.0',
+        )),
         # loss weights (consumed by MemNavTrainer)
         w_retrieval=1.0,   # ranking InfoNCE (which candidate frame matches)
         w_gate=1.0,        # revisit/novel gate BCE (is there a match at all)
         # Scale-invariant translation-direction auxiliary. Metric x/y remains a
         # diagnostic because LingBot pose has a per-sequence canonical scale.
         w_aux_direction=float(os.environ.get('MEMNAV_W_AUX_DIRECTION', '0.2')),
+        w_route_direction=float(os.environ.get(
+            'MEMNAV_W_ROUTE_DIRECTION',
+            '0.2' if _USE_ROUTE_SKETCH else '0.0',
+        )),
         # Optional supervision for the *adapted* range coordinate consumed by
         # revisit_head.  It targets asinh(GT endpoint distance / observed-prefix
         # step / window), never a global LingBot-units-to-metres conversion.

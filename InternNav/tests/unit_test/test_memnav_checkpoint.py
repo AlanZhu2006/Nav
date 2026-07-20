@@ -9,6 +9,10 @@ from torch import nn
 from transformers import TrainingArguments
 
 from internnav.model.basemodel.memnav.memnav_policy import MemNavPolicy
+from internnav.model.basemodel.memnav.route_sketch import (
+    ResidualRouteSketch,
+    route_curvature_gate,
+)
 from internnav.trainer.memnav_trainer import (
     MemNavTrainer,
     project_auxiliary_gradients,
@@ -109,6 +113,57 @@ class _OptimizerModel(nn.Module):
         return {'loss': self.linear(batch['x']).square().mean()}
 
 
+class _RouteLossModel(_LossModel):
+    def __init__(self):
+        super().__init__()
+        self.route_logits = nn.Parameter(torch.tensor([
+            [0.2, 0.8], [0.8, 0.2]
+        ]))
+        self.route_scale = nn.Parameter(torch.zeros(2))
+
+    def forward(self, batch):
+        output = super().forward(batch)
+        batch_size = batch['batch_labels'].shape[0]
+        direction = torch.nn.functional.normalize(
+            self.route_logits, dim=-1
+        ).unsqueeze(0).expand(batch_size, -1, -1)
+        output.update({
+            'route_direction': direction,
+            'route_raw_direction_norm': torch.linalg.vector_norm(
+                self.route_logits, dim=-1
+            ).unsqueeze(0).expand(batch_size, -1),
+            'route_curvature_gate': route_curvature_gate(direction),
+            'route_residual_scale': torch.tanh(self.route_scale),
+        })
+        return output
+
+
+class _RouteOptimizerModel(_OptimizerModel):
+    def __init__(self):
+        super().__init__()
+        self.core.route_sketch = ResidualRouteSketch(4, horizons=(1, 2))
+
+
+class _CheckpointUpgradeRetrieval:
+    @staticmethod
+    def upgrade_legacy_state_dict(state_dict, prefix, copy=True):
+        return dict(state_dict) if copy else state_dict
+
+
+class _CheckpointUpgradeStub:
+    def __init__(self, horizons=(2, 8, 24)):
+        self.core = SimpleNamespace(
+            retrieval=_CheckpointUpgradeRetrieval(),
+            route_sketch=ResidualRouteSketch(8, horizons=horizons),
+        )
+
+    def state_dict(self):
+        return {
+            f'core.route_sketch.{key}': value
+            for key, value in self.core.route_sketch.state_dict().items()
+        }
+
+
 class _AdapterGradientModel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -134,6 +189,11 @@ class MemNavCheckpointTest(unittest.TestCase):
             w_retrieval=1.0,
             w_gate=1.0,
             w_aux_direction=0.2,
+            w_route_direction=0.0,
+            use_route_sketch=False,
+            route_horizons=(2, 8, 24),
+            route_lr_multiplier=10.0,
+            route_curvature_emphasis=0.0,
             w_aux_range=0.2,
             aux_range_beta=0.1,
             aux_range_grad_cap_ratio=0.0,
@@ -250,6 +310,8 @@ class MemNavCheckpointTest(unittest.TestCase):
             trainer.log({'loss': float(loss.detach())})
             logged = trainer.state.log_history[-1]
             self.assertAlmostEqual(logged['action_noise_mse_theta'], 1.0)
+            self.assertIn('diffusion_noise_mean', logged)
+            self.assertIn('diffusion_noise_std', logged)
             self.assertGreater(logged['action_target_theta_std'], 0.0)
             self.assertAlmostEqual(logged['gate_revisit_recall'], 1.0)
             self.assertAlmostEqual(logged['gate_novel_recall'], 1.0)
@@ -331,6 +393,59 @@ class MemNavCheckpointTest(unittest.TestCase):
             trainer._sample_anchor_teacher_mask(positives, 0.5, seed=123)
             torch.testing.assert_close(torch.rand(3), expected_global_draw)
 
+    def test_route_direction_loss_is_label_side_and_backpropagates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config()
+            config.il.use_route_sketch = True
+            config.il.route_horizons = (1, 2)
+            config.il.w_route_direction = 0.2
+            model = _RouteLossModel()
+            trainer = MemNavTrainer(
+                config=config,
+                model=model,
+                args=TrainingArguments(
+                    output_dir=tmp,
+                    report_to='none',
+                    per_device_train_batch_size=2,
+                ),
+                train_dataset=_TinyDataset(),
+            )
+            labels = torch.tensor([
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+            ])
+            inputs = {
+                'batch_labels': labels,
+                'batch_pos_mask': torch.tensor([
+                    [True, False], [False, False]
+                ]),
+                'batch_neg_mask': torch.tensor([
+                    [False, True], [True, True]
+                ]),
+                'batch_is_revisit': torch.tensor([1.0, 0.0]),
+                'batch_goal_rel_pose': torch.tensor([
+                    [1.0, 2.0, 0.0], [0.0, 1.0, 0.0]
+                ]),
+                'batch_goal_range_code': torch.tensor([0.2, 0.5]),
+                'batch_goal_range_steps': torch.tensor([6.4, 16.0]),
+                'batch_gt_prefix_step_m': torch.tensor([0.25, 0.25]),
+                'batch_goal_rel_rotation': torch.eye(3).repeat(2, 1, 1),
+                'batch_goal_j': torch.tensor([0, -1]),
+                'cur_steps': [319, 1024],
+                'goal_steps': [400, 1100],
+            }
+            model.train()
+            loss, output = trainer.compute_loss(
+                model, inputs, return_outputs=True
+            )
+            self.assertTrue(torch.isfinite(loss))
+            self.assertGreater(
+                float(output['route_direction_loss'].detach()), 0.0
+            )
+            loss.backward()
+            self.assertTrue(torch.isfinite(model.route_logits.grad).all())
+            self.assertGreater(float(model.route_logits.grad.abs().sum()), 0.0)
+
     def test_action_safe_range_projection_removes_conflict_and_caps_norm(self):
         action = [torch.tensor([1.0, 0.0])]
         conflicting_range = [torch.tensor([-1.0, 2.0])]
@@ -388,6 +503,9 @@ class MemNavCheckpointTest(unittest.TestCase):
                 (checkpoint / 'memnav_metadata.json').read_text(encoding='utf-8')
             )
             self.assertEqual(metadata['training_objective']['w_aux_range'], 0.2)
+            self.assertEqual(
+                metadata['training_objective']['route_lr_multiplier'], 10.0
+            )
             self.assertEqual(
                 metadata['training_objective']['aux_range_grad_cap_ratio'], 0.0
             )
@@ -459,6 +577,61 @@ class MemNavCheckpointTest(unittest.TestCase):
                     model.core.revisit_merge.pose_encoder.reliability_head.parameters()
                 },
             )
+
+    def test_route_sketch_has_separate_scaled_optimizer_groups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config()
+            config.il.use_route_sketch = True
+            config.il.route_horizons = (1, 2)
+            config.il.route_lr_multiplier = 6.0
+            model = _RouteOptimizerModel()
+            trainer = MemNavTrainer(
+                config=config,
+                model=model,
+                args=TrainingArguments(
+                    output_dir=tmp,
+                    report_to='none',
+                    per_device_train_batch_size=1,
+                    learning_rate=2e-4,
+                    weight_decay=0.1,
+                ),
+                train_dataset=_TinyDataset(),
+            )
+            optimizer = trainer.create_optimizer()
+            groups = [
+                group for group in optimizer.param_groups
+                if str(group.get('memnav_group', '')).startswith('route_sketch')
+            ]
+            self.assertEqual(len(groups), 2)
+            self.assertTrue(all(
+                abs(group['lr'] - 1.2e-3) < 1e-12 for group in groups
+            ))
+            no_decay = next(
+                group for group in groups
+                if group['memnav_group'] == 'route_sketch_no_decay'
+            )
+            self.assertEqual(no_decay['weight_decay'], 0.0)
+            self.assertIn(
+                id(model.core.route_sketch.residual_scale),
+                {id(parameter) for parameter in no_decay['params']},
+            )
+
+    def test_route_checkpoint_upgrade_only_fills_fully_legacy_namespace(self):
+        stub = _CheckpointUpgradeStub()
+        upgraded = MemNavPolicy.upgrade_checkpoint_state_dict(stub, {})
+        expected = stub.state_dict()
+        self.assertEqual(set(upgraded), set(expected))
+        self.assertTrue(all(torch.equal(upgraded[key], value) for key, value in expected.items()))
+
+        partial = {'core.route_sketch.residual_scale': torch.zeros(3)}
+        upgraded_partial = MemNavPolicy.upgrade_checkpoint_state_dict(stub, partial)
+        self.assertEqual(set(upgraded_partial), set(partial))
+
+    def test_route_checkpoint_upgrade_rejects_different_horizons(self):
+        source = _CheckpointUpgradeStub(horizons=(1, 8, 24)).state_dict()
+        target = _CheckpointUpgradeStub(horizons=(2, 8, 24))
+        with self.assertRaisesRegex(ValueError, 'horizons do not match'):
+            MemNavPolicy.upgrade_checkpoint_state_dict(target, source)
 
     def test_compact_checkpoint_guards_fixed_eval_population(self):
         with tempfile.TemporaryDirectory() as tmp:

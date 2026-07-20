@@ -23,6 +23,7 @@ from internnav.dataset.memnav_dataset_lerobot import (
     memnav_collate_fn,
 )
 from internnav.model.basemodel.memnav.memnav_policy import MemNavModelConfig, MemNavPolicy
+from internnav.model.basemodel.memnav.route_sketch import route_direction_targets
 from internnav.model.basemodel.memnav.metrics import (
     attach_full_diffusion_records,
     compute_memnav_batch_records,
@@ -103,6 +104,41 @@ def _torch_load(path):
         return torch.load(path, map_location='cpu')
 
 
+def _validate_route_checkpoint_metadata(model, checkpoint, state):
+    """Reject version/horizon ambiguity for checkpoints that contain route state."""
+    route_prefix = 'core.route_sketch.'
+    has_route_state = any(key.startswith(route_prefix) for key in state)
+    if not has_route_state:
+        return None
+    metadata_path = checkpoint.parent / 'memnav_metadata.json'
+    if not metadata_path.is_file():
+        raise ValueError(
+            'Route checkpoint is missing memnav_metadata.json; cannot verify code version'
+        )
+    metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+    route_module = model.core.route_sketch
+    if route_module is None:
+        raise ValueError(
+            'Checkpoint contains route-sketch state but the evaluator model has '
+            'route sketch disabled'
+        )
+    expected_code = getattr(route_module, 'CODE_VERSION', None)
+    if metadata.get('route_sketch_code') != expected_code:
+        raise ValueError(
+            'Route-sketch version mismatch: '
+            f"{metadata.get('route_sketch_code')!r} != {expected_code!r}"
+        )
+    saved_horizons = (
+        metadata.get('training_objective', {}).get('route_horizons')
+    )
+    expected_horizons = list(route_module.horizons)
+    if saved_horizons != expected_horizons:
+        raise ValueError(
+            f'Route horizon mismatch: {saved_horizons!r} != {expected_horizons!r}'
+        )
+    return metadata
+
+
 def load_checkpoint(config, checkpoint):
     checkpoint = _checkpoint_file(checkpoint)
     if not checkpoint.is_file():
@@ -111,6 +147,7 @@ def load_checkpoint(config, checkpoint):
     state = _torch_load(checkpoint)
     if isinstance(state, dict) and 'state_dict' in state:
         state = state['state_dict']
+    _validate_route_checkpoint_metadata(model, checkpoint, state)
     state = model.upgrade_checkpoint_state_dict(state)
     current = model.state_dict()
     unexpected = [key for key in state if key not in current]
@@ -177,6 +214,90 @@ def _dataset_cache_contract(config):
             getattr(config.il, 'require_generated_pose_convention', False)
         ),
     }
+
+
+def _attach_route_sketch_records(records, outputs, batch, horizons):
+    """Attach label-side route diagnostics without changing policy inputs."""
+    prediction = outputs.get('route_direction')
+    if prediction is None:
+        return False
+    target, valid = route_direction_targets(
+        batch['batch_labels'].to(prediction.device), horizons
+    )
+    if prediction.shape != target.shape or len(records) != prediction.shape[0]:
+        raise ValueError('route prediction, target and record shapes must agree')
+    cosine = (prediction * target).sum(dim=-1).clamp(-1.0, 1.0)
+    error_deg = torch.rad2deg(torch.arccos(cosine))
+    raw_norm = outputs['route_raw_direction_norm']
+    residual_scale = outputs['route_residual_scale']
+    curvature_gate = outputs['route_curvature_gate']
+    for row_index, record in enumerate(records):
+        for horizon_index, horizon in enumerate(horizons):
+            prefix = f'route_h{int(horizon)}'
+            is_valid = bool(valid[row_index, horizon_index].item())
+            record[f'{prefix}_valid'] = is_valid
+            record[f'{prefix}_pred_x'] = float(
+                prediction[row_index, horizon_index, 0].item()
+            )
+            record[f'{prefix}_pred_y'] = float(
+                prediction[row_index, horizon_index, 1].item()
+            )
+            record[f'{prefix}_target_x'] = float(
+                target[row_index, horizon_index, 0].item()
+            )
+            record[f'{prefix}_target_y'] = float(
+                target[row_index, horizon_index, 1].item()
+            )
+            record[f'{prefix}_error_deg'] = (
+                float(error_deg[row_index, horizon_index].item())
+                if is_valid else None
+            )
+            record[f'{prefix}_raw_norm'] = float(
+                raw_norm[row_index, horizon_index].item()
+            )
+            record[f'{prefix}_residual_scale'] = float(
+                residual_scale[horizon_index].item()
+            )
+        record['route_curvature_gate'] = float(curvature_gate[row_index].item())
+    return True
+
+
+def _summarize_route_sketch(records, horizons, enabled):
+    summary = {'enabled': bool(enabled), 'horizons': list(horizons)}
+    if not enabled:
+        return summary
+
+    groups = {
+        'all': lambda record: True,
+        'hard_turn': lambda record: bool(record.get('decision_curriculum_hard')),
+        'goal_c': lambda record: record.get('goal_label') == 'C',
+    }
+    summary['groups'] = {}
+    for group_name, predicate in groups.items():
+        group = {}
+        for horizon in horizons:
+            key = f'route_h{int(horizon)}_error_deg'
+            values = [
+                float(record[key]) for record in records
+                if predicate(record) and record.get(key) is not None
+            ]
+            group[f'h{int(horizon)}_error_deg'] = (
+                sum(values) / len(values) if values else None
+            )
+            group[f'h{int(horizon)}_valid_count'] = len(values)
+        summary['groups'][group_name] = group
+        gate_values = [
+            float(record['route_curvature_gate'])
+            for record in records if predicate(record)
+        ]
+        group['curvature_gate'] = (
+            sum(gate_values) / len(gate_values) if gate_values else None
+        )
+    summary['residual_scale'] = {
+        f'h{int(horizon)}': records[0][f'route_h{int(horizon)}_residual_scale']
+        for horizon in horizons
+    }
+    return summary
 
 
 def main():
@@ -297,6 +418,9 @@ def main():
 
     model, checkpoint = load_checkpoint(config, args.checkpoint)
     model.eval()
+    route_module = model.core.route_sketch
+    route_horizons = tuple(route_module.horizons) if route_module is not None else ()
+    route_enabled = False
     torch.cuda.reset_peak_memory_stats()
     records = []
     started = time.time()
@@ -324,6 +448,11 @@ def main():
                 oracle_batch['diagnostic_timesteps'] = outputs['timesteps']
                 oracle_outputs = model(oracle_batch)
             batch_records = compute_memnav_batch_records(outputs, batch, oracle_outputs)
+            route_enabled = (
+                _attach_route_sketch_records(
+                    batch_records, outputs, batch, route_horizons
+                ) or route_enabled
+            )
             if args.full_diffusion_goal_shuffle:
                 batch_size = batch['batch_labels'].shape[0]
                 permutation = _goal_derangement(batch_size)
@@ -397,6 +526,9 @@ def main():
         'samples_per_second': len(records) / elapsed,
         'peak_cuda_memory_gib': torch.cuda.max_memory_allocated() / 2**30,
         'metrics': summarize_memnav_records(records),
+        'route_sketch': _summarize_route_sketch(
+            records, route_horizons, route_enabled
+        ),
     }
     if args.save_per_sample:
         result['per_sample'] = records

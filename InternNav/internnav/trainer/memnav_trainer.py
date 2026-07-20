@@ -13,6 +13,7 @@ from transformers.trainer import (
 )
 
 from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
+from internnav.model.basemodel.memnav.route_sketch import route_direction_targets
 from internnav.trainer.base import BaseTrainer
 
 
@@ -119,6 +120,21 @@ class MemNavTrainer(BaseTrainer):
         self.w_retr = getattr(config.il, 'w_retrieval', 1.0)
         self.w_gate = getattr(config.il, 'w_gate', 1.0)
         self.w_aux = getattr(config.il, 'w_aux_direction', 0.2)
+        self.w_route = float(getattr(config.il, 'w_route_direction', 0.0))
+        self.use_route_sketch = bool(
+            getattr(config.il, 'use_route_sketch', False)
+        )
+        self.route_horizons = tuple(
+            int(value) for value in getattr(
+                config.il, 'route_horizons', (2, 8, 24)
+            )
+        )
+        self.route_curvature_emphasis = float(
+            getattr(config.il, 'route_curvature_emphasis', 0.0)
+        )
+        self.route_lr_multiplier = float(
+            getattr(config.il, 'route_lr_multiplier', 10.0)
+        )
         self.w_aux_range = float(getattr(config.il, 'w_aux_range', 0.0))
         self.aux_range_beta = float(getattr(config.il, 'aux_range_beta', 0.1))
         self.aux_range_grad_cap_ratio = float(
@@ -136,6 +152,16 @@ class MemNavTrainer(BaseTrainer):
         )
         if self.w_aux_range < 0.0:
             raise ValueError('w_aux_range must be non-negative')
+        if self.w_route < 0.0:
+            raise ValueError('w_route_direction must be non-negative')
+        if self.w_route > 0.0 and not self.use_route_sketch:
+            raise ValueError(
+                'positive w_route_direction requires use_route_sketch=True'
+            )
+        if self.route_curvature_emphasis < 0.0:
+            raise ValueError('route_curvature_emphasis must be non-negative')
+        if self.route_lr_multiplier <= 0.0:
+            raise ValueError('route_lr_multiplier must be positive')
         if self.aux_range_beta <= 0.0:
             raise ValueError('aux_range_beta must be positive')
         if self.aux_range_grad_cap_ratio < 0.0:
@@ -196,6 +222,7 @@ class MemNavTrainer(BaseTrainer):
         pose_multiplier = float(
             getattr(self.config.il, 'pose_reliability_lr_multiplier', 5.0)
         )
+        route_multiplier = self.route_lr_multiplier
         if multiplier <= 0:
             raise ValueError(
                 f'gate_lr_multiplier must be positive, got {multiplier}'
@@ -222,21 +249,24 @@ class MemNavTrainer(BaseTrainer):
             name for name, _ in named_trainable
             if '.pose_encoder.reliability_head.' in name
         }
-        calibration_names = gate_names | pose_reliability_names
+        route_names = {
+            name for name, _ in named_trainable if '.route_sketch.' in name
+        }
+        special_names = gate_names | pose_reliability_names | route_names
         # Tiny test models and non-MemNav reuse should retain BaseTrainer's exact
         # optimizer behavior.
-        if not calibration_names:
+        if not special_names:
             return super().create_optimizer()
 
         decay_names = set(get_parameter_names(opt_model, ALL_LAYERNORM_LAYERS))
         decay_names = {name for name in decay_names if 'bias' not in name}
         regular_decay = [
             parameter for name, parameter in named_trainable
-            if name not in calibration_names and name in decay_names
+            if name not in special_names and name in decay_names
         ]
         regular_no_decay = [
             parameter for name, parameter in named_trainable
-            if name not in calibration_names and name not in decay_names
+            if name not in special_names and name not in decay_names
         ]
         gate_parameters = [
             parameter for name, parameter in named_trainable if name in gate_names
@@ -244,6 +274,19 @@ class MemNavTrainer(BaseTrainer):
         pose_reliability_parameters = [
             parameter for name, parameter in named_trainable
             if name in pose_reliability_names
+        ]
+        route_decay_parameters = [
+            parameter for name, parameter in named_trainable
+            if name in route_names
+            and name in decay_names
+            and not name.endswith('residual_scale')
+        ]
+        route_no_decay_parameters = [
+            parameter for name, parameter in named_trainable
+            if name in route_names
+            and (
+                name not in decay_names or name.endswith('residual_scale')
+            )
         ]
         optimizer_groups = [
             {'params': regular_decay, 'weight_decay': self.args.weight_decay},
@@ -261,6 +304,20 @@ class MemNavTrainer(BaseTrainer):
                 'lr': self.args.learning_rate * pose_multiplier,
                 'memnav_group': 'pose_reliability_calibration',
                 'lr_multiplier': pose_multiplier,
+            },
+            {
+                'params': route_decay_parameters,
+                'weight_decay': self.args.weight_decay,
+                'lr': self.args.learning_rate * route_multiplier,
+                'memnav_group': 'route_sketch_decay',
+                'lr_multiplier': route_multiplier,
+            },
+            {
+                'params': route_no_decay_parameters,
+                'weight_decay': 0.0,
+                'lr': self.args.learning_rate * route_multiplier,
+                'memnav_group': 'route_sketch_no_decay',
+                'lr_multiplier': route_multiplier,
             },
         ]
         optimizer_groups = [group for group in optimizer_groups if group['params']]
@@ -305,6 +362,11 @@ class MemNavTrainer(BaseTrainer):
             'w_retrieval': float(self.w_retr),
             'w_gate': float(self.w_gate),
             'w_aux_direction': float(self.w_aux),
+            'w_route_direction': float(self.w_route),
+            'use_route_sketch': bool(self.use_route_sketch),
+            'route_horizons': list(self.route_horizons),
+            'route_curvature_emphasis': self.route_curvature_emphasis,
+            'route_lr_multiplier': self.route_lr_multiplier,
             'w_aux_range': float(self.w_aux_range),
             'aux_range_beta': float(self.aux_range_beta),
             'aux_range_grad_cap_ratio': float(
@@ -431,9 +493,70 @@ class MemNavTrainer(BaseTrainer):
         action_sq = (fwd['noise_pred'] - fwd['noise']).square()
         action_axis_mse = action_sq.mean(dim=(0, 1))
         action_loss = action_axis_mse.mean()
+        diffusion_noise = fwd['noise']
+        diffusion_noise_mean = diffusion_noise.mean()
+        diffusion_noise_sq_mean = diffusion_noise.square().mean()
+        diffusion_timesteps = fwd.get('timesteps')
         action_target = inputs['batch_labels'].to(dev)
         action_target_mean = action_target.mean(dim=(0, 1))
         action_target_sq_mean = action_target.square().mean(dim=(0, 1))
+
+        # Multi-horizon route supervision uses only label-side future actions.
+        # The model forward path that produced route_direction consumed solely
+        # inference-available memory and goal inputs.
+        route_direction_loss = action_loss.new_zeros(())
+        route_direction_error_deg = None
+        route_target_curvature_deg = None
+        route_prediction_curvature_deg = None
+        route_valid = None
+        route_count = action_loss.new_zeros(())
+        route_prediction = fwd.get('route_direction')
+        if route_prediction is not None:
+            route_target, route_valid = route_direction_targets(
+                action_target, self.route_horizons
+            )
+            if route_prediction.shape != route_target.shape:
+                raise ValueError(
+                    'route prediction/target shape mismatch: '
+                    f'{tuple(route_prediction.shape)} != '
+                    f'{tuple(route_target.shape)}'
+                )
+            route_cosine = (
+                route_prediction * route_target
+            ).sum(dim=-1).clamp(-1.0, 1.0)
+            target_curvature_cosine = (
+                route_target[:, 0] * route_target[:, -1]
+            ).sum(dim=-1).clamp(-1.0, 1.0)
+            prediction_curvature_cosine = (
+                route_prediction[:, 0] * route_prediction[:, -1]
+            ).sum(dim=-1).clamp(-1.0, 1.0)
+            curvature_valid = route_valid[:, 0] & route_valid[:, -1]
+            target_curvature = torch.where(
+                curvature_valid,
+                1.0 - target_curvature_cosine,
+                torch.zeros_like(target_curvature_cosine),
+            )
+            curvature_weight = 1.0 + self.route_curvature_emphasis * (
+                target_curvature
+            ).unsqueeze(-1)
+            weighted_valid = route_valid.float() * curvature_weight
+            route_count = weighted_valid.sum()
+            route_direction_loss = (
+                (1.0 - route_cosine) * weighted_valid
+            ).sum() / weighted_valid.sum().clamp(min=1.0)
+            route_direction_error_deg = torch.rad2deg(
+                torch.arccos(route_cosine)
+            )
+            route_target_curvature_deg = torch.rad2deg(
+                torch.arccos(target_curvature_cosine)
+            )
+            route_prediction_curvature_deg = torch.rad2deg(
+                torch.arccos(prediction_curvature_cosine)
+            )
+        elif self.w_route > 0.0:
+            raise RuntimeError(
+                'route direction loss is enabled but model emitted no route sketch'
+            )
 
         # Decoupled retrieval: rank a true co-visible frame on revisit rows, and
         # classify match existence on every row. This avoids an always-null shortcut.
@@ -550,6 +673,7 @@ class MemNavTrainer(BaseTrainer):
             + self.w_retr * rank_loss
             + self.w_gate * gate_loss
             + self.w_aux * aux_direction_loss
+            + self.w_route * route_direction_loss
             + self.w_aux_range * aux_range_loss
             + self.w_pose_reliability * pose_reliability_loss
             + range_gradient_correction
@@ -871,6 +995,7 @@ class MemNavTrainer(BaseTrainer):
             'retrieval_loss': rank_loss,
             'gate_loss': gate_loss,
             'aux_direction_loss': aux_direction_loss,
+            'route_direction_loss': route_direction_loss,
             'aux_range_loss': aux_range_loss,
             'aux_range_code_mae': aux_range_code_mae,
             'raw_range_code_mae': raw_range_code_mae,
@@ -913,6 +1038,19 @@ class MemNavTrainer(BaseTrainer):
         # Accumulate over exactly the same interval as Trainer's own train/loss.
         action_value_count = float(action_target.shape[0] * action_target.shape[1])
         self._accumulate('action_loss', action_loss, action_value_count * 3.0, phase)
+        self._accumulate(
+            'diffusion_noise_mean', diffusion_noise_mean,
+            float(diffusion_noise.numel()), phase,
+        )
+        self._accumulate(
+            'diffusion_noise_sq_mean', diffusion_noise_sq_mean,
+            float(diffusion_noise.numel()), phase,
+        )
+        if diffusion_timesteps is not None:
+            self._accumulate(
+                'diffusion_timestep_mean', diffusion_timesteps.float().mean(),
+                action_target.shape[0], phase,
+            )
         for axis, value in zip(('x', 'y', 'theta'), action_axis_mse):
             self._accumulate(
                 f'action_noise_mse_{axis}', value, action_value_count, phase
@@ -929,6 +1067,63 @@ class MemNavTrainer(BaseTrainer):
         self._accumulate('retrieval_loss', rank_loss, rank_count, phase)
         self._accumulate('gate_loss', gate_loss, B, phase)
         self._accumulate('aux_direction_loss', aux_direction_loss, aux_count, phase)
+        self._accumulate(
+            'route_direction_loss', route_direction_loss, route_count, phase
+        )
+        if route_prediction is not None:
+            route_raw_norm = fwd['route_raw_direction_norm']
+            route_scale = fwd['route_residual_scale']
+            route_gate = fwd['route_curvature_gate']
+            route_row_valid = route_valid[:, 0] & route_valid[:, -1]
+            route_row_count = route_row_valid.float().sum()
+            self._accumulate(
+                'route_target_curvature_deg',
+                self._masked_mean(
+                    route_target_curvature_deg, route_row_valid
+                ),
+                route_row_count,
+                phase,
+            )
+            self._accumulate(
+                'route_prediction_curvature_deg',
+                self._masked_mean(
+                    route_prediction_curvature_deg, route_row_valid
+                ),
+                route_row_count,
+                phase,
+            )
+            self._accumulate(
+                'route_curvature_gate',
+                self._masked_mean(route_gate, route_row_valid),
+                route_row_count,
+                phase,
+            )
+            for horizon_index, horizon in enumerate(self.route_horizons):
+                horizon_valid = route_valid[:, horizon_index]
+                horizon_count = horizon_valid.float().sum()
+                horizon_error = self._masked_mean(
+                    route_direction_error_deg[:, horizon_index], horizon_valid
+                )
+                self._accumulate(
+                    f'route_direction_err_deg_h{horizon}',
+                    horizon_error,
+                    horizon_count,
+                    phase,
+                )
+                self._accumulate(
+                    f'route_raw_norm_h{horizon}',
+                    self._masked_mean(
+                        route_raw_norm[:, horizon_index], horizon_valid
+                    ),
+                    horizon_count,
+                    phase,
+                )
+                self._accumulate(
+                    f'route_residual_scale_h{horizon}',
+                    route_scale[horizon_index],
+                    B,
+                    phase,
+                )
         self._accumulate('aux_range_loss', aux_range_loss, range_count, phase)
         self._accumulate(
             'aux_range_code_mae', aux_range_code_mae, range_count, phase
@@ -1046,12 +1241,14 @@ class MemNavTrainer(BaseTrainer):
         if had_components:
             component_logs.setdefault('retrieval_loss', 0.0)
             component_logs.setdefault('aux_direction_loss', 0.0)
+            component_logs.setdefault('route_direction_loss', 0.0)
             component_logs.setdefault('aux_range_loss', 0.0)
             component_logs.setdefault('pose_reliability_loss', 0.0)
 
         # Convert accumulated first/second moments into an interval-level std.
         for entity in (
             'action_target_x', 'action_target_y', 'action_target_theta',
+            'diffusion_noise',
             'aux_pred_x', 'aux_pred_y', 'aux_gt_x', 'aux_gt_y',
             'aux_range_target',
         ):
@@ -1092,6 +1289,7 @@ class MemNavTrainer(BaseTrainer):
                 f"rank={display('eval_retrieval_loss' if phase == 'eval' else 'retrieval_loss')} "
                 f"gate={display('eval_gate_loss' if phase == 'eval' else 'gate_loss')} "
                 f"aux_dir={display('eval_aux_direction_loss' if phase == 'eval' else 'aux_direction_loss')} "
+                f"route={display('eval_route_direction_loss' if phase == 'eval' else 'route_direction_loss')} "
                 f"aux_range={display('eval_aux_range_loss' if phase == 'eval' else 'aux_range_loss')} "
                 f"pose_rel={display('eval_pose_reliability_loss' if phase == 'eval' else 'pose_reliability_loss')}"
             )
@@ -1138,6 +1336,7 @@ class MemNavTrainer(BaseTrainer):
         retrieval = getattr(getattr(model, 'core', None), 'retrieval', None)
         revisit_merge = getattr(getattr(model, 'core', None), 'revisit_merge', None)
         pose_encoder = getattr(revisit_merge, 'pose_encoder', None)
+        route_sketch = getattr(getattr(model, 'core', None), 'route_sketch', None)
         metadata = {
             'format_version': 4,
             'dataset_fingerprint': self._dataset_fingerprint(self.train_dataset),
@@ -1150,6 +1349,7 @@ class MemNavTrainer(BaseTrainer):
                 float(retrieval.gate_width.detach().cpu()) if retrieval is not None else None
             ),
             'revisit_pose_code': getattr(pose_encoder, 'CODE_VERSION', None),
+            'route_sketch_code': getattr(route_sketch, 'CODE_VERSION', None),
             # These values do not change checkpoint architecture, so format 4
             # remains load-compatible. Persist them for exact objective/schedule
             # provenance across resumes and comparisons.
@@ -1189,6 +1389,11 @@ class MemNavTrainer(BaseTrainer):
             # exactly equivalent to the new default-off value.
             saved_objective = dict(saved_objective)
             saved_objective.setdefault('aux_range_grad_cap_ratio', 0.0)
+            saved_objective.setdefault('w_route_direction', 0.0)
+            saved_objective.setdefault('use_route_sketch', False)
+            saved_objective.setdefault('route_horizons', [2, 8, 24])
+            saved_objective.setdefault('route_curvature_emphasis', 0.0)
+            saved_objective.setdefault('route_lr_multiplier', 10.0)
         if saved_objective is not None and saved_objective != current_objective:
             changed = sorted(
                 key for key in set(saved_objective) | set(current_objective)
@@ -1227,6 +1432,14 @@ class MemNavTrainer(BaseTrainer):
             raise ValueError(
                 'Revisit pose-code version changed since the checkpoint was written: '
                 f"{metadata.get('revisit_pose_code')!r} != {target_pose_code!r}."
+            )
+        target_route = getattr(getattr(target, 'core', None), 'route_sketch', None)
+        target_route_code = getattr(target_route, 'CODE_VERSION', None)
+        if metadata.get('route_sketch_code') != target_route_code:
+            raise ValueError(
+                'Route-sketch version changed since the checkpoint was written: '
+                f"{metadata.get('route_sketch_code')!r} != "
+                f'{target_route_code!r}.'
             )
         try:
             state = torch.load(checkpoint_path, map_location='cpu', weights_only=True)

@@ -118,6 +118,26 @@ MEMNAV_DINO_WEIGHTS
   `decision_hard_fraction`、`decision_route_angle_deg`、
   `action_loss_decision_hard/easy`。本机完整协议和结论边界见
   [`runs/2026-07-20-long-decision-curriculum-local.md`](runs/2026-07-20-long-decision-curriculum-local.md)。
+- Residual route sketch 也是独立、默认关闭的结构实验。启用时必须同时记录
+  `MEMNAV_USE_ROUTE_SKETCH=1`、`MEMNAV_ROUTE_HORIZONS`、
+  `MEMNAV_W_ROUTE_DIRECTION`、`MEMNAV_ROUTE_LR_MULTIPLIER` 和
+  `MEMNAV_ROUTE_CURVATURE_EMPHASIS`。它只从推理时已有的
+  current/revisit/novel memory 预测多时域局部方向；未来 action 只用于 label-side
+  loss，不能进入 forward 输入。旧 checkpoint 缺少的 route 参数仅允许通过
+  zero-residual migration 补齐，启用后第一次推理必须和旧模型逐字段完全一致。
+  route loss 读取 detached 的旧表示，不能单独反传污染旧 backbone；只有 diffusion
+  主 loss 可以决定三个 residual scale 是否打开。residual 还必须由模型自己预测的
+  short/long-horizon 曲率门控；GT 曲率只能重加权训练 loss，不能作为推理 gate。
+  提交长跑前必须完成同 checkpoint、同 seed、同样本序列的 route-off/on 配对，并在
+  完整 DDPM 上同时检查 3-leg Goal C、span>=256、2-leg 回归、goal sensitivity、
+  route 角误差和实际 residual scale。
+  2026-07-21 的本机配对实验已拒绝当前 v2：full-DDPM action MSE 从
+  `0.107667` 恶化到 `0.110549`（+2.68%），2-leg 恶化 4.05%，且 route head
+  在总体 h2/h8/h24 上没有击败“永远向前”的常数基线。该配置不得提交长任务；
+  完整结果和 RNG 配对证据见
+  [`runs/2026-07-21-residual-route-sketch-local.md`](runs/2026-07-21-residual-route-sketch-local.md)。
+  以后任何 route-off/on 对照还必须逐日志核对 `diffusion_noise_mean/std` 和
+  `diffusion_timestep_mean`，不能只凭相同命令行 seed 声称配对。
 - 预计算必须同时满足应用日志 `errors=0` 和 Slurm
   `COMPLETED, ExitCode=0:0`；脚本捕获错误后继续运行不算成功。
 - stdout、checkpoint、W&B 和诊断输出目录必须在 `sbatch` 前存在且可写，

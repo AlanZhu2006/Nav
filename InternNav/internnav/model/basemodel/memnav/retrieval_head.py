@@ -129,11 +129,22 @@ class RetrievalHead(nn.Module):
             unexpected_keys, error_msgs,
         )
 
-    def forward(self, goal_cls, mem_cls, cand_mask):
-        """Return match index, gate logit, ranking logits, and raw gate feature."""
+    @staticmethod
+    def raw_cosine(goal_cls, mem_cls):
+        """Frozen-DINO cosine used by the calibrated gate and diagnostics."""
         raw_goal = F.normalize(goal_cls.float(), dim=-1)
         raw_mem = F.normalize(mem_cls.float(), dim=-1)
-        raw_cos = (raw_goal.unsqueeze(1) * raw_mem).sum(-1)
+        return (raw_goal.unsqueeze(1) * raw_mem).sum(-1)
+
+    def raw_match(self, goal_cls, mem_cls, cand_mask):
+        """Select the raw-DINO top-1 candidate without changing rank logits."""
+        raw_cos = self.raw_cosine(goal_cls, mem_cls)
+        floor = torch.finfo(raw_cos.dtype).min
+        return raw_cos.masked_fill(~cand_mask, floor).argmax(-1), raw_cos
+
+    def forward(self, goal_cls, mem_cls, cand_mask):
+        """Return match index, gate logit, ranking logits, and raw gate feature."""
+        raw_cos = self.raw_cosine(goal_cls, mem_cls)
 
         gq = F.normalize(self.proj_goal(goal_cls), dim=-1)
         mk = F.normalize(self.proj_mem(mem_cls), dim=-1)

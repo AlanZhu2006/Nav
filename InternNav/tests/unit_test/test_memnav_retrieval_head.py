@@ -40,6 +40,15 @@ class MemNavRetrievalHeadTest(unittest.TestCase):
         )
         self.assertTrue(torch.isfinite(logits).all())
 
+    def test_raw_match_respects_candidate_mask(self):
+        head = RetrievalHead(dino_dim=3, proj_dim=2)
+        goal = torch.tensor([[1.0, 0.0, 0.0]])
+        memory = torch.tensor([[[1.0, 0.0, 0.0], [0.8, 0.6, 0.0]]])
+        candidate = torch.tensor([[False, True]])
+        match, cosine = head.raw_match(goal, memory, candidate)
+        self.assertEqual(match.tolist(), [1])
+        torch.testing.assert_close(cosine, torch.tensor([[1.0, 0.8]]))
+
     def test_gate_starts_at_calibrated_threshold_with_healthy_gradients(self):
         head = RetrievalHead(
             dino_dim=8,

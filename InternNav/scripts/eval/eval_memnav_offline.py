@@ -48,6 +48,10 @@ def parse_args():
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--max-samples', type=int, default=0)
     parser.add_argument(
+        '--selection-indices',
+        help='comma-separated explicit dataset indices; overrides --max-samples',
+    )
+    parser.add_argument(
         '--subset-mode',
         choices=('balanced-fixed', 'random'),
         default='balanced-fixed',
@@ -55,6 +59,18 @@ def parse_args():
     )
     parser.add_argument('--log-every', type=int, default=10)
     parser.add_argument('--oracle-positive', action='store_true')
+    parser.add_argument(
+        '--retrieval-anchor-mode', choices=('projected', 'raw'),
+        default='projected',
+        help='evaluation-only anchor selector; rank-loss logits remain unchanged',
+    )
+    parser.add_argument(
+        '--anchor-margin-override', type=int,
+        help=(
+            'evaluation-only earliest candidate/goal-insertion frame; leaves '
+            'the initial scale block intact'
+        ),
+    )
     parser.add_argument(
         '--full-diffusion-goal-shuffle',
         action='store_true',
@@ -194,9 +210,53 @@ def main():
         sampling_mode='fixed_leg',
         sampling_seed=args.sampling_seed,
     )
+    original_anchor_margins = sorted({
+        int(sample['amargin']) for sample in dataset.samples
+    })
+    if args.anchor_margin_override is not None:
+        if args.anchor_margin_override < config.il.num_scale:
+            raise ValueError(
+                '--anchor-margin-override must be at least num_scale='
+                f'{config.il.num_scale}'
+            )
+        for sample in dataset.samples:
+            sample['amargin'] = int(args.anchor_margin_override)
+        dataset.dataset_fingerprint = hashlib.sha256(
+            (
+                f'{dataset.dataset_fingerprint}\n'
+                f'anchor_margin_override={args.anchor_margin_override}'
+            ).encode('utf-8')
+        ).hexdigest()
     dataset_size = len(dataset)
     selection_indices = list(range(dataset_size))
-    if 0 < args.max_samples < dataset_size:
+    selection_mode = 'full'
+    if args.selection_indices:
+        selection_indices = [
+            int(value) for value in args.selection_indices.split(',') if value
+        ]
+        if (
+            not selection_indices
+            or len(set(selection_indices)) != len(selection_indices)
+            or min(selection_indices) < 0
+            or max(selection_indices) >= dataset_size
+        ):
+            raise ValueError(
+                '--selection-indices must be unique valid dataset indices'
+            )
+        eval_dataset = Subset(dataset, selection_indices)
+        subset_manifest = (
+            f'{dataset.dataset_fingerprint}\n'
+            + ','.join(str(index) for index in selection_indices)
+        )
+        eval_dataset.dataset_fingerprint = hashlib.sha256(
+            subset_manifest.encode('utf-8')
+        ).hexdigest()
+        selection_mode = 'explicit'
+        print(
+            f'[subset] explicit: {len(eval_dataset)}/{dataset_size}; '
+            f'fingerprint={eval_dataset.dataset_fingerprint}'
+        )
+    elif 0 < args.max_samples < dataset_size:
         if args.subset_mode == 'balanced-fixed':
             eval_dataset = build_fixed_memnav_eval_subset(
                 dataset, args.max_samples, selection_seed=args.seed
@@ -208,6 +268,7 @@ def main():
                 f'novel={eval_dataset.memnav_num_novel}; '
                 f'fingerprint={eval_dataset.dataset_fingerprint}'
             )
+            selection_mode = 'balanced-fixed'
         else:
             rng = np.random.default_rng(args.seed)
             selection_indices = sorted(
@@ -221,6 +282,7 @@ def main():
             eval_dataset.dataset_fingerprint = hashlib.sha256(
                 subset_manifest.encode('utf-8')
             ).hexdigest()
+            selection_mode = 'random'
     else:
         eval_dataset = dataset
     loader = DataLoader(
@@ -240,15 +302,23 @@ def main():
     started = time.time()
     with torch.inference_mode():
         for batch_index, batch in enumerate(loader):
+            eval_batch = dict(batch)
+            eval_batch['diagnostic_retrieval_anchor_mode'] = (
+                args.retrieval_anchor_mode
+            )
+            if args.anchor_margin_override is not None:
+                eval_batch['diagnostic_anchor_min_frame'] = int(
+                    args.anchor_margin_override
+                )
             condition = None
             if args.full_diffusion_goal_shuffle:
-                condition = model.prepare_condition(batch)
-                outputs = model.forward_with_condition(batch, condition)
+                condition = model.prepare_condition(eval_batch)
+                outputs = model.forward_with_condition(eval_batch, condition)
             else:
-                outputs = model(batch)
+                outputs = model(eval_batch)
             oracle_outputs = None
             if args.oracle_positive:
-                oracle_batch = dict(batch)
+                oracle_batch = dict(eval_batch)
                 oracle_batch['diagnostic_oracle_positive'] = True
                 oracle_batch['diagnostic_noise'] = outputs['noise']
                 oracle_batch['diagnostic_timesteps'] = outputs['timesteps']
@@ -257,7 +327,7 @@ def main():
             if args.full_diffusion_goal_shuffle:
                 batch_size = batch['batch_labels'].shape[0]
                 permutation = _goal_derangement(batch_size)
-                shuffled_batch = _shuffle_goal_condition(batch, permutation)
+                shuffled_batch = _shuffle_goal_condition(eval_batch, permutation)
                 shuffled_condition = model.prepare_condition(shuffled_batch)
                 device = next(model.parameters()).device
                 paired_seed = args.diffusion_seed + 3 * batch_index
@@ -303,10 +373,13 @@ def main():
         'split_seed': args.split_seed,
         'sampling_mode': 'fixed_leg',
         'sampling_seed': args.sampling_seed,
+        'retrieval_anchor_mode': args.retrieval_anchor_mode,
+        'original_anchor_margins': original_anchor_margins,
+        'anchor_margin_override': args.anchor_margin_override,
         'random_seed': args.seed,
         'dataset_fingerprint': dataset.dataset_fingerprint,
         'dataset_size': dataset_size,
-        'subset_mode': args.subset_mode if len(eval_dataset) < dataset_size else 'full',
+        'subset_mode': selection_mode,
         'selection_indices': selection_indices,
         'eval_dataset_fingerprint': getattr(
             eval_dataset, 'dataset_fingerprint', dataset.dataset_fingerprint

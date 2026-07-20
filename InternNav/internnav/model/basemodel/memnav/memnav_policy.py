@@ -683,6 +683,22 @@ class MemNavNet(nn.Module):
         match_idx, gate_logit, ret_logits, gate_feature = self.retrieval(
             goal_cls, mem_cls, cand_mask
         )
+        diagnostic_anchor_mode = batch.get(
+            'diagnostic_retrieval_anchor_mode', 'projected'
+        )
+        if diagnostic_anchor_mode == 'raw':
+            if self.training:
+                raise RuntimeError(
+                    'diagnostic raw retrieval anchor is evaluation-only'
+                )
+            match_idx, _ = self.retrieval.raw_match(
+                goal_cls, mem_cls, cand_mask
+            )
+        elif diagnostic_anchor_mode != 'projected':
+            raise ValueError(
+                'diagnostic_retrieval_anchor_mode must be projected/raw, got '
+                f'{diagnostic_anchor_mode!r}'
+            )
         revisit_gate = torch.sigmoid(gate_logit)       # P(revisit) for the decoder soft-gate
 
         # goal_append anchor: training defaults to the legacy all-positive teacher
@@ -702,7 +718,14 @@ class MemNavNet(nn.Module):
         )
 
         B = len(batch["cache_paths"])
-        lo = self.num_scale + self.window - 1
+        lo = int(batch.get(
+            'diagnostic_anchor_min_frame',
+            self.num_scale + self.window - 1,
+        ))
+        if lo < self.num_scale:
+            raise ValueError(
+                f'anchor minimum {lo} precedes scale block {self.num_scale}'
+            )
         cur_t, dfeat_t, curp, goalp = [], [], [], []
         pose_context_rows = []
         for b in range(B):

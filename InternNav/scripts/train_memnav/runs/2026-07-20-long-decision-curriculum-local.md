@@ -196,6 +196,66 @@ the expensive full-DDPM stage and removed from the code. More exposure to long
 straight-looking rows is not by itself sufficient; the supported signal is specifically
 long-horizon route disagreement.
 
+## Follow-up: stochastic candidate oracle
+
+The original NavDP inference path samples multiple DDPM trajectories and ranks them,
+whereas the current MemNav path emits one trajectory and has no critic.  A fixed-28
+offline upper-bound diagnostic therefore generated 32 complete DDPM trajectories for
+each unchanged MemNav condition and used action GT **only after sampling** to select the
+lowest-MSE candidate.  The policy never received the GT selector.  This is not an
+inference method and not a closed-loop result.
+
+The reusable evaluator is
+[`scripts/eval/diag_memnav_candidate_oracle.py`](../../eval/diag_memnav_candidate_oracle.py).
+The local source tree had gained ten new, uncached episodes after the earlier fixed-28
+reports were written.  Rather than silently changing the evaluated population, this
+diagnostic explicitly skipped those uncached additions and required the exact audited
+parent/evaluation fingerprints `e60441f...` / `67e8e611...`; any population change was
+fail-closed.
+
+For the untouched step-400 checkpoint:
+
+| Fixed-28 group | Candidate mean | Best of 4 | Best of 8 | Best of 32 |
+| --- | ---: | ---: | ---: | ---: |
+| all | 0.10072 | 0.07392 | 0.07002 | 0.06130 |
+| hard turn | 0.22892 | 0.19666 | 0.17757 | 0.15603 |
+| remaining span >=256 | 0.12546 | 0.09964 | 0.09191 | 0.07977 |
+| 3-leg Goal C | 0.10456 | 0.07238 | 0.06964 | 0.06427 |
+| 3-leg Goal-C revisit | 0.10179 | 0.07100 | 0.06772 | 0.06127 |
+| 2-leg | 0.10894 | 0.08340 | 0.07934 | 0.06770 |
+
+Thus the 32-candidate oracle lowers 3-leg Goal-C MSE by 38.5% and its five revisit
+rows by 39.8%.  The hard-turn upper bound is smaller but still nontrivial at 31.8%.
+The selected 32-candidate Goal-C rows reduce x/theta error by 42.5%/44.3%, but y by
+only 26.3%; stochastic selection helps, while the difficult near-route coordinate
+remains the least recoverable one.
+
+This upper bound does **not** justify copying the old NavDP critic unchanged.  That
+critic is trained primarily from collision clearance and masks the goal tokens, so it
+can prefer a safe candidate without knowing which safe branch reaches a revisit goal.
+The oracle instead ranks directly by the unavailable expert action.
+
+To test whether candidate selection automatically composes with the accepted sampler,
+the 20-step decision checkpoint was evaluated with the exact same first eight initial
+and intermediate DDPM random streams.  Paired best-of-8 changes relative to untouched
+step-400 were:
+
+| Group | Untouched best-of-8 | Decision best-of-8 | Change |
+| --- | ---: | ---: | ---: |
+| all | 0.07002 | 0.07040 | +0.54% |
+| hard turn | 0.17757 | 0.18235 | +2.69% |
+| remaining span >=256 | 0.09191 | 0.10570 | +15.00% |
+| 3-leg Goal C | 0.06964 | 0.07090 | +1.81% |
+| 3-leg Goal-C revisit | 0.06772 | 0.06672 | -1.47% |
+| 2-leg | 0.07934 | 0.08271 | +4.25% |
+
+This short-screen result means curriculum and oracle candidate diversity cannot be
+claimed as additive.  It does not overturn the same-budget decision-vs-uniform result:
+the continuation used only 20 updates and a deliberately short scheduler.  It does
+require keeping the next production run single-variable.  A future candidate arm
+should use a goal/route-conditioned ranker, start with 4--8 candidates, and be evaluated
+separately after the longer sampler A/B establishes a stable checkpoint.
+
 ## Next controlled experiment and rejection rule
 
 The next long run should change only the sampling mode and its four documented knobs;

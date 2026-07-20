@@ -159,6 +159,33 @@ early training window is recorded only as a launch/sampler check.  At step 10 th
 treatment hard/easy action losses were `0.1927 / 0.1559`; the control values were
 `0.2529 / 0.1248` on different sampled rows.
 
+## Scheduled paired full-DDPM acceptance evaluation
+
+Two immutable evaluator jobs were submitted after launch validation.  Both depend on
+*both* training jobs with
+`afterok:14376466:14376467`; if either training arm fails, neither half of the pair is
+allowed to run.
+
+- uniform JobID: `14376762` (`dd64-u-94eace0`);
+- decision JobID: `14376763` (`dd64-d-94eace0`);
+- evaluator script SHA256:
+  `a8070b8c45e453194468dc8c3107ee53ef3beb80dd2f53688288157804c681e1`;
+- partition / wall limit: `a100_tandon / 02:00:00` per arm;
+- checkpoints: each arm's `checkpoint-200/memnav.ckpt`;
+- selection: validation `fixed_leg`, balanced fixed `64`, batch size `4`;
+- seeds: split/sampling/model `0 / 0 / 0`, diffusion `104729`;
+- diagnostics: oracle-positive enabled, paired full-DDPM correct/shuffled-goal
+  sampling enabled, per-sample rows retained;
+- uniform output:
+  `/scratch/yz11502/Research/eval_outputs/ddpm64-ld-uniform-94eace0.json`;
+- decision output:
+  `/scratch/yz11502/Research/eval_outputs/ddpm64-ld-decision-94eace0.json`;
+- logs:
+  `/home/yz11502/logs/eval_memnav/ddpm64-{uniform,decision}-%j.{out,err}`.
+
+These jobs are acceptance diagnostics, not extra optimizer steps.  Their separate
+limits do not change the controlled 200-step training budget.
+
 ## Acceptance and rejection rule
 
 Training loss alone is not sufficient.  After both jobs finish, compare fixed
@@ -177,5 +204,6 @@ Current checklist:
 - [x] decision preflight completed with `ExitCode=0:0`;
 - [x] both training jobs started only after their preflights;
 - [x] W&B URLs and first finite step-10 logs recorded;
+- [x] paired full-DDPM jobs submitted with a joint `afterok` dependency;
 - [ ] both jobs wrote complete final step-200 checkpoints;
 - [ ] paired full-DDPM final evaluation completed.

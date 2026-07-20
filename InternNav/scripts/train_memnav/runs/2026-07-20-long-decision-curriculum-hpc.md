@@ -159,6 +159,31 @@ early training window is recorded only as a launch/sampler check.  At step 10 th
 treatment hard/easy action losses were `0.1927 / 0.1559`; the control values were
 `0.2529 / 0.1248` on different sampled rows.
 
+At step 40, the interval hard fraction / mean route angle was `0.125 / 19.20
+degrees` for control and `0.50 / 65.52 degrees` for treatment.  This second window
+confirms that the curriculum continues to move training exposure toward the intended
+route-disagreement rows.
+
+### First checkpoint integrity boundary
+
+Both arms wrote complete step-50 directories containing model, optimizer, scheduler,
+RNG, trainer state and metadata.  Both trainer states report global step `50`; both
+model files are `229127304` bytes and contain the same 379-key dtype/shape contract.
+
+- uniform model SHA256:
+  `6fda98a43e3009f5216c2c77e81fe34ba27783797769f99d2dfe6c9af95bd4c0`;
+- decision model SHA256:
+  `8ccf7a75d1d097d62f8f0ec423aea6cdc3082a2ac2b846952b5665ad3d546260`;
+- uniform/decision metadata SHA256:
+  `34c9a2b6395b526722793b7fa5abdd3c7687fa0d4a19328835cc0269f0cd16ad` /
+  `429dae7d2bd2f6be490c95c9ab525574f58042ad1320d81df481f64ffd070003`.
+
+The metadata has the same fixed-eval fingerprint and objective in both arms; only the
+expected training dataset fingerprint differs.  A per-tensor scan found every learned
+tensor finite.  The sole non-finite buffer in each file is the identical 24-by-24
+causal `core.tgt_mask`: its 276 strict-upper-triangle entries are intentionally
+negative infinity (`24*23/2`), and its remaining entries are zero.
+
 ## Scheduled paired full-DDPM acceptance evaluation
 
 Two immutable evaluator jobs were submitted after launch validation.  Both depend on

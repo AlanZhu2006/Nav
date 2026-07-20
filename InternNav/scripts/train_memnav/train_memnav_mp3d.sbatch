@@ -41,6 +41,9 @@
 #   EPOCHS=1
 #   NUM_WORKERS=4
 #   RESUME_FROM_CHECKPOINT=auto
+#   MEMNAV_INIT_CHECKPOINT=  (optional compact memnav.ckpt; resets optimizer/step)
+#   MEMNAV_LR=1e-4
+#   MEMNAV_SEED=0
 #   MEMNAV_MAX_TRAIN_STEPS=-1  (-1 = epoch-based; positive = bounded smoke)
 #   MEMNAV_SAVE_STEPS=25
 #   MEMNAV_SAMPLING_MODE=random_leg (set decision_curriculum for the opt-in arm)
@@ -104,6 +107,9 @@ export BATCH_SIZE=${BATCH_SIZE:-4}
 export EPOCHS=${EPOCHS:-1}
 export NUM_WORKERS=${NUM_WORKERS:-4}
 export RESUME_FROM_CHECKPOINT=${RESUME_FROM_CHECKPOINT:-auto}
+export MEMNAV_INIT_CHECKPOINT=${MEMNAV_INIT_CHECKPOINT:-}
+export MEMNAV_LR=${MEMNAV_LR:-1e-4}
+export MEMNAV_SEED=${MEMNAV_SEED:-0}
 export MEMNAV_SAVE_STEPS=${MEMNAV_SAVE_STEPS:-25}
 export MEMNAV_LOGGING_STEPS=${MEMNAV_LOGGING_STEPS:-10}
 export MEMNAV_EVAL_SAMPLES=${MEMNAV_EVAL_SAMPLES:-16}
@@ -142,6 +148,20 @@ apptainer exec --nv \
         [[ -d "${MEMNAV_FEATURE_ROOT}" ]] || { echo "ABORT: feature tree missing ${MEMNAV_FEATURE_ROOT}"; exit 1; }
         [[ -f "${LINGBOT_WEIGHTS}" ]]     || { echo "ABORT: weights missing ${LINGBOT_WEIGHTS}"; exit 1; }
         [[ -f "${MEMNAV_DINO_WEIGHTS}" ]] || { echo "ABORT: DINO weights missing ${MEMNAV_DINO_WEIGHTS}"; exit 1; }
+        if [[ -n "${MEMNAV_INIT_CHECKPOINT}" ]]; then
+          [[ -f "${MEMNAV_INIT_CHECKPOINT}" ]] || {
+            echo "ABORT: initialization checkpoint missing ${MEMNAV_INIT_CHECKPOINT}" >&2
+            exit 1
+          }
+          NORMALIZED_RESUME=$(printf "%s" "${RESUME_FROM_CHECKPOINT}" | tr "[:upper:]" "[:lower:]")
+          case "${NORMALIZED_RESUME}" in
+            ""|none|false|0) ;;
+            *)
+              echo "ABORT: MEMNAV_INIT_CHECKPOINT cannot be combined with resume=${RESUME_FROM_CHECKPOINT}" >&2
+              exit 1
+              ;;
+          esac
+        fi
         if [[ "${MEMNAV_REQUIRE_VERSIONED_CACHE}" == "1" && -z "${MEMNAV_EXPECTED_CACHE_SIGNATURE}" ]]; then
           echo "ABORT: versioned cache requires MEMNAV_EXPECTED_CACHE_SIGNATURE" >&2
           exit 1
@@ -169,6 +189,9 @@ apptainer exec --nv \
         LINGBOT_COMMIT=$(git -C "${LINGBOT_REPO}" rev-parse HEAD)
         echo "code_commit=${ACTUAL_CODE_COMMIT} lingbot_commit=${LINGBOT_COMMIT}"
         sha256sum "${LINGBOT_WEIGHTS}" "${MEMNAV_DINO_WEIGHTS}"
+        if [[ -n "${MEMNAV_INIT_CHECKPOINT}" ]]; then
+          sha256sum "${MEMNAV_INIT_CHECKPOINT}"
+        fi
 
         export PYTHONPATH="'"${REPO_ROOT}"':'"${REPO_ROOT}"'/src/diffusion-policy:${PYTHONPATH:-}"
 
@@ -200,7 +223,7 @@ apptainer exec --nv \
         command -v python; python -V
         python -m pip check
         python -c "import torch, transformers, diffusers; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available(), \"transformers\", transformers.__version__, \"diffusers\", diffusers.__version__); assert torch.cuda.is_available()"
-        echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} max_steps=${MEMNAV_MAX_TRAIN_STEPS} wk=${NUM_WORKERS} resume=${RESUME_FROM_CHECKPOINT}"
+        echo "name=${NAME} bs=${BATCH_SIZE} ep=${EPOCHS} max_steps=${MEMNAV_MAX_TRAIN_STEPS} wk=${NUM_WORKERS} lr=${MEMNAV_LR} seed=${MEMNAV_SEED} resume=${RESUME_FROM_CHECKPOINT} init_checkpoint=${MEMNAV_INIT_CHECKPOINT:-none}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"
@@ -210,14 +233,21 @@ apptainer exec --nv \
         echo "pose_scale_window=${MEMNAV_POSE_SCALE_WINDOW} pose_rel_conditioning=${MEMNAV_USE_POSE_RELIABILITY_CONDITIONING} pose_rel_weight=${MEMNAV_W_POSE_RELIABILITY} pose_rel_hidden=${MEMNAV_POSE_RELIABILITY_HIDDEN} pose_rel_init=${MEMNAV_POSE_RELIABILITY_INIT} pose_rel_lr_mult=${MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER}"
         echo "dino_weights=${MEMNAV_DINO_WEIGHTS}"
 
-        exec python scripts/train/train.py \
-            --name "${NAME}" \
-            --model-name memnav \
-            --batch-size "${BATCH_SIZE}" \
-            --num-workers "${NUM_WORKERS}" \
-            --epochs "${EPOCHS}" \
-            --root-dir "${MEMNAV_ROOT_DIR}" \
-            --resume-from-checkpoint "${RESUME_FROM_CHECKPOINT}"
+        TRAIN_ARGS=(
+          --name "${NAME}"
+          --model-name memnav
+          --batch-size "${BATCH_SIZE}"
+          --num-workers "${NUM_WORKERS}"
+          --epochs "${EPOCHS}"
+          --lr "${MEMNAV_LR}"
+          --seed "${MEMNAV_SEED}"
+          --root-dir "${MEMNAV_ROOT_DIR}"
+          --resume-from-checkpoint "${RESUME_FROM_CHECKPOINT}"
+        )
+        if [[ -n "${MEMNAV_INIT_CHECKPOINT}" ]]; then
+          TRAIN_ARGS+=(--ckpt-to-load "${MEMNAV_INIT_CHECKPOINT}")
+        fi
+        exec python scripts/train/train.py "${TRAIN_ARGS[@]}"
     '
 
 echo "=== done: $(date) ==="

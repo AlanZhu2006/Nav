@@ -160,6 +160,22 @@ sbatch --time=00:30:00 --export=ALL \
 `MEMNAV_MAX_TRAIN_STEPS=-1`（默认）保持正式任务按 epoch 训练；任何正式长跑都应在
 任务记录中明确写出该值。
 
+从已完成 checkpoint 做“相同起点、不同 treatment”的控制实验时，不要使用
+`RESUME_FROM_CHECKPOINT`：resume 会同时恢复旧 optimizer、scheduler、global step 和
+RNG，而且会拒绝 curriculum 引起的 dataset fingerprint 改变。应使用权重初始化：
+
+```bash
+MEMNAV_INIT_CHECKPOINT=/absolute/path/checkpoint-400/memnav.ckpt \
+RESUME_FROM_CHECKPOINT=none \
+MEMNAV_LR=1e-5 MEMNAV_SEED=0 \
+MEMNAV_MAX_TRAIN_STEPS=200 \
+sbatch --export=ALL scripts/train_memnav/train_memnav_mp3d.sbatch
+```
+
+入口会检查初始化文件存在、打印其 SHA256，并拒绝同时指定初始化 checkpoint 和
+非空 resume。配对 arm 必须记录完全相同的初始化 SHA256、学习率、seed、batch size、
+step budget 和固定验证 fingerprint；只有 treatment（例如 sampling mode）可以不同。
+
 ## 5. 长任务必须依赖预检
 
 ```bash

@@ -87,6 +87,22 @@ MEMNAV_DINO_WEIGHTS
 - parquet、RGB、DINO CLS、`cam_pose_enc` 的帧数及 goal 索引必须一致。
 - `MEMNAV_WINDOW`、`MEMNAV_NUM_SCALE`、`MEMNAV_MAX_FRAME_NUM` 必须与预计算
   几何一致，且最大帧数能覆盖最长 episode。
+- Temporal retrieval reranker 是独立、默认关闭的检索实验。启用
+  `MEMNAV_RETRIEVAL_ONLY=1` 时必须同时设置
+  `MEMNAV_RETRIEVAL_RANK_MODE=raw_temporal` 和
+  `MEMNAV_RETRIEVAL_DENOMINATOR=all_candidates`；Trainer 会 fail closed，确认只有
+  `temporal_weights` 与 `temporal_bias` 共 14 个标量可训练。raw DINO、raw
+  temperature、gate、LingBot、diffusion 和其余 policy 参数必须全部冻结。默认
+  shortlist 为 raw Top-10，score residual 限制为 `±0.02`，并以零初始化保证训练前
+  与 raw-DINO logits/Top-1 完全相同。时序特征只能读取已经观测到的历史 score
+  curve，不得使用绝对帧号、covisibility label 或未来轨迹。正式任务必须记录
+  `MEMNAV_RETRIEVAL_TEMPORAL_TOPK`、
+  `MEMNAV_RETRIEVAL_TEMPORAL_RESIDUAL_MAX`、
+  `MEMNAV_RETRIEVAL_MARGIN_COSINE`、
+  `MEMNAV_RETRIEVAL_MARGIN_WEIGHT`，并同时监控 held-out scene 的 listwise loss、
+  strict Top-1、negative/gray fraction、Recall@5/10 和 cosine margin。不能仅凭 loss
+  下降接受模型；Recall@10 不得下降，灰区不得增加，且产出的 checkpoint 仍须用
+  完整 policy/full-DDPM 固定集复评 action 回归。
 - 新 sparse 训练默认 `MEMNAV_USE_POSE_RELIABILITY_CONDITIONING=0` 且
   `MEMNAV_W_POSE_RELIABILITY=0`：旧 head 在 30 个 paired 样本上近似常数，且不能
   识别错误 retrieval anchor；它只保留为日志诊断，不再无依据地乘低 semantic gate。

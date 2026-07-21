@@ -230,6 +230,11 @@ class MemNavNet(nn.Module):
                  predict_size=24, temporal_depth=8, num_diffusion_iters=10, goal_warm=64,
                  novel_backbone_weights=None, gate_center=0.94, gate_width=0.04,
                  gate_slope_init=1.6, gate_bias_init=0.0,
+                 retrieval_rank_mode='projected', retrieval_raw_temp_init=0.01,
+                 retrieval_residual_max=0.25,
+                 retrieval_temporal_topk=10,
+                 retrieval_temporal_residual_max=0.02,
+                 retrieval_anchor_min_frame=None,
                  pose_scale_window=64, pose_reliability_hidden=16,
                  pose_reliability_init=0.95,
                  use_pose_reliability_conditioning=True,
@@ -250,6 +255,16 @@ class MemNavNet(nn.Module):
         if self.goal_warm < 0:
             raise ValueError('goal_warm must be non-negative')
         self.require_versioned_cache = bool(require_versioned_cache)
+        self.retrieval_anchor_min_frame = int(
+            self.num_scale + self.window - 1
+            if retrieval_anchor_min_frame is None
+            else retrieval_anchor_min_frame
+        )
+        if self.retrieval_anchor_min_frame < self.num_scale:
+            raise ValueError(
+                'retrieval_anchor_min_frame cannot precede the initial scale '
+                f'block: {self.retrieval_anchor_min_frame} < {self.num_scale}'
+            )
         self.use_pose_reliability_conditioning = bool(
             use_pose_reliability_conditioning
         )
@@ -264,6 +279,11 @@ class MemNavNet(nn.Module):
             gate_width=gate_width,
             gate_slope_init=gate_slope_init,
             gate_bias_init=gate_bias_init,
+            rank_mode=retrieval_rank_mode,
+            raw_temp_init=retrieval_raw_temp_init,
+            residual_max=retrieval_residual_max,
+            temporal_topk=retrieval_temporal_topk,
+            temporal_residual_max=retrieval_temporal_residual_max,
         )
         self.novel = NovelBranch(
             dim=token_dim, heads=heads, out_tokens=m_novel,
@@ -433,6 +453,8 @@ class MemNavNet(nn.Module):
             match_idx=enc['match_idx'],
             anchor_idx=enc['anchor_idx'],
             anchor_teacher_forced=enc['anchor_teacher_forced'],
+            retrieval_rank_temperature=enc['retrieval_rank_temperature'],
+            retrieval_residual_abs_mean=enc['retrieval_residual_abs_mean'],
         )
         if route is not None:
             condition.update(
@@ -485,6 +507,8 @@ class MemNavNet(nn.Module):
             gate_feature=condition["gate_feature"],
             match_idx=condition["match_idx"], anchor_idx=condition["anchor_idx"],
             anchor_teacher_forced=condition["anchor_teacher_forced"],
+            retrieval_rank_temperature=condition['retrieval_rank_temperature'],
+            retrieval_residual_abs_mean=condition['retrieval_residual_abs_mean'],
             gate_effective_threshold=self.retrieval.effective_gate_threshold,
             gate_normalized_slope=self.retrieval.gate_slope,
         )
@@ -499,6 +523,8 @@ class MemNavNet(nn.Module):
         return result
 
     def forward(self, batch):
+        if bool(batch.get('retrieval_only', False)):
+            return self.forward_retrieval(batch)
         return self.forward_with_condition(batch, self.prepare_condition(batch))
 
     @torch.no_grad()
@@ -705,26 +731,53 @@ class MemNavNet(nn.Module):
         anchor = torch.where(teacher_forced, best_positive, match_idx)
         return anchor, teacher_forced
 
+    def forward_retrieval(self, batch):
+        """Run the production context-free DINO retrieval path only.
+
+        Factoring this out lets retrieval-only fine-tuning skip GCT cache
+        injection, camera pose, the novel branch, and diffusion without changing
+        the logits used by the full policy.
+        """
+        dev = self.device
+        if batch.get('batch_goal_cls') is not None:
+            goal_cls = batch['batch_goal_cls'].to(dev)
+        else:
+            goal_cls = self.lingbot.dino(
+                batch['batch_goal_image'].to(dev)
+            )['cls']
+        mem_cls = batch['batch_mem_cls'].to(dev)
+        cand_mask = batch['batch_cand_mask'].to(dev).bool()
+        match_idx, gate_logit, ret_logits, gate_feature = self.retrieval(
+            goal_cls, mem_cls, cand_mask
+        )
+        return {
+            'goal_cls': goal_cls,
+            'mem_cls': mem_cls,
+            'cand_mask': cand_mask,
+            'match_idx': match_idx,
+            'gate_logit': gate_logit,
+            'gate_feature': gate_feature,
+            'ret_logits': ret_logits,
+            'retrieval_rank_temperature': self.retrieval.rank_temperature,
+            'retrieval_residual_abs_mean': (
+                self.retrieval.residual_weight_abs_mean
+            ),
+        }
+
     def encode_memory(self, batch):
         """Frozen front-end orchestration. Retrieval (trainable, batched) picks the
         match index; a per-sample loop runs the frozen LingBot ops. Returns the
         readouts the trainable head consumes.
         """
         dev = self.device
-        # goal_cls: real goal images (goal_{j}.jpg) have no cached CLS, so compute it
-        # from the goal image via the frozen context-free DINO trunk (same space as the
-        # cached per-frame dino_cls). Fall back to a provided batch_goal_cls (old path /
-        # smoke tests where the goal is a trajectory frame).
-        if batch.get("batch_goal_cls") is not None:
-            goal_cls = batch["batch_goal_cls"].to(dev)
-        else:
-            goal_cls = self.lingbot.dino(batch["batch_goal_image"].to(dev))["cls"]  # [B, D']
-        mem_cls = batch["batch_mem_cls"].to(dev)
-        cand_mask = batch["batch_cand_mask"].to(dev)   # revisit candidates E(k) = [amargin..k-t]
-        # (trainable) retrieval — match index + gate logit + ranking logits (over candidates)
-        match_idx, gate_logit, ret_logits, gate_feature = self.retrieval(
-            goal_cls, mem_cls, cand_mask
-        )
+        retrieval = self.forward_retrieval(batch)
+        goal_cls = retrieval['goal_cls']
+        mem_cls = retrieval['mem_cls']
+        cand_mask = retrieval['cand_mask']
+        match_idx = retrieval['match_idx']
+        gate_logit = retrieval['gate_logit']
+        ret_logits = retrieval['ret_logits']
+        gate_feature = retrieval['gate_feature']
         diagnostic_anchor_mode = batch.get(
             'diagnostic_retrieval_anchor_mode', 'projected'
         )
@@ -762,7 +815,7 @@ class MemNavNet(nn.Module):
         B = len(batch["cache_paths"])
         lo = int(batch.get(
             'diagnostic_anchor_min_frame',
-            self.num_scale + self.window - 1,
+            self.retrieval_anchor_min_frame,
         ))
         if lo < self.num_scale:
             raise ValueError(
@@ -824,6 +877,10 @@ class MemNavNet(nn.Module):
             match_idx=match_idx, anchor_idx=anchor, revisit_gate=revisit_gate,
             anchor_teacher_forced=anchor_teacher_forced,
             gate_logit=gate_logit, gate_feature=gate_feature, ret_logits=ret_logits,
+            retrieval_rank_temperature=self.retrieval.rank_temperature,
+            retrieval_residual_abs_mean=(
+                self.retrieval.residual_weight_abs_mean
+            ),
         )
 
 
@@ -924,6 +981,16 @@ class MemNavPolicy(PreTrainedModel):
             gate_width=il.get('gate_width', 0.04),
             gate_slope_init=il.get('gate_slope_init', 1.6),
             gate_bias_init=il.get('gate_bias_init', 0.0),
+            retrieval_rank_mode=il.get('retrieval_rank_mode', 'projected'),
+            retrieval_raw_temp_init=il.get('retrieval_raw_temp_init', 0.01),
+            retrieval_residual_max=il.get('retrieval_residual_max', 0.25),
+            retrieval_temporal_topk=il.get('retrieval_temporal_topk', 10),
+            retrieval_temporal_residual_max=il.get(
+                'retrieval_temporal_residual_max', 0.02
+            ),
+            retrieval_anchor_min_frame=il.get(
+                'retrieval_anchor_min_frame', None
+            ),
             pose_scale_window=il.get('pose_scale_window', 64),
             pose_reliability_hidden=il.get('pose_reliability_hidden', 16),
             pose_reliability_init=il.get('pose_reliability_init', 0.95),
@@ -939,6 +1006,9 @@ class MemNavPolicy(PreTrainedModel):
     def forward(self, batch):
         return self.core(batch)
 
+    def forward_retrieval(self, batch):
+        return self.core.forward_retrieval(batch)
+
     def prepare_condition(self, batch):
         return self.core.prepare_condition(batch)
 
@@ -949,7 +1019,7 @@ class MemNavPolicy(PreTrainedModel):
         return self.core.sample_actions_from_condition(condition, **kwargs)
 
     def upgrade_checkpoint_state_dict(self, state_dict):
-        """Upgrade legacy gate tensors and optional zero-residual route state."""
+        """Upgrade legacy gate/ranking tensors and optional route state."""
         upgraded = self.core.retrieval.upgrade_legacy_state_dict(
             state_dict, prefix='core.retrieval.', copy=True
         )

@@ -52,6 +52,21 @@
 #   MEMNAV_DECISION_MIN_REMAINING_FRAMES=128
 #   MEMNAV_DECISION_MIN_ANGLE_DEG=45.0
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
+#   MEMNAV_RETRIEVAL_RANK_MODE=projected
+#       (projected | raw_residual | raw_temporal)
+#   MEMNAV_RETRIEVAL_DENOMINATOR=positive_negative
+#       (positive_negative | all_candidates)
+#   MEMNAV_RETRIEVAL_ANCHOR_MIN_FRAME= (empty keeps cache window boundary; 8 is
+#       the validated early-anchor treatment)
+#   MEMNAV_RETRIEVAL_RAW_TEMP_INIT=0.01
+#   MEMNAV_RETRIEVAL_RESIDUAL_MAX=0.25
+#   MEMNAV_RETRIEVAL_TEMPORAL_TOPK=10
+#   MEMNAV_RETRIEVAL_TEMPORAL_RESIDUAL_MAX=0.02
+#   MEMNAV_RETRIEVAL_LR_MULTIPLIER=1.0
+#   MEMNAV_RETRIEVAL_ONLY=0  (1 freezes everything except 14 temporal scalars)
+#   MEMNAV_RETRIEVAL_MARGIN_COSINE=0.005
+#   MEMNAV_RETRIEVAL_MARGIN_WEIGHT=1.0  (retrieval-only default)
+#   MEMNAV_W_RETRIEVAL=1.0
 #   MEMNAV_W_AUX_DIRECTION=0.2
 #   MEMNAV_W_AUX_RANGE=0.0   (default-off experimental range supervision)
 #   MEMNAV_AUX_RANGE_BETA=0.1
@@ -121,6 +136,23 @@ export MEMNAV_EVAL_SAMPLES=${MEMNAV_EVAL_SAMPLES:-16}
 export MEMNAV_EVAL_STEPS=${MEMNAV_EVAL_STEPS:-25}
 export MEMNAV_EVAL_BATCH_SIZE=${MEMNAV_EVAL_BATCH_SIZE:-4}
 export MEMNAV_MAX_TRAIN_STEPS=${MEMNAV_MAX_TRAIN_STEPS:--1}
+export MEMNAV_RETRIEVAL_RANK_MODE=${MEMNAV_RETRIEVAL_RANK_MODE:-projected}
+export MEMNAV_RETRIEVAL_DENOMINATOR=${MEMNAV_RETRIEVAL_DENOMINATOR:-positive_negative}
+export MEMNAV_RETRIEVAL_ANCHOR_MIN_FRAME=${MEMNAV_RETRIEVAL_ANCHOR_MIN_FRAME:-}
+export MEMNAV_RETRIEVAL_RAW_TEMP_INIT=${MEMNAV_RETRIEVAL_RAW_TEMP_INIT:-0.01}
+export MEMNAV_RETRIEVAL_RESIDUAL_MAX=${MEMNAV_RETRIEVAL_RESIDUAL_MAX:-0.25}
+export MEMNAV_RETRIEVAL_TEMPORAL_TOPK=${MEMNAV_RETRIEVAL_TEMPORAL_TOPK:-10}
+export MEMNAV_RETRIEVAL_TEMPORAL_RESIDUAL_MAX=${MEMNAV_RETRIEVAL_TEMPORAL_RESIDUAL_MAX:-0.02}
+export MEMNAV_RETRIEVAL_LR_MULTIPLIER=${MEMNAV_RETRIEVAL_LR_MULTIPLIER:-1.0}
+export MEMNAV_RETRIEVAL_ONLY=${MEMNAV_RETRIEVAL_ONLY:-0}
+export MEMNAV_RETRIEVAL_MARGIN_COSINE=${MEMNAV_RETRIEVAL_MARGIN_COSINE:-0.005}
+if [[ -z "${MEMNAV_RETRIEVAL_MARGIN_WEIGHT:-}" ]]; then
+  case "${MEMNAV_RETRIEVAL_ONLY,,}" in
+    1|true|yes|on) export MEMNAV_RETRIEVAL_MARGIN_WEIGHT=1.0 ;;
+    *) export MEMNAV_RETRIEVAL_MARGIN_WEIGHT=0.0 ;;
+  esac
+fi
+export MEMNAV_W_RETRIEVAL=${MEMNAV_W_RETRIEVAL:-1.0}
 export MEMNAV_W_AUX_DIRECTION=${MEMNAV_W_AUX_DIRECTION:-0.2}
 export MEMNAV_W_AUX_RANGE=${MEMNAV_W_AUX_RANGE:-0.0}
 export MEMNAV_AUX_RANGE_BETA=${MEMNAV_AUX_RANGE_BETA:-0.1}
@@ -190,6 +222,18 @@ apptainer exec --nv \
           echo "ABORT: versioned cache run requires MEMNAV_EXPECTED_CODE_COMMIT" >&2
           exit 1
         fi
+        case "${MEMNAV_RETRIEVAL_ONLY,,}" in
+          1|true|yes|on)
+            [[ "${MEMNAV_RETRIEVAL_RANK_MODE}" == "raw_temporal" ]] || {
+              echo "ABORT: retrieval-only requires raw_temporal rank mode" >&2
+              exit 1
+            }
+            [[ "${MEMNAV_RETRIEVAL_DENOMINATOR}" == "all_candidates" ]] || {
+              echo "ABORT: retrieval-only requires all_candidates denominator" >&2
+              exit 1
+            }
+            ;;
+        esac
 
         source "${CONDA_SH}"
         conda activate "${CONDA_ENV}"
@@ -249,6 +293,7 @@ apptainer exec --nv \
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM}"
         echo "strict_features=${MEMNAV_STRICT_FEATURE_COVERAGE} require_versioned_cache=${MEMNAV_REQUIRE_VERSIONED_CACHE} expected_cache_signature=${MEMNAV_EXPECTED_CACHE_SIGNATURE} expected_code_commit=${MEMNAV_EXPECTED_CODE_COMMIT} require_pose_marker=${MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION}"
         echo "sampling=${MEMNAV_SAMPLING_MODE} decision_prob=${MEMNAV_DECISION_CURRICULUM_PROB} decision_lookahead=${MEMNAV_DECISION_LOOKAHEAD_FRAMES} decision_min_remaining=${MEMNAV_DECISION_MIN_REMAINING_FRAMES} decision_min_angle_deg=${MEMNAV_DECISION_MIN_ANGLE_DEG}"
+        echo "retrieval_rank_mode=${MEMNAV_RETRIEVAL_RANK_MODE} retrieval_denominator=${MEMNAV_RETRIEVAL_DENOMINATOR} retrieval_anchor_min_frame=${MEMNAV_RETRIEVAL_ANCHOR_MIN_FRAME:-legacy} retrieval_raw_temp_init=${MEMNAV_RETRIEVAL_RAW_TEMP_INIT} retrieval_residual_max=${MEMNAV_RETRIEVAL_RESIDUAL_MAX} retrieval_temporal_topk=${MEMNAV_RETRIEVAL_TEMPORAL_TOPK} retrieval_temporal_residual_max=${MEMNAV_RETRIEVAL_TEMPORAL_RESIDUAL_MAX} retrieval_lr_multiplier=${MEMNAV_RETRIEVAL_LR_MULTIPLIER} retrieval_only=${MEMNAV_RETRIEVAL_ONLY} retrieval_margin_cosine=${MEMNAV_RETRIEVAL_MARGIN_COSINE} retrieval_margin_weight=${MEMNAV_RETRIEVAL_MARGIN_WEIGHT} retrieval_weight=${MEMNAV_W_RETRIEVAL}"
         echo "aux_direction_weight=${MEMNAV_W_AUX_DIRECTION} aux_range_weight=${MEMNAV_W_AUX_RANGE} aux_range_beta=${MEMNAV_AUX_RANGE_BETA} aux_range_grad_cap_ratio=${MEMNAV_AUX_RANGE_GRAD_CAP_RATIO} anchor_tf=${MEMNAV_ANCHOR_TF_START}->${MEMNAV_ANCHOR_TF_END}@${MEMNAV_ANCHOR_TF_DECAY_STEPS}"
         echo "pose_scale_window=${MEMNAV_POSE_SCALE_WINDOW} pose_rel_conditioning=${MEMNAV_USE_POSE_RELIABILITY_CONDITIONING} pose_rel_weight=${MEMNAV_W_POSE_RELIABILITY} pose_rel_hidden=${MEMNAV_POSE_RELIABILITY_HIDDEN} pose_rel_init=${MEMNAV_POSE_RELIABILITY_INIT} pose_rel_lr_mult=${MEMNAV_POSE_RELIABILITY_LR_MULTIPLIER}"
         echo "route_sketch=${MEMNAV_USE_ROUTE_SKETCH} route_horizons=${MEMNAV_ROUTE_HORIZONS} route_weight=${MEMNAV_W_ROUTE_DIRECTION} route_lr_mult=${MEMNAV_ROUTE_LR_MULTIPLIER} route_curvature_emphasis=${MEMNAV_ROUTE_CURVATURE_EMPHASIS}"

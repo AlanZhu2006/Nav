@@ -28,6 +28,16 @@ def _env_int_tuple(name, default):
         raise ValueError(f'{name} must contain at least one horizon')
     return result
 
+
+def _env_optional_int(name, default=None):
+    value = os.environ.get(name)
+    if value is None or value.strip().lower() in {'', 'none'}:
+        return default
+    try:
+        return int(value)
+    except ValueError as error:
+        raise ValueError(f'{name} must be an integer or none') from error
+
 # HPC-friendly defaults: env vars override the developer-desktop paths so a
 # SLURM job only needs `export MEMNAV_ROOT_DIR / LINGBOT_REPO / LINGBOT_WEIGHTS`.
 _ROOT_DIR = os.environ.get(
@@ -62,6 +72,10 @@ _USE_POSE_RELIABILITY_CONDITIONING = _env_bool(
 )
 _USE_ROUTE_SKETCH = _env_bool('MEMNAV_USE_ROUTE_SKETCH', False)
 _ROUTE_HORIZONS = _env_int_tuple('MEMNAV_ROUTE_HORIZONS', (2, 8, 24))
+_RETRIEVAL_ANCHOR_MIN_FRAME = _env_optional_int(
+    'MEMNAV_RETRIEVAL_ANCHOR_MIN_FRAME'
+)
+_RETRIEVAL_ONLY = _env_bool('MEMNAV_RETRIEVAL_ONLY', False)
 _REQUIRE_GENERATED_POSE_CONVENTION = _env_bool(
     'MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION', False
 )
@@ -157,6 +171,7 @@ memnav_exp_cfg = ExpCfg(
         window_size=_WINDOW_SIZE,
         num_scale=_NUM_SCALE,
         max_frame_num=_MAX_FRAME_NUM,
+        retrieval_anchor_min_frame=_RETRIEVAL_ANCHOR_MIN_FRAME,
         # goal_append_warm's live-recompute depth before streaming the goal (deeper than
         # window_size on purpose): window_size's cold start at the window boundary starves
         # the goal's pose estimate (no real predecessors); goal_warm=64 empirically matches
@@ -181,6 +196,39 @@ memnav_exp_cfg = ExpCfg(
         gate_lr_multiplier=float(
             os.environ.get('MEMNAV_GATE_LR_MULTIPLIER', '10.0')
         ),
+        # Retrieval ranking can preserve the legacy projected-cosine path or
+        # start exactly from frozen raw-DINO ordering and learn only a bounded
+        # residual.  The latter is opt-in so historical checkpoints/evaluations
+        # remain byte-for-byte reproducible by default.
+        retrieval_rank_mode=os.environ.get(
+            'MEMNAV_RETRIEVAL_RANK_MODE', 'projected'
+        ),
+        retrieval_raw_temp_init=float(os.environ.get(
+            'MEMNAV_RETRIEVAL_RAW_TEMP_INIT', '0.01'
+        )),
+        retrieval_residual_max=float(os.environ.get(
+            'MEMNAV_RETRIEVAL_RESIDUAL_MAX', '0.25'
+        )),
+        retrieval_temporal_topk=int(os.environ.get(
+            'MEMNAV_RETRIEVAL_TEMPORAL_TOPK', '10'
+        )),
+        retrieval_temporal_residual_max=float(os.environ.get(
+            'MEMNAV_RETRIEVAL_TEMPORAL_RESIDUAL_MAX', '0.02'
+        )),
+        retrieval_denominator=os.environ.get(
+            'MEMNAV_RETRIEVAL_DENOMINATOR', 'positive_negative'
+        ),
+        retrieval_lr_multiplier=float(os.environ.get(
+            'MEMNAV_RETRIEVAL_LR_MULTIPLIER', '1.0'
+        )),
+        retrieval_only=_RETRIEVAL_ONLY,
+        retrieval_margin_cosine=float(os.environ.get(
+            'MEMNAV_RETRIEVAL_MARGIN_COSINE', '0.005'
+        )),
+        retrieval_margin_weight=float(os.environ.get(
+            'MEMNAV_RETRIEVAL_MARGIN_WEIGHT',
+            '1.0' if _RETRIEVAL_ONLY else '0.0',
+        )),
         # Long-range geometry confidence is separate from semantic revisit
         # confidence.  It sees only online consistency cues and is supervised by
         # raw-bearing agreement during training.
@@ -208,7 +256,9 @@ memnav_exp_cfg = ExpCfg(
             '8.0' if _USE_ROUTE_SKETCH else '0.0',
         )),
         # loss weights (consumed by MemNavTrainer)
-        w_retrieval=1.0,   # ranking InfoNCE (which candidate frame matches)
+        w_retrieval=float(os.environ.get(
+            'MEMNAV_W_RETRIEVAL', '1.0'
+        )),   # ranking InfoNCE (which candidate frame matches)
         w_gate=1.0,        # revisit/novel gate BCE (is there a match at all)
         # Scale-invariant translation-direction auxiliary. Metric x/y remains a
         # diagnostic because LingBot pose has a per-sequence canonical scale.

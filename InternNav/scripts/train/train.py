@@ -263,6 +263,9 @@ def main(config, model_class, model_config_class):
                 feature_root=getattr(config.il, 'feature_root', None),
                 window_size=getattr(config.il, 'window_size', 8),
                 num_scale=getattr(config.il, 'num_scale', 8),
+                retrieval_anchor_min_frame=getattr(
+                    config.il, 'retrieval_anchor_min_frame', None
+                ),
                 strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
                 require_versioned_cache=getattr(
                     config.il, 'require_versioned_cache', False
@@ -290,6 +293,9 @@ def main(config, model_class, model_config_class):
                 decision_min_angle_deg=getattr(
                     config.il, 'decision_min_angle_deg', 45.0
                 ),
+                retrieval_only=bool(getattr(
+                    config.il, 'retrieval_only', False
+                )),
             )
         else:
             if '3dgs' in config.il.lmdb_features_dir or '3dgs' in config.il.lmdb_features_dir:
@@ -318,6 +324,9 @@ def main(config, model_class, model_config_class):
                 feature_root=getattr(config.il, 'feature_root', None),
                 window_size=getattr(config.il, 'window_size', 8),
                 num_scale=getattr(config.il, 'num_scale', 8),
+                retrieval_anchor_min_frame=getattr(
+                    config.il, 'retrieval_anchor_min_frame', None
+                ),
                 strict_feature_coverage=getattr(config.il, 'strict_feature_coverage', True),
                 require_versioned_cache=getattr(
                     config.il, 'require_versioned_cache', False
@@ -345,6 +354,9 @@ def main(config, model_class, model_config_class):
                 decision_min_angle_deg=getattr(
                     config.il, 'decision_min_angle_deg', 45.0
                 ),
+                retrieval_only=bool(getattr(
+                    config.il, 'retrieval_only', False
+                )),
             )
             eval_dataset_data = build_fixed_memnav_eval_subset(
                 fixed_val,
@@ -398,11 +410,18 @@ def main(config, model_class, model_config_class):
             train_dataset = train_dataset_data
             collate_fn = logoplanner_collate_fn
         elif config.model_name == 'memnav':
-            from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
+            from internnav.dataset.memnav_dataset_lerobot import (
+                memnav_collate_fn,
+                memnav_retrieval_collate_fn,
+            )
             from internnav.trainer import MemNavTrainer
             policy_trainer = MemNavTrainer
             train_dataset = train_dataset_data
-            collate_fn = memnav_collate_fn
+            collate_fn = (
+                memnav_retrieval_collate_fn
+                if bool(getattr(config.il, 'retrieval_only', False))
+                else memnav_collate_fn
+            )
 
         # ------------ training args ------------
         is_memnav = config.model_name == 'memnav'

@@ -132,6 +132,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
         covis_pos_hi=0.5,
         covis_pos_lo=0.1,
         anchor_margin=None,
+        retrieval_anchor_min_frame=None,
         glimpse_pos=14,
         glimpse_neg=83,
         exclude_recent=83,
@@ -162,6 +163,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
         patch_size=14,
         preprocess_mode='pad',
         repeat=1,
+        retrieval_only=False,
         debug=False,
         **kwargs,
     ):
@@ -180,6 +182,16 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.covis_pos_lo = covis_pos_lo
         self.anchor_margin_default = (anchor_margin if anchor_margin is not None
                                       else num_scale + window_size - 1)
+        self.retrieval_anchor_min_frame = (
+            None if retrieval_anchor_min_frame is None
+            else int(retrieval_anchor_min_frame)
+        )
+        if (self.retrieval_anchor_min_frame is not None
+                and self.retrieval_anchor_min_frame < self.num_scale):
+            raise ValueError(
+                'retrieval_anchor_min_frame cannot precede the initial scale '
+                f'block: {self.retrieval_anchor_min_frame} < {self.num_scale}'
+            )
         # frame-offset bands for goal A (no covis): frames within `glimpse_pos` of A's
         # arrival strongly see it (median covis rise ~14); frames earlier than
         # `glimpse_neg` (p95 rise ~83) definitely don't; the band between is ignore.
@@ -246,6 +258,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.image_size = image_size
         self.patch_size = patch_size
         self.preprocess_mode = preprocess_mode
+        self.retrieval_only = bool(retrieval_only)
 
         # LingBot's exact image preprocessing (square-pad to image_size), so the
         # goal/window images here match what the GCT window-forward + dense DINO
@@ -453,6 +466,11 @@ class MemNav_Dataset(NavDP_Base_Datset):
               f"revisit/novel dynamic per-k, exclude_recent={self.exclude_recent}, repeat={self.repeat})")
         if self.input_stats:
             print(f"[MemNav_Dataset] skipped episode inputs: {dict(self.input_stats)}")
+        if self.retrieval_anchor_min_frame is not None:
+            print(
+                '[MemNav_Dataset] retrieval candidate floor override: '
+                f'{self.retrieval_anchor_min_frame}'
+            )
         if self.cache_keyframe_intervals:
             interval_counts = Counter(self.cache_keyframe_intervals)
             print(
@@ -490,6 +508,12 @@ class MemNav_Dataset(NavDP_Base_Datset):
             'require_versioned_cache': self.require_versioned_cache,
             'expected_cache_signature': self.expected_cache_signature,
         }
+        if self.retrieval_anchor_min_frame is not None:
+            fingerprint_config['retrieval_anchor_min_frame'] = (
+                self.retrieval_anchor_min_frame
+            )
+        if self.retrieval_only:
+            fingerprint_config['retrieval_only'] = True
         # Keep the default random/fixed dataset identity byte-for-byte compatible
         # with checkpoints written before the opt-in curriculum existed. Dormant
         # knobs cannot change selection or labels, so including them would create
@@ -540,6 +564,10 @@ class MemNav_Dataset(NavDP_Base_Datset):
         pos_hi = float(meta.get('covis_pos_hi', self.covis_pos_hi))
         pos_lo = float(meta.get('covis_pos_lo', self.covis_pos_lo))
         amargin = int(meta.get('anchor_margin', self.anchor_margin_default))
+        retrieval_amargin = (
+            amargin if self.retrieval_anchor_min_frame is None
+            else self.retrieval_anchor_min_frame
+        )
         frame_convention = meta.get('frame_convention', '')
         slack = self.goal_slack
         t = self.exclude_recent
@@ -548,10 +576,11 @@ class MemNav_Dataset(NavDP_Base_Datset):
         def _rgb(i):
             return os.path.join(rgb_dir, f'{int(i)}.jpg')
 
-        # k is sampled per __getitem__ in the goal's own leg. The candidate region
-        # E(k) = [amargin .. k-t] must be non-empty -> k >= amargin + t. Labels
-        # (pos/neg/cand/null_pos) are built DYNAMICALLY from the raw covis curve in
-        # _build_label; here we only store the curve + thresholds + the k-range.
+        # k is sampled per __getitem__ in the goal's own leg.  Preserve the
+        # generator's original margin for that sampling range so a retrieval-only
+        # floor experiment does not silently change the action/current-step
+        # population.  ``retrieval_amargin`` changes only E(k), the candidate
+        # region used by labels and inference.
 
         # --- covis goals B, C, ... : pick k inside leg j, label by covis over E(k) ---
         for j, g in enumerate(goals):
@@ -576,7 +605,8 @@ class MemNav_Dataset(NavDP_Base_Datset):
             # to the render's orientation by construction — see RevisitMerge docstring).
             out.append(dict(has_covis=True, goal_j=j, leg_start=leg_start, goal_step=goal_step,
                             k_lo=int(k_lo), k_hi=int(k_hi), goal_img_path=goal_img_path,
-                            curve=curve, pos_hi=pos_hi, pos_lo=pos_lo, amargin=amargin,
+                            curve=curve, pos_hi=pos_hi, pos_lo=pos_lo,
+                            amargin=retrieval_amargin,
                             yaw_habitat=float(g.get('yaw_habitat', 0.0))))
 
         # --- goal A (first milestone): no earlier pass, so ALWAYS novel under the unified
@@ -590,7 +620,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
             if k_hi >= k_lo and os.path.isfile(_rgb(a_frame)):
                 out.append(dict(has_covis=False, goal_j=-1, leg_start=0, goal_step=goal_step,
                                 k_lo=int(k_lo), k_hi=int(k_hi), goal_img_path=_rgb(a_frame),
-                                T_A=a_frame, amargin=amargin))
+                                T_A=a_frame, amargin=retrieval_amargin))
         for sample in out:
             sample['frame_convention'] = frame_convention
         return out
@@ -893,6 +923,26 @@ class MemNav_Dataset(NavDP_Base_Datset):
         # unified revisit label over candidate region E(k) = [amargin .. k-exclude_recent]
         pos_mask, neg_mask, cand_mask, null_pos = self._build_label(s, k)
 
+        # Retrieval-only fine-tuning needs neither future action labels nor the
+        # expensive local RGB window/GCT pose path.  It still executes all strict
+        # source/cache/frame-length validation above, then returns the exact same
+        # candidate keys and masks used by the full policy.
+        if self.retrieval_only:
+            goal_image = self._load_image_path(s['goal_img_path'])
+            return {
+                'mem_cls': torch.tensor(mem_cls, dtype=torch.float32),
+                'pos_mask': torch.from_numpy(np.ascontiguousarray(pos_mask)),
+                'neg_mask': torch.from_numpy(np.ascontiguousarray(neg_mask)),
+                'cand_mask': torch.from_numpy(np.ascontiguousarray(cand_mask)),
+                'null_pos': torch.tensor(bool(null_pos)),
+                'is_revisit': torch.tensor(
+                    float(not null_pos), dtype=torch.float32
+                ),
+                'goal_image': goal_image,
+                'goal_j': int(s.get('goal_j', -1)),
+                'sample_identity': str(s['sample_identity']),
+            }
+
         # --- action segment: forward path current(k) -> goal(goal_step) ---
         seg = extrinsics[k : goal_step + 1].copy()         # seg[0] == current frame k
         pred_actions, goal_rel_pose = self._build_actions(seg, base_extrinsic, pred_digit)
@@ -1071,6 +1121,57 @@ def memnav_collate_fn(batch):
         'batch_has_covis':       torch.tensor([b['has_covis'] for b in batch], dtype=torch.bool),
         'leg_starts':            [b['leg_start'] for b in batch],
         'sample_identities':     [b['sample_identity'] for b in batch],
+    }
+
+
+def memnav_retrieval_collate_fn(batch):
+    """Collate the light retrieval-only dataset contract.
+
+    ``batch_labels`` is a harmless scalar label used only so Hugging Face's
+    evaluation loop calls :meth:`MemNavTrainer.compute_loss`; the retrieval-only
+    loss consumes the explicit positive/candidate masks below.
+    """
+    batch_size = len(batch)
+    feature_dim = batch[0]['mem_cls'].shape[-1]
+    lengths = [sample['mem_cls'].shape[0] for sample in batch]
+    max_length = max(lengths)
+    mem_cls = torch.zeros(
+        batch_size, max_length, feature_dim, dtype=torch.float32
+    )
+    mem_mask = torch.zeros(batch_size, max_length, dtype=torch.bool)
+    pos_mask = torch.zeros(batch_size, max_length, dtype=torch.bool)
+    neg_mask = torch.zeros(batch_size, max_length, dtype=torch.bool)
+    cand_mask = torch.zeros(batch_size, max_length, dtype=torch.bool)
+    for index, sample in enumerate(batch):
+        length = lengths[index]
+        mem_cls[index, :length] = sample['mem_cls']
+        mem_mask[index, :length] = True
+        pos_mask[index, :length] = sample['pos_mask']
+        neg_mask[index, :length] = sample['neg_mask']
+        cand_mask[index, :length] = sample['cand_mask']
+
+    is_revisit = torch.stack([sample['is_revisit'] for sample in batch])
+    return {
+        'retrieval_only': True,
+        'batch_mem_cls': mem_cls,
+        'batch_mem_mask': mem_mask,
+        'batch_pos_mask': pos_mask,
+        'batch_neg_mask': neg_mask,
+        'batch_cand_mask': cand_mask,
+        'batch_null_pos': torch.stack([
+            sample['null_pos'] for sample in batch
+        ]),
+        'batch_is_revisit': is_revisit,
+        'batch_labels': is_revisit.clone(),
+        'batch_goal_image': torch.stack([
+            sample['goal_image'] for sample in batch
+        ]),
+        'batch_goal_j': torch.tensor([
+            sample['goal_j'] for sample in batch
+        ], dtype=torch.long),
+        'sample_identities': [
+            sample['sample_identity'] for sample in batch
+        ],
     }
 
 

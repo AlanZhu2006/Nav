@@ -9,6 +9,7 @@ from torch import nn
 from transformers import TrainingArguments
 
 from internnav.model.basemodel.memnav.memnav_policy import MemNavPolicy
+from internnav.model.basemodel.memnav.retrieval_head import RetrievalHead
 from internnav.model.basemodel.memnav.route_sketch import (
     ResidualRouteSketch,
     route_curvature_gate,
@@ -99,6 +100,9 @@ class _OptimizerModel(nn.Module):
         self.core.retrieval = nn.Module()
         self.core.retrieval.gate_log_slope = nn.Parameter(torch.tensor(0.0))
         self.core.retrieval.gate_bias = nn.Parameter(torch.tensor(0.0))
+        self.core.retrieval.proj = nn.Linear(3, 2)
+        self.core.retrieval.raw_log_temp = nn.Parameter(torch.tensor(-4.0))
+        self.core.retrieval.residual_weights = nn.Parameter(torch.zeros(2))
         self.core.revisit_merge = nn.Module()
         self.core.revisit_merge.pose_encoder = nn.Module()
         self.core.revisit_merge.pose_encoder.reliability_head = nn.Sequential(
@@ -111,6 +115,50 @@ class _OptimizerModel(nn.Module):
 
     def forward(self, batch):
         return {'loss': self.linear(batch['x']).square().mean()}
+
+
+class _RetrievalOnlyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.unrelated = nn.Linear(3, 2)
+        self.core = nn.Module()
+        self.core.retrieval = RetrievalHead(
+            dino_dim=2,
+            proj_dim=2,
+            rank_mode='raw_temporal',
+            raw_temp_init=0.01,
+            temporal_topk=4,
+            temporal_residual_max=0.02,
+        )
+
+    @property
+    def device(self):
+        return self.core.retrieval.temporal_weights.device
+
+    def forward(self, batch):
+        self.assert_retrieval_contract(batch)
+        match, gate_logit, ret_logits, gate_feature = self.core.retrieval(
+            batch['batch_goal_cls'].to(self.device),
+            batch['batch_mem_cls'].to(self.device),
+            batch['batch_cand_mask'].to(self.device),
+        )
+        return {
+            'match_idx': match,
+            'gate_logit': gate_logit,
+            'gate_feature': gate_feature,
+            'ret_logits': ret_logits,
+            'retrieval_rank_temperature': (
+                self.core.retrieval.rank_temperature
+            ),
+            'retrieval_residual_abs_mean': (
+                self.core.retrieval.residual_weight_abs_mean
+            ),
+        }
+
+    @staticmethod
+    def assert_retrieval_contract(batch):
+        if not bool(batch.get('retrieval_only', False)):
+            raise AssertionError('missing retrieval-only dispatch marker')
 
 
 class _RouteLossModel(_LossModel):
@@ -282,6 +330,7 @@ class MemNavCheckpointTest(unittest.TestCase):
                 'batch_labels': labels,
                 'batch_pos_mask': torch.tensor([[True, False], [False, False]]),
                 'batch_neg_mask': torch.tensor([[False, True], [True, True]]),
+                'batch_cand_mask': torch.ones(2, 2, dtype=torch.bool),
                 'batch_is_revisit': torch.tensor([1.0, 0.0]),
                 'batch_goal_rel_pose': torch.tensor([
                     [1.0, 2.0, 0.0], [0.0, 1.0, 0.0]
@@ -325,6 +374,30 @@ class MemNavCheckpointTest(unittest.TestCase):
             self.assertAlmostEqual(logged['anchor_tf_probability'], 1.0)
             self.assertIn('aux_mse_y_anchor_gap_256_511', logged)
 
+            # A gray candidate participates in inference argmax, so the aligned
+            # objective must also put it in the denominator.  The legacy hard-only
+            # objective has no supported competitor on this row.
+            gray_inputs = dict(inputs)
+            gray_inputs['batch_neg_mask'] = torch.tensor([
+                [False, False], [True, True]
+            ])
+            trainer.retrieval_denominator = 'all_candidates'
+            _, gray_outputs = trainer.compute_loss(
+                model, gray_inputs, return_outputs=True
+            )
+            self.assertEqual(
+                float(gray_outputs['retrieval_hard_loss'].detach()), 0.0
+            )
+            self.assertGreater(
+                float(gray_outputs['retrieval_all_candidate_loss'].detach()), 0.0
+            )
+            torch.testing.assert_close(
+                gray_outputs['retrieval_loss'],
+                gray_outputs['retrieval_all_candidate_loss'],
+            )
+            trainer.retrieval_denominator = 'positive_negative'
+            trainer._metric_accumulators['train'].clear()
+
             model.zero_grad(set_to_none=True)
             novel_inputs = dict(inputs)
             novel_inputs['batch_pos_mask'] = torch.zeros(2, 2, dtype=torch.bool)
@@ -346,6 +419,65 @@ class MemNavCheckpointTest(unittest.TestCase):
                 not isinstance(value, float) or torch.isfinite(torch.tensor(value))
                 for value in novel_logged.values()
             ))
+
+    def test_retrieval_only_freezes_everything_except_temporal_reranker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config()
+            config.il.retrieval_only = True
+            config.il.retrieval_rank_mode = 'raw_temporal'
+            config.il.retrieval_denominator = 'all_candidates'
+            config.il.retrieval_margin_cosine = 0.005
+            config.il.retrieval_margin_weight = 1.0
+            model = _RetrievalOnlyModel()
+            trainer = MemNavTrainer(
+                config=config,
+                model=model,
+                args=TrainingArguments(
+                    output_dir=tmp,
+                    report_to='none',
+                    per_device_train_batch_size=1,
+                ),
+                train_dataset=_TinyDataset(),
+            )
+            trainable = {
+                name for name, parameter in model.named_parameters()
+                if parameter.requires_grad
+            }
+            self.assertEqual(trainable, {
+                'core.retrieval.temporal_weights',
+                'core.retrieval.temporal_bias',
+            })
+            self.assertFalse(model.core.retrieval.raw_log_temp.requires_grad)
+
+            cosine = torch.tensor([0.94, 0.95, 0.94, 0.96])
+            memory = torch.stack((
+                cosine, (1.0 - cosine.square()).sqrt()
+            ), -1)[None]
+            inputs = {
+                'retrieval_only': True,
+                'batch_goal_cls': torch.tensor([[1.0, 0.0]]),
+                'batch_mem_cls': memory,
+                'batch_cand_mask': torch.ones(1, 4, dtype=torch.bool),
+                # Supported plateau is positive; the isolated raw peak is not.
+                'batch_pos_mask': torch.tensor([[True, True, True, False]]),
+                'batch_neg_mask': torch.tensor([[False, False, False, True]]),
+                'batch_labels': torch.ones(1),
+            }
+            loss, outputs = trainer.compute_loss(
+                model, inputs, return_outputs=True
+            )
+            self.assertTrue(torch.isfinite(loss))
+            self.assertEqual(float(outputs['retrieval_strict_top1']), 0.0)
+            self.assertGreater(
+                float(outputs['retrieval_margin_loss'].detach()), 0.0
+            )
+            loss.backward()
+            self.assertGreater(
+                float(model.core.retrieval.temporal_weights.grad.abs().sum()),
+                0.0,
+            )
+            self.assertIsNotNone(model.core.retrieval.temporal_bias.grad)
+            self.assertIsNone(model.core.retrieval.raw_log_temp.grad)
 
     def test_anchor_teacher_forcing_schedule_and_endpoint_masks(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -577,6 +709,17 @@ class MemNavCheckpointTest(unittest.TestCase):
                     model.core.revisit_merge.pose_encoder.reliability_head.parameters()
                 },
             )
+            retrieval_groups = [
+                group for group in optimizer.param_groups
+                if str(group.get('memnav_group', '')).startswith(
+                    'retrieval_rank'
+                )
+            ]
+            self.assertEqual(len(retrieval_groups), 2)
+            self.assertTrue(all(
+                abs(group['lr'] - 2e-4) < 1e-12
+                for group in retrieval_groups
+            ))
 
     def test_route_sketch_has_separate_scaled_optimizer_groups(self):
         with tempfile.TemporaryDirectory() as tmp:

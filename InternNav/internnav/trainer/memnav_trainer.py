@@ -118,6 +118,25 @@ class MemNavTrainer(BaseTrainer):
         self.label_names = ['batch_labels']
         self.config = config
         self.w_retr = getattr(config.il, 'w_retrieval', 1.0)
+        self.retrieval_denominator = getattr(
+            config.il, 'retrieval_denominator', 'positive_negative'
+        )
+        self.retrieval_lr_multiplier = float(
+            getattr(config.il, 'retrieval_lr_multiplier', 1.0)
+        )
+        self.retrieval_only = bool(
+            getattr(config.il, 'retrieval_only', False)
+        )
+        self.retrieval_margin_cosine = float(
+            getattr(config.il, 'retrieval_margin_cosine', 0.005)
+        )
+        self.retrieval_margin_weight = float(
+            getattr(
+                config.il,
+                'retrieval_margin_weight',
+                1.0 if self.retrieval_only else 0.0,
+            )
+        )
         self.w_gate = getattr(config.il, 'w_gate', 1.0)
         self.w_aux = getattr(config.il, 'w_aux_direction', 0.2)
         self.w_route = float(getattr(config.il, 'w_route_direction', 0.0))
@@ -152,6 +171,33 @@ class MemNavTrainer(BaseTrainer):
         )
         if self.w_aux_range < 0.0:
             raise ValueError('w_aux_range must be non-negative')
+        if self.w_retr < 0.0:
+            raise ValueError('w_retrieval must be non-negative')
+        if self.retrieval_denominator not in {
+            'positive_negative', 'all_candidates'
+        }:
+            raise ValueError(
+                'retrieval_denominator must be positive_negative/all_candidates, '
+                f'got {self.retrieval_denominator!r}'
+            )
+        if self.retrieval_lr_multiplier <= 0.0:
+            raise ValueError('retrieval_lr_multiplier must be positive')
+        if self.retrieval_margin_cosine < 0.0:
+            raise ValueError('retrieval_margin_cosine must be non-negative')
+        if self.retrieval_margin_weight < 0.0:
+            raise ValueError('retrieval_margin_weight must be non-negative')
+        if self.retrieval_only:
+            rank_mode = getattr(
+                config.il, 'retrieval_rank_mode', 'projected'
+            )
+            if rank_mode != 'raw_temporal':
+                raise ValueError(
+                    'retrieval_only requires retrieval_rank_mode=raw_temporal'
+                )
+            if self.retrieval_denominator != 'all_candidates':
+                raise ValueError(
+                    'retrieval_only requires retrieval_denominator=all_candidates'
+                )
         if self.w_route < 0.0:
             raise ValueError('w_route_direction must be non-negative')
         if self.w_route > 0.0 and not self.use_route_sketch:
@@ -191,6 +237,33 @@ class MemNavTrainer(BaseTrainer):
         self._metric_accumulators = {'train': {}, 'eval': {}}
         self.eval_seed = int(getattr(config.il, 'eval_seed', 0))
         model = self.model.module if hasattr(self.model, 'module') else self.model
+        if self.retrieval_only:
+            trainable_suffixes = (
+                'retrieval.temporal_weights',
+                'retrieval.temporal_bias',
+            )
+            for name, parameter in model.named_parameters():
+                parameter.requires_grad_(name.endswith(trainable_suffixes))
+            trainable = [
+                (name, parameter)
+                for name, parameter in model.named_parameters()
+                if parameter.requires_grad
+            ]
+            trainable_names = {name for name, _ in trainable}
+            if len(trainable_names) != 2 or not all(
+                any(name.endswith(suffix) for name in trainable_names)
+                for suffix in trainable_suffixes
+            ):
+                raise RuntimeError(
+                    'retrieval-only freeze contract expected exactly temporal '
+                    f'weights+bias, got {sorted(trainable_names)}'
+                )
+            trainable_count = sum(parameter.numel() for _, parameter in trainable)
+            if trainable_count != 14:
+                raise RuntimeError(
+                    'retrieval-only freeze contract expected 14 scalars, got '
+                    f'{trainable_count}'
+                )
         self.model_device = model.device
         # Known local-frame convention candidate. We report both raw and converted
         # camera-rotation errors so this correction can never hide a bad pose stream.
@@ -203,6 +276,12 @@ class MemNavTrainer(BaseTrainer):
         fingerprint = self._dataset_fingerprint(self.train_dataset) or '<unavailable>'
         print(f'[Rank {rank}] Model device: {self.model_device}')
         print(f'[Rank {rank}] Dataset fingerprint: {fingerprint}')
+        if self.retrieval_only:
+            print(
+                f'[Rank {rank}] Retrieval-only: 14 trainable scalars; '
+                f'cosine margin={self.retrieval_margin_cosine}; '
+                f'margin weight={self.retrieval_margin_weight}'
+            )
 
     def create_optimizer(self):
         """Give small calibration heads their own learning-rate groups.
@@ -223,6 +302,7 @@ class MemNavTrainer(BaseTrainer):
             getattr(self.config.il, 'pose_reliability_lr_multiplier', 5.0)
         )
         route_multiplier = self.route_lr_multiplier
+        retrieval_multiplier = self.retrieval_lr_multiplier
         if multiplier <= 0:
             raise ValueError(
                 f'gate_lr_multiplier must be positive, got {multiplier}'
@@ -252,7 +332,13 @@ class MemNavTrainer(BaseTrainer):
         route_names = {
             name for name, _ in named_trainable if '.route_sketch.' in name
         }
-        special_names = gate_names | pose_reliability_names | route_names
+        retrieval_names = {
+            name for name, _ in named_trainable
+            if '.retrieval.' in name and name not in gate_names
+        }
+        special_names = (
+            gate_names | retrieval_names | pose_reliability_names | route_names
+        )
         # Tiny test models and non-MemNav reuse should retain BaseTrainer's exact
         # optimizer behavior.
         if not special_names:
@@ -270,6 +356,14 @@ class MemNavTrainer(BaseTrainer):
         ]
         gate_parameters = [
             parameter for name, parameter in named_trainable if name in gate_names
+        ]
+        retrieval_decay_parameters = [
+            parameter for name, parameter in named_trainable
+            if name in retrieval_names and name in decay_names
+        ]
+        retrieval_no_decay_parameters = [
+            parameter for name, parameter in named_trainable
+            if name in retrieval_names and name not in decay_names
         ]
         pose_reliability_parameters = [
             parameter for name, parameter in named_trainable
@@ -297,6 +391,20 @@ class MemNavTrainer(BaseTrainer):
                 'lr': self.args.learning_rate * multiplier,
                 'memnav_group': 'gate_calibration',
                 'lr_multiplier': multiplier,
+            },
+            {
+                'params': retrieval_decay_parameters,
+                'weight_decay': self.args.weight_decay,
+                'lr': self.args.learning_rate * retrieval_multiplier,
+                'memnav_group': 'retrieval_rank_decay',
+                'lr_multiplier': retrieval_multiplier,
+            },
+            {
+                'params': retrieval_no_decay_parameters,
+                'weight_decay': 0.0,
+                'lr': self.args.learning_rate * retrieval_multiplier,
+                'memnav_group': 'retrieval_rank_no_decay',
+                'lr_multiplier': retrieval_multiplier,
             },
             {
                 'params': pose_reliability_parameters,
@@ -360,6 +468,29 @@ class MemNavTrainer(BaseTrainer):
     def _training_objective_metadata(self):
         return {
             'w_retrieval': float(self.w_retr),
+            'retrieval_denominator': self.retrieval_denominator,
+            'retrieval_lr_multiplier': self.retrieval_lr_multiplier,
+            'retrieval_only': self.retrieval_only,
+            'retrieval_margin_cosine': self.retrieval_margin_cosine,
+            'retrieval_margin_weight': self.retrieval_margin_weight,
+            'retrieval_rank_mode': getattr(
+                self.config.il, 'retrieval_rank_mode', 'projected'
+            ),
+            'retrieval_raw_temp_init': float(getattr(
+                self.config.il, 'retrieval_raw_temp_init', 0.01
+            )),
+            'retrieval_residual_max': float(getattr(
+                self.config.il, 'retrieval_residual_max', 0.25
+            )),
+            'retrieval_temporal_topk': int(getattr(
+                self.config.il, 'retrieval_temporal_topk', 10
+            )),
+            'retrieval_temporal_residual_max': float(getattr(
+                self.config.il, 'retrieval_temporal_residual_max', 0.02
+            )),
+            'retrieval_anchor_min_frame': getattr(
+                self.config.il, 'retrieval_anchor_min_frame', None
+            ),
             'w_gate': float(self.w_gate),
             'w_aux_direction': float(self.w_aux),
             'w_route_direction': float(self.w_route),
@@ -463,7 +594,112 @@ class MemNavTrainer(BaseTrainer):
         )
         return eligible & (draw < probability)
 
+    def _compute_retrieval_only_loss(
+        self, model, inputs, return_outputs=False
+    ):
+        """Train the bounded temporal residual without policy-side gradients.
+
+        Listwise multi-positive likelihood provides dense supervision.  A second
+        hinge term is measured in pre-temperature cosine units and directly
+        aligns optimization with strict inference Top-1: the best positive must
+        beat the best gray-or-negative candidate by the configured margin.
+        """
+        phase = 'train' if model.training else 'eval'
+        fwd = model(inputs)
+        ret_logits = fwd['ret_logits']
+        device = ret_logits.device
+        positive = inputs['batch_pos_mask'].to(device).bool()
+        negative = inputs['batch_neg_mask'].to(device).bool()
+        candidate = inputs['batch_cand_mask'].to(device).bool()
+        if ret_logits.shape != positive.shape:
+            raise ValueError('retrieval logits/masks must have identical shapes')
+        if bool((positive & negative).any()):
+            raise ValueError('retrieval positive/negative masks must be disjoint')
+        if bool(((positive | negative) & ~candidate).any()):
+            raise ValueError(
+                'retrieval positive/negative masks must be candidate subsets'
+            )
+
+        nonpositive = candidate & ~positive
+        rows = positive.any(-1) & nonpositive.any(-1)
+        row_count = rows.float().sum()
+        floor = torch.finfo(ret_logits.dtype).min
+        positive_lse = ret_logits.masked_fill(
+            ~positive, floor
+        ).logsumexp(-1)
+        candidate_lse = ret_logits.masked_fill(
+            ~candidate, floor
+        ).logsumexp(-1)
+        listwise_loss = (
+            candidate_lse[rows] - positive_lse[rows]
+        ).sum() / row_count.clamp_min(1.0)
+
+        temperature = fwd['retrieval_rank_temperature'].to(
+            device=device, dtype=ret_logits.dtype
+        )
+        rank_cosine = ret_logits * temperature
+        best_positive = rank_cosine.masked_fill(
+            ~positive, floor
+        ).max(-1).values
+        best_nonpositive = rank_cosine.masked_fill(
+            ~nonpositive, floor
+        ).max(-1).values
+        strict_margin = best_positive - best_nonpositive
+        margin_loss = F.relu(
+            self.retrieval_margin_cosine - strict_margin[rows]
+        ).sum() / row_count.clamp_min(1.0)
+        loss = listwise_loss + self.retrieval_margin_weight * margin_loss
+
+        match = fwd['match_idx'].to(device).long()
+        selected_positive = positive.gather(1, match[:, None]).squeeze(1)
+        selected_negative = negative.gather(1, match[:, None]).squeeze(1)
+        selected_gray = (
+            candidate.gather(1, match[:, None]).squeeze(1)
+            & ~selected_positive
+            & ~selected_negative
+        )
+        strict_top1 = self._masked_mean(selected_positive.float(), rows)
+        negative_fraction = self._masked_mean(
+            selected_negative.float(), rows
+        )
+        gray_fraction = self._masked_mean(selected_gray.float(), rows)
+        strict_margin_mean = self._masked_mean(strict_margin, rows)
+
+        def recall_at(k):
+            width = ret_logits.shape[-1]
+            count = min(int(k), width)
+            top_indices = ret_logits.topk(count, -1).indices
+            top_positive = positive.gather(1, top_indices).any(-1)
+            return self._masked_mean(top_positive.float(), rows)
+
+        recall_5 = recall_at(5)
+        recall_10 = recall_at(10)
+        residual_abs_mean = fwd['retrieval_residual_abs_mean']
+        outputs = {
+            'loss': loss,
+            'retrieval_loss': listwise_loss,
+            'retrieval_margin_loss': margin_loss,
+            'retrieval_strict_margin_cosine': strict_margin_mean,
+            'retrieval_strict_top1': strict_top1,
+            'retrieval_recall_at_5': recall_5,
+            'retrieval_recall_at_10': recall_10,
+            'seen_match_negative_fraction': negative_fraction,
+            'seen_match_gray_fraction': gray_fraction,
+            'retrieval_rank_temperature': temperature,
+            'retrieval_residual_abs_mean': residual_abs_mean,
+        }
+        for name, value in outputs.items():
+            if name == 'loss':
+                continue
+            self._accumulate(name, value, row_count, phase)
+        self._accumulate('rank_row_fraction', row_count / rows.numel(), rows.numel(), phase)
+        return (loss, outputs) if return_outputs else loss
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if self.retrieval_only:
+            return self._compute_retrieval_only_loss(
+                model, inputs, return_outputs=return_outputs
+            )
         dev = next(model.parameters()).device
         phase = 'train' if model.training else 'eval'
         anchor_tf_probability = (
@@ -564,18 +800,58 @@ class MemNavTrainer(BaseTrainer):
         gate_logit = fwd['gate_logit']
         pos = inputs['batch_pos_mask'].to(dev).bool()
         neg = inputs['batch_neg_mask'].to(dev).bool()
+        candidate_input = inputs.get('batch_cand_mask')
+        if candidate_input is None:
+            if self.retrieval_denominator == 'all_candidates':
+                raise ValueError(
+                    'all_candidates retrieval loss requires batch_cand_mask'
+                )
+            # Legacy smoke/test batches predate an explicit candidate mask; for
+            # the legacy objective its exact structural support is pos | neg.
+            cand = pos | neg
+        else:
+            cand = candidate_input.to(dev).bool()
         is_rev = inputs['batch_is_revisit'].to(dev).float()
+        if bool((pos & neg).any()):
+            raise ValueError('retrieval positive/negative masks must be disjoint')
+        if bool(((pos | neg) & ~cand).any()):
+            raise ValueError(
+                'retrieval positive/negative masks must be candidate subsets'
+            )
         neg_inf = torch.finfo(ret_logits.dtype).min
-        lse_pn = ret_logits.masked_fill(~(pos | neg), neg_inf).logsumexp(-1)
         lse_p = ret_logits.masked_fill(~pos, neg_inf).logsumexp(-1)
-        rank_rows = pos.any(-1) & neg.any(-1)
-        rank_count = rank_rows.float().sum()
-        # Index first. On novel rows lse_p is the finite dtype floor; forming
-        # the difference and multiplying it by zero later needlessly creates a
-        # value near float32 max and can poison mixed-precision backward.
-        rank_loss = (
-            lse_pn[rank_rows] - lse_p[rank_rows]
-        ).sum() / rank_count.clamp(min=1.0)
+
+        def rank_loss_over(denominator):
+            lse_denominator = ret_logits.masked_fill(
+                ~denominator, neg_inf
+            ).logsumexp(-1)
+            rows = pos.any(-1) & (denominator & ~pos).any(-1)
+            count = rows.float().sum()
+            # Index first. On novel rows lse_p is the finite dtype floor;
+            # subtracting it before masking can poison mixed-precision backward.
+            value = (
+                lse_denominator[rows] - lse_p[rows]
+            ).sum() / count.clamp(min=1.0)
+            return value, count, rows
+
+        retrieval_hard_loss, hard_rank_count, _ = rank_loss_over(
+            pos | neg
+        )
+        retrieval_all_candidate_loss, all_rank_count, _ = (
+            rank_loss_over(cand)
+        )
+        if self.retrieval_denominator == 'all_candidates':
+            rank_loss = retrieval_all_candidate_loss
+            rank_count = all_rank_count
+        else:
+            rank_loss = retrieval_hard_loss
+            rank_count = hard_rank_count
+        retrieval_rank_temperature = fwd.get(
+            'retrieval_rank_temperature', ret_logits.new_tensor(1.0)
+        )
+        retrieval_residual_abs_mean = fwd.get(
+            'retrieval_residual_abs_mean', ret_logits.new_zeros(())
+        )
 
         n_rev = is_rev.sum()
         n_novel = (1.0 - is_rev).sum()
@@ -701,6 +977,14 @@ class MemNavTrainer(BaseTrainer):
             pred_match = ret_logits.argmax(-1)
             hit = pos.gather(1, pred_match[:, None]).squeeze(1).float()
             seen_match = self._masked_mean(hit, rev_mask)
+            selected_negative = neg.gather(
+                1, pred_match[:, None]
+            ).squeeze(1)
+            selected_gray = ~(hit.bool() | selected_negative)
+            seen_match_negative = self._masked_mean(
+                selected_negative, rev_mask
+            )
+            seen_match_gray = self._masked_mean(selected_gray, rev_mask)
 
             xy_error = pred_xy - gt_xy
             xy_sq = xy_error.square()
@@ -993,6 +1277,10 @@ class MemNavTrainer(BaseTrainer):
             'action_noise_mse_y': action_axis_mse[1],
             'action_noise_mse_theta': action_axis_mse[2],
             'retrieval_loss': rank_loss,
+            'retrieval_hard_loss': retrieval_hard_loss,
+            'retrieval_all_candidate_loss': retrieval_all_candidate_loss,
+            'retrieval_rank_temperature': retrieval_rank_temperature,
+            'retrieval_residual_abs_mean': retrieval_residual_abs_mean,
             'gate_loss': gate_loss,
             'aux_direction_loss': aux_direction_loss,
             'route_direction_loss': route_direction_loss,
@@ -1023,6 +1311,8 @@ class MemNavTrainer(BaseTrainer):
             'gate_effective_threshold': gate_effective_threshold,
             'gate_normalized_slope': gate_normalized_slope,
             'seen_match_acc': seen_match,
+            'seen_match_negative_fraction': seen_match_negative,
+            'seen_match_gray_fraction': seen_match_gray,
             'rot_err_raw_deg': rot_err_raw,
             'rot_err_converted_deg': rot_err_converted,
             'aux_mse_x': aux_mse_x,
@@ -1065,6 +1355,22 @@ class MemNavTrainer(BaseTrainer):
                 action_value_count, phase,
             )
         self._accumulate('retrieval_loss', rank_loss, rank_count, phase)
+        self._accumulate(
+            'retrieval_hard_loss', retrieval_hard_loss,
+            hard_rank_count, phase,
+        )
+        self._accumulate(
+            'retrieval_all_candidate_loss', retrieval_all_candidate_loss,
+            all_rank_count, phase,
+        )
+        self._accumulate(
+            'retrieval_rank_temperature', retrieval_rank_temperature,
+            B, phase,
+        )
+        self._accumulate(
+            'retrieval_residual_abs_mean',
+            retrieval_residual_abs_mean, B, phase,
+        )
         self._accumulate('gate_loss', gate_loss, B, phase)
         self._accumulate('aux_direction_loss', aux_direction_loss, aux_count, phase)
         self._accumulate(
@@ -1178,6 +1484,12 @@ class MemNavTrainer(BaseTrainer):
         self._accumulate('effective_gate_seen', effective_gate_seen, n_rev, phase)
         self._accumulate('effective_gate_unseen', effective_gate_unseen, n_novel, phase)
         self._accumulate('seen_match_acc', seen_match, n_rev, phase)
+        self._accumulate(
+            'seen_match_negative_fraction', seen_match_negative, n_rev, phase
+        )
+        self._accumulate(
+            'seen_match_gray_fraction', seen_match_gray, n_rev, phase
+        )
         self._accumulate('gate_feature_seen', gate_feature_seen, n_rev, phase)
         self._accumulate('gate_feature_unseen', gate_feature_unseen, n_novel, phase)
         self._accumulate('gate_effective_threshold', gate_effective_threshold, B, phase)
@@ -1240,6 +1552,13 @@ class MemNavTrainer(BaseTrainer):
         # support fractions instead of leaving a sparse/stale W&B series.
         if had_components:
             component_logs.setdefault('retrieval_loss', 0.0)
+            component_logs.setdefault('retrieval_hard_loss', 0.0)
+            component_logs.setdefault('retrieval_all_candidate_loss', 0.0)
+            if self.retrieval_only:
+                component_logs.setdefault('retrieval_margin_loss', 0.0)
+                component_logs.setdefault('retrieval_strict_top1', 0.0)
+                component_logs.setdefault('retrieval_recall_at_5', 0.0)
+                component_logs.setdefault('retrieval_recall_at_10', 0.0)
             component_logs.setdefault('aux_direction_loss', 0.0)
             component_logs.setdefault('route_direction_loss', 0.0)
             component_logs.setdefault('aux_range_loss', 0.0)
@@ -1277,7 +1596,18 @@ class MemNavTrainer(BaseTrainer):
         logs.update(component_logs)
         rank = dist.get_rank() if dist.is_initialized() else 0
         action_key = 'eval_action_loss' if phase == 'eval' else 'action_loss'
-        if rank == 0 and action_key in component_logs:
+        if rank == 0 and self.retrieval_only and (
+            'eval_retrieval_loss' if phase == 'eval' else 'retrieval_loss'
+        ) in component_logs:
+            prefix = 'eval_' if phase == 'eval' else ''
+            print(
+                f"[Step {self.state.global_step}] phase={phase} "
+                f"rank={component_logs[prefix + 'retrieval_loss']:.4f} "
+                f"margin={component_logs.get(prefix + 'retrieval_margin_loss', 0.0):.4f} "
+                f"top1={component_logs.get(prefix + 'retrieval_strict_top1', 0.0):.4f} "
+                f"r10={component_logs.get(prefix + 'retrieval_recall_at_10', 0.0):.4f}"
+            )
+        elif rank == 0 and action_key in component_logs:
             def display(key):
                 value = component_logs.get(key)
                 return 'n/a' if value is None else f'{value:.4f}'
@@ -1342,6 +1672,9 @@ class MemNavTrainer(BaseTrainer):
             'dataset_fingerprint': self._dataset_fingerprint(self.train_dataset),
             'eval_dataset_fingerprint': self._dataset_fingerprint(self.eval_dataset),
             'gate_parameterization': 'normalized_raw_cosine_v1',
+            'retrieval_rank_mode': getattr(
+                retrieval, 'rank_mode', None
+            ),
             'gate_center': (
                 float(retrieval.gate_center.detach().cpu()) if retrieval is not None else None
             ),
@@ -1389,6 +1722,21 @@ class MemNavTrainer(BaseTrainer):
             # exactly equivalent to the new default-off value.
             saved_objective = dict(saved_objective)
             saved_objective.setdefault('aux_range_grad_cap_ratio', 0.0)
+            saved_objective.setdefault(
+                'retrieval_denominator', 'positive_negative'
+            )
+            saved_objective.setdefault('retrieval_lr_multiplier', 1.0)
+            saved_objective.setdefault('retrieval_only', False)
+            saved_objective.setdefault('retrieval_margin_cosine', 0.005)
+            saved_objective.setdefault('retrieval_margin_weight', 0.0)
+            saved_objective.setdefault('retrieval_rank_mode', 'projected')
+            saved_objective.setdefault('retrieval_raw_temp_init', 0.01)
+            saved_objective.setdefault('retrieval_residual_max', 0.25)
+            saved_objective.setdefault('retrieval_temporal_topk', 10)
+            saved_objective.setdefault(
+                'retrieval_temporal_residual_max', 0.02
+            )
+            saved_objective.setdefault('retrieval_anchor_min_frame', None)
             saved_objective.setdefault('w_route_direction', 0.0)
             saved_objective.setdefault('use_route_sketch', False)
             saved_objective.setdefault('route_horizons', [2, 8, 24])

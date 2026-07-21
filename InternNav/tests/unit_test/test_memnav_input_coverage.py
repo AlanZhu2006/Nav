@@ -4,10 +4,12 @@ import tempfile
 import unittest
 
 import numpy as np
+import torch
 
 from internnav.dataset.memnav_dataset_lerobot import (
     MemNav_Dataset,
     build_fixed_memnav_eval_subset,
+    memnav_retrieval_collate_fn,
 )
 from internnav.dataset.memnav_pose_conventions import GENERATED_ZUP_FRAME_CONVENTION
 from internnav.model.basemodel.memnav.cache_schema import (
@@ -233,6 +235,40 @@ class MemNavInputCoverageTest(unittest.TestCase):
                 legacy.dataset_fingerprint, enabled.dataset_fingerprint
             )
 
+    def test_retrieval_floor_changes_candidates_not_current_step_population(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'raw'
+            features = Path(tmp) / 'features'
+            episode = _source_episode(root)
+            feature_dir = (
+                features / episode.relative_to(root) / 'videos/chunk-000'
+            )
+            feature_dir.mkdir(parents=True)
+            (feature_dir / 'lingbot_cache.npz').touch()
+            (feature_dir / 'lingbot_cam_cache.npz').touch()
+
+            common = dict(
+                feature_root=features,
+                strict_feature_coverage=True,
+                sampling_mode='fixed_leg',
+            )
+            legacy = MemNav_Dataset(root, **common)
+            expanded = MemNav_Dataset(
+                root, retrieval_anchor_min_frame=8, **common
+            )
+            self.assertEqual(legacy.samples[0]['k_lo'], expanded.samples[0]['k_lo'])
+            self.assertEqual(legacy.samples[0]['k_hi'], expanded.samples[0]['k_hi'])
+            self.assertEqual(legacy.samples[0]['amargin'], 39)
+            self.assertEqual(expanded.samples[0]['amargin'], 8)
+            self.assertNotEqual(
+                legacy.dataset_fingerprint, expanded.dataset_fingerprint
+            )
+
+            with self.assertRaisesRegex(ValueError, 'initial scale block'):
+                MemNav_Dataset(
+                    root, retrieval_anchor_min_frame=7, **common
+                )
+
     def test_strict_coverage_requires_both_lingbot_caches(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'raw'
@@ -333,6 +369,28 @@ class MemNavInputCoverageTest(unittest.TestCase):
             first = train._sample_k_and_digit(sample, sample['k_lo'], sample['k_hi'])
             second = train._sample_k_and_digit(sample, sample['k_lo'], sample['k_hi'])
             self.assertEqual(first, second)
+
+    def test_retrieval_only_collate_omits_policy_window_contract(self):
+        samples = []
+        for length in (3, 5):
+            samples.append({
+                'mem_cls': torch.randn(length, 4),
+                'pos_mask': torch.arange(length) == 1,
+                'neg_mask': torch.arange(length) == 2,
+                'cand_mask': torch.ones(length, dtype=torch.bool),
+                'null_pos': torch.tensor(False),
+                'is_revisit': torch.tensor(1.0),
+                'goal_image': torch.randn(3, 8, 8),
+                'goal_j': 0,
+                'sample_identity': f'sample-{length}',
+            })
+        batch = memnav_retrieval_collate_fn(samples)
+        self.assertTrue(batch['retrieval_only'])
+        self.assertEqual(batch['batch_mem_cls'].shape, (2, 5, 4))
+        self.assertEqual(batch['batch_goal_image'].shape, (2, 3, 8, 8))
+        self.assertFalse(bool(batch['batch_cand_mask'][0, 3:].any()))
+        self.assertNotIn('batch_window_images', batch)
+        self.assertNotIn('cache_paths', batch)
 
 
 if __name__ == '__main__':

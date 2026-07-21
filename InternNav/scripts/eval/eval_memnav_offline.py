@@ -324,6 +324,9 @@ def main():
         feature_root=feature_root,
         window_size=config.il.window_size,
         num_scale=config.il.num_scale,
+        retrieval_anchor_min_frame=getattr(
+            config.il, 'retrieval_anchor_min_frame', None
+        ),
         **cache_contract,
         data_split=args.data_split,
         validation_fraction=args.validation_fraction,

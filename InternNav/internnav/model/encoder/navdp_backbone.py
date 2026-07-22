@@ -1,9 +1,41 @@
 import math
+import os
 
 import torch
 import torch.nn as nn
 
 from internnav.model.encoder.depth_anything.depth_anything_v2.dpt import DepthAnythingV2
+
+
+def expand_patch_embed_to_six_channels(patch_embed):
+    """Convert a pretrained RGB patch projection to current+goal early fusion.
+
+    Each three-channel half receives half the RGB kernel. Therefore identical
+    current/goal images reproduce the original pretrained convolution exactly,
+    including its bias, while both halves remain independently trainable.
+    """
+    if patch_embed.in_channels != 3 or patch_embed.groups != 1:
+        raise ValueError(
+            'expected a dense three-channel patch projection, got '
+            f'in_channels={patch_embed.in_channels}, groups={patch_embed.groups}'
+        )
+    expanded = nn.Conv2d(
+        in_channels=6,
+        out_channels=patch_embed.out_channels,
+        kernel_size=patch_embed.kernel_size,
+        stride=patch_embed.stride,
+        padding=patch_embed.padding,
+        dilation=patch_embed.dilation,
+        groups=patch_embed.groups,
+        bias=patch_embed.bias is not None,
+        padding_mode=patch_embed.padding_mode,
+    ).to(device=patch_embed.weight.device, dtype=patch_embed.weight.dtype)
+    with torch.no_grad():
+        expanded.weight[:, :3].copy_(0.5 * patch_embed.weight)
+        expanded.weight[:, 3:].copy_(0.5 * patch_embed.weight)
+        if patch_embed.bias is not None:
+            expanded.bias.copy_(patch_embed.bias)
+    return expanded
 
 
 class SinusoidalPosEmb(nn.Module):
@@ -314,7 +346,9 @@ class NavDP_RGBD_Backbone(nn.Module):
 
 
 class NavDP_ImageGoal_Backbone(nn.Module):
-    def __init__(self, image_size=224, embed_size=512, device='cuda:0'):
+    def __init__(
+        self, image_size=224, embed_size=512, device='cuda:0', checkpoint=None
+    ):
         super().__init__()
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -326,15 +360,44 @@ class NavDP_ImageGoal_Backbone(nn.Module):
         self.image_size = image_size
         self.embed_size = embed_size
         model_configs = {'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]}}
-        self.imagegoal_encoder = DepthAnythingV2(**model_configs['vits'])
-        self.imagegoal_encoder = self.imagegoal_encoder.pretrained.float()
-        self.imagegoal_encoder.patch_embed.proj = nn.Conv2d(
-            in_channels=6,
-            out_channels=self.imagegoal_encoder.patch_embed.proj.out_channels,
-            kernel_size=self.imagegoal_encoder.patch_embed.proj.kernel_size,
-            stride=self.imagegoal_encoder.patch_embed.proj.stride,
-            padding=self.imagegoal_encoder.patch_embed.proj.padding,
-        )
+        depth_model = DepthAnythingV2(**model_configs['vits'])
+        if checkpoint:
+            if not os.path.isfile(checkpoint):
+                raise FileNotFoundError(
+                    f'DINO/Depth-Anything initialization checkpoint not found: {checkpoint}'
+                )
+            try:
+                state = torch.load(checkpoint, map_location='cpu', weights_only=True)
+            except TypeError:
+                state = torch.load(checkpoint, map_location='cpu')
+            incompatible = depth_model.load_state_dict(state, strict=False)
+            unexpected = [
+                key for key in incompatible.unexpected_keys
+                if key != 'pretrained.mask_token'
+            ]
+            if incompatible.missing_keys or unexpected:
+                raise RuntimeError(
+                    'DINO/Depth-Anything checkpoint is incompatible: '
+                    f'missing={incompatible.missing_keys[:8]}, '
+                    f'unexpected={unexpected[:8]}'
+                )
+            print(f'[NavDP_ImageGoal_Backbone] initialized DINO-S from {checkpoint}')
+        self.imagegoal_encoder = depth_model.pretrained.float()
+        if checkpoint:
+            self.imagegoal_encoder.patch_embed.proj = expand_patch_embed_to_six_channels(
+                self.imagegoal_encoder.patch_embed.proj
+            )
+        else:
+            # Preserve the original NavDP behavior for non-MemNav callers that
+            # intentionally construct this backbone without pretrained weights.
+            old_projection = self.imagegoal_encoder.patch_embed.proj
+            self.imagegoal_encoder.patch_embed.proj = nn.Conv2d(
+                in_channels=6,
+                out_channels=old_projection.out_channels,
+                kernel_size=old_projection.kernel_size,
+                stride=old_projection.stride,
+                padding=old_projection.padding,
+            )
         self.imagegoal_encoder.train()
         self.project_layer = nn.Linear(384, embed_size)
         self.to(device)

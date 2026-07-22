@@ -11,6 +11,7 @@
 #SBATCH --partition=a100_tandon
 #SBATCH --gres=gpu:1
 #SBATCH --export=ALL
+# REQUIRED: complete scripts/train_memnav/README.md before every sbatch submission.
 #
 # MemNav single-GPU training / smoke on the InternData-N1 MP3D shard.
 # Mirrors the `sbatch_lg` pattern in GR00T_cam: standalone .sbatch with
@@ -54,7 +55,10 @@ conda activate /scratch/lg154/conda-envs/memnav
 # --- paths + PYTHONPATH ---
 export LINGBOT_REPO=${LINGBOT_REPO:-/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map}
 export LINGBOT_WEIGHTS=${LINGBOT_WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
+export MEMNAV_DINO_WEIGHTS=${MEMNAV_DINO_WEIGHTS:-${REPO_ROOT}/checkpoints/depth_anything_v2_vits.pth}
 export MEMNAV_ROOT_DIR=${MEMNAV_ROOT_DIR:-/scratch/lg154/Research/datasets/InternData-N1/vln_n1/_raw}
+export MEMNAV_STRICT_FEATURE_COVERAGE=${MEMNAV_STRICT_FEATURE_COVERAGE:-1}
+export MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION=${MEMNAV_REQUIRE_GENERATED_POSE_CONVENTION:-0}
 export PYTHONPATH="${REPO_ROOT}/src/diffusion-policy:${PYTHONPATH:-}"
 
 # --- per-job scratch (isolated TMP / HOME / XDG so concurrent jobs don't collide) ---
@@ -84,12 +88,22 @@ NAME=${NAME:-memnav_smoke}
 BATCH_SIZE=${BATCH_SIZE:-2}
 EPOCHS=${EPOCHS:-1}
 NUM_WORKERS=${NUM_WORKERS:-0}
+RESUME_FROM_CHECKPOINT=${RESUME_FROM_CHECKPOINT:-auto}
+export MEMNAV_SAVE_STEPS=${MEMNAV_SAVE_STEPS:-25}
+export MEMNAV_LOGGING_STEPS=${MEMNAV_LOGGING_STEPS:-10}
+export MEMNAV_DATA_SPLIT=${MEMNAV_DATA_SPLIT:-train}
+export MEMNAV_VALIDATION_FRACTION=${MEMNAV_VALIDATION_FRACTION:-0.1}
+export MEMNAV_SPLIT_SEED=${MEMNAV_SPLIT_SEED:-0}
+export MEMNAV_EVAL_SAMPLES=${MEMNAV_EVAL_SAMPLES:-16}
+export MEMNAV_EVAL_STEPS=${MEMNAV_EVAL_STEPS:-25}
 
 # --- wandb (per-job dirs so concurrent runs don't collide) ---
 export MEMNAV_REPORT_TO=${MEMNAV_REPORT_TO:-wandb}
 if [[ "${MEMNAV_REPORT_TO}" == "wandb" ]]; then
   export WANDB_PROJECT=${WANDB_PROJECT:-memnav}
   export WANDB_NAME=${WANDB_NAME:-${NAME}}
+  export WANDB_RUN_ID=${WANDB_RUN_ID:-${NAME}}
+  export WANDB_RESUME=${WANDB_RESUME:-allow}
   export WANDB_DIR="${JOB_TMP_ROOT}/wandb_root"
   export WANDB_CACHE_DIR="${JOB_TMP_ROOT}/wandb_cache"
   export WANDB_CONFIG_DIR="${JOB_TMP_ROOT}/wandb_config"
@@ -100,17 +114,21 @@ fi
 # --- pre-flight ---
 [[ -f "${LINGBOT_WEIGHTS}" ]] \
   || { echo "Missing LingBot weights: ${LINGBOT_WEIGHTS}" >&2; exit 1; }
+[[ -f "${MEMNAV_DINO_WEIGHTS}" ]] \
+  || { echo "Missing DINO weights: ${MEMNAV_DINO_WEIGHTS}" >&2; exit 1; }
 [[ -d "${MEMNAV_ROOT_DIR}" ]] \
   || { echo "Missing MemNav root: ${MEMNAV_ROOT_DIR}" >&2; exit 1; }
 
 echo "===== TRAIN ENV CHECK ====="
 echo "host:        $(hostname)"
-which python; python -V
+command -v python; python -V
 echo "torch:       $(python -c 'import torch; print(torch.__version__, "cuda", torch.cuda.is_available())')"
 echo "exp:         ${NAME}"
 echo "root:        ${MEMNAV_ROOT_DIR}"
 echo "weights:     ${LINGBOT_WEIGHTS}"
+echo "dino:        ${MEMNAV_DINO_WEIGHTS}"
 echo "bs/ep/wk:    ${BATCH_SIZE} / ${EPOCHS} / ${NUM_WORKERS}"
+echo "resume:      ${RESUME_FROM_CHECKPOINT}"
 echo "report_to:   ${MEMNAV_REPORT_TO} (project=${WANDB_PROJECT:-<n/a>} name=${WANDB_NAME:-<n/a>})"
 nvidia-smi -L || true
 
@@ -120,4 +138,5 @@ exec python scripts/train/train.py \
     --batch-size "${BATCH_SIZE}" \
     --num-workers "${NUM_WORKERS}" \
     --epochs "${EPOCHS}" \
-    --root-dir "${MEMNAV_ROOT_DIR}"
+    --root-dir "${MEMNAV_ROOT_DIR}" \
+    --resume-from-checkpoint "${RESUME_FROM_CHECKPOINT}"

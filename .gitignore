@@ -52,6 +52,7 @@ venv.bak/
 # --- Logs / runs / artifacts ---
 *.log
 *.log.json
+.diagnostics/
 nohup.out
 wandb/
 logs/

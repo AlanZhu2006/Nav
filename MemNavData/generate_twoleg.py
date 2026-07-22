@@ -335,7 +335,11 @@ def covis_curve(goal_pts_world, poses, depths, tol=0.3):
 
 
 def save_traj(out_dir, rgbs, depths, poses_hab, meta, goal_rgbs):
-    import pandas as pd
+    import pandas as pd, shutil
+    # Wipe any prior (re)generation of this episode first: writing in place with
+    # os.makedirs(exist_ok=True) would leave orphan tail frames when the new
+    # trajectory is shorter than a previous one (stale N..M jpgs/pngs never overwritten).
+    shutil.rmtree(out_dir, ignore_errors=True)
     rgb_d = os.path.join(out_dir, "videos/chunk-000/observation.images.rgb")
     dep_d = os.path.join(out_dir, "videos/chunk-000/observation.images.depth")
     dat_d = os.path.join(out_dir, "data/chunk-000"); met_d = os.path.join(out_dir, "meta")
@@ -350,8 +354,13 @@ def save_traj(out_dir, rgbs, depths, poses_hab, meta, goal_rgbs):
         Image.fromarray(g).save(os.path.join(out_dir, f"goal_{k}.jpg"), quality=95)
     if goal_rgbs:
         Image.fromarray(goal_rgbs[0]).save(os.path.join(out_dir, "goal_image.jpg"), quality=95)
-    # poses -> stored Z-up camera-to-world; extrinsic = identity mount (we bake full pose)
+    # Poses are stored as Z-up camera-to-world. NavDP expects action_R =
+    # base_R @ camera_mount_R and removes the mount before making planar labels.
+    # At zero Habitat yaw, action_R is M_W, so the corresponding mount is M_W,
+    # not identity. Its translation is the camera height in the Z-up data frame.
     ext = np.eye(4)
+    ext[:3, :3] = M_W
+    ext[:3, 3] = M_W @ np.array([0.0, float(meta.get("camera_height_m", 0.5)), 0.0])
     rows = []
     for i, Tw in enumerate(poses_hab):
         Td = np.eye(4); Td[:3, :3] = M_W @ Tw[:3, :3]; Td[:3, 3] = M_W @ Tw[:3, 3]
@@ -360,7 +369,8 @@ def save_traj(out_dir, rgbs, depths, poses_hab, meta, goal_rgbs):
                      "observation.camera_extrinsic": ext.astype(np.float32).tolist(),
                      "action": Td.astype(np.float32).tolist()})
     pd.DataFrame(rows).to_parquet(os.path.join(dat_d, "episode_000000.parquet"))
-    json.dump(meta, open(os.path.join(met_d, "gen_meta.json"), "w"), indent=2)
+    with open(os.path.join(met_d, "gen_meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
 
 
 def align_turn(pos, yaw0, yaw1, max_turn_deg):
@@ -655,6 +665,7 @@ def make_episode(sim, rng, args, ep_idx, esdf_cache):
                     # LingBot streaming: valid match range = [anchor_margin, step); loader masks [0,anchor_margin)
                     # from retrieval positives (goal_append can't reconstruct a match below num_scale+window-1).
                     window=args.window, num_scale=args.num_scale, anchor_margin=args.anchor_margin,
+                    camera_height_m=float(args.cam_h),
                     frame_convention="positions+parquet in data(Zup,M_W); yaw_habitat in render frame")
         return rgbs, depths, poses, meta, goal_rgbs
     return None

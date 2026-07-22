@@ -1,0 +1,397 @@
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+import numpy as np
+import torch
+
+from internnav.dataset.memnav_dataset_lerobot import (
+    MemNav_Dataset,
+    build_fixed_memnav_eval_subset,
+    memnav_retrieval_collate_fn,
+)
+from internnav.dataset.memnav_pose_conventions import GENERATED_ZUP_FRAME_CONVENTION
+from internnav.model.basemodel.memnav.cache_schema import (
+    CACHE_SCHEMA_VERSION,
+    KEYFRAME_POLICY,
+)
+
+
+def _source_episode(root: Path, convention=GENERATED_ZUP_FRAME_CONVENTION,
+                    scene='scene', episode_name='episode_0000'):
+    episode = root / 'vln_n1' / scene / episode_name
+    (episode / 'data/chunk-000').mkdir(parents=True)
+    (episode / 'videos/chunk-000/observation.images.rgb').mkdir(parents=True)
+    (episode / 'meta').mkdir()
+    (episode / 'data/chunk-000/episode_000000.parquet').touch()
+    (episode / 'meta/gen_meta.json').write_text(json.dumps({
+        'n_frames': 130,
+        'switches': [100, 130],
+        'anchor_margin': 39,
+        'frame_convention': convention,
+        'goals': [{
+            'covis_curve': [0.0] * 40 + [0.8] + [0.0] * 59,
+            'yaw_habitat': 0.0,
+        }],
+    }))
+    (episode / 'goal_1.jpg').touch()
+    # Dynamic E(k) requires k >= anchor_margin + exclude_recent = 122.
+    (episode / 'videos/chunk-000/observation.images.rgb/122.jpg').touch()
+    return episode
+
+
+class MemNavInputCoverageTest(unittest.TestCase):
+    @staticmethod
+    def _write_versioned_cache_pair(feature_dir, num_frames=130, scale=8):
+        shared = {
+            'cache_schema_version': np.array([CACHE_SCHEMA_VERSION]),
+            'keyframe_policy': np.array([KEYFRAME_POLICY]),
+            'num_frames': np.array([num_frames]),
+            'num_scale_frames': np.array([scale]),
+            'keyframe_interval': np.array([1]),
+            'kv_cache_sliding_window': np.array([32]),
+            'precompute_signature': np.array(['test-signature']),
+        }
+        np.savez(
+            feature_dir / 'lingbot_cache.npz',
+            **shared,
+            anchor_frame_indices=np.arange(scale, num_frames),
+            dino_cls=np.zeros((num_frames, 1), np.float16),
+            anchor_k=np.zeros((num_frames - scale, 1), np.float16),
+            anchor_v=np.zeros((num_frames - scale, 1), np.float16),
+            meta=np.array([scale, 6, 1, 1, 1]),
+        )
+        np.savez(
+            feature_dir / 'lingbot_cam_cache.npz',
+            **shared,
+            cam_frame_indices=np.arange(num_frames),
+            cam_pose_enc=np.zeros((num_frames, 9), np.float32),
+            cam_k=np.zeros((num_frames, 1), np.float16),
+            cam_v=np.zeros((num_frames, 1), np.float16),
+        )
+
+    def test_fixed_eval_subset_is_balanced_deterministic_and_fingerprinted(self):
+        class FakeDataset:
+            sampling_mode = 'fixed_leg'
+            dataset_fingerprint = 'parent-fingerprint'
+            samples = [
+                {'k_lo': 0, 'k_hi': 0, 'novel': index >= 5}
+                for index in range(10)
+            ]
+
+            def __len__(self):
+                return len(self.samples)
+
+            def __getitem__(self, index):
+                return self.samples[index]
+
+            @staticmethod
+            def _sample_k_and_digit(sample, k_lo, k_hi):
+                return 0, 4
+
+            @staticmethod
+            def _build_label(sample, k):
+                return None, None, None, sample['novel']
+
+        first = build_fixed_memnav_eval_subset(FakeDataset(), 4, selection_seed=7)
+        second = build_fixed_memnav_eval_subset(FakeDataset(), 4, selection_seed=7)
+        self.assertEqual(first.memnav_num_revisit, 2)
+        self.assertEqual(first.memnav_num_novel, 2)
+        self.assertEqual(first.memnav_selection_indices, second.memnav_selection_indices)
+        self.assertEqual(first.dataset_fingerprint, second.dataset_fingerprint)
+        self.assertNotEqual(first.dataset_fingerprint, FakeDataset.dataset_fingerprint)
+
+    def test_aux_goal_translation_uses_the_actual_endpoint(self):
+        dataset = object.__new__(MemNav_Dataset)
+        points = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.5, 0.0],
+        ])
+        dataset.process_actions = lambda *args, **kwargs: (
+            points, None, None, None, np.array([0, 1])
+        )
+        # Like NavDP.xyz_to_xyt, the last row stores the penultimate point.
+        dataset.xyz_to_xyt = lambda *args, **kwargs: np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.25],
+        ])
+        actions, goal = dataset._build_actions(
+            np.repeat(np.eye(4)[None], 3, axis=0), np.eye(4), pred_digit=1
+        )
+        np.testing.assert_allclose(goal, [2.0, 0.5, 0.25])
+        self.assertEqual(actions.shape, (1, 3))
+
+    def test_range_target_uses_only_observed_prefix_scale_and_matches_pose_code(self):
+        prefix = np.repeat(np.eye(4)[None], 5, axis=0)
+        prefix[:, 0, 3] = np.arange(5) * 0.25
+        code, step_m, range_steps = MemNav_Dataset._build_range_target(
+            prefix, np.array([2.0, 0.0, 0.0]), distance_unit_steps=32
+        )
+        self.assertAlmostEqual(float(step_m), 0.25)
+        self.assertAlmostEqual(float(range_steps), 8.0)
+        self.assertAlmostEqual(float(code), float(np.arcsinh(8.0 / 32.0)))
+
+        stationary = np.repeat(np.eye(4)[None], 3, axis=0)
+        missing = MemNav_Dataset._build_range_target(
+            stationary, np.array([1.0, 0.0, 0.0]), distance_unit_steps=32
+        )
+        self.assertTrue(all(np.isnan(value) for value in missing))
+
+    def test_decision_curriculum_detects_long_route_disagreement(self):
+        extrinsics = np.repeat(np.eye(4)[None], 129, axis=0)
+        # At k=0 the short route initially goes left, while the endpoint is to
+        # the right: an unambiguous 180-degree long-horizon decision point.
+        extrinsics[16, 0, 3] = -1.0
+        extrinsics[128, 0, 3] = 1.0
+        hard = MemNav_Dataset._decision_curriculum_candidates(
+            extrinsics,
+            0,
+            0,
+            128,
+            lookahead_frames=16,
+            min_remaining_frames=128,
+            min_angle_deg=45.0,
+        )
+        np.testing.assert_array_equal(hard, [0])
+
+        extrinsics[16, 0, 3] = 0.5
+        easy = MemNav_Dataset._decision_curriculum_candidates(
+            extrinsics,
+            0,
+            0,
+            128,
+            lookahead_frames=16,
+            min_remaining_frames=128,
+            min_angle_deg=45.0,
+        )
+        self.assertEqual(len(easy), 0)
+
+    def test_decision_curriculum_is_opt_in_and_falls_back_to_uniform(self):
+        dataset = object.__new__(MemNav_Dataset)
+        dataset.sampling_mode = 'decision_curriculum'
+        dataset.decision_curriculum_prob = 1.0
+        dataset.decision_lookahead_frames = 16
+        dataset.decision_min_remaining_frames = 128
+        dataset.decision_min_angle_deg = 45.0
+        dataset.random_digit = False
+        dataset.pred_digit = 4
+        sample = {'goal_step': 128}
+        extrinsics = np.repeat(np.eye(4)[None], 129, axis=0)
+        extrinsics[16, 0, 3] = -1.0
+        extrinsics[128, 0, 3] = 1.0
+        k, digit = dataset._sample_k_and_digit(
+            sample, 0, 0, extrinsics=extrinsics
+        )
+        self.assertEqual((k, digit), (0, 4))
+
+        with self.assertRaisesRegex(ValueError, 'requires trajectory extrinsics'):
+            dataset._sample_k_and_digit(sample, 0, 0)
+
+    def test_dormant_curriculum_knobs_preserve_legacy_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'raw'
+            features = Path(tmp) / 'features'
+            episode = _source_episode(root)
+            feature_dir = (
+                features / episode.relative_to(root) / 'videos/chunk-000'
+            )
+            feature_dir.mkdir(parents=True)
+            (feature_dir / 'lingbot_cache.npz').touch()
+            (feature_dir / 'lingbot_cam_cache.npz').touch()
+
+            common = dict(
+                feature_root=features,
+                strict_feature_coverage=True,
+                sampling_mode='fixed_leg',
+            )
+            legacy = MemNav_Dataset(
+                root,
+                decision_curriculum_prob=0.5,
+                decision_min_angle_deg=45.0,
+                **common,
+            )
+            dormant_changed = MemNav_Dataset(
+                root,
+                decision_curriculum_prob=1.0,
+                decision_min_angle_deg=120.0,
+                **common,
+            )
+            self.assertEqual(
+                legacy.dataset_fingerprint,
+                dormant_changed.dataset_fingerprint,
+            )
+
+            enabled = MemNav_Dataset(
+                root,
+                feature_root=features,
+                strict_feature_coverage=True,
+                sampling_mode='decision_curriculum',
+                decision_curriculum_prob=0.5,
+                decision_min_angle_deg=45.0,
+            )
+            self.assertNotEqual(
+                legacy.dataset_fingerprint, enabled.dataset_fingerprint
+            )
+
+    def test_retrieval_floor_changes_candidates_not_current_step_population(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'raw'
+            features = Path(tmp) / 'features'
+            episode = _source_episode(root)
+            feature_dir = (
+                features / episode.relative_to(root) / 'videos/chunk-000'
+            )
+            feature_dir.mkdir(parents=True)
+            (feature_dir / 'lingbot_cache.npz').touch()
+            (feature_dir / 'lingbot_cam_cache.npz').touch()
+
+            common = dict(
+                feature_root=features,
+                strict_feature_coverage=True,
+                sampling_mode='fixed_leg',
+            )
+            legacy = MemNav_Dataset(root, **common)
+            expanded = MemNav_Dataset(
+                root, retrieval_anchor_min_frame=8, **common
+            )
+            self.assertEqual(legacy.samples[0]['k_lo'], expanded.samples[0]['k_lo'])
+            self.assertEqual(legacy.samples[0]['k_hi'], expanded.samples[0]['k_hi'])
+            self.assertEqual(legacy.samples[0]['amargin'], 39)
+            self.assertEqual(expanded.samples[0]['amargin'], 8)
+            self.assertNotEqual(
+                legacy.dataset_fingerprint, expanded.dataset_fingerprint
+            )
+
+            with self.assertRaisesRegex(ValueError, 'initial scale block'):
+                MemNav_Dataset(
+                    root, retrieval_anchor_min_frame=7, **common
+                )
+
+    def test_strict_coverage_requires_both_lingbot_caches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'raw'
+            features = Path(tmp) / 'features'
+            episode = _source_episode(root)
+            feature_dir = features / episode.relative_to(root) / 'videos/chunk-000'
+            feature_dir.mkdir(parents=True)
+            (feature_dir / 'lingbot_cache.npz').touch()
+
+            with self.assertRaisesRegex(RuntimeError, 'Incomplete MemNav feature coverage'):
+                MemNav_Dataset(
+                    root,
+                    feature_root=features,
+                    strict_feature_coverage=True,
+                )
+
+    def test_generated_pose_marker_is_required_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'raw'
+            features = Path(tmp) / 'features'
+            episode = _source_episode(root, convention='stored=Zup(M_W); render=habitat')
+            feature_dir = features / episode.relative_to(root) / 'videos/chunk-000'
+            feature_dir.mkdir(parents=True)
+            (feature_dir / 'lingbot_cache.npz').touch()
+            (feature_dir / 'lingbot_cam_cache.npz').touch()
+
+            with self.assertRaisesRegex(RuntimeError, 'Invalid generated pose convention'):
+                MemNav_Dataset(
+                    root,
+                    feature_root=features,
+                    strict_feature_coverage=True,
+                    require_generated_pose_convention=True,
+                )
+
+    def test_versioned_cache_is_checked_eagerly_for_zero_step_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'raw'
+            features = Path(tmp) / 'features'
+            episode = _source_episode(root)
+            rgb_dir = episode / 'videos/chunk-000/observation.images.rgb'
+            for index in range(130):
+                (rgb_dir / f'{index}.jpg').touch()
+            feature_dir = features / episode.relative_to(root) / 'videos/chunk-000'
+            feature_dir.mkdir(parents=True)
+            self._write_versioned_cache_pair(feature_dir)
+
+            dataset = MemNav_Dataset(
+                root,
+                feature_root=features,
+                window_size=32,
+                strict_feature_coverage=True,
+                require_versioned_cache=True,
+                expected_cache_signature='test-signature',
+            )
+            self.assertEqual(dataset.cache_keyframe_intervals, [1])
+
+            with np.load(feature_dir / 'lingbot_cam_cache.npz') as current:
+                broken = {name: current[name] for name in current.files}
+            broken['precompute_signature'] = np.array(['wrong-run'])
+            np.savez(feature_dir / 'lingbot_cam_cache.npz', **broken)
+            with self.assertRaisesRegex(RuntimeError, 'precompute_signature mismatch'):
+                MemNav_Dataset(
+                    root,
+                    feature_root=features,
+                    window_size=32,
+                    strict_feature_coverage=True,
+                    require_versioned_cache=True,
+                    expected_cache_signature='test-signature',
+                )
+
+    def test_scene_split_has_no_leakage_and_fixed_k_is_repeatable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'raw'
+            features = Path(tmp) / 'features'
+            for index in range(20):
+                episode = _source_episode(root, scene=f'scene_{index:02d}')
+                feature_dir = features / episode.relative_to(root) / 'videos/chunk-000'
+                feature_dir.mkdir(parents=True)
+                (feature_dir / 'lingbot_cache.npz').touch()
+                (feature_dir / 'lingbot_cam_cache.npz').touch()
+
+            common = dict(
+                feature_root=features,
+                strict_feature_coverage=True,
+                validation_fraction=0.3,
+                split_seed=7,
+                sampling_mode='fixed_leg',
+                sampling_seed=11,
+            )
+            train = MemNav_Dataset(root, data_split='train', **common)
+            val = MemNav_Dataset(root, data_split='val', **common)
+            train_scenes = {Path(path).parent.name for path in train.trajectory_dirs}
+            val_scenes = {Path(path).parent.name for path in val.trajectory_dirs}
+            self.assertFalse(train_scenes & val_scenes)
+            self.assertEqual(len(train_scenes | val_scenes), 20)
+
+            sample = train.samples[0]
+            first = train._sample_k_and_digit(sample, sample['k_lo'], sample['k_hi'])
+            second = train._sample_k_and_digit(sample, sample['k_lo'], sample['k_hi'])
+            self.assertEqual(first, second)
+
+    def test_retrieval_only_collate_omits_policy_window_contract(self):
+        samples = []
+        for length in (3, 5):
+            samples.append({
+                'mem_cls': torch.randn(length, 4),
+                'pos_mask': torch.arange(length) == 1,
+                'neg_mask': torch.arange(length) == 2,
+                'cand_mask': torch.ones(length, dtype=torch.bool),
+                'null_pos': torch.tensor(False),
+                'is_revisit': torch.tensor(1.0),
+                'goal_image': torch.randn(3, 8, 8),
+                'goal_j': 0,
+                'sample_identity': f'sample-{length}',
+            })
+        batch = memnav_retrieval_collate_fn(samples)
+        self.assertTrue(batch['retrieval_only'])
+        self.assertEqual(batch['batch_mem_cls'].shape, (2, 5, 4))
+        self.assertEqual(batch['batch_goal_image'].shape, (2, 3, 8, 8))
+        self.assertFalse(bool(batch['batch_cand_mask'][0, 3:].any()))
+        self.assertNotIn('batch_window_images', batch)
+        self.assertNotIn('cache_paths', batch)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,313 @@
+# MemNav Policy — Pose Pipeline Fixes
+
+`memnav_policy.py` (`MemNavNet`/`RevisitMerge`) and `lingbot_stream.py`
+(`LingBotStream`) implement the trainable heads over the frozen LingBot-Map
+GCT front-end. This document covers a round of fixes to the **pose
+pipeline** specifically — `cur_pose`, `goal_pose`, and how `RevisitMerge`
+turns them into the revisit/aux-pose signal — found by comparing the
+pipeline's own pose estimates against ground truth and against LingBot's
+own "official" continuous-stream inference. Diagnostic tooling lives in
+`InternNav/scripts/diag_lingbot_pose_accuracy.py`.
+
+---
+
+## 1. What was wrong
+
+`encode_memory`'s original per-sample loop derived **both** `cur_pose` (the
+current frame's absolute camera pose) and `goal_pose` (the revisit goal's
+absolute camera pose) by re-deriving them from a **cold-started**
+`window_forward`/`goal_append` reconstruction: inject the precomputed scale
++ specials-only history, then recompute a local window of raw frames live
+from scratch before reading off the pose.
+
+Comparing this against (a) real GT extrinsics and (b) LingBot's own
+`GCTStream.inference_streaming`-equivalent continuous pass (captured once,
+for free, during precompute — `cam_pose_enc` in `lingbot_cam_cache.npz`)
+showed:
+
+- **`cur_pose`** didn't need to be reconstructed at all — `k` is always a
+  real trajectory frame, and its exact pose is already sitting in
+  `cam_pose_enc[k]`. `window_forward`'s cold start (no real predecessors at
+  the start of the recomputed window) was reproducing this with several
+  meters of avoidable error at deep `k`, for zero reason — the ground truth
+  reconstruction was on disk the whole time.
+- **`goal_pose`** genuinely needs *some* live computation (the goal image
+  is newly inserted, not a cached frame), but `goal_append`'s cold start at
+  the nominal `window` boundary (32 frames) starved it of context. A deeper
+  live recompute (`warm=64`) — still bounded, still cheap, doesn't scale
+  with `recall_gap` — closes the gap almost entirely to what a true,
+  unbroken continuous stream achieves.
+- **`RevisitMerge`** was trying to learn the relative pose
+  `T_cur^-1 T_goal` from `cur_pose`/`goal_pose` via independently-embedded
+  tokens merged by attention — a representation that is architecturally
+  incapable of the bilinear cross term the true relative transform requires
+  (`t_rel = R_cur^T(t_goal - t_cur)` mixes a rotation derived from one pose
+  with a translation difference derived from both). No amount of data
+  fixes an architecture that can't represent the target function.
+- **`aux_pose_head`**'s `θ` target isn't recoverable from `(cur_pose,
+  goal_pose)` at all, regardless of how accurate those poses are. GT `θ` is
+  the path's net heading change between departure and arrival — a function
+  of the geodesic route's shape (obstacle layout), not of the two endpoint
+  poses. Worse: the goal image's own rendered orientation is independent of
+  the true arrival heading *by construction* of the data generator
+  (`MemNavData/generate_twoleg.py`'s `roll_leg`: "NO terminal orientation
+  alignment... arrival heading is the natural approach heading"; goal yaw =
+  the historical anchor frame's own heading + random jitter). There is no
+  `θ` signal in the inputs to extract, even in principle.
+
+---
+
+## 2. Fixes
+
+### 2.1 `cur_pose` — read from cache, not reconstructed
+
+`MemNavNet._load_cache` now also loads `cam_pose_enc` from
+`lingbot_cam_cache.npz`. `encode_memory` reads `cur_pose =
+cache["cam_pose_enc"][k]` directly instead of calling
+`self.lingbot.camera_pose(ck, cv, k, cur_agg)`. Cheaper (no extra camera-head
+forward) and exact by construction — verified to match `cam_pose_enc[k]`
+bit-for-bit on a real batch. `window_forward` is still run for `cur`/`dfeat`
+(the RGBD/depth Perceiver branches still need it); only the pose readout
+changed.
+
+### 2.2 `goal_pose` — deep warm-recompute instead of a cold start
+
+New method `LingBotStream.goal_append_warm(goal_img, cache, m, rgb_dir,
+warm, return_agg=False)`: recomputes live from
+`max(num_scale, m - warm + 1)` (not `m - window + 1`) before streaming the
+goal at `m+1`. `encode_memory` calls this with `self.goal_warm` (default
+**64**) instead of `goal_append`.
+
+Validated against a true continuous-stream oracle and real goal GT
+positions (`scripts/diag_lingbot_pose_accuracy.py`, `warm_goal_pose` /
+`oracle_goal_pose`):
+
+| depth (3-leg, `m=140`, `recall_gap=290`) | error vs. true goal position |
+|---|---|
+| production (`window=32`, cold start) | 1.464 m |
+| `warm=64` | **1.046 m** |
+| `warm=128` | 1.106 m (no further gain) |
+| oracle (true continuous stream) | 1.101 m |
+
+`warm=64` matches the oracle to within noise; deeper warm-up buys nothing.
+Also checked: the model's own KV eviction can stay at the nominal `window`
+(32) during the 64-frame warm loop — an "evict back to 32" run scored
+1.038 m, statistically the same as never evicting (1.046 m) — so
+`goal_append_warm` needed **no** change to `kv_cache_sliding_window`, only
+a longer live-recompute range.
+
+Threaded through config: `il.goal_warm` (`MemNavPolicy.__init__` →
+`MemNavNet(goal_warm=...)`), default 64, set explicitly in
+`scripts/train/configs/memnav.py`.
+
+### 2.3 `RevisitMerge` — analytic relative pose, not learned absolute-pose fusion
+
+`RevisitMerge._relative_pose(cur_pose9, goal_pose9)` computes
+`T_cur^-1 T_goal` in closed form:
+
+```
+t_rel = R_cur^T (t_goal - t_cur)
+R_rel = R_cur^T R_goal
+```
+
+via `quat_to_mat` (`lingbot_map.utils.rotation`, lazy import). `R_rel` remains
+available for diagnostics, but neither raw `t_rel` nor the full endpoint
+rotation is sent directly to the action decoder.
+
+`GaugeInvariantRevisitPose` converts the analytic pose into four values:
+
+```text
+bearing = normalize([t_rel.z, -t_rel.x])
+range   = asinh(||planar t_rel|| / robust_stream_step / window)
+code    = [bearing_x, bearing_y, range, pose_reliability]
+```
+
+Uniformly rescaling the LingBot map leaves this code unchanged. The corrected
+`[z,-x]` mapping is explicit instead of asking a global affine head to rediscover
+it. The endpoint camera yaw is excluded from the action code because the data
+generator deliberately makes goal-render yaw independent of path-arrival
+heading. It is still returned as `R_rel` for pose diagnostics.
+
+- **shared `rel_adapter`**: residual MLP on the four-dimensional robust code,
+  initialized as an exact identity.
+- **`revisit_head`**: trainable `Linear(4, n_out·token_dim)` on that shared code.
+- **`aux_pose_head`**: `Linear(4,2)`, initialized to read the two bearing
+  coordinates directly and supervised only by planar direction.
+- **`reliability_head`**: predicts whether the long-range geometry is useful
+  from online-only cues: normalized range, retrieval gap, recent-vs-prefix step
+  scale drift, goal-to-anchor range, vertical leakage, non-yaw rotation, and
+  semantic-match strength.
+
+### 2.4 The auxiliary is scale-invariant and policy-shared
+
+`cur_pose`/`goal_pose` come from the frozen camera head under
+`torch.no_grad()`, but that does **not** prevent `Linear(3,2)` from learning:
+its input can be constant while its own weight and bias still receive
+gradients. The previous freeze made `w_aux * aux_loss` a constant offset in
+the reported total loss and did not change any parameter update.
+
+The head remains initialized with the known signed-axis mapping, now performed
+before the trainable head:
+
+```python
+raw_bearing = normalize([t_rel.z, -t_rel.x])
+pose_code = [raw_bearing.x, raw_bearing.y, bounded_range, reliability]
+aux_pose = aux_pose_head(pose_code + rel_adapter(pose_code))
+```
+
+The mapping follows from the generated-data camera-mount correction. Legacy
+labels represented `[up, -right, back]`; corrected NavDP coordinates are
+`[-back, -right, up]`. Combined with the validated LingBot-to-legacy mapping,
+the corrected planar coordinates are `[lingbot_z, -lingbot_x]`.
+
+No fixed metric scale is baked in. Robust median stream step is used only as an
+internal gauge, not as a conversion to metres. The direction loss remains
+`1-cosine(pred_xy,gt_xy)` on revisit rows. Raw x/y MSE, per-axis prediction/GT
+std, and L2 error remain diagnostics.
+
+The residual `rel_adapter` is shared with `revisit_head`; direction gradients
+therefore shape features used by the diffusion policy. This removes the old
+failure mode where a large y MSE participated in global gradient clipping but
+could update only an isolated calibration head.
+
+Optional range supervision also reaches this adapter, but its SmoothL1 gradient
+can be much larger than the action gradient even when its scalar loss looks
+small. `MEMNAV_AUX_RANGE_GRAD_CAP_RATIO > 0` enables action-safe gradient
+surgery on the range term only: a component opposing the diffusion action
+gradient is projected away, and the remaining global adapter-gradient norm is
+capped to the configured fraction of the action norm. The added surrogate has
+exactly zero forward value, so reported loss values retain their ordinary
+meaning. The legacy behavior remains the default (`0`). Training reports the
+raw action/range cosine, raw and corrected norm ratios, cap scale, and conflict
+fraction. This experimental path is fail-closed for multi-process DDP; the
+controlled arm used one GPU. The formal `rho=0.25` arm reduced the rejected
+range+live model's fixed-64 full-DDPM action MSE by `6.60%`, but remained
+`32.44%` worse than the range-free baseline and improved only 3 of 64 paired
+samples. It is therefore a diagnostic mechanism, not an accepted recipe; direct
+range supervision remains default-off.
+
+### 2.5 Semantic retrieval and geometric trust are separate
+
+The raw-DINO gate estimates `P(goal has a historical match)`. A correct match
+does not guarantee that a long monocular trajectory still has a usable bearing.
+The decoder therefore uses
+
+```text
+effective_revisit_gate = semantic_revisit_gate * pose_reliability
+```
+
+The reliability target is `clamp(cos(raw_bearing, GT_bearing), 0, 1)` on revisit
+rows. GT is used only to supervise calibration; inference uses the observable
+cues listed above. This makes fallback to the current-goal visual branch
+evidence-driven rather than a hard-coded temporal-gap threshold. Training logs
+reliability, target quality, Brier error, effective gate, raw bearing error, and
+action error by goal/gap/span.
+
+The cue choice was checked before implementation on 576 current→goal pairs from
+the 12 locally retained full-stream episodes. Recent-vs-prefix step-scale drift
+correlated with raw bearing error at Pearson `r=0.57` (Spearman `0.54`), while
+normalizing distance by that step scale did **not** improve distance correlation.
+Accordingly, scale drift is used as a confidence cue, not as a claimed metric
+correction; no threshold was fitted to those episodes.
+
+### 2.6 Novel branch starts from the intended pretrained DINO-S
+
+The six-channel current+goal encoder previously constructed a fresh
+`DepthAnythingV2` model but never loaded its checkpoint. It also passed raw
+`[0,1]` pixels into a trunk pretrained with ImageNet normalization. Thus the
+entire novel visual branch was silently random even though it was described as
+DINOv2-S.
+
+MemNav now requires `MEMNAV_DINO_WEIGHTS` (default:
+`InternNav/checkpoints/depth_anything_v2_vits.pth`) and fails before training if
+the file is absent or incompatible. The pretrained 3-channel patch projection
+is expanded to six channels by copying half of its RGB kernel to the current
+half and half to the goal half. Therefore, when current and goal are identical,
+the expanded convolution exactly reproduces the pretrained RGB response while
+both halves remain independently trainable. Current and goal are ImageNet-
+normalized independently before concatenation.
+
+### 2.7 Training and W&B correctness
+
+- Action heading deltas are wrapped to `[-pi, pi)` before NavDP's x4 scaling;
+  W&B reports diffusion error separately as `action_noise_mse_x/y/theta` and
+  reports the x/y/theta target standard deviations over the same logging window.
+- Retrieval ranking is computed only on rows with both a positive and a
+  negative. Novel-only batches produce an exact zero ranking term, without
+  first forming a near-float-limit masked value.
+- The supervised gate uses raw frozen-DINO maximum cosine, while ranking keeps
+  its trainable projection. The old `a*cos+b` scalars placed the useful
+  0.90–0.97 cosine band in poorly conditioned coordinates and barely moved at
+  the shared policy LR. The gate now operates on `(cos-center)/width` (training-
+  split defaults `center=0.94`, `width=0.04`), learns an O(1) positive slope and
+  bias in a separate 10× LR group, and logs its effective raw-cosine threshold.
+  Legacy `gate_a/gate_b` checkpoints are converted algebraically without
+  changing their logits, but their optimizer state is deliberately not resumed.
+  Gate loss has fixed semantics (no four-sample batch-derived class weight), and
+  logs class-specific recall plus window-level separation.
+- Component metrics are accumulated over the exact Hugging Face logging
+  interval. A deterministic, scene-held-out validation subset is evaluated with
+  fixed k/noise/timesteps, so changes across checkpoints are comparable.
+- The custom dictionary batch explicitly declares `batch_labels` to Hugging
+  Face. Scheduled evaluation therefore runs `MemNavTrainer.compute_loss`
+  instead of incorrectly expanding the batch as keyword arguments to the model.
+- Step checkpoints contain the trainable state plus optimizer, scheduler, RNG,
+  trainer state, and train/eval fingerprints. Slurm jobs auto-resume rather than
+  losing an eight-hour run at the wall-time boundary.
+- `scripts/eval/eval_memnav_offline.py` provides a fixed current-architecture
+  diagnostic, including oracle-positive retrieval. With
+  `--full-diffusion-goal-shuffle`, it also runs the complete DDPM reverse process
+  for correct and cyclically shuffled goal images using identical initial and
+  intermediate randomness. Per-sample metrics are stratified by goal A/B/C,
+  retrieval time gap, and remaining path span. When `--max-samples` is used,
+  evaluator and Trainer share the same deterministic revisit/novel-balanced
+  subset builder and fingerprint, so checkpoint comparisons cannot silently use
+  different 16-sample populations. It is explicitly not a closed-loop Habitat
+  navigation score.
+- `scripts/eval/compare_memnav_offline.py` compares two retained per-sample
+  reports only after their evaluator commit, data/cache fingerprints, sample
+  indices, seeds, DDPM protocol and per-row identities all match. It reports
+  paired deltas and bootstrap intervals for overall, 2/3-leg, Goal C,
+  long-span and hard-turn slices; a mismatched experiment fails closed instead
+  of producing an apparently paired table.
+- Trainer/W&B mirrors the important strata without changing the objective:
+  action and gate by goal A/B/C, plus revisit aux direction/x/y by goal type,
+  teacher-forced anchor-gap bin, and remaining-path-span bin. Every bin includes
+  a support fraction so an empty or rare group cannot be mistaken for a trend.
+
+---
+
+## 3. Files touched
+
+| file | change |
+|---|---|
+| `internnav/model/basemodel/memnav/memnav_policy.py` | `_load_cache` loads `cam_pose_enc`; analytic relative pose; semantic/geometric dual gate; normalized pretrained novel branch |
+| `internnav/model/basemodel/memnav/revisit_pose.py` | gauge-invariant planar code and observable-cue geometric reliability head |
+| `internnav/model/encoder/navdp_backbone.py` | validates DINO-S weights and expands the pretrained RGB patch projection to six-channel early fusion |
+| `internnav/model/basemodel/memnav/lingbot_stream.py` | new `goal_append_warm` method |
+| `internnav/trainer/memnav_trainer.py` | direction + reliability supervision, long-range stratified diagnostics, fixed validation |
+| `scripts/train/configs/memnav.py` | explicit `goal_warm=64`, required DINO weights, held-out split/eval and resumable step checkpoint defaults |
+| `internnav/model/basemodel/memnav/retrieval_head.py` | separately testable projected ranking and normalized/calibrated raw-cosine revisit gate |
+| `internnav/model/basemodel/memnav/metrics.py` | deterministic per-sample, B/C/time-stratified, and paired full-diffusion diagnostics |
+| `scripts/eval/eval_memnav_offline.py` | strict fixed-split evaluator with optional oracle-positive and full-DDPM goal-shuffle passes |
+| `scripts/eval/compare_memnav_offline.py` | fail-closed paired comparison with long-route strata and bootstrap confidence intervals |
+| `scripts/diag_lingbot_pose_accuracy.py` | new diagnostic harness (GT vs. official-continuous-stream vs. ours; `warm_forward`/`warm_goal_pose`/`oracle_goal_pose`) used to find and validate all of the above |
+
+## 4. Open items
+
+- **Precompute still runs at `kv_cache_sliding_window=32`**, not
+  LingBot's intended 64 — `cam_pose_enc` itself (hence `cur_pose`, which
+  reads it directly) would be more accurate at window=64 (0.35–0.40 m ATE
+  measured vs. 0.64–0.65 m at window=32 on the same trajectories). Not yet
+  changed — it's a precompute config/cost tradeoff (roughly doubles
+  per-trajectory KV work), not a code fix, and out of scope for this round.
+- **Metric translation has an irreducible residual** because LingBot's
+  monocular scale varies by sequence and long trajectories accumulate drift.
+  The policy now sees a gauge-invariant bounded code and can fall back when
+  reliability is low, but this does not repair the underlying map. A submap
+  Sim(2)/SE(2) pose graph remains the structural next step.
+- Frozen VO accuracy has a real, separate ceiling on long/turn-heavy
+  trajectories (measured 2.5 m ATE on a 744-frame, 2-turn episode even for
+  the trusted continuous-stream reference) — not something any of the
+  fixes above can close; it's a property of the frozen model itself, not
+  the reconstruction path.

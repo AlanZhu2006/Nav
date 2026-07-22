@@ -49,6 +49,9 @@ def _report(rows):
         'selection_indices': [0, 1, 2, 3],
         'eval_dataset_fingerprint': 'fixed-four',
         'evaluated_samples': 4,
+        'retrieval_anchor_mode': 'projected',
+        'original_anchor_margins': [8],
+        'anchor_margin_override': None,
         'oracle_positive': True,
         'full_diffusion_goal_shuffle': True,
         'diffusion_seed': 104729,
@@ -126,6 +129,20 @@ class MemNavOfflineCompareTest(unittest.TestCase):
         treatment['diffusion_seed'] += 1
         with self.assertRaisesRegex(ValueError, 'diffusion_seed'):
             validate_and_pair(control, treatment)
+
+    def test_rejects_retrieval_anchor_contract_mismatch(self):
+        mismatches = {
+            'retrieval_anchor_mode': 'raw',
+            'original_anchor_margins': [16],
+            'anchor_margin_override': 16,
+        }
+        for key, value in mismatches.items():
+            with self.subTest(key=key):
+                control = _report(self.control_rows)
+                treatment = _report(self.treatment_rows)
+                treatment[key] = value
+                with self.assertRaisesRegex(ValueError, key):
+                    validate_and_pair(control, treatment)
 
     def test_rejects_row_contract_mismatch(self):
         control = _report(self.control_rows)

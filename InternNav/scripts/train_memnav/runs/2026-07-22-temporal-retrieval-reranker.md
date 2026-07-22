@@ -116,9 +116,17 @@ acceptance result.
 
 ## Formal scene-held-out training result
 
-The dependent job completed all 3000 optimizer steps in `00:08:48`. The complete
-fixed validation set had 558 goals, of which 212 revisit rows had a valid ranking
-target after candidate masking. Recall@5 stayed `181/212` and Recall@10 stayed
+The dependent job completed all 3000 optimizer steps in `00:08:48`.
+
+**Post-audit correction (2026-07-22):** the selected fixed dataset contained 558
+goals, but `TrainingArguments(dataloader_drop_last=True)` and evaluation batch size
+16 caused HF evaluation to consume only the first 544. The omitted final 14 rows
+include five rankable 3-leg Goal-C revisits. Therefore every W&B table in this
+section describes 544 evaluated goals and 212 rankable rows, not the complete 558.
+See `2026-07-22-legacy-retrieval-checkpoint-audit.md` for the zero-mismatch dataset
+contract check and the exact full-population raw baseline.
+
+Within the actually evaluated 544 goals, Recall@5 stayed `181/212` and Recall@10 stayed
 `189/212` at every recorded evaluation, confirming that training changed only the
 ordering inside the raw shortlist.
 
@@ -136,9 +144,9 @@ Top-1/negative/gray counts and has slightly lower listwise loss than step 2250. 
 checkpoint SHA256 is
 `c5382ccb732af2c8053741be8117258b80f2c190ed1e9427b7d4bfeb3001e3df`.
 
-The exact zero-residual control subsequently completed on the same 558-row population
-with base learning rate zero. Of the 221 revisit rows, 212 had a valid ranking target
-after candidate masking:
+The exact zero-residual control subsequently completed on the same configured
+population with base learning rate zero. It likewise evaluated only the first 544
+rows; 212 had a valid ranking target after candidate masking:
 
 | Metric | Zero residual | Step 2500 | Change |
 | --- | ---: | ---: | ---: |
@@ -284,8 +292,8 @@ Formal artifacts (gitignored diagnostics):
   preflight; final state `COMPLETED, ExitCode=0:0`, elapsed `00:08:48` on
   `h200_tandon`;
 - long-run budget: batch size `8`, maximum `3000` optimizer steps, evaluation every
-  `250` steps on all `558` held-out goals, checkpoint every `500` steps with six
-  checkpoints retained;
+  `250` steps on a configured 558-goal set (actual 544 because of the drop-last issue
+  documented above), checkpoint every `500` steps with six checkpoints retained;
 - W&B run:
   `https://wandb.ai/yz11502-new-york-university/memnav/runs/retr-temporal-s3000-1c7aee0`;
 - exact zero-residual control: JobID `14502040`, `COMPLETED, ExitCode=0:0` in

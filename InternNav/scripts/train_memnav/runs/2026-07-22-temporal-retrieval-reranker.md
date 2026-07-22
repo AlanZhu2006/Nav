@@ -203,6 +203,63 @@ Local artifacts (gitignored diagnostics):
   SHA256
   `60ab8f54fb3a5660539a35b74f66aa837a17d6fa033c96c98d8c2ef1bb46a057`.
 
+## Formal paired full-DDPM action gate
+
+The formal comparison used 64 balanced fixed rows, including 32 revisit and 32 novel
+rows. Both arms ran concurrently on separate GPUs of the same H200 node `gh126` with
+the same code, sparse cache, 64 explicit indices, batch size 4, diffusion seed
+`104729`, and paired correct/shuffled-goal initial noise. The only model difference
+was the remotely audited 14-scalar temporal reranker state. The fail-closed comparator
+accepted all experiment-level and row-level contracts before computing 100,000 paired
+bootstrap resamples.
+
+| Group | Rows | Raw control | Step 2500 | Relative change | Paired 95% CI for delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| All | 64 | 0.073553 | 0.073424 | -0.18% | `[-0.000504, +0.000145]` |
+| Revisit | 32 | 0.076599 | 0.076613 | +0.02% | `[0, +0.0000337]` |
+| Novel | 32 | 0.070507 | 0.070235 | -0.39% | `[-0.001011, +0.000277]` |
+| 2-leg | 15 | 0.060391 | 0.059757 | -1.05% | `[-0.001922, +0.0000175]` |
+| 3-leg | 49 | 0.077583 | 0.077608 | +0.03% | `[-0.000201, +0.000260]` |
+| 3-leg Goal-C revisit | 25 | 0.076170 | 0.076185 | +0.0189% | `[0, +0.0000400]` |
+| Remaining span >=256 | 6 | 0.095117 | 0.095117 | 0.00% | `[0, 0]` |
+| Hard turn | 4 | 0.201410 | 0.201410 | 0.00% | `[0, 0]` |
+
+The apparent all-row improvement is not a reliable policy gain: its confidence
+interval crosses zero, and only 4/64 rows improved while 8 worsened and 52 were
+bitwise tied. The revisit retrieval counts were exactly unchanged at 23 positive,
+8 gray/ignored, and 1 negative. Twelve rows changed match index:
+
+- all three changed revisit rows remained positive-to-positive; none improved its
+  full-diffusion action MSE, and their regressions were only `0.0000617`, `0.0000796`,
+  and `0.0002803`;
+- all nine changed novel rows remained non-positive-to-non-positive, because a novel
+  Goal-A row has no retrieval positive to learn;
+- one novel 2-leg Goal-A row contributed a `-0.009612` delta by itself and dominated
+  the small aggregate improvement, while another novel Goal-A row regressed by
+  `+0.003994`.
+
+The result passes the overall 2% regression bound but fails the separately
+pre-registered zero-regression requirement for 3-leg Goal-C revisit rows. Therefore
+step 2500 is **not accepted as a policy improvement** and the temporal mode remains an
+optional retrieval diagnostic rather than a new default. The scene-held-out
+classification result is still real: it improves strict retrieval Top-1 inside the
+raw Top-10, but this fixed action gate shows that the improvement does not transfer to
+long-route or revisit action quality. Future work should not spend another long run
+only reducing this listwise loss; it needs a goal-conditioned action-relevance signal
+and must avoid applying a revisit-trained temporal residual blindly to novel rows.
+
+Formal artifacts (gitignored diagnostics):
+
+- raw report: `.diagnostics/retrieval/temporal-reranker-raw-full64.json`, SHA256
+  `61ceec9d87f06c57c0943e4a38dbab3e2fd6888414f04e10b3a1be721120fda4`;
+- step-2500 report:
+  `.diagnostics/retrieval/temporal-reranker-step2500-full64.json`, SHA256
+  `1ae4504a1a88acd57fdd6f551215fd32b0cd4d2b52c2ab4c0519a56ed8c563dc`;
+- 100,000-resample comparison:
+  `.diagnostics/retrieval/temporal-reranker-raw-vs-step2500-full64-100k.json`,
+  SHA256
+  `b67fc722fc2d9137fead6fa28843be1311ea5d3d2b2a123162a5e8e3fc25c832`.
+
 ## Submission record
 
 - code commit: `1c7aee077252fa3d23fda6532c5660a21ddca702`;
@@ -241,12 +298,30 @@ Local artifacts (gitignored diagnostics):
   `ddpm2-retr-raw-1c7aee0.json` (SHA256
   `79aff7a551ad74edd0933909483f058c4b7335b3b050a333f13c46d97bf5c5a4`),
   and passed the runtime dependency, code, model-weight, and cache-signature checks;
-- at the latest audit, temporal smoke `14526134` remained pending on
-  `QOSGrpGRES`; consequently the paired smoke comparison was not yet interpreted;
-- fixed-64 action-gate jobs: raw `14526135`, temporal `14526136`; both use the exact
-  dependency `afterok:14526133:14526134`, diffusion seed `104729`, balanced fixed
-  selection, paired correct/shuffled-goal noise, and immutable evaluator SHA256
+- temporal smoke `14526134` completed with `ExitCode=0:0` in `00:03:49` on `ga004`
+  after waiting for `QOSGrpGRES`; its report SHA256 is
+  `458115e365ae2b8b842c37be96cb5b441a7f236ab03a700eabe55c59afbd5633`;
+- the strict two-row smoke comparison was bitwise tied for both match index and all
+  primary action groups; comparison SHA256
+  `c7ed53391a25175b291226a173248fa4e6ff6253171a7af0b1c2c3e369965ee8`;
+- the first fixed-64 raw allocation, JobID `14526135`, passed repository, dependency,
+  package, weight, dataset, and cache checks but failed before its first batch on
+  `ga040` with `CUDA-capable device(s) is/are busy or unavailable`; final state
+  `FAILED, ExitCode=1:0`, elapsed `00:02:40`, and no report was written;
+- the original pending temporal JobID `14526136` was cancelled without running so
+  that both arms could be repeated on one healthy GPU architecture; the cluster
+  rejected an attempted `--exclude=ga040` submission before assigning a JobID;
+- retry fixed-64 jobs: raw `14527490`, temporal `14527491`. Because Slurm refused to
+  reuse the already-satisfied smoke dependencies, both were submitted only after the
+  two successful smoke exits and JSON checks had been recorded. They ran concurrently
+  on separate H200 GPUs of node `gh126` and completed with `ExitCode=0:0` in
+  `00:21:42` and `00:21:16`, respectively;
+- both retry arms used diffusion seed `104729`, balanced fixed selection, paired
+  correct/shuffled-goal noise, and immutable evaluator SHA256
   `a8070b8c45e453194468dc8c3107ee53ef3beb80dd2f53688288157804c681e1`;
+- retry stdout/stderr:
+  `/home/yz11502/logs/eval_memnav/offline-14527490.{out,err}` and
+  `/home/yz11502/logs/eval_memnav/offline-14527491.{out,err}`;
 - training dataset: `3962` goals / `1704` episodes, fingerprint
   `f4ded662fdd7db7b37c4ebdfb6c94a82e6b8a6bc7fa29f1cd71e4c2c36b483aa`;
 - validation dataset: `558` goals / `240` episodes, fingerprint

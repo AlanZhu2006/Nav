@@ -217,8 +217,14 @@ def main() -> None:
         for label, _root in arms:
             with np.load(per_arm[label][episode], allow_pickle=False) as cache:
                 pose = np.asarray(cache["cam_pose_enc"], dtype=np.float64)
-                cam_indices = np.asarray(cache["cam_frame_indices"])
-                scale = int(np.asarray(cache["num_scale_frames"]).reshape(-1)[0])
+                if "cam_frame_indices" in cache.files:
+                    cam_indices = np.asarray(cache["cam_frame_indices"])
+                    scale = int(np.asarray(cache["num_scale_frames"]).reshape(-1)[0])
+                else:
+                    # Legacy pre-schema dense cache: one camera KV row per frame,
+                    # no metadata. Assume the production num_scale_frames=8.
+                    scale = 8
+                    cam_indices = np.arange(len(pose), dtype=np.int64)
             row = summarize_pose(pose, action, metadata, rpe_gaps=rpe_gaps)
             n_keyframes = int(len(cam_indices) - scale)
             n_streamed = max(1, row["n"] - scale)

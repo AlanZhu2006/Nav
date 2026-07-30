@@ -365,12 +365,46 @@ class MemNavAgent:
             # decode: normalized deltas / 4 -> metres; cumsum -> waypoints
             deltas = (naction / 4.0).float().cpu().numpy()               # [N,24,3]
             paths = np.cumsum(deltas, axis=1)
-            ends = paths[:, -1, :2]
-            medoid = int(np.argmin(np.linalg.norm(ends - ends.mean(0), axis=1)))
+
+            # geometric trajectory selection (MEMNAV_COLLISION_SELECT, default on):
+            # this model has no critic — NavDP's collision score is instead computed
+            # geometrically from the CURRENT view's predicted depth (the map-scale
+            # depth head, made metric by the ground scale). One extra _predict_depth
+            # on tokens we already hold (_last_agg); pure head, no KV mutation.
+            # Any failure (or =0) falls back to the endpoint medoid.
+            values, pick = [0.0] * N, None
+            if os.environ.get("MEMNAV_COLLISION_SELECT", "1") != "0":
+                try:
+                    from internnav.model.basemodel.memnav.collision_check import (
+                        obstacle_points_from_depth, score_trajectories,
+                        select_trajectory)
+                    from internnav.model.basemodel.memnav.lingbot_stream import (
+                        GROUND_BIAS_CORRECTION)
+                    pred = self.lb.model._predict_depth(
+                        self._last_agg, cur_img[None][None].to(dev), self._psi)
+                    d_cur = pred["depth"][0, -1, ..., 0].float()
+                    c_cur = pred["depth_conf"][0, -1].float()
+                    fov_v, fov_h = float(cur_pose[0, 7]), float(cur_pose[0, 8])
+                    ms = float(mscale.item())
+                    # h_est back out of the scale (scale = 1.15*cam_h/h_est) —
+                    # exact whenever the ground-scale clamp didn't bind (>95% eps)
+                    h_est = GROUND_BIAS_CORRECTION * self.camera_height / ms
+                    obs = obstacle_points_from_depth(
+                        d_cur, c_cur, fov_v, fov_h, h_est, ms)
+                    paths_t = torch.as_tensor(paths, device=obs.device)
+                    scores, _ = score_trajectories(paths_t, obs, fov_h)
+                    pick = select_trajectory(paths_t, scores)
+                    values = scores.float().cpu().tolist()
+                except Exception as e:
+                    print(f"[MemNavAgent] collision select failed ({e}); "
+                          f"falling back to medoid", flush=True)
+            if pick is None:
+                ends = paths[:, -1, :2]
+                pick = int(np.argmin(np.linalg.norm(ends - ends.mean(0), axis=1)))
             return dict(
-                trajectory=paths[medoid].tolist(),
+                trajectory=paths[pick].tolist(),
                 all_trajectory=paths.tolist(),
-                all_values=[0.0] * N,
+                all_values=values,
                 gate=float(gate.item()),
                 match_idx=int(match_idx.item()),
                 raw_score=raw_score,

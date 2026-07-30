@@ -13,7 +13,7 @@
 #SBATCH --export=ALL
 #
 # Numerical-equivalence check for the batched window_forward path
-# (MEMNAV_STREAM_GROUP). Runs scripts/diag_batched_window.py inside the SAME
+# (MEMNAV_STREAM_GROUP). Runs scripts/diag_perf/diag_batched_window.py inside the SAME
 # apptainer overlay as training so it sees the packed frames + host caches.
 set -euo pipefail
 
@@ -50,7 +50,7 @@ apptainer exec --nv \
         export TMPDIR="${JOB_TMP_ROOT}/tmp"; mkdir -p "${TMPDIR}"
         export MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 TOKENIZERS_PARALLELISM=false
         which python; python -V
-        exec python scripts/diag_batched_window.py
+        exec python scripts/diag_perf/diag_batched_window.py
     '
 
 echo "=== done: $(date) ==="

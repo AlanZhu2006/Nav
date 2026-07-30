@@ -7,7 +7,7 @@ pipeline** specifically — `cur_pose`, `goal_pose`, and how `RevisitMerge`
 turns them into the revisit/aux-pose signal — found by comparing the
 pipeline's own pose estimates against ground truth and against LingBot's
 own "official" continuous-stream inference. Diagnostic tooling lives in
-`InternNav/scripts/diag_lingbot_pose_accuracy.py`.
+`InternNav/scripts/diag_pose_scale/diag_lingbot_pose_accuracy.py`.
 
 ---
 
@@ -79,7 +79,7 @@ goal at `m+1`. `encode_memory` calls this with `self.goal_warm` (default
 **64**) instead of `goal_append`.
 
 Validated against a true continuous-stream oracle and real goal GT
-positions (`scripts/diag_lingbot_pose_accuracy.py`, `warm_goal_pose` /
+positions (`scripts/diag_pose_scale/diag_lingbot_pose_accuracy.py`, `warm_goal_pose` /
 `oracle_goal_pose`):
 
 | depth (3-leg, `m=140`, `recall_gap=290`) | error vs. true goal position |
@@ -200,7 +200,7 @@ call).
 | `internnav/model/basemodel/memnav/lingbot_stream.py` | new `goal_append_warm` method |
 | `internnav/trainer/memnav_trainer.py` | `gt_pose` sliced to `[..., :2]` |
 | `scripts/train/configs/memnav.py` | explicit `goal_warm=64` |
-| `scripts/diag_lingbot_pose_accuracy.py` | new diagnostic harness (GT vs. official-continuous-stream vs. ours; `warm_forward`/`warm_goal_pose`/`oracle_goal_pose`) used to find and validate all of the above |
+| `scripts/diag_pose_scale/diag_lingbot_pose_accuracy.py` | new diagnostic harness (GT vs. official-continuous-stream vs. ours; `warm_forward`/`warm_goal_pose`/`oracle_goal_pose`) used to find and validate all of the above |
 
 ## 4. Open items
 

@@ -38,6 +38,6 @@ apptainer exec --nv \
         export MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 TOKENIZERS_PARALLELISM=false
         export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
         which python; python -V
-        exec python scripts/diag_goal_io.py
+        exec python scripts/diag_perf/diag_goal_io.py
     '
 echo "=== done: $(date) ==="

@@ -14,7 +14,7 @@ Report:
   - distribution of obstacle counts
 
 Usage (from InternNav/):
-  python scripts/diag_obstacle_coverage.py \
+  python scripts/diag_collision_geo/diag_obstacle_coverage.py \
       --root-dir /scratch/lg154/Research/datasets/InternData-N1/vln_n1/_raw \
       --cache /tmp/logoplanner_dataset_lerobot.json \
       --max-trajectories 0

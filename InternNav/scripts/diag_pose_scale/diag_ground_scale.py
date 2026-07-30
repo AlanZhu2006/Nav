@@ -21,8 +21,8 @@ compares its planar norm |t_rel_xz| against the GT pair's metric displacement
 |t_gt[g] - t_gt[k]| — per-pair error in meters, no Sim(3) fit involved.
 
 Usage (memnav conda env, from InternNav/):
-  python scripts/diag_ground_scale.py
-  python scripts/diag_ground_scale.py --episodes mp3d_2leg/17DRP5sb8fy/episode_0000 \
+  python scripts/diag_pose_scale/diag_ground_scale.py
+  python scripts/diag_pose_scale/diag_ground_scale.py --episodes mp3d_2leg/17DRP5sb8fy/episode_0000 \
       --skip_precompute /tmp/lingbot_pose_eval_out_XXXX
 """
 import argparse
@@ -33,7 +33,7 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from diag_lingbot_pose_accuracy import (  # noqa: E402  (same scripts/ dir)
     DEFAULT_ROOT, LINGBOT_REPO, WEIGHTS,
     run_precompute, load_gt_positions, load_official_positions, umeyama,

@@ -12,7 +12,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --export=ALL
 #
-# Offline CLS-separation probe (scripts/diag_gate_features.py) inside the SAME
+# Offline CLS-separation probe (scripts/diag_retrieval/diag_gate_features.py) inside the SAME
 # apptainer overlay training uses — frames + goal_{j}.jpg live in the squashfs,
 # caches on host. GPU only to run the frozen DINO on the goal images (few hundred).
 #
@@ -47,7 +47,7 @@ apptainer exec --nv \
         cd '"${REPO_ROOT}"'
         export PYTHONPATH="'"${REPO_ROOT}"'/src/diffusion-policy:${PYTHONPATH:-}"
         export TOKENIZERS_PARALLELISM=false
-        exec python scripts/diag_gate_features.py \
+        exec python scripts/diag_retrieval/diag_gate_features.py \
             --max_per_group "${MAX_PER_GROUP}"
     '
 echo "=== done: $(date) ==="

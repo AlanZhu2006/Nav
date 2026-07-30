@@ -20,7 +20,7 @@ Outputs (to --out):
   traj_viz.npz  : raw centers + errors + yaw for offline re-plotting.
 
 Run inside the apptainer overlay (same as the pose-scale probe):
-  python scripts/diag_traj_viz.py --traj_idx -1 --max_frames 160
+  python scripts/diag_pose_scale/diag_traj_viz.py --traj_idx -1 --max_frames 160
 """
 import argparse
 import os

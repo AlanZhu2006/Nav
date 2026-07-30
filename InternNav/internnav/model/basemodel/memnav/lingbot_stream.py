@@ -167,7 +167,7 @@ def ground_scale_from_h_est(h_est, camera_height_m=0.5,
     bias_correction: the raw per-frame-median estimate carries a consistent
     underestimate (deepest-peak rule + depth-head far bias make h_est ~13% too
     deep) — fit as 1/median(s_raw/s_gt_umeyama)=1/0.868 over the 16 validate_gated
-    2-leg episodes (outlier-excluded; scripts/diag_ground_scale.py, 2026-07-21).
+    2-leg episodes (outlier-excluded; scripts/diag_pose_scale/diag_ground_scale.py, 2026-07-21).
     Residual after correction: ~8% std, range [0.78, 1.09]; the remaining spread is
     dominated by a per-scene depth bias (17DRP ~0.90 vs 1LX ~0.79 raw medians).
     scale_range: CLAMP the corrected estimate into [lo, hi] (only None if h_est is
@@ -178,7 +178,7 @@ def ground_scale_from_h_est(h_est, camera_height_m=0.5,
     true s_gt median 15): clamp 61% vs constant 83%. The reject-to-constant design
     assumed out-of-range == floor-miss (est huge, truth ~normal, constant closer), but
     no such episode exists here — high-est episodes have genuinely high true scale, and
-    the depth estimate tracks it (scripts/diag_ground_scale_sweep.py). Ceiling recalibr-
+    the depth estimate tracks it (scripts/diag_pose_scale/diag_ground_scale_sweep.py). Ceiling recalibr-
     ated to 6.0 (was 4.0). Overridable per run via MEMNAV_GROUND_SCALE_MAX (-> MemNavNet).
     In practice only the upper bound ever binds (0 episodes hit the 0.8 floor)."""
     if h_est is None or h_est <= 1e-6:
@@ -488,7 +488,7 @@ class LingBotStream(nn.Module):
             scale = camera_height_m / (floor_y_peak - median(camera_y))
 
         Map-frame conventions this relies on (both validated for this checkpoint by
-        scripts/diag_ground_scale.py): pose9 absT/quaR decode as CAM-TO-WORLD, and
+        scripts/diag_pose_scale/diag_ground_scale.py): pose9 absT/quaR decode as CAM-TO-WORLD, and
         the map frame is the frame-0 OpenCV camera frame (y points DOWN), so the
         floor sits at y > camera_y and gravity is +y whenever the capture camera is
         level (true for the MP3D generator: pitch 0, fixed mount).
@@ -860,7 +860,7 @@ class LingBotStream(nn.Module):
         window_forward's cold start at the nominal window boundary starves the goal's pose
         estimate — the first live-recomputed frame (and everything causally downstream of
         it, including the goal) has no real predecessors, only the injected specials-only
-        history. Empirically (scripts/diag_lingbot_pose_accuracy.py's goal-insertion test,
+        history. Empirically (scripts/diag_pose_scale/diag_lingbot_pose_accuracy.py's goal-insertion test,
         comparing against a true continuous-stream oracle and the goal's real GT position)
         ``warm=64`` closes this gap almost entirely — matches oracle to within noise, while
         ``warm=32`` (the nominal window) leaves ~30% avoidable error on the table and

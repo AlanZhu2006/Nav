@@ -12,7 +12,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --export=ALL
 #
-# Pose-scale diagnostic (scripts/diag_pose_scale.py) inside the SAME apptainer
+# Pose-scale diagnostic (scripts/diag_pose_scale/diag_pose_scale.py) inside the SAME apptainer
 # overlay training uses. Decides whether the stuck aux-pose loss is a per-traj
 # scale-ambiguity problem (=> scale-invariant target) or an arch/loss problem
 # (=> keep metric, fix head). Frozen LingBot on GPU; ~40 trajectories + 256 samples.
@@ -53,7 +53,7 @@ apptainer exec --nv \
         export TOKENIZERS_PARALLELISM=false
         ONLY_C_FLAG=""
         if [ "${ONLY_C}" = "1" ]; then ONLY_C_FLAG="--only_C --out /scratch/lg154/Research/Nav/InternNav/logs/train_memnav/pose_decomp"; fi
-        exec python scripts/diag_pose_scale.py \
+        exec python scripts/diag_pose_scale/diag_pose_scale.py \
             --n_traj "${N_TRAJ}" \
             --n_samples "${N_SAMPLES}" \
             --n_decomp "${N_DECOMP}" \

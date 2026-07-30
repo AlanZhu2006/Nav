@@ -3,7 +3,7 @@
 #
 # The batched path (MEMNAV_STREAM_GROUP>1) runs G trajectory streams on the aggregator's
 # batch dim instead of a per-sample Python loop — ~Gx fewer frozen-LingBot forwards/step.
-# It is numerically equivalent to the old path (validated by scripts/diag_batched_window.py).
+# It is numerically equivalent to the old path (validated by scripts/diag_perf/diag_batched_window.py).
 #
 # Usage:
 #   bash scripts/train_memnav/submit_train_mp3d.sh

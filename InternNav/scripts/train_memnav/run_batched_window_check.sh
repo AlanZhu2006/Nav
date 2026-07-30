@@ -35,6 +35,6 @@ apptainer exec --nv \
         export TMPDIR="/tmp/${USER}/memnav_chk_${SLURM_JOB_ID:-$$}"; mkdir -p "${TMPDIR}"
         export MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 TOKENIZERS_PARALLELISM=false
         which python; python -V
-        exec python scripts/diag_batched_window.py
+        exec python scripts/diag_perf/diag_batched_window.py
     '
 echo "=== done: $(date) ==="

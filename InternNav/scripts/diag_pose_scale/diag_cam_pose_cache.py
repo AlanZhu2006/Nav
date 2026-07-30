@@ -10,7 +10,7 @@ For one trajectory:
 
 Local resid low + global high == accumulated streaming drift (LingBot is locally
 accurate). Run inside the apptainer overlay (parquet lives in the .sqf):
-  python scripts/diag_cam_pose_cache.py --traj_idx 0
+  python scripts/diag_pose_scale/diag_cam_pose_cache.py --traj_idx 0
 """
 import argparse
 import os

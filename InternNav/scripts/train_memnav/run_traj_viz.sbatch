@@ -13,7 +13,7 @@
 #SBATCH --export=ALL
 #
 # Visualize LingBot predicted camera trajectory (native full-seq + our streaming)
-# vs GT for ONE episode (scripts/diag_traj_viz.py). Tests the "weak at sharp turns"
+# vs GT for ONE episode (scripts/diag_pose_scale/diag_traj_viz.py). Tests the "weak at sharp turns"
 # hypothesis: does the predicted track diverge from GT at the leg-switch align_turn?
 set -euo pipefail
 
@@ -49,7 +49,7 @@ apptainer exec --nv \
         cd '"${REPO_ROOT}"'
         export PYTHONPATH="'"${REPO_ROOT}"'/src/diffusion-policy:${PYTHONPATH:-}"
         export TOKENIZERS_PARALLELISM=false
-        exec python scripts/diag_traj_viz.py \
+        exec python scripts/diag_pose_scale/diag_traj_viz.py \
             --traj_idx "${TRAJ_IDX}" \
             --max_frames "${MAX_FRAMES}" \
             --start_frame "${START_FRAME}" \

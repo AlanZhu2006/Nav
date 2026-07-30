@@ -281,7 +281,7 @@ class MemNavNet(nn.Module):
         self.predict_size = predict_size
         # goal_append_warm's live-recompute depth before streaming the goal — deeper than
         # `window` on purpose (see LingBotStream.goal_append_warm); validated against a
-        # continuous-stream oracle in scripts/diag_lingbot_pose_accuracy.py.
+        # continuous-stream oracle in scripts/diag_pose_scale/diag_lingbot_pose_accuracy.py.
         self.goal_warm = goal_warm
         # Sparse-cache training must fail closed on a legacy/mixed cache tree
         # (silently shifted temporal indices otherwise); dense-cache training

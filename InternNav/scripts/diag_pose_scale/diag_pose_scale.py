@@ -30,7 +30,7 @@ Probe A (the real aux signal): ||goal_pose[:3] - cur_pose[:3]|| (LingBot, incl.
 Run (inside the same apptainer overlay training uses):
     sbatch scripts/train_memnav/run_pose_scale_probe.sbatch
 or in an existing GPU alloc:
-    python scripts/diag_pose_scale.py --n_traj 40 --n_samples 256
+    python scripts/diag_pose_scale/diag_pose_scale.py --n_traj 40 --n_samples 256
 """
 import argparse
 import json

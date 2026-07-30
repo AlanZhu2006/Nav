@@ -25,7 +25,7 @@ and the SAME transform is then applied to `ours`, so a real bug in the windowed 
 shows up as elevated ours-vs-GT error rather than being silently absorbed by a separate best-fit.
 
 Usage (from InternNav/, memnav conda env, needs pandas/torch/matplotlib):
-  python scripts/diag_lingbot_pose_accuracy.py \
+  python scripts/diag_pose_scale/diag_lingbot_pose_accuracy.py \
       --episodes mp3d_2leg/17DRP5sb8fy/episode_0000,mp3d_2leg/1LXtFkjw3qL/episode_0000
 """
 import argparse
@@ -45,7 +45,7 @@ DEFAULT_ROOT = "/home/asus/Research/Nav/memnav_viz/validate_gated"
 DEFAULT_EPISODES = "mp3d_2leg/17DRP5sb8fy/episode_0000,mp3d_2leg/1LXtFkjw3qL/episode_0000"
 LINGBOT_REPO = "/home/asus/Research/Nav/NavDP/baselines/memnav/lingbot-map"
 WEIGHTS = os.path.join(LINGBOT_REPO, "weights/lingbot-map-long.pt")
-PRECOMPUTE_SCRIPT = os.path.join(os.path.dirname(__file__), "dataset_converters", "precompute_lingbot_features.py")
+PRECOMPUTE_SCRIPT = os.path.join(os.path.dirname(__file__), "..", "dataset_converters", "precompute_lingbot_features.py")
 OUT_DIR = "/home/asus/Research/Nav/memnav_viz/lingbot_pose_eval"
 
 
@@ -355,7 +355,7 @@ def main():
         out_root = run_precompute(args.root, episodes, args.window, args.num_scale,
                                   args.max_frame_num, args.overwrite)
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))  # InternNav/ on path
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))  # InternNav/ on path
     from internnav.model.basemodel.memnav.lingbot_stream import LingBotStream
     lb = LingBotStream(lingbot_repo=LINGBOT_REPO, weights=WEIGHTS, window=args.window,
                        num_scale=args.num_scale, max_frame_num=args.max_frame_num, device="cuda")

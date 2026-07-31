@@ -460,11 +460,13 @@ def extract_trajectory(
     cam_frame_indices = list(range(scale))
     gs_heights, gs_frames, gs_off = [], [], [0]
 
-    def pool_ground(agg_tokens, frame_imgs, pose9):
+    def pool_ground(agg_tokens, frame_imgs, pose9, dp=None):
         """Depth head on the just-streamed frame(s) -> per-frame-relative floor
-        candidate heights (cpu), frame indices offset to be episode-global."""
+        candidate heights (cpu), frame indices offset to be episode-global.
+        `dp` lets the flow gate's depth prediction be reused for the same frame."""
         gfh = ground_helpers[0]
-        dp = model._predict_depth(agg_tokens, frame_imgs, psi)   # fp32 inside
+        if dp is None:
+            dp = model._predict_depth(agg_tokens, frame_imgs, psi)   # fp32 inside
         rel, fo = gfh(dp["depth"][0, ..., 0].float(), dp["depth_conf"][0].float(), pose9)
         gs_heights.append(rel.cpu()); gs_frames.append((fo + gs_off[0]).cpu())
         gs_off[0] += pose9.shape[0]
@@ -489,6 +491,7 @@ def extract_trajectory(
     anchor_k_list, anchor_v_list, anchor_frame_indices = [], [], []
     for i in range(scale, S):
         frame = images[:, i:i + 1].to(dev, non_blocking=True)
+        frame_dp = None          # this frame's depth-head output, shared gate->ground
         if flow_gated:
             # Commit-then-drop: forward in normal append mode (one pass — the
             # frame's own attention is identical whether or not its KV persists),
@@ -516,9 +519,10 @@ def extract_trajectory(
                 # cache_schema._flow_gate_indices asserts it).
                 is_keyframe = True
             else:
-                depth = model._predict_depth(
+                frame_dp = model._predict_depth(
                     agg_tok, images=frame, patch_start_idx=psi
-                )["depth"].float()                           # [1, 1, H, W, 1]
+                )
+                depth = frame_dp["depth"].float()            # [1, 1, H, W, 1]
                 flow = _compute_flow_magnitude(
                     cur_pose, last_kf_pose, depth, tuple(depth.shape[2:4])
                 )
@@ -560,7 +564,7 @@ def extract_trajectory(
         if ground_helpers is not None and (i - scale) % ground_stride == 0:
             # Dense per-frame output like cam_pose_enc — pooled regardless of
             # keyframe status (only the KV memory is sparsified).
-            pool_ground(agg_tok, frame, pl[-1][0].float())
+            pool_ground(agg_tok, frame, pl[-1][0].float(), dp=frame_dp)
         if is_keyframe:
             ck, cv = read_cam_newest(1)
             cam_k_list.append(ck)

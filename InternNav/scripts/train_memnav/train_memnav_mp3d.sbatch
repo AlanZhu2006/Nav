@@ -126,6 +126,9 @@ export MEMNAV_GATE_TEACHER_END=${MEMNAV_GATE_TEACHER_END:-0.0}
 export MEMNAV_GATE_TEACHER_STEPS=${MEMNAV_GATE_TEACHER_STEPS:-1000}
 export MEMNAV_INIT_CKPT=${MEMNAV_INIT_CKPT:-}
 export MEMNAV_PREFLIGHT_ONLY=${MEMNAV_PREFLIGHT_ONLY:-0}
+# -1 = normal epoch-based training. The guarded preflight sets 1 and executes the
+# exact production train.py entrypoint for one optimizer step after gradient checks.
+export MEMNAV_TRAIN_MAX_STEPS=${MEMNAV_TRAIN_MAX_STEPS:--1}
 
 # training knobs
 export NAME=${NAME:-memnav_mp3d}
@@ -210,6 +213,7 @@ srun --export=ALL --ntasks=1 --ntasks-per-node=1 \
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} stream_group=${MEMNAV_STREAM_GROUP} max_legs=${MEMNAV_MAX_LEGS} versioned_cache=${MEMNAV_REQUIRE_VERSIONED_CACHE} save_steps=${MEMNAV_SAVE_STEPS}"
         echo "gate_teacher=${MEMNAV_GATE_TEACHER_START}->${MEMNAV_GATE_TEACHER_END} over ${MEMNAV_GATE_TEACHER_STEPS} steps"
         echo "init_ckpt=${MEMNAV_INIT_CKPT:-<fresh>}"
+        echo "entrypoint_max_steps=${MEMNAV_TRAIN_MAX_STEPS}"
         nvidia-smi -L || true
 
         # CPU-side dependency/config/cache/output preflight.  Keep this separate from
@@ -222,23 +226,34 @@ srun --export=ALL --ntasks=1 --ntasks-per-node=1 \
         # the host requeues for a fresh allocation instead of dying mid-train.
         python scripts/train_memnav/gpu_preflight.py || exit 42
 
+        TRAIN_CMD=(
+          torchrun --standalone --nnodes=1 --nproc_per_node="${NPROC}"
+          scripts/train/train.py
+          --name "${NAME}"
+          --model-name memnav
+          --batch-size "${BATCH_SIZE}"
+          --num-workers "${NUM_WORKERS}"
+          --epochs "${EPOCHS}"
+          --root-dir "${MEMNAV_ROOT_DIR}"
+        )
+
         if [[ "${MEMNAV_PREFLIGHT_ONLY}" == "1" ]]; then
           echo "===== ONE-BATCH TRAINING PREFLIGHT ====="
           python scripts/train_memnav/full_training_preflight.py
+          [[ "${MEMNAV_TRAIN_MAX_STEPS}" == "1" ]] || {
+            echo "ABORT: preflight must run production entrypoint with MEMNAV_TRAIN_MAX_STEPS=1"
+            exit 1
+          }
+          echo "===== PRODUCTION ENTRYPOINT ONE-STEP PREFLIGHT ====="
+          "${TRAIN_CMD[@]}"
+          echo "===== ENTRYPOINT-PREFLIGHT PASS ====="
           echo "===== PREFLIGHT-ONLY PASS ====="
           exit 0
         fi
 
         # 2-GPU DDP. --standalone runs a single-node c10d rendezvous on a free port and
         # exports RANK/LOCAL_RANK/WORLD_SIZE/MASTER_ADDR/MASTER_PORT, which train.py reads.
-        exec torchrun --standalone --nnodes=1 --nproc_per_node="${NPROC}" \
-            scripts/train/train.py \
-            --name "${NAME}" \
-            --model-name memnav \
-            --batch-size "${BATCH_SIZE}" \
-            --num-workers "${NUM_WORKERS}" \
-            --epochs "${EPOCHS}" \
-            --root-dir "${MEMNAV_ROOT_DIR}"
+        exec "${TRAIN_CMD[@]}"
     '
 rc=$?
 set -e

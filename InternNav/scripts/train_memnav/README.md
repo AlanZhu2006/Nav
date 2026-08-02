@@ -25,25 +25,29 @@
    `MEMNAV_WINDOW/NUM_SCALE/MAX_FRAME_NUM` 与预计算一致。
 
 正式脚本会自动运行 `dependency_preflight.py` 和 `gpu_preflight.py`。前者检查
-真实 Python import、路径、一个 cache pair 的 header/schema、warm-start 权重结构及
-写权限；后者检查每张可见 GPU 能否创建 CUDA context。
+真实 Python import（包括生产 `train.py` 的 MemNav 模型选择路径）、路径、一个 cache
+pair 的 header/schema、warm-start 权重结构及写权限；后者检查每张可见 GPU 能否创建
+CUDA context。
 
 ## 先提交真实 batch 预检
 
 预检和正式训练必须使用同一份 `.sbatch`、容器、overlay、Conda、数据、cache 与
-权重。预检会构造完整模型并执行一个真实 revisit batch 的前向和反向：
+权重。预检先构造完整模型并执行一个真实 revisit batch 的前向和反向，然后再通过
+正式 `scripts/train/train.py` 入口运行一个 optimizer step。这样既验证 gate 梯度，
+也覆盖正式入口、Trainer、DataLoader 和模型选择式依赖：
 
 ```bash
 PREFLIGHT_JOB=$(REPO_ROOT=/scratch/<user>/Research/Nav-axis-uturn/InternNav \
   NAME=<run>_preflight \
-  MEMNAV_PREFLIGHT_ONLY=1 MEMNAV_REPORT_TO=none NPROC=1 BATCH_SIZE=1 NUM_WORKERS=0 \
+  MEMNAV_PREFLIGHT_ONLY=1 MEMNAV_TRAIN_MAX_STEPS=1 \
+  MEMNAV_REPORT_TO=none NPROC=1 BATCH_SIZE=1 NUM_WORKERS=0 \
   sbatch --parsable --time=00:30:00 --gres=gpu:1 --export=ALL \
   scripts/train_memnav/train_memnav_mp3d.sbatch)
 PREFLIGHT_JOB=${PREFLIGHT_JOB%%;*}
 ```
 
-只有 `sacct` 显示 `COMPLETED` 且 `ExitCode=0:0`、日志包含
-`[full-preflight] PASS`，才允许长任务开始。
+只有 `sacct` 显示 `COMPLETED` 且 `ExitCode=0:0`、日志同时包含
+`[full-preflight] PASS` 与 `ENTRYPOINT-PREFLIGHT PASS`，才允许长任务开始。
 
 ## 长任务必须依赖预检成功
 

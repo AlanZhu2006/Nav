@@ -59,6 +59,13 @@ def check_imports() -> None:
     # imported the unrelated, ignored Long-CLIP checkout. Keep it as a regression check.
     from internnav.model.basemodel.memnav.memnav_policy import MemNavNet  # noqa: F401
     from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset  # noqa: F401
+    # Exercise the exact model-selection path used by the production train.py entrypoint.
+    # The full-batch preflight used to import MemNav classes directly and therefore
+    # missed train.py's eager import of the unrelated, gitignored Long-CLIP checkout.
+    from scripts.train.train import _load_runtime
+    runtime = _load_runtime("memnav")
+    if runtime.dataset_class is not MemNav_Dataset:
+        raise RuntimeError("train.py selected an unexpected MemNav dataset class")
     print("[dependency-preflight] imports OK: " + " ".join(versions), flush=True)
 
 

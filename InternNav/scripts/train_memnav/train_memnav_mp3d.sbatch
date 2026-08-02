@@ -158,6 +158,7 @@ srun --export=ALL --ntasks=1 --ntasks-per-node=1 \
   apptainer exec --nv \
     --overlay "${IMG}:ro" \
     -B /scratch/lg154 \
+    -B "${REPO_ROOT}" \
     "${BASE_SIF}" \
     bash -c '
         set -euo pipefail

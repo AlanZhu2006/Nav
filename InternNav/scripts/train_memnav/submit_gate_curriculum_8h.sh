@@ -28,6 +28,7 @@ COMMIT=$(git -C "${REPO_ROOT}" rev-parse HEAD)
 BRANCH=$(git -C "${REPO_ROOT}" branch --show-current)
 mkdir -p "${REPO_ROOT}/logs/train_memnav"
 bash -n "${SBATCH_SCRIPT}"
+cd "${REPO_ROOT}"
 
 echo "commit=${COMMIT} branch=${BRANCH}"
 echo "repo=${REPO_ROOT}"
@@ -49,7 +50,10 @@ PREFLIGHT_JOB=$(
   MEMNAV_REPORT_TO=none \
   NPROC=1 BATCH_SIZE=1 NUM_WORKERS=0 \
   sbatch --parsable --job-name="${RUN_NAME}_pre" --time=00:30:00 \
-    --gres=gpu:1 --cpus-per-task=8 --mem=80G --export=ALL "${SBATCH_SCRIPT}"
+    --gres=gpu:1 --cpus-per-task=8 --mem=80G \
+    --output="${REPO_ROOT}/logs/train_memnav/${RUN_NAME}_pre-%j.out" \
+    --error="${REPO_ROOT}/logs/train_memnav/${RUN_NAME}_pre-%j.err" \
+    --export=ALL "${SBATCH_SCRIPT}"
 )
 PREFLIGHT_JOB=${PREFLIGHT_JOB%%;*}
 
@@ -67,7 +71,10 @@ TRAIN_JOB=$(
   MEMNAV_SAVE_STEPS=100 \
   NPROC=2 BATCH_SIZE=4 NUM_WORKERS=8 EPOCHS=10 \
   sbatch --parsable --job-name="${RUN_NAME}" --time=08:00:00 \
-    --dependency="afterok:${PREFLIGHT_JOB}" --export=ALL "${SBATCH_SCRIPT}"
+    --dependency="afterok:${PREFLIGHT_JOB}" \
+    --output="${REPO_ROOT}/logs/train_memnav/${RUN_NAME}-%j.out" \
+    --error="${REPO_ROOT}/logs/train_memnav/${RUN_NAME}-%j.err" \
+    --export=ALL "${SBATCH_SCRIPT}"
 )
 TRAIN_JOB=${TRAIN_JOB%%;*}
 

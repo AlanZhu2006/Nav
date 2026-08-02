@@ -15,9 +15,10 @@
    python -m pytest -q tests/unit_test
    ```
 
-3. 确认部署目录 `/scratch/lg154/Research/Nav-axis-uturn/InternNav` 指向该
-   commit，不从其他人正在修改的共享主工作树启动；提交时显式导出同一路径的
-   `REPO_ROOT`。
+3. 确认自己账号下的独立部署目录（例如
+   `/scratch/<user>/Research/Nav-axis-uturn/InternNav`）指向该 commit，不从其他人
+   正在修改的共享主工作树启动；提交时显式导出同一路径的 `REPO_ROOT`。日志和
+   新 checkpoint 写入该目录，共享数据/权重仅只读复用。
 4. 核对 `MEMNAV_ROOT_DIR`、`MEMNAV_FEATURE_ROOT`、`LINGBOT_REPO`、
    `LINGBOT_WEIGHTS`、`MEMNAV_INIT_CKPT` 和输出目录。
 5. sparse cache 训练必须设置 `MEMNAV_REQUIRE_VERSIONED_CACHE=1`，且
@@ -33,7 +34,7 @@
 权重。预检会构造完整模型并执行一个真实 revisit batch 的前向和反向：
 
 ```bash
-PREFLIGHT_JOB=$(REPO_ROOT=/scratch/lg154/Research/Nav-axis-uturn/InternNav \
+PREFLIGHT_JOB=$(REPO_ROOT=/scratch/<user>/Research/Nav-axis-uturn/InternNav \
   NAME=<run>_preflight \
   MEMNAV_PREFLIGHT_ONLY=1 MEMNAV_REPORT_TO=none NPROC=1 BATCH_SIZE=1 NUM_WORKERS=0 \
   sbatch --parsable --time=00:30:00 --gres=gpu:1 --export=ALL \
@@ -47,7 +48,7 @@ PREFLIGHT_JOB=${PREFLIGHT_JOB%%;*}
 ## 长任务必须依赖预检成功
 
 ```bash
-TRAIN_JOB=$(REPO_ROOT=/scratch/lg154/Research/Nav-axis-uturn/InternNav \
+TRAIN_JOB=$(REPO_ROOT=/scratch/<user>/Research/Nav-axis-uturn/InternNav \
   NAME=<run> MEMNAV_PREFLIGHT_ONLY=0 \
   sbatch --parsable --time=08:00:00 --dependency="afterok:${PREFLIGHT_JOB}" \
   --export=ALL scripts/train_memnav/train_memnav_mp3d.sbatch)

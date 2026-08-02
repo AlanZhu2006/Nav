@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=memnav_mp3d
-#SBATCH --output=/scratch/lg154/Research/Nav-axis-uturn/InternNav/logs/train_memnav/mp3d-%j.out
-#SBATCH --error=/scratch/lg154/Research/Nav-axis-uturn/InternNav/logs/train_memnav/mp3d-%j.err
+#SBATCH --output=slurm-%x-%j.out
+#SBATCH --error=slurm-%x-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
@@ -71,7 +71,7 @@ IMG=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 # Source/output worktree.  Never silently fall back to the shared main checkout:
 # this experiment must execute the committed branch containing the curriculum.
-REPO_ROOT=${REPO_ROOT:-/scratch/lg154/Research/Nav-axis-uturn/InternNav}
+REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-/scratch/lg154/Research/Nav-axis-uturn/InternNav}}
 [[ -f "${REPO_ROOT}/scripts/train/train.py" ]] || {
   echo "ABORT: REPO_ROOT is not an InternNav checkout: ${REPO_ROOT}"; exit 1;
 }

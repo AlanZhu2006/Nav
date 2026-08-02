@@ -77,9 +77,11 @@ REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-/scratch/lg154/Research/Nav-axis-utur
 }
 mkdir -p "${REPO_ROOT}/logs/train_memnav"
 
-# in-container overlay path (frames) + host feature tree (caches)
+# in-container overlay path (frames) + host feature tree (caches).  The former
+# dense ``mp3d_revisit_v0_feat`` tree was retired; the current schema-v2 caches
+# use flow-gated sparse keyframes and live in ``*_feat_flowgate``.
 export MEMNAV_ROOT_DIR=/mp3d_revisit_v0/vln_n1/traj_data
-export MEMNAV_FEATURE_ROOT=/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data
+export MEMNAV_FEATURE_ROOT=${MEMNAV_FEATURE_ROOT:-/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat_flowgate/vln_n1/traj_data}
 export LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
 export LINGBOT_WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
 

@@ -10,7 +10,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../.." && pwd)
 SBATCH_SCRIPT="${SCRIPT_DIR}/train_memnav_mp3d.sbatch"
 RUN_NAME=${RUN_NAME:-memnav_gatecurr_warm2600_alllegs_$(date +%Y%m%d_%H%M%S)}
-MEMNAV_INIT_CKPT=${MEMNAV_INIT_CKPT:-/scratch/lg154/Research/Nav/InternNav/checkpoints/memnav_mp3d_flowgate/checkpoint-2600/memnav.ckpt}
+MEMNAV_INIT_CKPT=${MEMNAV_INIT_CKPT:-/scratch/lg154/Research/Nav/InternNav/checkpoints/memnav_mp3d_flowgate/ckpts/checkpoint-2600/memnav.ckpt}
 
 command -v sbatch >/dev/null || { echo "ABORT: sbatch is unavailable"; exit 1; }
 command -v scontrol >/dev/null || { echo "ABORT: scontrol is unavailable"; exit 1; }

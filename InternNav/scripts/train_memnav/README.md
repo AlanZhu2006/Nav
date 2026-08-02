@@ -26,8 +26,9 @@
 
 正式脚本会自动运行 `dependency_preflight.py` 和 `gpu_preflight.py`。前者检查
 真实 Python import（包括生产 `train.py` 的 MemNav 模型选择路径）、路径、一个 cache
-pair 的 header/schema、warm-start 权重结构及写权限；后者检查每张可见 GPU 能否创建
-CUDA context。
+pair 的 header/schema、`MEMNAV_INIT_CKPT -> il.ckpt_to_load` 配置接线、warm-start 权重
+结构及写权限；后者检查每张可见 GPU 能否创建 CUDA context。真实 batch 阶段还会将
+模型内四个关键 tensor 与源 checkpoint 逐值比较，防止“文件存在但训练没有加载”。
 
 ## 先提交真实 batch 预检
 

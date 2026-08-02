@@ -66,6 +66,13 @@ def check_imports() -> None:
     runtime = _load_runtime("memnav")
     if runtime.dataset_class is not MemNav_Dataset:
         raise RuntimeError("train.py selected an unexpected MemNav dataset class")
+    expected_init = os.environ.get("MEMNAV_INIT_CKPT", "")
+    configured_init = str(runtime.exp_cfg.il.ckpt_to_load or "")
+    if configured_init != expected_init:
+        raise RuntimeError(
+            "MEMNAV_INIT_CKPT is not wired to train config il.ckpt_to_load: "
+            f"env={expected_init!r} config={configured_init!r}"
+        )
     print("[dependency-preflight] imports OK: " + " ".join(versions), flush=True)
 
 

@@ -77,6 +77,26 @@ def main() -> None:
 
     config = MemNavModelConfig(model_cfg=memnav_exp_cfg.model_dump())
     model = MemNavPolicy.from_pretrained(il.ckpt_to_load, config=config).cuda().train()
+    if il.ckpt_to_load:
+        state = torch.load(il.ckpt_to_load, map_location="cpu", weights_only=False)
+        state = state.get("state_dict", state) if isinstance(state, dict) else state
+        current = model.state_dict()
+        probe_keys = (
+            "core.retrieval.gate_a",
+            "core.retrieval.gate_b",
+            "core.revisit_merge.revisit_head.weight",
+            "core.decoder.layers.0.self_attn.in_proj_weight",
+        )
+        mismatched = [key for key in probe_keys
+                      if key not in state or not torch.equal(current[key].cpu(), state[key].cpu())]
+        if mismatched:
+            raise RuntimeError(f"warm-start tensors were not loaded exactly: {mismatched}")
+        print(
+            f"[full-preflight] warm start tensors match: {il.ckpt_to_load} "
+            f"({len(probe_keys)} probes)",
+            flush=True,
+        )
+        del state, current
     # The wrapper follows train mode; its frozen feature producer must not.
     if model.core.lingbot.model.training or model.core.lingbot.depth_feat_head.training:
         raise RuntimeError("frozen LingBot child escaped into train mode")

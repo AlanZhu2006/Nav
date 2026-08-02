@@ -77,7 +77,7 @@ memnav_exp_cfg = ExpCfg(
         use_ckpt_config=False,
         save_results=True,
         split=['val_seen'],
-        ckpt_to_load=_INIT_CKPT,
+        ckpt_to_load='',
         max_steps=195,
         sample=False,
         success_distance=3.0,
@@ -95,7 +95,10 @@ memnav_exp_cfg = ExpCfg(
         save_interval_steps=_SAVE_STEPS,
         save_filter_frozen_weights=True,
         load_from_ckpt=False,
-        ckpt_to_load='',
+        # Training warm start (weights only). This must live under il: train.py
+        # constructs the policy from config.il.ckpt_to_load; eval.ckpt_to_load is
+        # unrelated and is consumed only by evaluation entrypoints.
+        ckpt_to_load=_INIT_CKPT,
         report_to=os.environ.get('MEMNAV_REPORT_TO', 'wandb'),
         # data + frozen-LingBot paths (override via MEMNAV_ROOT_DIR / LINGBOT_REPO / LINGBOT_WEIGHTS)
         root_dir=_ROOT_DIR,

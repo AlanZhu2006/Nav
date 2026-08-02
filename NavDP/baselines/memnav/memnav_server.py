@@ -5,15 +5,20 @@ frames over HTTP; this server maintains the live LingBot memory and plans
 trajectories toward a goal image on request.
 
 Endpoints (NavDP wire-contract style):
-  POST /navigator_reset      JSON {camera_height?, stop_threshold?, batch_size?}
+  POST /navigator_reset      JSON {camera_height?, seed?}
                              -> {"algo": "memnav"}   (starts a fresh episode)
   POST /memory_step          files: image (jpg)      -> {"frame_idx": i}
                              stream a frame into memory WITHOUT planning (leg replay)
   POST /imagegoal_step       files: image (jpg), goal (jpg)
                              -> {"trajectory": [24,3] metres (x fwd, y left, theta),
                                  "all_trajectory": [N,24,3], "all_values": [N],
-                                 "gate": float, "match_idx": int, "frame_idx": int}
+                                 "gate": float, "match_idx": int, "frame_idx": int,
+                                 "goal_rel_yaw": float|null,
+                                 "current_goal_cos": float}
                              streams the frame, then plans toward the goal.
+  POST /imagegoal_similarity files: image (jpg), goal (jpg)
+                             -> {"current_goal_cos": float}
+                             stateless visual check; does not mutate memory.
 
 Usage:
   conda activate memnav
@@ -70,7 +75,8 @@ app = Flask(__name__)
 def navigator_reset():
     payload = request.get_json(silent=True) or {}
     cam_h = float(payload.get("camera_height", 0.5))
-    agent.reset(camera_height=cam_h)
+    seed = payload.get("seed")
+    agent.reset(camera_height=cam_h, seed=seed)
     return jsonify({"algo": "memnav"})
 
 
@@ -90,8 +96,21 @@ def memory_step():
 @app.route("/imagegoal_step", methods=["POST"])
 def imagegoal_step():
     agent.add_frame(request.files["image"].read())
-    out = agent.plan(request.files["goal"].read())
+    forced_anchor = request.form.get("forced_anchor")
+    forced_gate = request.form.get("forced_gate")
+    out = agent.plan(
+        request.files["goal"].read(),
+        forced_anchor=(int(forced_anchor) if forced_anchor is not None else None),
+        forced_gate=(float(forced_gate) if forced_gate is not None else None),
+    )
     return jsonify(out)
+
+
+@app.route("/imagegoal_similarity", methods=["POST"])
+def imagegoal_similarity():
+    score = agent.image_goal_similarity(
+        request.files["image"].read(), request.files["goal"].read())
+    return jsonify({"current_goal_cos": score})
 
 
 if __name__ == "__main__":

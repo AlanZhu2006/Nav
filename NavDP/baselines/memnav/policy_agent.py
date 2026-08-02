@@ -27,6 +27,11 @@ import shutil
 import numpy as np
 import torch
 
+try:  # package import in tests; script-local import in memnav_server.py
+    from .pose_alignment import lingbot_relative_yaw
+except ImportError:  # pragma: no cover - exercised by the live script entrypoint
+    from pose_alignment import lingbot_relative_yaw
+
 
 # ----------------------------------------------------------------------------- #
 # helpers
@@ -83,7 +88,16 @@ class MemNavAgent:
     # ------------------------------------------------------------------ #
     # episode lifecycle
     # ------------------------------------------------------------------ #
-    def reset(self, camera_height=0.5):
+    def reset(self, camera_height=0.5, seed=None):
+        # Reset diffusion randomness per episode so terminal-mode A/B runs have
+        # an identical navigation prefix.  This does not force deterministic
+        # CUDA kernels; it controls the explicit torch.randn DDPM start noise.
+        if seed is not None:
+            seed = int(seed)
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
         self._episode_counter += 1
         self.rgb_dir = os.path.join(self.buffer_root, f"ep_{self._episode_counter:04d}")
         shutil.rmtree(self.rgb_dir, ignore_errors=True)
@@ -111,6 +125,35 @@ class MemNavAgent:
         self._psi = None                 # patch_start_idx from the scale block
         self.lb.model.clean_kv_cache()
         self.lb.model.camera_head.clean_kv_cache()
+
+    @torch.no_grad()
+    def image_goal_similarity(self, image_jpg_bytes, goal_jpg_bytes):
+        """Stateless raw-DINO cosine for terminal visual verification.
+
+        Unlike ``plan()``, this neither appends the image to streaming memory
+        nor runs retrieval.  Terminal-motion frames therefore cannot produce a
+        trivial near-self retrieval match at the verification step.
+        """
+        import hashlib
+
+        current_path = os.path.join(self.rgb_dir, "_verify_current.jpg")
+        with open(current_path, "wb") as f:
+            f.write(image_jpg_bytes)
+        current_img = self.lb.load_images([current_path])[0][None].to(self.device)
+        current_cls = self.lb.dino(current_img)["cls"]
+
+        gkey = hashlib.md5(goal_jpg_bytes).hexdigest()
+        goal_cls = self._goal_cache.get(("cls", gkey))
+        if goal_cls is None:
+            goal_path = os.path.join(self.rgb_dir, "_verify_goal.jpg")
+            with open(goal_path, "wb") as f:
+                f.write(goal_jpg_bytes)
+            goal_img = self.lb.load_images([goal_path])[0][None].to(self.device)
+            goal_cls = self.lb.dino(goal_img)["cls"]
+            self._goal_cache[("cls", gkey)] = goal_cls
+
+        return float(torch.nn.functional.cosine_similarity(
+            current_cls, goal_cls, dim=-1)[0].item())
 
     # ------------------------------------------------------------------ #
     # capture-stream internals (mirrors precompute extract_trajectory)
@@ -257,9 +300,16 @@ class MemNavAgent:
         return self._metric_scale
 
     @torch.no_grad()
-    def plan(self, goal_jpg_bytes):
+    def plan(self, goal_jpg_bytes, forced_anchor=None, forced_gate=None):
         """Plan toward a goal image. Returns dict with metre-space waypoints in the
-        current camera planar frame (x forward, y left, theta CCW)."""
+        current camera planar frame (x forward, y left, theta CCW).
+
+        ``forced_anchor`` and ``forced_gate`` are evaluation-only oracle
+        interventions. They change
+        only the history frame used by the revisit tower; retrieval logits,
+        gate, current-state tower, novel tower, and diffusion decoding remain
+        unchanged. The default ``None`` preserves deployment behavior.
+        """
         k = self.n - 1
         lo = self.amargin
         if k < self.S + self.W:
@@ -283,14 +333,23 @@ class MemNavAgent:
                 self._goal_cache[("cls", gkey)] = self.lb.dino(goal_t)["cls"]
             goal_cls = self._goal_cache[("cls", gkey)]                   # [1,1024]
             mem_cls = torch.stack(self.dino_cls, 0)[None].to(dev)        # [1,k+1,1024]
+            current_goal_cos = float(torch.nn.functional.cosine_similarity(
+                goal_cls, mem_cls[:, k], dim=-1)[0].item())
             cand = torch.zeros(1, k + 1, dtype=torch.bool, device=dev)
             hi = k - self.exclude_recent
             if hi >= lo:
                 cand[0, lo:hi + 1] = True
             match_idx, gate_logit, _ = self.core.retrieval(goal_cls, mem_cls, cand)
             gate = torch.sigmoid(gate_logit)     # trained gate: decoder soft-bias, as in training
+            predicted_gate = float(gate.item())
+            if forced_gate is not None:
+                forced_gate = float(forced_gate)
+                if not 0.0 <= forced_gate <= 1.0:
+                    return dict(error=f"forced gate {forced_gate} outside [0, 1]")
+                gate = torch.full_like(gate, forced_gate)
 
             raw_score = None
+            raw_cos = None
             if self.retrieval_mode == "raw" and cand.any():
                 import torch.nn.functional as Fnn
                 raw_cos = Fnn.cosine_similarity(goal_cls.unsqueeze(1), mem_cls, dim=-1)[0]
@@ -305,6 +364,21 @@ class MemNavAgent:
                     match = cand_best
                     self._anchor_state[gkey] = dict(m=cand_best, score=raw_score)
                 match_idx = torch.tensor([match], device=dev)
+            retrieved_anchor = int(match_idx.clamp(lo, k - 1).item())
+            forced_anchor_score = None
+            if forced_anchor is not None:
+                forced_anchor = int(forced_anchor)
+                if forced_anchor < lo or forced_anchor > hi:
+                    return dict(
+                        error=(f"forced anchor {forced_anchor} outside eligible "
+                               f"range [{lo}, {hi}]")
+                    )
+                match_idx = torch.tensor([forced_anchor], device=dev)
+                if raw_cos is None:
+                    import torch.nn.functional as Fnn
+                    raw_cos = Fnn.cosine_similarity(
+                        goal_cls.unsqueeze(1), mem_cls, dim=-1)[0]
+                forced_anchor_score = float(raw_cos[forced_anchor].item())
             anchor = int(match_idx.clamp(lo, k - 1).item())
 
             # current state (tower 1): LIVE stream tokens — no window recompute at eval.
@@ -343,10 +417,14 @@ class MemNavAgent:
             mscale = torch.tensor([self._get_metric_scale()], device=dev, dtype=torch.float32)
             current_state = self.core.build_current_state(cur_t, dfeat)
             if goal_pose is not None:
-                revisit, aux_pose, _ = self.core.build_revisit(cur_pose.to(dev), goal_pose.to(dev), mscale)
+                revisit, aux_pose, relative_rotation = self.core.build_revisit(
+                    cur_pose.to(dev), goal_pose.to(dev), mscale)
+                goal_rel_yaw = lingbot_relative_yaw(
+                    relative_rotation[0].float().cpu().numpy())
             else:
                 revisit = torch.zeros((1, self.core.n_rev, self.core.action_head.in_features), device=dev)
                 aux_pose = torch.zeros((1, 2), device=dev)
+                goal_rel_yaw = None
             novel = self.core.novel(cur_img[None].to(dev), goal_t)
 
             # DDPM reverse loop (no critic in this model)
@@ -406,10 +484,19 @@ class MemNavAgent:
                 all_trajectory=paths.tolist(),
                 all_values=values,
                 gate=float(gate.item()),
+                predicted_gate=predicted_gate,
+                forced_gate=(float(forced_gate)
+                             if forced_gate is not None else None),
                 match_idx=int(match_idx.item()),
                 raw_score=raw_score,
+                retrieved_anchor=retrieved_anchor,
+                forced_anchor=(int(forced_anchor)
+                               if forced_anchor is not None else None),
+                forced_anchor_score=forced_anchor_score,
                 anchor=anchor,
                 aux_pose=aux_pose[0].float().cpu().tolist(),
+                goal_rel_yaw=goal_rel_yaw,
+                current_goal_cos=current_goal_cos,
                 frame_idx=k,
             )
         finally:

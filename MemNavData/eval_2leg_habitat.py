@@ -41,6 +41,17 @@ import requests
 from PIL import Image
 
 from generate_twoleg import (M_W, geodesic, make_sim, render, yaw_facing)
+from terminal_uturn import (
+    TerminalManeuverExecutor,
+    plan_staged_terminal_maneuver,
+    plan_terminal_maneuver,
+    relative_xy_to_world,
+    wrap_angle,
+)
+from visual_yaw_refinement import (
+    estimate_visual_yaw,
+    visual_yaw_action_decision,
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--episode_root", type=str, required=True,
@@ -62,6 +73,58 @@ parser.add_argument("--v_max", type=float, default=0.0376, help="m per frame (da
 parser.add_argument("--r_min", type=float, default=0.40)
 parser.add_argument("--max_turn_deg", type=float, default=4.5)
 parser.add_argument("--lookahead", type=float, default=0.7)
+parser.add_argument(
+    "--terminal_uturn",
+    choices=["off", "oracle", "lingbot_yaw", "lingbot_local", "lingbot"],
+    default="off",
+    help=("revisit-only terminal pose alignment: oracle uses meta goal pose; "
+          "lingbot_yaw isolates predicted rotation with oracle position; "
+          "lingbot_local returns to the current position using predicted yaw only; "
+          "lingbot uses the latest aux translation + axis-corrected R_rel yaw"),
+)
+parser.add_argument("--terminal_radius", type=float, default=0.40,
+                    help="minimum radius of the forward-only terminal maneuver")
+parser.add_argument("--terminal_snap_tol", type=float, default=0.08,
+                    help="max navmesh projection displacement allowed for a turn sample")
+parser.add_argument("--terminal_yaw_tol_deg", type=float, default=15.0)
+parser.add_argument("--terminal_budget", type=int, default=400,
+                    help="extra frame budget after first reaching the goal position")
+parser.add_argument(
+    "--terminal_visual_refine",
+    choices=["off", "verify", "refine"],
+    default="off",
+    help=("after the coarse terminal maneuver, estimate a direct two-view yaw "
+          "residual; verify only logs it, refine executes at most one additional "
+          "forward-only correction"),
+)
+parser.add_argument("--visual_yaw_min_matches", type=int, default=8)
+parser.add_argument("--visual_yaw_min_inliers", type=int, default=16)
+parser.add_argument("--visual_yaw_min_inlier_ratio", type=float, default=0.50)
+parser.add_argument("--visual_yaw_max_off_axis_deg", type=float, default=15.0)
+parser.add_argument("--visual_yaw_max_consensus_deg", type=float, default=5.0)
+parser.add_argument("--visual_yaw_deadband_deg", type=float, default=8.0,
+                    help="do not move for a smaller accepted visual residual")
+parser.add_argument("--visual_yaw_max_correction_deg", type=float, default=45.0,
+                    help="fail closed when the accepted residual exceeds this bound")
+parser.add_argument(
+    "--retrieval_override",
+    choices=["off", "gt_covis"],
+    default="off",
+    help=("evaluation-only intervention: force the revisit anchor to the "
+          "episode metadata's GT covisibility argmax"),
+)
+parser.add_argument(
+    "--gate_override",
+    type=float,
+    default=None,
+    help="evaluation-only decoder gate override in [0,1]",
+)
+parser.add_argument("--loop_cos_min", type=float, default=None,
+                    help="optional raw-DINO current/goal cosine threshold for loop closure")
+parser.add_argument("--seed", type=int, default=0,
+                    help="base diffusion seed; episode i uses seed+i")
+parser.add_argument("--episode_ids", type=str, default="",
+                    help="optional comma-separated episode directory names")
 parser.add_argument("--episodes", type=int, default=0, help="cap #episodes (0 = all)")
 parser.add_argument("--save_video", action="store_true")
 args = parser.parse_args()
@@ -79,8 +142,11 @@ def jpg_bytes(rgb):
     return buf.getvalue()
 
 
-def srv_reset(camera_height=CAM_H):
-    r = requests.post(f"{BASE}/navigator_reset", json={"camera_height": camera_height})
+def srv_reset(camera_height=CAM_H, seed=None):
+    payload = {"camera_height": camera_height}
+    if seed is not None:
+        payload["seed"] = int(seed)
+    r = requests.post(f"{BASE}/navigator_reset", json=payload)
     r.raise_for_status()
     return r.json()["algo"]
 
@@ -91,9 +157,27 @@ def srv_memory(image_jpg):
     return r.json()
 
 
-def srv_plan(image_jpg, goal_jpg):
+def srv_plan(image_jpg, goal_jpg, forced_anchor=None, forced_gate=None):
+    data = {}
+    if forced_anchor is not None:
+        data["forced_anchor"] = str(int(forced_anchor))
+    if forced_gate is not None:
+        data["forced_gate"] = str(float(forced_gate))
     r = requests.post(f"{BASE}/imagegoal_step",
-                      files={"image": ("image.jpg", image_jpg), "goal": ("goal.jpg", goal_jpg)})
+                      files={"image": ("image.jpg", image_jpg),
+                             "goal": ("goal.jpg", goal_jpg)},
+                      data=data)
+    r.raise_for_status()
+    return r.json()
+
+
+def srv_similarity(image_jpg, goal_jpg):
+    """Direct visual check without appending to or retrieving from memory."""
+    r = requests.post(
+        f"{BASE}/imagegoal_similarity",
+        files={"image": ("image.jpg", image_jpg),
+               "goal": ("goal.jpg", goal_jpg)},
+    )
     r.raise_for_status()
     return r.json()
 
@@ -152,23 +236,296 @@ def pursuit_step(pos, psi, path_xz, pf):
 # --------------------------------------------------------------------------- #
 # rollout
 # --------------------------------------------------------------------------- #
-def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None):
-    """Policy-driven leg. Returns dict(reached, path_len, end_pos, end_psi, steps)."""
+def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
+                   terminal_mode="off", goal_yaw=None, camera_intrinsic=None,
+                   forced_anchor=None, forced_gate=None):
+    """Policy-driven leg with optional forward-only terminal pose alignment.
+
+    Navigation success remains the benchmark's distance-only event.  When a
+    terminal mode is enabled, rollout continues after that event so we can
+    separately measure whether the robot returns to the goal with the goal
+    image's orientation and whether direct visual similarity improves.
+    """
     path_len, history, way_world, plans = 0.0, [], None, []
-    for step in range(args.max_steps):
+    reached_position = False
+    path_len_at_reach = None
+    step_at_reach = None
+    pose_estimate = None
+    terminal = None
+    terminal_phase = None
+    terminal_attempted = False
+    coarse_terminal_completed = False
+    terminal_failure = None
+    terminal_info = {}
+    visual_yaw_checked = False
+    visual_yaw_initial = None
+    visual_yaw_final = None
+    visual_refine_attempted = False
+    visual_refine_executed = False
+    visual_refine_completed = False
+    visual_refine_skip_reason = None
+    visual_refine_failure = None
+    pre_turn_cos = None
+    pre_turn_yaw_err = None
+    pre_turn_yaw_signed_err = None
+
+    def result(steps, final_response=None):
+        final_dist = float(np.linalg.norm(
+            np.asarray([pos[0], pos[2]]) - np.asarray(goal_xz)))
+        final_yaw_err = (abs(wrap_angle(float(goal_yaw) - psi))
+                         if goal_yaw is not None else None)
+        final_yaw_signed_err = (wrap_angle(float(goal_yaw) - psi)
+                                if goal_yaw is not None else None)
+        post_cos = ((final_response or {}).get("current_goal_cos")
+                    if final_response is not None else None)
+        terminal_completed = bool(coarse_terminal_completed)
+        pose_aligned = bool(
+            terminal_attempted
+            and final_dist < args.success_dist
+            and final_yaw_err is not None
+            and final_yaw_err <= np.deg2rad(args.terminal_yaw_tol_deg)
+        )
+        loop_closed = None
+        if args.loop_cos_min is not None:
+            loop_closed = bool(
+                pose_aligned and post_cos is not None
+                and post_cos >= args.loop_cos_min)
+        return dict(
+            reached=bool(reached_position),
+            path_len=path_len,
+            path_len_at_reach=path_len_at_reach,
+            step_at_reach=step_at_reach,
+            end_pos=pos,
+            end_psi=psi,
+            steps=steps,
+            plans=plans,
+            terminal_mode=terminal_mode,
+            terminal_attempted=terminal_attempted,
+            terminal_completed=terminal_completed,
+            terminal_success=pose_aligned,
+            terminal_failure=terminal_failure,
+            terminal_path_type=terminal_info.get("mode"),
+            terminal_path_m=terminal_info.get("length_m"),
+            terminal_min_clearance_m=terminal_info.get("min_clearance_m"),
+            terminal_target_pos_err_m=terminal_info.get("target_pos_err_m"),
+            terminal_target_yaw_err_deg=terminal_info.get("target_yaw_err_deg"),
+            terminal_target_yaw_signed_err_deg=terminal_info.get(
+                "target_yaw_signed_err_deg"),
+            terminal_target_yaw_hab=terminal_info.get("target_yaw_hab"),
+            terminal_pose_gap_frames=terminal_info.get("pose_gap_frames"),
+            visual_yaw_mode=args.terminal_visual_refine,
+            visual_yaw_checked=visual_yaw_checked,
+            visual_yaw_initial=visual_yaw_initial,
+            visual_yaw_final=visual_yaw_final,
+            visual_refine_attempted=visual_refine_attempted,
+            visual_refine_executed=visual_refine_executed,
+            visual_refine_completed=visual_refine_completed,
+            visual_refine_skip_reason=visual_refine_skip_reason,
+            visual_refine_failure=visual_refine_failure,
+            visual_refine_path_type=terminal_info.get("visual_path_type"),
+            visual_refine_path_m=terminal_info.get("visual_path_m"),
+            visual_refine_min_clearance_m=terminal_info.get(
+                "visual_min_clearance_m"),
+            pre_turn_goal_cos=pre_turn_cos,
+            post_turn_goal_cos=post_cos,
+            pre_turn_yaw_err_deg=(np.degrees(pre_turn_yaw_err)
+                                  if pre_turn_yaw_err is not None else None),
+            pre_turn_yaw_signed_err_deg=(np.degrees(pre_turn_yaw_signed_err)
+                                         if pre_turn_yaw_signed_err is not None
+                                         else None),
+            post_turn_yaw_err_deg=(np.degrees(final_yaw_err)
+                                   if final_yaw_err is not None else None),
+            post_turn_yaw_signed_err_deg=(np.degrees(final_yaw_signed_err)
+                                          if final_yaw_signed_err is not None else None),
+            final_yaw_hab=float(psi),
+            goal_yaw_hab=(float(goal_yaw) if goal_yaw is not None else None),
+            final_goal_dist_m=final_dist,
+            loop_closed=loop_closed,
+        )
+
+    total_budget = args.max_steps + (args.terminal_budget if terminal_mode != "off" else 0)
+    for step in range(total_budget):
         rgb, _depth = render(sim, pos + np.array([0, CAM_H, 0]), psi)
         frame = jpg_bytes(rgb)
         if writer is not None:
             writer.append_data(rgb)
+
+        # The Dubins samples are already velocity/curvature limited.  Stream
+        # every moving frame into LingBot, but do not let diffusion overwrite
+        # the deterministic terminal maneuver.  Once complete, plan once at
+        # the final view to measure direct current-image/goal-image similarity.
+        if terminal is not None:
+            if terminal.done:
+                if terminal_phase == "visual":
+                    visual_refine_completed = not terminal.failed
+                    if camera_intrinsic is not None:
+                        try:
+                            visual_yaw_final = estimate_visual_yaw(
+                                frame,
+                                goal_jpg,
+                                camera_intrinsic,
+                                min_matches=args.visual_yaw_min_matches,
+                                min_inliers=args.visual_yaw_min_inliers,
+                                min_inlier_ratio=args.visual_yaw_min_inlier_ratio,
+                                max_off_axis_deg=args.visual_yaw_max_off_axis_deg,
+                                max_consensus_error_deg=(
+                                    args.visual_yaw_max_consensus_deg),
+                            ).to_dict()
+                        except Exception as exc:  # optional verifier must fail closed
+                            visual_refine_failure = (
+                                f"final visual yaw estimator error: {exc}")
+                    final_response = srv_similarity(frame, goal_jpg)
+                    return result(step + 1, final_response)
+
+                coarse_terminal_completed = not terminal.failed
+                if args.terminal_visual_refine != "off":
+                    visual_yaw_checked = True
+                    estimate = None
+                    if camera_intrinsic is None:
+                        visual_refine_failure = "camera intrinsic unavailable"
+                    else:
+                        try:
+                            estimate = estimate_visual_yaw(
+                                frame,
+                                goal_jpg,
+                                camera_intrinsic,
+                                min_matches=args.visual_yaw_min_matches,
+                                min_inliers=args.visual_yaw_min_inliers,
+                                min_inlier_ratio=args.visual_yaw_min_inlier_ratio,
+                                max_off_axis_deg=args.visual_yaw_max_off_axis_deg,
+                                max_consensus_error_deg=(
+                                    args.visual_yaw_max_consensus_deg),
+                            )
+                            visual_yaw_initial = estimate.to_dict()
+                        except Exception as exc:  # optional verifier must fail closed
+                            estimate = None
+                            visual_refine_failure = (
+                                f"visual yaw estimator error: {exc}")
+
+                    should_refine = args.terminal_visual_refine == "refine"
+                    if should_refine:
+                        apply_correction, decision_reason = (
+                            visual_yaw_action_decision(
+                                estimate,
+                                deadband_deg=args.visual_yaw_deadband_deg,
+                                max_correction_deg=(
+                                    args.visual_yaw_max_correction_deg),
+                            ))
+                        if not apply_correction:
+                            if estimate is not None:
+                                visual_refine_skip_reason = decision_reason
+                        else:
+                            visual_refine_attempted = True
+                            visual_goal_yaw = wrap_angle(
+                                psi + float(estimate.yaw_correction_rad))
+                            maneuver = plan_terminal_maneuver(
+                                current_xz=[pos[0], pos[2]],
+                                current_yaw=psi,
+                                goal_xz=[pos[0], pos[2]],
+                                goal_yaw=visual_goal_yaw,
+                                radius=args.terminal_radius,
+                                turn_step_m=args.v_max * 0.48,
+                                straight_step_m=args.v_max,
+                                pathfinder=pf,
+                                floor_y=float(pos[1]),
+                                snap_tolerance=args.terminal_snap_tol,
+                            )
+                            if maneuver is None:
+                                maneuver = plan_staged_terminal_maneuver(
+                                    current_xz=[pos[0], pos[2]],
+                                    current_yaw=psi,
+                                    goal_yaw=visual_goal_yaw,
+                                    radius=args.terminal_radius,
+                                    turn_step_m=args.v_max * 0.48,
+                                    straight_step_m=args.v_max,
+                                    pathfinder=pf,
+                                    floor_y=float(pos[1]),
+                                    snap_tolerance=args.terminal_snap_tol,
+                                )
+                            if maneuver is None:
+                                visual_refine_failure = (
+                                    "no collision-free visual correction path")
+                            else:
+                                visual_refine_executed = True
+                                terminal_info.update(
+                                    visual_path_type=maneuver.mode,
+                                    visual_path_m=maneuver.length_m,
+                                    visual_min_clearance_m=(
+                                        maneuver.min_clearance_m),
+                                    length_m=(terminal_info.get("length_m", 0.0)
+                                              + maneuver.length_m),
+                                )
+                                terminal = TerminalManeuverExecutor(
+                                    maneuver,
+                                    snap_tolerance=args.terminal_snap_tol,
+                                )
+                                terminal_phase = "visual"
+                                # The final coarse-pose frame has not yet been
+                                # streamed.  Consume it exactly once, then take
+                                # the first deterministic correction step.
+                                srv_memory(frame)
+                                pos, psi, dl = terminal.step(
+                                    pos, psi, pf, float(pos[1]))
+                                path_len += dl
+                                history.append(np.array([pos[0], pos[2]]))
+                                if terminal.failed:
+                                    visual_refine_failure = (
+                                        "visual correction navmesh step rejected")
+                                    return result(step + 1)
+                                continue
+                final_response = srv_similarity(frame, goal_jpg)
+                return result(step + 1, final_response)
+            srv_memory(frame)
+            pos, psi, dl = terminal.step(pos, psi, pf, float(pos[1]))
+            path_len += dl
+            history.append(np.array([pos[0], pos[2]]))
+            if terminal.failed:
+                if terminal_phase == "visual":
+                    visual_refine_failure = (
+                        "visual correction navmesh step rejected")
+                else:
+                    terminal_failure = "navmesh step rejected"
+                return result(step + 1)
+            continue
+
+        # Do not silently give the navigation policy the terminal-only budget.
+        if step >= args.max_steps:
+            return result(step)
+
+        response = None
         if step % args.exec_horizon == 0:
-            resp = srv_plan(frame, goal_jpg)
-            if "trajectory" in resp:
-                way = np.asarray(resp["trajectory"], float)
+            response = srv_plan(
+                frame, goal_jpg, forced_anchor=forced_anchor,
+                forced_gate=forced_gate)
+            if "trajectory" in response:
+                way = np.asarray(response["trajectory"], float)
                 way_world = waypoints_to_world(way, [pos[0], pos[2]], psi)
-                plans.append(dict(step=step, gate=resp.get("gate"),
-                                  match_idx=resp.get("match_idx"), anchor=resp.get("anchor"),
-                                  raw_score=resp.get("raw_score"),
-                                  frame_idx=resp.get("frame_idx")))
+                plans.append(dict(step=step, gate=response.get("gate"),
+                                  match_idx=response.get("match_idx"), anchor=response.get("anchor"),
+                                  retrieved_anchor=response.get("retrieved_anchor"),
+                                  forced_anchor=response.get("forced_anchor"),
+                                  forced_anchor_score=response.get(
+                                      "forced_anchor_score"),
+                                  predicted_gate=response.get("predicted_gate"),
+                                  forced_gate=response.get("forced_gate"),
+                                  raw_score=response.get("raw_score"),
+                                  goal_rel_yaw=response.get("goal_rel_yaw"),
+                                  current_goal_cos=response.get("current_goal_cos"),
+                                  frame_idx=response.get("frame_idx")))
+
+                aux = response.get("aux_pose")
+                rel_yaw = response.get("goal_rel_yaw")
+                if aux is not None and rel_yaw is not None:
+                    aux = np.asarray(aux, dtype=np.float64)
+                    if aux.shape == (2,) and np.isfinite(aux).all() and np.isfinite(rel_yaw):
+                        pose_estimate = dict(
+                            goal_xz=relative_xy_to_world(
+                                aux, [pos[0], pos[2]], psi),
+                            goal_yaw=wrap_angle(psi + float(rel_yaw)),
+                            goal_cos=response.get("current_goal_cos"),
+                            frame_idx=response.get("frame_idx"),
+                            anchor=response.get("anchor"),
+                        )
         else:
             srv_memory(frame)
         if way_world is not None:
@@ -176,11 +533,103 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None):
             path_len += dl
         history.append(np.array([pos[0], pos[2]]))
         if np.linalg.norm(np.array([pos[0], pos[2]]) - goal_xz) < args.success_dist:
-            return dict(reached=True, path_len=path_len, end_pos=pos, end_psi=psi, steps=step + 1, plans=plans)
+            if not reached_position:
+                reached_position = True
+                path_len_at_reach = path_len
+                step_at_reach = step + 1
+                pre_turn_cos = ((response or {}).get("current_goal_cos")
+                                if response is not None
+                                else (pose_estimate or {}).get("goal_cos"))
+                pre_turn_yaw_err = (abs(wrap_angle(float(goal_yaw) - psi))
+                                    if goal_yaw is not None else None)
+                pre_turn_yaw_signed_err = (wrap_angle(float(goal_yaw) - psi)
+                                            if goal_yaw is not None else None)
+            if terminal_mode == "off":
+                return result(step + 1)
+
+            if not terminal_attempted:
+                terminal_attempted = True
+                if terminal_mode == "oracle":
+                    terminal_goal_xz = np.asarray(goal_xz, dtype=np.float64)
+                    terminal_goal_yaw = goal_yaw
+                elif terminal_mode == "lingbot_yaw" and pose_estimate is not None:
+                    terminal_goal_xz = np.asarray(goal_xz, dtype=np.float64)
+                    terminal_goal_yaw = pose_estimate["goal_yaw"]
+                elif terminal_mode == "lingbot_local" and pose_estimate is not None:
+                    # The navigation/stop mechanism has already brought us into
+                    # the success region.  Close only the heading loop here: a
+                    # same-position Dubins maneuver avoids trusting the noisier
+                    # metric aux translation for the terminal correction.
+                    terminal_goal_xz = np.asarray([pos[0], pos[2]], dtype=np.float64)
+                    terminal_goal_yaw = pose_estimate["goal_yaw"]
+                elif pose_estimate is not None:
+                    terminal_goal_xz = pose_estimate["goal_xz"]
+                    terminal_goal_yaw = pose_estimate["goal_yaw"]
+                else:
+                    terminal_goal_xz, terminal_goal_yaw = None, None
+
+                if terminal_goal_xz is None or terminal_goal_yaw is None:
+                    terminal_failure = "LingBot goal pose unavailable"
+                    return result(step + 1)
+
+                terminal_info.update(
+                    target_pos_err_m=float(np.linalg.norm(
+                        np.asarray(terminal_goal_xz) - np.asarray(goal_xz))),
+                    target_yaw_err_deg=float(np.degrees(abs(wrap_angle(
+                        float(terminal_goal_yaw) - float(goal_yaw))))),
+                    target_yaw_signed_err_deg=float(np.degrees(wrap_angle(
+                        float(goal_yaw) - float(terminal_goal_yaw)))),
+                    target_yaw_hab=float(terminal_goal_yaw),
+                    start_yaw_hab=float(psi),
+                    pose_gap_frames=(int(pose_estimate["frame_idx"]
+                                         - pose_estimate["anchor"])
+                                     if pose_estimate.get("frame_idx") is not None
+                                     and pose_estimate.get("anchor") is not None
+                                     else None),
+                )
+
+                maneuver = plan_terminal_maneuver(
+                    current_xz=[pos[0], pos[2]],
+                    current_yaw=psi,
+                    goal_xz=terminal_goal_xz,
+                    goal_yaw=terminal_goal_yaw,
+                    radius=args.terminal_radius,
+                    turn_step_m=args.v_max * 0.48,
+                    straight_step_m=args.v_max,
+                    pathfinder=pf,
+                    floor_y=float(pos[1]),
+                    snap_tolerance=args.terminal_snap_tol,
+                )
+                if maneuver is None and terminal_mode == "lingbot_local":
+                    maneuver = plan_staged_terminal_maneuver(
+                        current_xz=[pos[0], pos[2]],
+                        current_yaw=psi,
+                        goal_yaw=terminal_goal_yaw,
+                        radius=args.terminal_radius,
+                        turn_step_m=args.v_max * 0.48,
+                        straight_step_m=args.v_max,
+                        pathfinder=pf,
+                        floor_y=float(pos[1]),
+                        snap_tolerance=args.terminal_snap_tol,
+                    )
+                if maneuver is None:
+                    terminal_failure = "no collision-free forward-only path"
+                    return result(step + 1)
+                terminal_info.update(
+                    mode=maneuver.mode,
+                    length_m=maneuver.length_m,
+                    min_clearance_m=maneuver.min_clearance_m,
+                )
+                terminal = TerminalManeuverExecutor(
+                    maneuver, snap_tolerance=args.terminal_snap_tol)
+                terminal_phase = "coarse"
         if len(history) > args.stuck_window and \
            np.linalg.norm(history[-1] - history[-args.stuck_window]) < args.stuck_dist:
-            return dict(reached=False, path_len=path_len, end_pos=pos, end_psi=psi, steps=step + 1, plans=plans)
-    return dict(reached=False, path_len=path_len, end_pos=pos, end_psi=psi, steps=args.max_steps, plans=plans)
+            return result(step + 1)
+    if visual_refine_executed and not visual_refine_completed \
+            and visual_refine_failure is None:
+        visual_refine_failure = "terminal budget exhausted during visual correction"
+    return result(total_budget)
 
 
 def spl(reached, geo, plen):
@@ -196,27 +645,36 @@ def main():
 
     ep_dirs = sorted(d for d in glob.glob(os.path.join(args.episode_root, "episode_*"))
                      if os.path.isfile(os.path.join(d, "meta", "gen_meta.json")))
+    if args.episode_ids:
+        wanted = {x.strip() for x in args.episode_ids.split(",") if x.strip()}
+        ep_dirs = [d for d in ep_dirs if os.path.basename(d) in wanted]
     if args.episodes:
         ep_dirs = ep_dirs[:args.episodes]
 
     sim = make_sim(args.scene, "", agent_radius=args.agent_radius)
     pf = sim.pathfinder
-    algo = srv_reset()
+    algo = srv_reset(seed=args.seed)
     print(f"[eval2leg] server algo={algo}, {len(ep_dirs)} episodes, "
           f"leg1={args.leg1_mode}, cold={args.reset_memory}")
 
     metrics = []
-    for ep_dir in ep_dirs:
+    for ep_idx, ep_dir in enumerate(ep_dirs):
         meta = json.load(open(os.path.join(ep_dir, "meta", "gen_meta.json")))
         if meta.get("n_legs", 2) != 2:
             continue
         import pandas as pd
         rows = pd.read_parquet(os.path.join(ep_dir, "data/chunk-000/episode_000000.parquet"))
+        intrinsic_raw = rows.iloc[0]["observation.camera_intrinsic"]
+        camera_intrinsic = np.stack([
+            np.asarray(row, dtype=np.float64) for row in intrinsic_raw
+        ])
         switch = int(meta["switch_idx"])
         rgb_dir = os.path.join(ep_dir, "videos/chunk-000/observation.images.rgb")
 
         A_hab = data_to_hab(meta["A"])
         B = meta["goals"][0]
+        forced_anchor = (int(B["covis_argmax"])
+                         if args.retrieval_override == "gt_covis" else None)
         B_hab = data_to_hab(B["pos"])
         A_xz, B_xz = A_hab[[0, 2]], B_hab[[0, 2]]
         start_floor, start_psi = parquet_pose_hab(rows.iloc[0]["action"])
@@ -227,7 +685,9 @@ def main():
         goalA_jpg = open(os.path.join(rgb_dir, f"{switch - 1}.jpg"), "rb").read()
         goalB_jpg = open(os.path.join(ep_dir, "goal_1.jpg"), "rb").read()
 
-        srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)))
+        episode_seed = args.seed + ep_idx
+        srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)),
+                  seed=episode_seed)
         writer = None
         if args.save_video and imageio is not None:
             writer = imageio.get_writer(
@@ -240,30 +700,94 @@ def main():
             pos, psi = parquet_pose_hab(rows.iloc[switch - 1]["action"])
             legA = dict(reached=True, path_len=geoA, steps=switch, plans=[])   # scripted: SPL_A undefined
         else:
-            legA = run_policy_leg(sim, pf, start_floor, start_psi, goalA_jpg, A_xz, geoA, writer)
+            legA = run_policy_leg(
+                sim, pf, start_floor, start_psi, goalA_jpg, A_xz, geoA, writer,
+                terminal_mode="off")
             pos, psi = legA["end_pos"], legA["end_psi"]
 
         # ---- leg 2 ----
         legB = dict(reached=False, path_len=0.0, steps=0, plans=[])
         if legA["reached"]:
             if args.reset_memory:
-                srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)))
-            legB = run_policy_leg(sim, pf, pos, psi, goalB_jpg, B_xz, geoB, writer)
+                srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)),
+                          seed=episode_seed)
+            legB = run_policy_leg(
+                sim, pf, pos, psi, goalB_jpg, B_xz, geoB, writer,
+                terminal_mode=args.terminal_uturn,
+                goal_yaw=float(B["yaw_habitat"]),
+                camera_intrinsic=camera_intrinsic,
+                forced_anchor=forced_anchor,
+                forced_gate=args.gate_override,
+            )
 
         if writer is not None:
             writer.close()
         m = dict(
             episode=os.path.basename(ep_dir),
+            seed=episode_seed,
             reached_A=float(legA["reached"]), reached_B=float(legB["reached"]),
             spl_A=(spl(legA["reached"], geoA, legA["path_len"])
                    if args.leg1_mode == "policy" else float("nan")),
-            spl_B=spl(legB["reached"], geoB, legB["path_len"]),
+            # Keep the official distance-only SPL comparable to the old
+            # evaluator: terminal alignment happens after first success.
+            spl_B=spl(
+                legB["reached"], geoB,
+                (legB["path_len_at_reach"]
+                 if legB.get("path_len_at_reach") is not None
+                 else legB["path_len"])),
+            spl_B_with_terminal=spl(legB["reached"], geoB, legB["path_len"]),
             geo_A=geoA, geo_B=geoB,
             len_A=legA["path_len"], len_B=legB["path_len"],
+            len_B_at_reach=legB.get("path_len_at_reach"),
             steps_A=legA["steps"], steps_B=legB["steps"],
+            steps_B_at_reach=legB.get("step_at_reach"),
             covis=B.get("covis"), recall_gap=B.get("recall_gap"),
+            retrieval_override=args.retrieval_override,
+            gate_override=args.gate_override,
+            gt_covis_anchor=B.get("covis_argmax"),
             gate_B_mean=(float(np.mean([p["gate"] for p in legB["plans"]])) if legB["plans"] else float("nan")),
             gate_B_max=(float(np.max([p["gate"] for p in legB["plans"]])) if legB["plans"] else float("nan")),
+            terminal_mode=legB.get("terminal_mode"),
+            terminal_attempted=legB.get("terminal_attempted"),
+            terminal_completed=legB.get("terminal_completed"),
+            terminal_success=legB.get("terminal_success"),
+            terminal_failure=legB.get("terminal_failure"),
+            terminal_path_type=legB.get("terminal_path_type"),
+            terminal_path_m=legB.get("terminal_path_m"),
+            terminal_min_clearance_m=legB.get("terminal_min_clearance_m"),
+            terminal_target_pos_err_m=legB.get("terminal_target_pos_err_m"),
+            terminal_target_yaw_err_deg=legB.get("terminal_target_yaw_err_deg"),
+            terminal_target_yaw_signed_err_deg=legB.get(
+                "terminal_target_yaw_signed_err_deg"),
+            terminal_target_yaw_hab=legB.get("terminal_target_yaw_hab"),
+            terminal_pose_gap_frames=legB.get("terminal_pose_gap_frames"),
+            visual_yaw_mode=legB.get("visual_yaw_mode"),
+            visual_yaw_checked=legB.get("visual_yaw_checked"),
+            visual_yaw_initial=(json.dumps(legB.get("visual_yaw_initial"))
+                                if legB.get("visual_yaw_initial") is not None
+                                else None),
+            visual_yaw_final=(json.dumps(legB.get("visual_yaw_final"))
+                              if legB.get("visual_yaw_final") is not None
+                              else None),
+            visual_refine_attempted=legB.get("visual_refine_attempted"),
+            visual_refine_executed=legB.get("visual_refine_executed"),
+            visual_refine_completed=legB.get("visual_refine_completed"),
+            visual_refine_skip_reason=legB.get("visual_refine_skip_reason"),
+            visual_refine_failure=legB.get("visual_refine_failure"),
+            visual_refine_path_type=legB.get("visual_refine_path_type"),
+            visual_refine_path_m=legB.get("visual_refine_path_m"),
+            visual_refine_min_clearance_m=legB.get(
+                "visual_refine_min_clearance_m"),
+            pre_turn_goal_cos=legB.get("pre_turn_goal_cos"),
+            post_turn_goal_cos=legB.get("post_turn_goal_cos"),
+            pre_turn_yaw_err_deg=legB.get("pre_turn_yaw_err_deg"),
+            pre_turn_yaw_signed_err_deg=legB.get("pre_turn_yaw_signed_err_deg"),
+            post_turn_yaw_err_deg=legB.get("post_turn_yaw_err_deg"),
+            post_turn_yaw_signed_err_deg=legB.get("post_turn_yaw_signed_err_deg"),
+            terminal_final_yaw_hab=legB.get("final_yaw_hab"),
+            terminal_goal_yaw_hab=legB.get("goal_yaw_hab"),
+            terminal_final_goal_dist_m=legB.get("final_goal_dist_m"),
+            loop_closed=legB.get("loop_closed"),
         )
         json.dump(dict(legA=legA["plans"], legB=legB["plans"]),
                   open(os.path.join(args.out, m["episode"] + "_plans.json"), "w"))
@@ -279,11 +803,38 @@ def main():
     n = len(metrics)
     nA = sum(m["reached_A"] for m in metrics)
     condB = [m for m in metrics if m["reached_A"] > 0.5]
+    attempted = [m for m in condB if m.get("terminal_attempted")]
+    completed = [m for m in attempted if m.get("terminal_completed")]
+    visual_checked = [m for m in attempted if m.get("visual_yaw_checked")]
+    visual_executed = [m for m in visual_checked if m.get("visual_refine_executed")]
+    visual_completed = [m for m in visual_executed if m.get("visual_refine_completed")]
     summary = dict(
         episodes=n, leg1_mode=args.leg1_mode, cold=args.reset_memory,
+        base_seed=args.seed, retrieval_override=args.retrieval_override,
+        gate_override=args.gate_override,
         SR_A=(nA / n) if n and args.leg1_mode == "policy" else None,
         SR_B_given_A=(sum(m["reached_B"] for m in condB) / len(condB)) if condB else 0.0,
         mean_spl_B=float(np.nanmean([m["spl_B"] for m in condB])) if condB else 0.0,
+        mean_spl_B_with_terminal=(float(np.nanmean(
+            [m["spl_B_with_terminal"] for m in condB])) if condB else 0.0),
+        terminal_attempt_rate=(float(np.mean([m["terminal_attempted"] for m in condB]))
+                               if condB and args.terminal_uturn != "off" else None),
+        terminal_completion_rate_given_attempt=(len(completed) / len(attempted)
+                                                if attempted else None),
+        terminal_success_rate_given_attempt=(float(np.mean(
+            [m["terminal_success"] for m in attempted])) if attempted else None),
+        terminal_pose_success_rate_overall=(float(np.mean(
+            [m["terminal_success"] for m in condB]))
+            if condB and args.terminal_uturn != "off" else None),
+        visual_yaw_check_rate=(len(visual_checked) / len(attempted)
+                               if attempted and args.terminal_visual_refine != "off"
+                               else None),
+        visual_refine_execution_rate_given_check=(
+            len(visual_executed) / len(visual_checked)
+            if visual_checked and args.terminal_visual_refine == "refine" else None),
+        visual_refine_completion_rate_given_execution=(
+            len(visual_completed) / len(visual_executed)
+            if visual_executed else None),
     )
     json.dump(summary, open(os.path.join(args.out, "summary.json"), "w"), indent=2)
     print("[eval2leg] done:", summary)

@@ -110,3 +110,4 @@ NavDP/checkpoints/
 # --- Workspace-local repos and generated MemNav diagnostics ---
 /IsaacLab/
 /memnav_viz/
+/eval_terminal_ab/

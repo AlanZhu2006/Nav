@@ -49,6 +49,18 @@ _AUX_POSE_CALIBRATION = os.environ.get('MEMNAV_AUX_POSE_CALIBRATION', 'empirical
 # untouched; the ~4% above clamp to 6.0 (beats the old reject-to-constant in every band)
 # — see lingbot_stream.GROUND_SCALE_RANGE / diag_ground_scale_sweep.py.
 _GROUND_SCALE_MAX = float(os.environ.get('MEMNAV_GROUND_SCALE_MAX', '6.0'))
+# Decoder-gate curriculum. encode_memory already teacher-forces the goal_append anchor
+# to a GT-positive frame during training, but the old decoder immediately multiplied
+# its usefulness by an untrained predicted revisit gate. Start from the GT revisit
+# label, then linearly hand control to the predicted gate; at/after STEPS inference and
+# training are identical. Set START=END=0 (or STEPS=0 with END=0) for the old behavior.
+_GATE_TEACHER_START = float(os.environ.get('MEMNAV_GATE_TEACHER_START', '1.0'))
+_GATE_TEACHER_END = float(os.environ.get('MEMNAV_GATE_TEACHER_END', '0.0'))
+_GATE_TEACHER_STEPS = int(os.environ.get('MEMNAV_GATE_TEACHER_STEPS', '1000'))
+# Optional weights-only warm start.  Use a NEW NAME/output directory so HF does not
+# restore the old trainer global_step: the gate curriculum must begin at ratio START,
+# not be skipped because the source checkpoint happened to be at step > STEPS.
+_INIT_CKPT = os.environ.get('MEMNAV_INIT_CKPT', '')
 
 memnav_exp_cfg = ExpCfg(
     name='memnav_train',
@@ -65,7 +77,7 @@ memnav_exp_cfg = ExpCfg(
         use_ckpt_config=False,
         save_results=True,
         split=['val_seen'],
-        ckpt_to_load='',
+        ckpt_to_load=_INIT_CKPT,
         max_steps=195,
         sample=False,
         success_distance=3.0,
@@ -122,6 +134,10 @@ memnav_exp_cfg = ExpCfg(
         w_retrieval=1.0,   # ranking InfoNCE (which candidate frame matches)
         w_gate=1.0,        # revisit/novel gate BCE (is there a match at all)
         w_aux_pose=0.5,
+        # training-only decoder gate teacher forcing -> predicted-gate handoff
+        gate_teacher_start=_GATE_TEACHER_START,
+        gate_teacher_end=_GATE_TEACHER_END,
+        gate_teacher_steps=_GATE_TEACHER_STEPS,
         ddp_find_unused_parameters=True,
     ),
     model=memnav_cfg,

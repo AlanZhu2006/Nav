@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=memnav_mp3d
-#SBATCH --output=/scratch/lg154/Research/Nav/InternNav/logs/train_memnav/mp3d-%j.out
-#SBATCH --error=/scratch/lg154/Research/Nav/InternNav/logs/train_memnav/mp3d-%j.err
+#SBATCH --output=/scratch/lg154/Research/Nav-axis-uturn/InternNav/logs/train_memnav/mp3d-%j.out
+#SBATCH --error=/scratch/lg154/Research/Nav-axis-uturn/InternNav/logs/train_memnav/mp3d-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
@@ -53,6 +53,12 @@
 #                            estimates above this are CLAMPED to it. 6.0 leaves ~95.6% of
 #                            pt1 eps untouched; the ~4% above clamp to 6.0.)
 #   MEMNAV_STREAM_GROUP=1    (per-sample streaming; >1 batches G streams in encode_memory)
+#   MEMNAV_REQUIRE_VERSIONED_CACHE=1 (reject mixed/legacy sparse-cache layouts)
+#   MEMNAV_GATE_TEACHER_START=1.0  (decoder uses GT revisit gate initially)
+#   MEMNAV_GATE_TEACHER_END=0.0    (fully predicted gate after curriculum)
+#   MEMNAV_GATE_TEACHER_STEPS=1000 (linear handoff in optimizer steps)
+#   MEMNAV_INIT_CKPT=''        (optional weights-only warm start; use a fresh NAME)
+#   MEMNAV_PREFLIGHT_ONLY=0    (1 = one real batch forward/backward, then exit)
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
 #
 # Submit:
@@ -61,11 +67,15 @@
 #       sbatch --export=ALL InternNav/scripts/train_memnav/train_memnav_mp3d.sbatch
 set -euo pipefail
 
-mkdir -p /scratch/lg154/Research/Nav/InternNav/logs/train_memnav
-
 IMG=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
-REPO_ROOT=/scratch/lg154/Research/Nav/InternNav
+# Source/output worktree.  Never silently fall back to the shared main checkout:
+# this experiment must execute the committed branch containing the curriculum.
+REPO_ROOT=${REPO_ROOT:-/scratch/lg154/Research/Nav-axis-uturn/InternNav}
+[[ -f "${REPO_ROOT}/scripts/train/train.py" ]] || {
+  echo "ABORT: REPO_ROOT is not an InternNav checkout: ${REPO_ROOT}"; exit 1;
+}
+mkdir -p "${REPO_ROOT}/logs/train_memnav"
 
 # in-container overlay path (frames) + host feature tree (caches)
 export MEMNAV_ROOT_DIR=/mp3d_revisit_v0/vln_n1/traj_data
@@ -77,6 +87,10 @@ export LINGBOT_WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
 export MEMNAV_WINDOW=32
 export MEMNAV_NUM_SCALE=8
 export MEMNAV_MAX_FRAME_NUM=2048
+# This job is specifically for the versioned pt1 sparse cache tree.  Fail closed if
+# a path typo or mixed tree would otherwise silently fall back to dense row==frame
+# arithmetic (the exact long-horizon interval bug fixed earlier).
+export MEMNAV_REQUIRE_VERSIONED_CACHE=${MEMNAV_REQUIRE_VERSIONED_CACHE:-1}
 
 # Batch G trajectory streams on the aggregator's batch dim inside encode_memory
 # (window_forward + goal_append_warm). 1 = original one-at-a-time loop; >1 collapses
@@ -101,6 +115,15 @@ export MEMNAV_GROUND_SCALE_MAX=${MEMNAV_GROUND_SCALE_MAX:-6.0}
 # auto-resumes from the latest checkpoint in checkpoints/<NAME>/ckpts, so a re-submitted
 # job continues where a timed-out one stopped. save_total_limit=8 bounds retained ckpts.
 export MEMNAV_SAVE_STEPS=${MEMNAV_SAVE_STEPS:-100}
+
+# Prevent the untrained revisit gate from hiding the already teacher-anchored revisit
+# token from action loss at the start of training.  The ratio reaches zero by step 1000,
+# so the latter part of training exactly matches inference-time predicted-gate routing.
+export MEMNAV_GATE_TEACHER_START=${MEMNAV_GATE_TEACHER_START:-1.0}
+export MEMNAV_GATE_TEACHER_END=${MEMNAV_GATE_TEACHER_END:-0.0}
+export MEMNAV_GATE_TEACHER_STEPS=${MEMNAV_GATE_TEACHER_STEPS:-1000}
+export MEMNAV_INIT_CKPT=${MEMNAV_INIT_CKPT:-}
+export MEMNAV_PREFLIGHT_ONLY=${MEMNAV_PREFLIGHT_ONLY:-0}
 
 # training knobs
 export NAME=${NAME:-memnav_mp3d}
@@ -141,6 +164,9 @@ srun --export=ALL --ntasks=1 --ntasks-per-node=1 \
         ls "${MEMNAV_ROOT_DIR}" >/dev/null || { echo "ABORT: overlay missing ${MEMNAV_ROOT_DIR}"; exit 1; }
         [[ -d "${MEMNAV_FEATURE_ROOT}" ]] || { echo "ABORT: feature tree missing ${MEMNAV_FEATURE_ROOT}"; exit 1; }
         [[ -f "${LINGBOT_WEIGHTS}" ]]     || { echo "ABORT: weights missing ${LINGBOT_WEIGHTS}"; exit 1; }
+        [[ -z "${MEMNAV_INIT_CKPT}" || -f "${MEMNAV_INIT_CKPT}" ]] || {
+          echo "ABORT: warm-start checkpoint missing ${MEMNAV_INIT_CKPT}"; exit 1;
+        }
 
         source /scratch/lg154/miniconda3/etc/profile.d/conda.sh
         conda activate /scratch/lg154/conda-envs/memnav
@@ -173,18 +199,32 @@ srun --export=ALL --ntasks=1 --ntasks-per-node=1 \
         fi
 
         echo "===== TRAIN ENV CHECK ====="
-        which python; python -V
+        command -v python; python -V
         python -c "import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available())"
         echo "name=${NAME} bs/gpu=${BATCH_SIZE} ep=${EPOCHS} wk/gpu=${NUM_WORKERS} nproc=${NPROC}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
-        echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} stream_group=${MEMNAV_STREAM_GROUP} max_legs=${MEMNAV_MAX_LEGS} save_steps=${MEMNAV_SAVE_STEPS}"
+        echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} stream_group=${MEMNAV_STREAM_GROUP} max_legs=${MEMNAV_MAX_LEGS} versioned_cache=${MEMNAV_REQUIRE_VERSIONED_CACHE} save_steps=${MEMNAV_SAVE_STEPS}"
+        echo "gate_teacher=${MEMNAV_GATE_TEACHER_START}->${MEMNAV_GATE_TEACHER_END} over ${MEMNAV_GATE_TEACHER_STEPS} steps"
+        echo "init_ckpt=${MEMNAV_INIT_CKPT:-<fresh>}"
         nvidia-smi -L || true
+
+        # CPU-side dependency/config/cache/output preflight.  Keep this separate from
+        # the CUDA-context probe below: dependency failures are deterministic and must
+        # fail the job, whereas transient busy GPUs are eligible for bounded requeue.
+        python scripts/train_memnav/dependency_preflight.py
 
         # Preflight: prove every allocated GPU can create a CUDA context BEFORE we
         # commit to the run. On a busy/exclusive GPU this exits 1 -> we return 42 so
         # the host requeues for a fresh allocation instead of dying mid-train.
         python scripts/train_memnav/gpu_preflight.py || exit 42
+
+        if [[ "${MEMNAV_PREFLIGHT_ONLY}" == "1" ]]; then
+          echo "===== ONE-BATCH TRAINING PREFLIGHT ====="
+          python scripts/train_memnav/full_training_preflight.py
+          echo "===== PREFLIGHT-ONLY PASS ====="
+          exit 0
+        fi
 
         # 2-GPU DDP. --standalone runs a single-node c10d rendezvous on a free port and
         # exports RANK/LOCAL_RANK/WORLD_SIZE/MASTER_ADDR/MASTER_PORT, which train.py reads.

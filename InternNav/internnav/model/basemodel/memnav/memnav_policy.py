@@ -24,6 +24,7 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from transformers import PretrainedConfig, PreTrainedModel
 
 from internnav.model.basemodel.memnav.cache_schema import validate_cache_pair
+from internnav.model.basemodel.memnav.gate_curriculum import blend_decoder_gate
 from internnav.model.basemodel.memnav.lingbot_stream import (
     LingBotStream, ground_scale_from_h_est, GROUND_SCALE_RANGE)
 from internnav.model.encoder.navdp_backbone import (
@@ -384,7 +385,19 @@ class MemNavNet(nn.Module):
                                                       enc["metric_scale"])
         novel = self.novel(batch["batch_window_images"][:, -1].to(dev),   # current frame [B,3,H,W]
                            batch["batch_goal_image"].to(dev))             # goal frame
-        gate = enc["revisit_gate"]
+        predicted_gate = enc["revisit_gate"]
+        # Training-only curriculum: early action updates must actually see the
+        # teacher-forced revisit token.  Otherwise an initially low predicted gate
+        # suppresses that token in decoder cross-attention even though encode_memory
+        # already chose a GT-positive anchor.  The trainer linearly decays this scalar
+        # to zero; eval/inference ignores it unconditionally.
+        gate_teacher_ratio = float(batch.get("decoder_gate_teacher_ratio", 0.0))
+        gate = blend_decoder_gate(
+            predicted_gate,
+            batch["batch_is_revisit"],
+            gate_teacher_ratio,
+            training=self.training,
+        )
 
         labels = batch["batch_labels"].to(dev)          # [B, predict_size, 3]
         B = labels.shape[0]
@@ -395,7 +408,9 @@ class MemNavNet(nn.Module):
         noise_pred = self.predict_noise(noisy, timesteps, current_state, revisit, novel, gate)
         return dict(
             noise_pred=noise_pred, noise=noise,
-            aux_pose=aux_pose, R_rel=R_rel, ret_logits=enc["ret_logits"], revisit_gate=gate,
+            aux_pose=aux_pose, R_rel=R_rel, ret_logits=enc["ret_logits"],
+            predicted_revisit_gate=predicted_gate, revisit_gate=gate,
+            gate_teacher_ratio=gate.new_tensor(gate_teacher_ratio if self.training else 0.0),
             gate_logit=enc["gate_logit"], match_idx=enc["match_idx"], anchor_idx=enc["anchor_idx"],
             goal_anchor_idx=enc["goal_anchor_idx"],
         )

@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, DistributedSampler
 
 from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
+from internnav.model.basemodel.memnav.gate_curriculum import linear_teacher_ratio
 from internnav.trainer.base import BaseTrainer
 
 
@@ -22,6 +23,13 @@ class MemNavTrainer(BaseTrainer):
         self.w_retr = getattr(config.il, "w_retrieval", 1.0)     # ranking InfoNCE
         self.w_gate = getattr(config.il, "w_gate", 1.0)          # revisit/novel BCE
         self.w_aux = getattr(config.il, "w_aux_pose", 0.5)
+        self.gate_teacher_start = float(getattr(config.il, "gate_teacher_start", 1.0))
+        self.gate_teacher_end = float(getattr(config.il, "gate_teacher_end", 0.0))
+        self.gate_teacher_steps = int(getattr(config.il, "gate_teacher_steps", 1000))
+        # Validate once at startup instead of discovering a bad setting after the
+        # expensive frozen front-end has already processed a batch.
+        linear_teacher_ratio(
+            0, self.gate_teacher_start, self.gate_teacher_end, self.gate_teacher_steps)
         self.model_device = (self.model.module if hasattr(self.model, "module") else self.model).device
         # Rotation-specific local-frame correction for the rotation-accuracy diagnostic
         # (compute_loss, R_rel vs batch_goal_rel_rotation). NOT RevisitMerge.aux_pose_head's
@@ -68,6 +76,9 @@ class MemNavTrainer(BaseTrainer):
         'gate_seen': 'retrieval/gate_seen',
         'gate_unseen': 'retrieval/gate_unseen',
         'gate_sep': 'retrieval/gate_sep',
+        'decoder_gate_seen': 'retrieval/decoder_gate_seen',
+        'decoder_gate_unseen': 'retrieval/decoder_gate_unseen',
+        'decoder_gate_sep': 'retrieval/decoder_gate_sep',
         'seen_match_acc': 'retrieval/seen_match_acc',
         # (2) camera pose
         'aux_loss': 'pose/aux_loss',
@@ -94,6 +105,7 @@ class MemNavTrainer(BaseTrainer):
         'epoch': 'config/epoch',
         'mem_alloc_gb': 'config/mem_alloc_gb',
         'mem_reserved_gb': 'config/mem_reserved_gb',
+        'gate_teacher_ratio': 'config/gate_teacher_ratio',
     }
 
     def log(self, logs, *args, **kwargs):
@@ -119,7 +131,17 @@ class MemNavTrainer(BaseTrainer):
     # ------------------------------------------------------------------ #
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         dev = next(model.parameters()).device
-        fwd = model(inputs)                                       # forward(batch) moves tensors internally
+        gate_teacher_ratio = linear_teacher_ratio(
+            self.state.global_step,
+            self.gate_teacher_start,
+            self.gate_teacher_end,
+            self.gate_teacher_steps,
+        )
+        # Do not mutate the collator-owned dictionary: callbacks or future diagnostic
+        # passes may reuse it.  Only MemNavNet consumes this training-only scalar.
+        model_inputs = dict(inputs)
+        model_inputs["decoder_gate_teacher_ratio"] = gate_teacher_ratio
+        fwd = model(model_inputs)                                 # forward(batch) moves tensors internally
 
         # --- diffusion action loss (always goal-conditioned). Kept per-sample first
         # (mean over predict_size/action-dim only) so it can be bucketed by
@@ -193,6 +215,7 @@ class MemNavTrainer(BaseTrainer):
             action_loss_leg2 = (per_action_loss * is_leg2).sum() / n_leg2
             action_loss_leg3 = (per_action_loss * is_leg3).sum() / n_leg3
             gate_prob = torch.sigmoid(gate_logit)                # [B] P(revisit)
+            decoder_gate = fwd["revisit_gate"]                   # [B] gate actually seen by decoder
             n_revisit_raw = revisit.sum()                         # UNclamped — 0 iff this batch has no revisit rows
             has_revisit = bool(n_revisit_raw.item() > 0.5)
             ns = n_revisit_raw.clamp(min=1.0)
@@ -200,6 +223,9 @@ class MemNavTrainer(BaseTrainer):
             gate_seen = (gate_prob * revisit).sum() / ns          # → 1 (visited)
             gate_unseen = (gate_prob * (1.0 - revisit)).sum() / nu  # → 0 (novel)
             gate_sep = gate_seen - gate_unseen                    # → large + (the separation)
+            decoder_gate_seen = (decoder_gate * revisit).sum() / ns
+            decoder_gate_unseen = (decoder_gate * (1.0 - revisit)).sum() / nu
+            decoder_gate_sep = decoder_gate_seen - decoder_gate_unseen
             gate_acc = ((gate_prob > 0.5).float() == revisit).float().mean()
             pred = ret_logits.argmax(-1)                          # [B] best candidate frame
             hit = pos.gather(1, pred[:, None]).squeeze(1).float()
@@ -262,6 +288,10 @@ class MemNavTrainer(BaseTrainer):
         outputs = dict(loss=loss, action_loss=action_loss,
                        retrieval_loss=rank_loss, gate_loss=gate_loss, aux_loss=aux_loss,
                        gate_seen=gate_seen, gate_unseen=gate_unseen, gate_sep=gate_sep,
+                       decoder_gate_seen=decoder_gate_seen,
+                       decoder_gate_unseen=decoder_gate_unseen,
+                       decoder_gate_sep=decoder_gate_sep,
+                       gate_teacher_ratio=fwd["gate_teacher_ratio"],
                        gate_acc=gate_acc, seen_match_acc=seen_match, rot_err_deg=rot_err,
                        pos_err_m=pos_err_m, pos_dir_err_deg=pos_dir_err,
                        action_loss_novel=action_loss_novel, action_loss_leg2=action_loss_leg2,
@@ -285,7 +315,8 @@ class MemNavTrainer(BaseTrainer):
             print(f"[Step {self.state.global_step}] loss={loss.item():.4f} act={action_loss.item():.4f} "
                   f"rank={rank_loss.item():.4f} gate={gate_loss.item():.4f} | "
                   f"gate seen={gate_seen.item():.2f} unseen={gate_unseen.item():.2f} sep={gate_sep.item():+.2f} "
-                  f"acc={gate_acc.item():.2f} | {revisit_part}"
+                  f"acc={gate_acc.item():.2f} | decoder seen={decoder_gate_seen.item():.2f} "
+                  f"unseen={decoder_gate_unseen.item():.2f} mix={gate_teacher_ratio:.2f} | {revisit_part}"
                   + (f" | {depth_part}" if depth_part else "")
                   + (f" | act: {action_part}" if action_part else ""))
 
@@ -301,6 +332,10 @@ class MemNavTrainer(BaseTrainer):
                 'gate_seen': gate_seen.item(),
                 'gate_unseen': gate_unseen.item(),
                 'gate_sep': gate_sep.item(),
+                'decoder_gate_seen': decoder_gate_seen.item(),
+                'decoder_gate_unseen': decoder_gate_unseen.item(),
+                'decoder_gate_sep': decoder_gate_sep.item(),
+                'gate_teacher_ratio': gate_teacher_ratio,
             }
             # revisit-only metrics (aux_loss, rot_err_deg, pos_err_m, pos_dir_err_deg,
             # seen_match_acc): only logged when this batch actually contains revisit rows

@@ -65,3 +65,11 @@ sacct -j "${PREFLIGHT_JOB},${TRAIN_JOB}" -X --format=JobID,State,Elapsed,ExitCod
 必须记录：commit、部署目录、数据/cache/权重路径、预检 JobID 与最终状态、长任务
 JobID、W&B run、stdout/stderr 路径，以及第一个完整 checkpoint。`PENDING
 (Dependency)` 是正常等待；`RUNNING` 仍需检查日志、GPU 利用率和 W&B 是否真正更新。
+
+本次 gate curriculum 的固定 all-leg 8 小时实验可直接运行：
+
+```bash
+bash scripts/train_memnav/submit_gate_curriculum_8h.sh
+```
+
+它封装的仍是上述 preflight/`afterok` 流程，不会跳过任何检查。

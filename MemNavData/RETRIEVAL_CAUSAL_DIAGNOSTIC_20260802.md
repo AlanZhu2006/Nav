@@ -375,10 +375,10 @@ retrieval implementation.  In the candidate rollouts, all ten failures kept a
 stable anchor, and nine used an anchor inside the episode's GT-covisible set.
 Correct retrieval was therefore often present but was not sufficient.
 
-The strongest controlled episode is `1LXtFkjw3qL/episode_0003`: both checkpoints
+The strongest controlled episode is `17DRP5sb8fy/episode_0003`: both checkpoints
 made their first leg-B plan from current frame 194, anchor 51, and the same
-LingBot relative yaw `-1.0421 rad`.  The baseline failed after 9.77 m, while the
-candidate succeeded after 4.75 m.  That transition lies downstream of the
+LingBot relative yaw `-1.0421 rad`.  The baseline failed after 20.15 m, while the
+candidate succeeded after 7.17 m.  That transition lies downstream of the
 frozen pose and selected anchor, consistent with the curriculum changing how
 memory/current/image-goal features are converted into actions.
 

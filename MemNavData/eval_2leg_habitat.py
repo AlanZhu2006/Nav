@@ -142,10 +142,12 @@ def jpg_bytes(rgb):
     return buf.getvalue()
 
 
-def srv_reset(camera_height=CAM_H, seed=None):
+def srv_reset(camera_height=CAM_H, seed=None, episode_len=None):
     payload = {"camera_height": camera_height}
     if seed is not None:
         payload["seed"] = int(seed)
+    if episode_len is not None:
+        payload["episode_len"] = int(episode_len)
     r = requests.post(f"{BASE}/navigator_reset", json=payload)
     r.raise_for_status()
     return r.json()["algo"]
@@ -687,7 +689,7 @@ def main():
 
         episode_seed = args.seed + ep_idx
         srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)),
-                  seed=episode_seed)
+                  seed=episode_seed, episode_len=int(meta["n_frames"]))
         writer = None
         if args.save_video and imageio is not None:
             writer = imageio.get_writer(
@@ -710,7 +712,7 @@ def main():
         if legA["reached"]:
             if args.reset_memory:
                 srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)),
-                          seed=episode_seed)
+                          seed=episode_seed, episode_len=int(meta["n_frames"]))
             legB = run_policy_leg(
                 sim, pf, pos, psi, goalB_jpg, B_xz, geoB, writer,
                 terminal_mode=args.terminal_uturn,

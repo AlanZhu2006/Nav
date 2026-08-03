@@ -5,7 +5,7 @@ frames over HTTP; this server maintains the live LingBot memory and plans
 trajectories toward a goal image on request.
 
 Endpoints (NavDP wire-contract style):
-  POST /navigator_reset      JSON {camera_height?, seed?}
+  POST /navigator_reset      JSON {camera_height?, seed?, episode_len?}
                              -> {"algo": "memnav"}   (starts a fresh episode)
   POST /memory_step          files: image (jpg)      -> {"frame_idx": i}
                              stream a frame into memory WITHOUT planning (leg replay)
@@ -50,6 +50,8 @@ parser.add_argument("--gate_skip_below", type=float, default=0.0,
                     help="skip the goal-insert tower when trained gate < this (0 = never skip)")
 parser.add_argument("--anchor_switch_margin", type=float, default=0.01,
                     help="sticky-anchor ratchet: switch match only on a clear score win")
+parser.add_argument("--flow_gate", type=str, default="auto",
+                    help="auto = training length tier; off = dense; or fixed px threshold")
 parser.add_argument("--buffer_root", type=str, default="/tmp/memnav_server_buffer")
 args = parser.parse_args()
 
@@ -66,6 +68,7 @@ agent = MemNavAgent(
     gate_skip_below=args.gate_skip_below,
     retrieval_mode=args.retrieval,
     anchor_switch_margin=args.anchor_switch_margin,
+    flow_gate=args.flow_gate,
 )
 
 app = Flask(__name__)
@@ -76,14 +79,16 @@ def navigator_reset():
     payload = request.get_json(silent=True) or {}
     cam_h = float(payload.get("camera_height", 0.5))
     seed = payload.get("seed")
-    agent.reset(camera_height=cam_h, seed=seed)
-    return jsonify({"algo": "memnav"})
+    episode_len = payload.get("episode_len")
+    agent.reset(camera_height=cam_h, seed=seed, episode_len=episode_len)
+    return jsonify({"algo": "memnav", "flow_threshold": agent.flow_threshold})
 
 
 @app.route("/navigator_reset_env", methods=["POST"])
 def navigator_reset_env():
     # single-env server: same as a full reset (used by the cold/reset-memory arm)
-    agent.reset(camera_height=agent.camera_height)
+    agent.reset(camera_height=agent.camera_height, seed=agent._last_seed,
+                episode_len=agent._last_episode_len)
     return jsonify({"algo": "memnav"})
 
 
@@ -116,5 +121,6 @@ def imagegoal_similarity():
 if __name__ == "__main__":
     print(f"[memnav_server] ready on :{args.port} "
           f"(W={agent.W}, S={agent.S}, amargin={agent.amargin}, "
-          f"exclude_recent={agent.exclude_recent}, samples={agent.num_samples})")
+          f"exclude_recent={agent.exclude_recent}, samples={agent.num_samples}, "
+          f"flow_gate={agent.flow_gate})")
     app.run(host="0.0.0.0", port=args.port, threaded=False)

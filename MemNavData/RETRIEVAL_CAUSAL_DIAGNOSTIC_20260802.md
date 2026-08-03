@@ -292,3 +292,112 @@ to learn residual-memory utility and decide whether the change is useful.
 Full machine-readable outputs are stored under:
 
 `/scratch/yz11502/Research/Nav-axis-uturn-results/fixed_checkpoint_eval/fixed_ckpt2600_vs_gatecurr600_20260803`
+
+## Paired closed-loop Habitat result (2026-08-03)
+
+The fixed-checkpoint evaluator above isolates losses but does not measure the
+effect of compounding waypoint errors.  A second, deterministic A/B therefore
+ran the two checkpoints through the same closed-loop Habitat episodes.  This is
+an evaluation of the complete all-leg gate-curriculum continuation, not of the
+gate scalar alone: retrieval, current-state/revisit projections and the DDPM
+decoder were all trainable during that continuation.
+
+### Checkpoint and dependency identity
+
+- baseline: `memnav_mp3d_flowgate/checkpoint-2600/memnav.ckpt`, SHA-256
+  `debd079c6f578e9c6e2c1f0e70f6dc8fc2c2230785c28d6da2fae118a665b38b`;
+- candidate: `checkpoint-600` from
+  `memnav_gatecurr_warm2600_alllegs_warmfix_20260803_014435`, SHA-256
+  `9b7a5811ff0aea212503f58b45258ba4f66b06420f87c350946aead39db6fdb7`;
+- LingBot dependency commit:
+  `7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2`;
+- `lingbot-map-long.pt` SHA-256:
+  `832bc82cbae0bc9bbe946ef5ee1f7226abd8c0e183ccf8beddbb3d133576f409`.
+
+The candidate was warm-started from the baseline and trained on all legs.  Its
+decoder-gate teacher ratio changed linearly from 1 to 0 over 500 optimizer
+steps; checkpoint 600 therefore runs on the predicted gate without teacher
+forcing.  It did **not** train a terminal U-turn head.  The separate
+forward-only terminal U-turn is evaluator/controller code and was disabled in
+this comparison.
+
+### Fixed online protocol
+
+- scenes: `17DRP5sb8fy` and `1LXtFkjw3qL`, ten fixed episodes each;
+- leg A replayed into memory; the policy controls the return/revisit leg B;
+- identical episode seed `0..9`, images, start/goal poses and simulator setup;
+- positional success radius 1 m, 1200-frame budget, execution horizon 8;
+- trained projection (`head`) retrieval, no GT retrieval or gate override;
+- live sparse flow gate `auto`: all 20 trajectories have 274--509 frames and
+  therefore use the 20-pixel tier, with the 30-frame forced-keyframe gap;
+- W32/S8 LingBot streaming, 83-frame retrieval exclusion and 16 DDPM samples;
+- per-episode ground metric scale enabled;
+- `terminal_uturn=off` and visual refinement off.
+
+Interrupted processes were resumed only at episode boundaries.  The resumed
+base seed was changed to the original episode index, preserving the exact
+per-episode diffusion seed.  Completed rows were never rerun or selected by
+outcome.
+
+| Scene | flowgate-2600 SR | gatecurr-600 SR | flowgate-2600 SPL | gatecurr-600 SPL |
+|---|---:|---:|---:|---:|
+| `17DRP5sb8fy` | 1/10 | 3/10 | 0.0451 | 0.2367 |
+| `1LXtFkjw3qL` | 5/10 | 7/10 | 0.2291 | 0.4800 |
+| **Pooled** | **6/20 (30%)** | **10/20 (50%)** | **0.1371** | **0.3583** |
+
+The paired outcome table is six successes under both checkpoints, ten failures
+under both, four baseline-failure/candidate-success transitions, and zero
+regressions.  Every one of the six shared successes also had a shorter
+candidate path and a higher candidate SPL.  Across all 20 rows:
+
+| Metric | flowgate-2600 | gatecurr-600 | Paired change |
+|---|---:|---:|---:|
+| Mean leg-B path | 10.737 m | 6.989 m | -3.748 m |
+| Mean leg-B frames | 291.85 | 208.30 | -83.55 |
+| Mean final goal distance | 3.219 m | 2.438 m | -0.782 m |
+| Mean SPL | 0.1371 | 0.3583 | +0.2212 |
+
+A paired episode bootstrap gives a 95% interval of `[+0.1027, +0.3557]` for
+mean SPL change and `[-6.568, -1.459] m` for mean path change.  The four versus
+zero discordant successes give exact two-sided McNemar `p=0.125`; the candidate
+50% Wilson interval is `[0.299, 0.701]` and the baseline 30% interval is
+`[0.145, 0.519]`.  Thus this fixed sample provides consistent evidence of
+better closed-loop behavior, but it remains too small for a definitive SR
+claim and needs more scenes/seeds.
+
+### What the online result does and does not show
+
+The gain is not terminal loop closure: navigation stops at the first 1 m
+positional success and does not enforce the goal-image yaw.  It is also not
+evidence that LingBot metric pose or retrieval top-1 was repaired; the two
+checkpoints use the same frozen LingBot, axis/scale conversion and online
+retrieval implementation.  In the candidate rollouts, all ten failures kept a
+stable anchor, and nine used an anchor inside the episode's GT-covisible set.
+Correct retrieval was therefore often present but was not sufficient.
+
+The strongest controlled episode is `1LXtFkjw3qL/episode_0003`: both checkpoints
+made their first leg-B plan from current frame 194, anchor 51, and the same
+LingBot relative yaw `-1.0421 rad`.  The baseline failed after 9.77 m, while the
+candidate succeeded after 4.75 m.  That transition lies downstream of the
+frozen pose and selected anchor, consistent with the curriculum changing how
+memory/current/image-goal features are converted into actions.
+
+Recall gap remains an important residual limitation.  Candidate success was
+6/7 for gap at most 120 frames but only 4/13 beyond 120 (two-sided Fisher
+`p` approximately 0.057).  This is a strong trend rather than a confirmed
+threshold.  All episodes are shorter than the old 702-frame flow tier and their
+anchors were retained, so it should not be described as the old 320-frame
+keyframe-dropping bug.  The residual problem is long-gap feature-to-action
+robustness after a usable memory match.
+
+Finally, the flat fixed-sample epsilon-MSE and improved closed-loop SR are not a
+logical contradiction.  Epsilon-MSE averages denoising errors over random
+timesteps and samples, whereas a small directional waypoint change can prevent
+a closed-loop trajectory from compounding an early mistake.  The rollout is
+the stronger behavioral measurement, while the offline result prevents the
+unsupported claim that the curriculum uniformly improved one-step action
+regression.
+
+Local raw rows and per-plan traces are under
+`.diagnostics/navdp_sr_20260803/`; that directory is intentionally not part of
+the source commit.

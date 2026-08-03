@@ -167,6 +167,12 @@ def materialize_batch(dataset: MemNav_Dataset, records: list[dict]) -> dict:
 def load_heads(model: MemNavPolicy, path: str) -> None:
     state = torch.load(path, map_location="cpu", weights_only=True)
     state = state.get("state_dict", state) if isinstance(state, dict) else state
+    fusion_key = "core.gate_fusion_residual"
+    # Checkpoints predating residual fusion have complementary semantics. Reset
+    # explicitly so evaluation order cannot leak a newer checkpoint's mode into
+    # a subsequent legacy load on the reused frozen backbone.
+    if fusion_key not in state:
+        model.core.gate_fusion_residual.zero_()
     incompatible = model.load_state_dict(state, strict=False)
     if incompatible.unexpected_keys:
         raise RuntimeError(f"unexpected checkpoint tensors: {incompatible.unexpected_keys[:10]}")
@@ -182,7 +188,8 @@ def load_heads(model: MemNavPolicy, path: str) -> None:
         raise RuntimeError(f"checkpoint probes were not loaded exactly: {mismatched}")
     print(
         f"[fixed-eval] loaded {path}: tensors={len(state)} "
-        f"missing_frozen={len(incompatible.missing_keys)}",
+        f"missing_frozen={len(incompatible.missing_keys)} "
+        f"fusion={'residual' if model.core.gate_fusion_residual.item() else 'complementary'}",
         flush=True,
     )
 

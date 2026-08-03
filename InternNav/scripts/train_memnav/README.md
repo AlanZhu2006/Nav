@@ -80,6 +80,31 @@ bash scripts/train_memnav/submit_gate_curriculum_8h.sh
 
 它封装的仍是上述 preflight/`afterok` 流程，不会跳过任何检查。
 
+固定评测确认 complementary gate curriculum 只改善 gate 分类、没有改善 action 后，
+residual-gate 的单变量 A/B 使用：
+
+```bash
+bash scripts/train_memnav/submit_residual_gate_8h.sh
+```
+
+该脚本仍从同一个 flowgate checkpoint-2600 暖启动、仍跑 all-leg 和相同的 500-step
+teacher handoff，唯一启用的结构变化是 `MEMNAV_GATE_FUSION=residual`：visual image-goal
+列始终可见，revisit memory 作为 gated residual 加入。脚本明确保持
+`MEMNAV_RETRIEVAL_TOP1_WEIGHT=0`，防止把 top-1 loss 和 fusion 同时改变。fusion mode
+会作为 persistent buffer 写进 checkpoint；旧 checkpoint 缺少该 buffer 时按历史
+`complementary` 解释，避免评测加载顺序污染语义。
+
+可选 top-1 margin 已作为独立开关实现：
+
+```bash
+export MEMNAV_RETRIEVAL_TOP1_WEIGHT=0.25
+export MEMNAV_RETRIEVAL_TOP1_MARGIN=0.2
+```
+
+它约束 `max_positive > max_negative + margin`，对应部署时的 live argmax；默认权重为
+零，只记录诊断值。`dependency_preflight.py` 会核对 fusion/top-1 环境变量确实进入
+训练配置，真实 batch preflight 还会检查 fusion buffer、top-1 loss 及梯度有限性。
+
 ## 固定 checkpoint A/B 评测
 
 训练曲线来自不同随机 batch，不能单独证明新 checkpoint 泛化更好。使用

@@ -4,8 +4,10 @@ Three goal pathways (see GL.md / memnav-project memory):
   (1) backbone current state      — frozen GCT (LingBotStream.window_forward)
   (2) revisit goal→history        — frozen GCT (LingBotStream.goal_append), visited goals
   (3) novel current→goal (DINO)   — TRAINABLE cross-attention, unseen goals
-Retrieval confidence biases the decoder cross-attention toward (2) vs (3) (no multiply,
-no goal_cls). NavDP DDPM decoder on top; NO critic (collision is geometric at eval).
+Retrieval confidence biases decoder cross-attention. Historical checkpoints use a
+complementary (2)-vs-(3) mask; residual checkpoints keep (3) as the visual base policy
+and gate only the added (2) memory columns (no readout multiply, no raw goal_cls).
+NavDP DDPM decoder on top; NO critic (collision is geometric at eval).
 Always goal-conditioned — no classifier-free "no-goal" branch (dropped: our goal-directed
 two-leg episodes can require a genuine U-turn, so masking the goal out of the label gave
 the unconditional branch contradictory supervision — same visual context, opposite action,
@@ -25,6 +27,7 @@ from transformers import PretrainedConfig, PreTrainedModel
 
 from internnav.model.basemodel.memnav.cache_schema import validate_cache_pair
 from internnav.model.basemodel.memnav.gate_curriculum import blend_decoder_gate
+from internnav.model.basemodel.memnav.gate_fusion import branch_log_weights, gate_fusion_code
 from internnav.model.basemodel.memnav.lingbot_stream import (
     LingBotStream, ground_scale_from_h_est, GROUND_SCALE_RANGE)
 from internnav.model.encoder.navdp_backbone import (
@@ -266,7 +269,8 @@ class MemNavNet(nn.Module):
     def __init__(self, lingbot_kwargs=None, dino_dim=1024, lingbot_dim=2048, depth_feat_dim=256,
                  token_dim=384, heads=8, m_rgbd=4, m_depth=4, m_revisit=4, m_novel=4,
                  predict_size=24, temporal_depth=8, num_diffusion_iters=10, goal_warm=64,
-                 aux_pose_calibration='empirical', scale_mode='ground', ground_scale_max=None,
+                 aux_pose_calibration='empirical', scale_mode='ground', gate_fusion='complementary',
+                 ground_scale_max=None,
                  require_versioned_cache=False, device="cuda"):
         super().__init__()
         # ground-scale gate ceiling (scale_mode='ground'): corrected estimates above this
@@ -332,6 +336,14 @@ class MemNavNet(nn.Module):
         # Learnable by default (the model tunes the global balance); to force/ablate a weighting
         # set `net.branch_bias.data = torch.tensor([r, n])` and `net.branch_bias.requires_grad_(False)`.
         self.branch_bias = nn.Parameter(torch.zeros(2))
+        # Persistent checkpoint code: old checkpoints lack this key and therefore
+        # retain the constructor default (complementary); new residual checkpoints
+        # carry code=1 and restore their routing semantics automatically at inference.
+        self.register_buffer(
+            "gate_fusion_residual",
+            torch.tensor(gate_fusion_code(gate_fusion), dtype=torch.float32),
+            persistent=True,
+        )
 
         self.to(device)   # move trainable heads to device (lingbot.model already there)
 
@@ -355,26 +367,33 @@ class MemNavNet(nn.Module):
         mem = torch.cat([time_emb, current_state, revisit, novel], dim=1)
         return mem + self.cond_pos_embed(mem)
 
-    def _gate_mask(self, gate):
+    def _gate_mask(self, gate, gate_fusion_residual=None):
         """Per-sample cross-attention bias [B*heads, predict_size, mem_len] — directs
         attention without scaling the readouts.
-          revisit cols += log(gate), novel cols += log(1-gate)"""
+
+        Complementary routing uses ``[log(gate), log(1-gate)]``. Residual routing
+        keeps the visual-goal branch available and adds revisit memory with
+        ``[log(gate), 0]``. ``gate_fusion_residual`` is an evaluation-only override;
+        production calls use the persistent checkpoint buffer.
+        """
         B = gate.shape[0]
         bias = gate.new_zeros(B, self.mem_len)
         rs, re = 1 + self.n_cs, 1 + self.n_cs + self.n_rev
         ns, ne = re, re + self.n_nov
-        g = gate.clamp(1e-4, 1 - 1e-4)
-        bias[:, rs:re] = torch.log(g).unsqueeze(1) + self.branch_bias[0]      # revisit
-        bias[:, ns:ne] = torch.log(1 - g).unsqueeze(1) + self.branch_bias[1]  # novel
+        fusion = self.gate_fusion_residual if gate_fusion_residual is None else gate_fusion_residual
+        revisit_log, visual_log = branch_log_weights(gate, fusion)
+        bias[:, rs:re] = revisit_log.unsqueeze(1) + self.branch_bias[0]       # revisit
+        bias[:, ns:ne] = visual_log.unsqueeze(1) + self.branch_bias[1]        # visual goal
         bias = bias[:, None, None, :].expand(B, self.heads, self.predict_size, self.mem_len)
         return bias.reshape(B * self.heads, self.predict_size, self.mem_len)
 
-    def predict_noise(self, noisy, timestep, current_state, revisit, novel, gate):
+    def predict_noise(self, noisy, timestep, current_state, revisit, novel, gate,
+                      gate_fusion_residual=None):
         a = self.input_embed(noisy)
         a = a + self.out_pos_embed(a)
         mem = self._memory(current_state, revisit, novel, timestep)
         out = self.decoder(tgt=a, memory=mem, tgt_mask=self.tgt_mask,
-                           memory_mask=self._gate_mask(gate))
+                           memory_mask=self._gate_mask(gate, gate_fusion_residual))
         return self.action_head(self.layernorm(out))
 
     def forward(self, batch):
@@ -664,6 +683,7 @@ class MemNavPolicy(PreTrainedModel):
             goal_warm=il.get('goal_warm', 64),
             aux_pose_calibration=il.get('aux_pose_calibration', 'empirical'),
             scale_mode=il.get('scale_mode', 'ground'),
+            gate_fusion=il.get('gate_fusion', 'complementary'),
             require_versioned_cache=bool(il.get('require_versioned_cache', False)),
             ground_scale_max=il.get('ground_scale_max'),
             lingbot_kwargs=lingbot_kwargs or None, device=str(self._device),

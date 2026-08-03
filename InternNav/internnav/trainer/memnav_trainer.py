@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
 from internnav.model.basemodel.memnav.gate_curriculum import linear_teacher_ratio
+from internnav.model.basemodel.memnav.retrieval_losses import multi_positive_retrieval_losses
 from internnav.trainer.base import BaseTrainer
 
 
@@ -21,6 +22,8 @@ class MemNavTrainer(BaseTrainer):
         super().__init__(**kwargs)
         self.config = config
         self.w_retr = getattr(config.il, "w_retrieval", 1.0)     # ranking InfoNCE
+        self.w_retr_top1 = float(getattr(config.il, "w_retrieval_top1", 0.0))
+        self.retr_top1_margin = float(getattr(config.il, "retrieval_top1_margin", 0.2))
         self.w_gate = getattr(config.il, "w_gate", 1.0)          # revisit/novel BCE
         self.w_aux = getattr(config.il, "w_aux_pose", 0.5)
         self.gate_teacher_start = float(getattr(config.il, "gate_teacher_start", 1.0))
@@ -30,7 +33,19 @@ class MemNavTrainer(BaseTrainer):
         # expensive frozen front-end has already processed a batch.
         linear_teacher_ratio(
             0, self.gate_teacher_start, self.gate_teacher_end, self.gate_teacher_steps)
-        self.model_device = (self.model.module if hasattr(self.model, "module") else self.model).device
+        root_model = self.model.module if hasattr(self.model, "module") else self.model
+        self.model_device = root_model.device
+        # An empirical aux head and its frozen LingBot inputs have no gradient
+        # path. Keep aux metrics, but do not add a detached constant to the
+        # optimized scalar and mistake its batch fluctuations for learning.
+        aux_head = root_model.core.revisit_merge.aux_pose_head
+        self.aux_optimization_active = any(p.requires_grad for p in aux_head.parameters())
+        self.w_aux_effective = self.w_aux if self.aux_optimization_active else 0.0
+        if self.w_aux and not self.aux_optimization_active:
+            print(
+                "[MemNavTrainer] aux pose is diagnostic-only: aux_pose_head is frozen; "
+                "effective optimization weight=0"
+            )
         # Rotation-specific local-frame correction for the rotation-accuracy diagnostic
         # (compute_loss, R_rel vs batch_goal_rel_rotation). NOT RevisitMerge.aux_pose_head's
         # _R_CONV/_SCALE — empirically, translation and rotation need DIFFERENT corrections;
@@ -71,6 +86,7 @@ class MemNavTrainer(BaseTrainer):
     _WB_TARGET = {
         # (1) retrieval
         'retrieval_loss': 'retrieval/retrieval_loss',
+        'retrieval_top1_loss': 'retrieval/retrieval_top1_margin_loss',
         'gate_loss': 'retrieval/gate_loss',
         'gate_acc': 'retrieval/gate_acc',
         'gate_seen': 'retrieval/gate_seen',
@@ -163,15 +179,11 @@ class MemNavTrainer(BaseTrainer):
         pos = inputs["batch_pos_mask"].to(dev).bool()            # [B, L]
         neg = inputs["batch_neg_mask"].to(dev).bool()            # [B, L]
         is_rev = inputs["batch_is_revisit"].to(dev)              # [B] float (1=revisit, 0=novel)
-        NEG_INF = torch.finfo(ret_logits.dtype).min
-        # (a) ranking: -log Σ_pos e^s / Σ_{pos∪neg} e^s, over revisit rows carrying a negative
-        lse_pn = ret_logits.masked_fill(~(pos | neg), NEG_INF).logsumexp(-1)
-        lse_p = ret_logits.masked_fill(~pos, NEG_INF).logsumexp(-1)
-        rank_rows = pos.any(-1) & neg.any(-1)                    # [B] revisit rows w/ contrastive signal
-        # Index first. On novel rows lse_p is the finite dtype floor; forming the
-        # difference and multiplying by zero later creates a value near float32 max
-        # that overflows to inf/NaN under mixed-precision backward.
-        rank_loss = (lse_pn[rank_rows] - lse_p[rank_rows]).sum() / rank_rows.sum().clamp(min=1.0)
+        # (a) set ranking + optional deployment-consistent top-1 margin. Indexing
+        # invalid rows before subtraction avoids finite-floor overflow under AMP.
+        rank_loss, retrieval_top1_loss, _rank_rows = multi_positive_retrieval_losses(
+            ret_logits, pos, neg, top1_margin=self.retr_top1_margin
+        )
         # (b) gate BCE over ALL rows; pos_weight offsets the novel-heavy class mix
         n_rev = is_rev.sum()
         pos_weight = ((1.0 - is_rev).sum() / n_rev.clamp(min=1.0)).clamp(0.1, 10.0)
@@ -190,7 +202,8 @@ class MemNavTrainer(BaseTrainer):
         R_rel = fwd["R_rel"]                                      # [B,3,3] predicted relative rotation
 
         loss = (action_loss + self.w_retr * rank_loss
-                + self.w_gate * gate_loss + self.w_aux * aux_loss)
+                + self.w_retr_top1 * retrieval_top1_loss
+                + self.w_gate * gate_loss + self.w_aux_effective * aux_loss)
 
         with torch.no_grad():
             # --- action-loss split by goal category: overall (already `action_loss`),
@@ -286,7 +299,8 @@ class MemNavTrainer(BaseTrainer):
             aux_loss_deep = (per * is_deep).sum() / n_deep
             aux_loss_shallow = (per * is_shallow).sum() / n_shallow
         outputs = dict(loss=loss, action_loss=action_loss,
-                       retrieval_loss=rank_loss, gate_loss=gate_loss, aux_loss=aux_loss,
+                       retrieval_loss=rank_loss, retrieval_top1_loss=retrieval_top1_loss,
+                       gate_loss=gate_loss, aux_loss=aux_loss,
                        gate_seen=gate_seen, gate_unseen=gate_unseen, gate_sep=gate_sep,
                        decoder_gate_seen=decoder_gate_seen,
                        decoder_gate_unseen=decoder_gate_unseen,
@@ -313,7 +327,8 @@ class MemNavTrainer(BaseTrainer):
                 f"leg3(n={int(n_leg3_raw.item())})={action_loss_leg3.item():.4f}" if has_leg3 else '',
             ]))
             print(f"[Step {self.state.global_step}] loss={loss.item():.4f} act={action_loss.item():.4f} "
-                  f"rank={rank_loss.item():.4f} gate={gate_loss.item():.4f} | "
+                  f"rank={rank_loss.item():.4f} top1={retrieval_top1_loss.item():.4f} "
+                  f"gate={gate_loss.item():.4f} | "
                   f"gate seen={gate_seen.item():.2f} unseen={gate_unseen.item():.2f} sep={gate_sep.item():+.2f} "
                   f"acc={gate_acc.item():.2f} | decoder seen={decoder_gate_seen.item():.2f} "
                   f"unseen={decoder_gate_unseen.item():.2f} mix={gate_teacher_ratio:.2f} | {revisit_part}"
@@ -327,6 +342,7 @@ class MemNavTrainer(BaseTrainer):
             log_payload = {
                 'action_loss': action_loss.item(),
                 'retrieval_loss': rank_loss.item(),
+                'retrieval_top1_loss': retrieval_top1_loss.item(),
                 'gate_loss': gate_loss.item(),
                 'gate_acc': gate_acc.item(),
                 'gate_seen': gate_seen.item(),

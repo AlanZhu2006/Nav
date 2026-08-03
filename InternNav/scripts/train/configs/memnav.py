@@ -57,6 +57,19 @@ _GROUND_SCALE_MAX = float(os.environ.get('MEMNAV_GROUND_SCALE_MAX', '6.0'))
 _GATE_TEACHER_START = float(os.environ.get('MEMNAV_GATE_TEACHER_START', '1.0'))
 _GATE_TEACHER_END = float(os.environ.get('MEMNAV_GATE_TEACHER_END', '0.0'))
 _GATE_TEACHER_STEPS = int(os.environ.get('MEMNAV_GATE_TEACHER_STEPS', '1000'))
+# Decoder branch fusion. ``complementary`` is the historical
+# [log(g), log(1-g)] mask. ``residual`` always preserves the visual-goal branch
+# and gates only the additional revisit-memory columns.
+_GATE_FUSION = os.environ.get('MEMNAV_GATE_FUSION', 'complementary')
+if _GATE_FUSION not in ('complementary', 'residual'):
+    raise ValueError(f"MEMNAV_GATE_FUSION must be complementary or residual, got {_GATE_FUSION!r}")
+# Optional deployment-consistent top-1 margin. It is implemented and logged in
+# every run, but weight zero preserves the exact historical objective so the
+# first residual-fusion A/B changes only one variable.
+_RETRIEVAL_TOP1_WEIGHT = float(os.environ.get('MEMNAV_RETRIEVAL_TOP1_WEIGHT', '0.0'))
+_RETRIEVAL_TOP1_MARGIN = float(os.environ.get('MEMNAV_RETRIEVAL_TOP1_MARGIN', '0.2'))
+if _RETRIEVAL_TOP1_WEIGHT < 0 or _RETRIEVAL_TOP1_MARGIN < 0:
+    raise ValueError('retrieval top-1 weight and margin must be non-negative')
 # Optional weights-only warm start.  Use a NEW NAME/output directory so HF does not
 # restore the old trainer global_step: the gate curriculum must begin at ratio START,
 # not be skipped because the source checkpoint happened to be at step > STEPS.
@@ -141,6 +154,9 @@ memnav_exp_cfg = ExpCfg(
         gate_teacher_start=_GATE_TEACHER_START,
         gate_teacher_end=_GATE_TEACHER_END,
         gate_teacher_steps=_GATE_TEACHER_STEPS,
+        gate_fusion=_GATE_FUSION,
+        w_retrieval_top1=_RETRIEVAL_TOP1_WEIGHT,
+        retrieval_top1_margin=_RETRIEVAL_TOP1_MARGIN,
         ddp_find_unused_parameters=True,
     ),
     model=memnav_cfg,

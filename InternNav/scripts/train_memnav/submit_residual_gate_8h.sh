@@ -1,19 +1,23 @@
 #!/bin/bash
-# Submit the causal revisit-gate experiment as:
-#   one-batch preflight --afterok--> eight-hour all-leg training.
+# Submit the isolated residual-gate A/B:
+#   real one-batch preflight --afterok--> eight-hour all-leg training.
 #
-# Run this from the dedicated lg154 deployment worktree. Environment variables
-# RUN_NAME and MEMNAV_INIT_CKPT may override the timestamped name and warm start.
+# It intentionally matches submit_gate_curriculum_8h.sh except for
+# MEMNAV_GATE_FUSION=residual. The optional top-1 objective stays disabled so
+# the fixed checkpoint comparison changes one causal variable.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../.." && pwd)
 SBATCH_SCRIPT="${SCRIPT_DIR}/train_memnav_mp3d.sbatch"
-RUN_NAME=${RUN_NAME:-memnav_gatecurr_warm2600_alllegs_$(date +%Y%m%d_%H%M%S)}
+RUN_NAME=${RUN_NAME:-memnav_residualgate_warm2600_alllegs_$(date +%Y%m%d_%H%M%S)}
 MEMNAV_INIT_CKPT=${MEMNAV_INIT_CKPT:-/scratch/lg154/Research/Nav/InternNav/checkpoints/memnav_mp3d_flowgate/ckpts/checkpoint-2600/memnav.ckpt}
 
 command -v sbatch >/dev/null || { echo "ABORT: sbatch is unavailable"; exit 1; }
 command -v scontrol >/dev/null || { echo "ABORT: scontrol is unavailable"; exit 1; }
+[[ "${REPO_ROOT}" == */Nav-axis-uturn/InternNav ]] || {
+  echo "ABORT: submissions must use the dedicated Nav-axis-uturn checkout: ${REPO_ROOT}"; exit 1;
+}
 [[ -f "${SBATCH_SCRIPT}" ]] || { echo "ABORT: missing ${SBATCH_SCRIPT}"; exit 1; }
 [[ -f "${MEMNAV_INIT_CKPT}" ]] || {
   echo "ABORT: warm-start checkpoint missing: ${MEMNAV_INIT_CKPT}"; exit 1;
@@ -33,22 +37,24 @@ cd "${REPO_ROOT}"
 echo "commit=${COMMIT} branch=${BRANCH}"
 echo "repo=${REPO_ROOT}"
 echo "run=${RUN_NAME} init_ckpt=${MEMNAV_INIT_CKPT}"
-echo "training=all legs, complementary gate teacher 1->0 over 500 optimizer steps, 8 hours"
+echo "ablation=residual visual base + gated revisit; top1 objective disabled"
 
-# One GPU is enough for the real-batch preflight. All data/model/cache knobs are
-# identical to the long job; only batch/DDP/logging differ.
+COMMON_EXPORTS=(
+  REPO_ROOT="${REPO_ROOT}"
+  MEMNAV_INIT_CKPT="${MEMNAV_INIT_CKPT}"
+  MEMNAV_MAX_LEGS=0
+  MEMNAV_GATE_TEACHER_START=1.0
+  MEMNAV_GATE_TEACHER_END=0.0
+  MEMNAV_GATE_TEACHER_STEPS=500
+  MEMNAV_GATE_FUSION=residual
+  MEMNAV_RETRIEVAL_TOP1_WEIGHT=0.0
+  MEMNAV_RETRIEVAL_TOP1_MARGIN=0.2
+)
+
 PREFLIGHT_JOB=$(
-  REPO_ROOT="${REPO_ROOT}" \
+  env "${COMMON_EXPORTS[@]}" \
   NAME="${RUN_NAME}_preflight" \
   WANDB_NAME="${RUN_NAME}_preflight" \
-  MEMNAV_INIT_CKPT="${MEMNAV_INIT_CKPT}" \
-  MEMNAV_MAX_LEGS=0 \
-  MEMNAV_GATE_TEACHER_START=1.0 \
-  MEMNAV_GATE_TEACHER_END=0.0 \
-  MEMNAV_GATE_TEACHER_STEPS=500 \
-  MEMNAV_GATE_FUSION=complementary \
-  MEMNAV_RETRIEVAL_TOP1_WEIGHT=0.0 \
-  MEMNAV_RETRIEVAL_TOP1_MARGIN=0.2 \
   MEMNAV_PREFLIGHT_ONLY=1 \
   MEMNAV_TRAIN_MAX_STEPS=1 \
   MEMNAV_REPORT_TO=none \
@@ -62,17 +68,9 @@ PREFLIGHT_JOB=$(
 PREFLIGHT_JOB=${PREFLIGHT_JOB%%;*}
 
 TRAIN_JOB=$(
-  REPO_ROOT="${REPO_ROOT}" \
+  env "${COMMON_EXPORTS[@]}" \
   NAME="${RUN_NAME}" \
   WANDB_NAME="${RUN_NAME}" \
-  MEMNAV_INIT_CKPT="${MEMNAV_INIT_CKPT}" \
-  MEMNAV_MAX_LEGS=0 \
-  MEMNAV_GATE_TEACHER_START=1.0 \
-  MEMNAV_GATE_TEACHER_END=0.0 \
-  MEMNAV_GATE_TEACHER_STEPS=500 \
-  MEMNAV_GATE_FUSION=complementary \
-  MEMNAV_RETRIEVAL_TOP1_WEIGHT=0.0 \
-  MEMNAV_RETRIEVAL_TOP1_MARGIN=0.2 \
   MEMNAV_PREFLIGHT_ONLY=0 \
   MEMNAV_TRAIN_MAX_STEPS=-1 \
   MEMNAV_REPORT_TO=wandb \

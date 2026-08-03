@@ -73,6 +73,17 @@ def check_imports() -> None:
             "MEMNAV_INIT_CKPT is not wired to train config il.ckpt_to_load: "
             f"env={expected_init!r} config={configured_init!r}"
         )
+    expected_fusion = os.environ.get("MEMNAV_GATE_FUSION", "complementary")
+    if runtime.exp_cfg.il.gate_fusion != expected_fusion:
+        raise RuntimeError(
+            "MEMNAV_GATE_FUSION is not wired to train config: "
+            f"env={expected_fusion!r} config={runtime.exp_cfg.il.gate_fusion!r}"
+        )
+    expected_top1_weight = float(os.environ.get("MEMNAV_RETRIEVAL_TOP1_WEIGHT", "0.0"))
+    expected_top1_margin = float(os.environ.get("MEMNAV_RETRIEVAL_TOP1_MARGIN", "0.2"))
+    if (runtime.exp_cfg.il.w_retrieval_top1 != expected_top1_weight
+            or runtime.exp_cfg.il.retrieval_top1_margin != expected_top1_margin):
+        raise RuntimeError("retrieval top-1 settings are not wired to train config")
     print("[dependency-preflight] imports OK: " + " ".join(versions), flush=True)
 
 

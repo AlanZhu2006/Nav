@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset, memnav_collate_fn
 from internnav.model.basemodel.memnav.memnav_policy import MemNavModelConfig, MemNavPolicy
+from internnav.model.basemodel.memnav.retrieval_losses import multi_positive_retrieval_losses
 from scripts.train.configs.memnav import memnav_exp_cfg
 
 
@@ -77,6 +78,12 @@ def main() -> None:
 
     config = MemNavModelConfig(model_cfg=memnav_exp_cfg.model_dump())
     model = MemNavPolicy.from_pretrained(il.ckpt_to_load, config=config).cuda().train()
+    expected_residual = float(il.gate_fusion == "residual")
+    actual_residual = float(model.core.gate_fusion_residual.item())
+    if actual_residual != expected_residual:
+        raise RuntimeError(
+            f"gate fusion mismatch: config={il.gate_fusion} checkpoint_code={actual_residual}"
+        )
     if il.ckpt_to_load:
         state = torch.load(il.ckpt_to_load, map_location="cpu", weights_only=False)
         state = state.get("state_dict", state) if isinstance(state, dict) else state
@@ -121,15 +128,16 @@ def main() -> None:
     logits = forward["ret_logits"]
     pos = batch["batch_pos_mask"].cuda().bool()
     neg = batch["batch_neg_mask"].cuda().bool()
-    floor = torch.finfo(logits.dtype).min
-    rank_loss = (
-        logits.masked_fill(~(pos | neg), floor).logsumexp(-1)
-        - logits.masked_fill(~pos, floor).logsumexp(-1)
-    ).mean()
+    rank_loss, top1_loss, _ = multi_positive_retrieval_losses(
+        logits, pos, neg, top1_margin=il.retrieval_top1_margin
+    )
     gate_loss = F.binary_cross_entropy_with_logits(forward["gate_logit"], target)
     gt_pose = batch["batch_goal_rel_pose"][:, :2].cuda()
     aux_loss = (forward["aux_pose"] - gt_pose).square().mean()
-    loss = action_loss + il.w_retrieval * rank_loss + il.w_gate * gate_loss + il.w_aux_pose * aux_loss
+    aux_weight = il.w_aux_pose if forward["aux_pose"].requires_grad else 0.0
+    loss = (action_loss + il.w_retrieval * rank_loss
+            + il.w_retrieval_top1 * top1_loss + il.w_gate * gate_loss
+            + aux_weight * aux_loss)
 
     model.zero_grad(set_to_none=True)
     loss.backward()
@@ -152,6 +160,7 @@ def main() -> None:
     peak = torch.cuda.max_memory_allocated() / 2**30
     print(
         f"[full-preflight] PASS loss={loss.item():.6f} "
+        f"fusion={il.gate_fusion} top1={top1_loss.item():.6f} "
         f"pred_gate={predicted_gate.item():.6f} decoder_gate={forward['revisit_gate'].item():.6f} "
         f"action_dgate={action_to_gate.item():+.3e} peak_alloc={peak:.2f}GiB",
         flush=True,

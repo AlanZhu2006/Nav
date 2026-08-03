@@ -124,6 +124,9 @@ export MEMNAV_SAVE_STEPS=${MEMNAV_SAVE_STEPS:-100}
 export MEMNAV_GATE_TEACHER_START=${MEMNAV_GATE_TEACHER_START:-1.0}
 export MEMNAV_GATE_TEACHER_END=${MEMNAV_GATE_TEACHER_END:-0.0}
 export MEMNAV_GATE_TEACHER_STEPS=${MEMNAV_GATE_TEACHER_STEPS:-1000}
+export MEMNAV_GATE_FUSION=${MEMNAV_GATE_FUSION:-complementary}
+export MEMNAV_RETRIEVAL_TOP1_WEIGHT=${MEMNAV_RETRIEVAL_TOP1_WEIGHT:-0.0}
+export MEMNAV_RETRIEVAL_TOP1_MARGIN=${MEMNAV_RETRIEVAL_TOP1_MARGIN:-0.2}
 export MEMNAV_INIT_CKPT=${MEMNAV_INIT_CKPT:-}
 export MEMNAV_PREFLIGHT_ONLY=${MEMNAV_PREFLIGHT_ONLY:-0}
 # -1 = normal epoch-based training. The guarded preflight sets 1 and executes the
@@ -212,6 +215,7 @@ srun --export=ALL --ntasks=1 --ntasks-per-node=1 \
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} stream_group=${MEMNAV_STREAM_GROUP} max_legs=${MEMNAV_MAX_LEGS} versioned_cache=${MEMNAV_REQUIRE_VERSIONED_CACHE} save_steps=${MEMNAV_SAVE_STEPS}"
         echo "gate_teacher=${MEMNAV_GATE_TEACHER_START}->${MEMNAV_GATE_TEACHER_END} over ${MEMNAV_GATE_TEACHER_STEPS} steps"
+        echo "gate_fusion=${MEMNAV_GATE_FUSION} retrieval_top1_weight=${MEMNAV_RETRIEVAL_TOP1_WEIGHT} margin=${MEMNAV_RETRIEVAL_TOP1_MARGIN}"
         echo "init_ckpt=${MEMNAV_INIT_CKPT:-<fresh>}"
         echo "entrypoint_max_steps=${MEMNAV_TRAIN_MAX_STEPS}"
         nvidia-smi -L || true

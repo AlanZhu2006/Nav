@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
 from internnav.model.basemodel.memnav.gate_curriculum import linear_teacher_ratio
+from internnav.model.basemodel.memnav.goal_swap import goal_swap_margin_metrics
 from internnav.model.basemodel.memnav.retrieval_losses import multi_positive_retrieval_losses
 from internnav.trainer.base import BaseTrainer
 
@@ -26,6 +27,10 @@ class MemNavTrainer(BaseTrainer):
         self.retr_top1_margin = float(getattr(config.il, "retrieval_top1_margin", 0.2))
         self.w_gate = getattr(config.il, "w_gate", 1.0)          # revisit/novel BCE
         self.w_aux = getattr(config.il, "w_aux_pose", 0.5)
+        self.w_goal_swap = float(getattr(config.il, "w_goal_swap", 0.0))
+        self.goal_swap_margin = float(getattr(config.il, "goal_swap_margin", 0.05))
+        if self.w_goal_swap < 0 or self.goal_swap_margin < 0:
+            raise ValueError("goal-swap weight and margin must be non-negative")
         self.gate_teacher_start = float(getattr(config.il, "gate_teacher_start", 1.0))
         self.gate_teacher_end = float(getattr(config.il, "gate_teacher_end", 0.0))
         self.gate_teacher_steps = int(getattr(config.il, "gate_teacher_steps", 1000))
@@ -115,6 +120,10 @@ class MemNavTrainer(BaseTrainer):
         'action_loss_novel': 'action/action_loss_novel',
         'action_loss_leg2': 'action/action_loss_leg2',
         'action_loss_leg3': 'action/action_loss_leg3',
+        'goal_swap_loss': 'action/goal_swap_margin_loss',
+        'goal_swap_gap': 'action/goal_swap_error_gap',
+        'goal_swap_rms': 'action/goal_swap_output_rms',
+        'goal_swap_active': 'action/goal_swap_active_rows',
         # (4) training config / system
         'learning_rate': 'config/learning_rate',
         'grad_norm': 'config/grad_norm',
@@ -157,6 +166,12 @@ class MemNavTrainer(BaseTrainer):
         # passes may reuse it.  Only MemNavNet consumes this training-only scalar.
         model_inputs = dict(inputs)
         model_inputs["decoder_gate_teacher_ratio"] = gate_teacher_ratio
+        model_inputs["compute_goal_swap"] = bool(
+            self.w_goal_swap > 0
+            and (inputs["batch_is_revisit"] < 0.5).any().item()
+            and (inputs.get("batch_negative_goal_image") is not None
+                 or inputs["batch_is_revisit"].numel() > 1)
+        )
         fwd = model(model_inputs)                                 # forward(batch) moves tensors internally
 
         # --- diffusion action loss (always goal-conditioned). Kept per-sample first
@@ -167,6 +182,31 @@ class MemNavTrainer(BaseTrainer):
         noise = fwd["noise"]
         per_action_loss = (fwd["noise_pred"] - noise).square().mean(dim=(-2, -1))  # [B]
         action_loss = per_action_loss.mean()
+
+        # Counterfactual goal-conditioned denoising. Same current/history/noise/timestep,
+        # but a direction-filtered wrong goal must explain this row's expert action worse than the
+        # correct goal by ``goal_swap_margin``. This directly penalizes the measured
+        # "goal image has nearly no effect" shortcut without fabricating a wrong-goal GT.
+        if model_inputs["compute_goal_swap"]:
+            if fwd["noise_pred_swapped_goal"] is None:
+                raise RuntimeError("goal-swap objective requested but model returned no swapped pass")
+            novel_rows = inputs["batch_is_revisit"].to(dev) < 0.5
+            swap_metrics = goal_swap_margin_metrics(
+                fwd["noise_pred"],
+                fwd["noise_pred_swapped_goal"],
+                noise,
+                novel_rows & fwd["goal_swap_valid"],
+                self.goal_swap_margin,
+            )
+        else:
+            zero = action_loss * 0.0
+            swap_metrics = {
+                "loss": zero,
+                "error_gap": zero.detach(),
+                "output_rms": zero.detach(),
+                "active_count": torch.zeros((), device=dev, dtype=torch.long),
+            }
+        goal_swap_loss = swap_metrics["loss"]
 
         # --- retrieval: DECOUPLED ranking (InfoNCE) + revisit gate (BCE) ---
         # A joint softmax with a null slot collapses to always-null (the easy shortcut),
@@ -203,7 +243,8 @@ class MemNavTrainer(BaseTrainer):
 
         loss = (action_loss + self.w_retr * rank_loss
                 + self.w_retr_top1 * retrieval_top1_loss
-                + self.w_gate * gate_loss + self.w_aux_effective * aux_loss)
+                + self.w_gate * gate_loss + self.w_aux_effective * aux_loss
+                + self.w_goal_swap * goal_swap_loss)
 
         with torch.no_grad():
             # --- action-loss split by goal category: overall (already `action_loss`),
@@ -309,7 +350,10 @@ class MemNavTrainer(BaseTrainer):
                        gate_acc=gate_acc, seen_match_acc=seen_match, rot_err_deg=rot_err,
                        pos_err_m=pos_err_m, pos_dir_err_deg=pos_dir_err,
                        action_loss_novel=action_loss_novel, action_loss_leg2=action_loss_leg2,
-                       action_loss_leg3=action_loss_leg3)
+                       action_loss_leg3=action_loss_leg3,
+                       goal_swap_loss=goal_swap_loss,
+                       goal_swap_gap=swap_metrics["error_gap"],
+                       goal_swap_rms=swap_metrics["output_rms"])
         if (dist.get_rank() if dist.is_initialized() else 0) == 0:
             revisit_part = (f"pos_err={pos_err_m.item():.2f}m dir_err={pos_dir_err.item():.1f}deg "
                             f"rot_err={rot_err.item():.1f}deg aux={aux_loss.item():.4f} "
@@ -333,7 +377,11 @@ class MemNavTrainer(BaseTrainer):
                   f"acc={gate_acc.item():.2f} | decoder seen={decoder_gate_seen.item():.2f} "
                   f"unseen={decoder_gate_unseen.item():.2f} mix={gate_teacher_ratio:.2f} | {revisit_part}"
                   + (f" | {depth_part}" if depth_part else "")
-                  + (f" | act: {action_part}" if action_part else ""))
+                  + (f" | act: {action_part}" if action_part else "")
+                  + (f" | goal_swap(n={int(swap_metrics['active_count'].item())}) "
+                     f"loss={goal_swap_loss.item():.4f} gap={swap_metrics['error_gap'].item():+.4f} "
+                     f"rms={swap_metrics['output_rms'].item():.4f}"
+                     if int(swap_metrics["active_count"].item()) > 0 else ""))
 
         # Per-component metrics → wandb/tb. self.log is rank-0-only inside HF Trainer;
         # gate by logging_steps to match train/loss cadence and avoid extra .item() syncs.
@@ -353,6 +401,13 @@ class MemNavTrainer(BaseTrainer):
                 'decoder_gate_sep': decoder_gate_sep.item(),
                 'gate_teacher_ratio': gate_teacher_ratio,
             }
+            if int(swap_metrics["active_count"].item()) > 0:
+                log_payload.update({
+                    'goal_swap_loss': goal_swap_loss.item(),
+                    'goal_swap_gap': swap_metrics['error_gap'].item(),
+                    'goal_swap_rms': swap_metrics['output_rms'].item(),
+                    'goal_swap_active': int(swap_metrics['active_count'].item()),
+                })
             # revisit-only metrics (aux_loss, rot_err_deg, pos_err_m, pos_dir_err_deg,
             # seen_match_acc): only logged when this batch actually contains revisit rows
             # -- otherwise the masked-mean formula silently reports 0 (0/clamp(0,min=1)),
@@ -410,23 +465,34 @@ class MemNavTrainer(BaseTrainer):
     # ------------------------------------------------------------------ #
     def create_optimizer(self):
         rank = dist.get_rank() if dist.is_initialized() else 0
-        lr = getattr(self.config.il, "lr", 1e-4)
-        m = self.model.module if hasattr(self.model, "module") else self.model
-        params = [p for p in m.parameters() if p.requires_grad]       # frozen LingBot excluded
-        self.optimizer = torch.optim.Adam(params, lr=lr)
+        self.optimizer = super().create_optimizer()
         if rank == 0:
+            m = self.model.module if hasattr(self.model, "module") else self.model
+            params = [p for p in m.parameters() if p.requires_grad]
             n = sum(p.numel() for p in params)
-            print(f"[Rank 0] Adam lr={lr}; trainable params: {n:,} ({len(params)} tensors)")
+            print(
+                f"[Rank 0] {type(self.optimizer).__name__} lr={self.args.learning_rate} "
+                f"weight_decay={self.args.weight_decay}; trainable params: "
+                f"{n:,} ({len(params)} tensors)"
+            )
         return self.optimizer
 
-    def create_scheduler(self, optimizer, num_training_steps: int):
-        self.lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=1.0, end_factor=0.5, total_iters=10000)
+    def create_scheduler(self, num_training_steps: int, optimizer=None):
+        self.lr_scheduler = super().create_scheduler(
+            num_training_steps=num_training_steps,
+            optimizer=optimizer or self.optimizer,
+        )
+        if (dist.get_rank() if dist.is_initialized() else 0) == 0:
+            print(
+                f"[Rank 0] scheduler={self.args.lr_scheduler_type} "
+                f"warmup_steps={self.args.get_warmup_steps(num_training_steps)} "
+                f"total_steps={num_training_steps}"
+            )
         return self.lr_scheduler
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):
         self.create_optimizer()
-        self.create_scheduler(self.optimizer, num_training_steps)
+        self.create_scheduler(num_training_steps, optimizer=self.optimizer)
         return self.optimizer, self.lr_scheduler
 
     def get_train_dataloader(self):

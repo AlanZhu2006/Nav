@@ -34,6 +34,10 @@ _REQUIRE_VERSIONED_CACHE = os.environ.get(
 ).lower() in ('1', 'true', 'yes')
 # Restrict to episodes with n_legs <= MEMNAV_MAX_LEGS (unset or 0 = keep all; 2 = two-leg only).
 _MAX_LEGS = int(os.environ.get('MEMNAV_MAX_LEGS') or 0) or None
+# Optional early Goal-A coverage. Empty/unset preserves the historical k>=122
+# requirement; 40 matches the first valid W=32,num_scale=8 inference state.
+_GOAL_A_MIN_K_RAW = os.environ.get('MEMNAV_GOAL_A_MIN_K', '').strip()
+_GOAL_A_MIN_K = int(_GOAL_A_MIN_K_RAW) if _GOAL_A_MIN_K_RAW else None
 # Step-based checkpointing: save every N optimizer steps so a wall-clock timeout banks
 # recent progress (epoch-based saves never fired — runs die mid-epoch-0). Non-None here
 # switches train.py to save_strategy='steps' for memnav (other models stay on 'epoch').
@@ -70,6 +74,15 @@ _RETRIEVAL_TOP1_WEIGHT = float(os.environ.get('MEMNAV_RETRIEVAL_TOP1_WEIGHT', '0
 _RETRIEVAL_TOP1_MARGIN = float(os.environ.get('MEMNAV_RETRIEVAL_TOP1_MARGIN', '0.2'))
 if _RETRIEVAL_TOP1_WEIGHT < 0 or _RETRIEVAL_TOP1_MARGIN < 0:
     raise ValueError('retrieval top-1 weight and margin must be non-negative')
+# Counterfactual Novel conditioning: same state/noise/timestep, same-scene wrong goal.
+# Weight zero is historical behavior; tonight's controlled run enables it explicitly.
+_GOAL_SWAP_WEIGHT = float(os.environ.get('MEMNAV_GOAL_SWAP_WEIGHT', '0.0'))
+_GOAL_SWAP_MARGIN = float(os.environ.get('MEMNAV_GOAL_SWAP_MARGIN', '0.05'))
+_GOAL_SWAP_MIN_ANGLE_DEG = float(os.environ.get('MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG', '30.0'))
+if _GOAL_SWAP_WEIGHT < 0 or _GOAL_SWAP_MARGIN < 0:
+    raise ValueError('goal-swap weight and margin must be non-negative')
+if not 0.0 <= _GOAL_SWAP_MIN_ANGLE_DEG <= 180.0:
+    raise ValueError('goal-swap minimum angle must be in [0,180] degrees')
 # Optional weights-only warm start.  Use a NEW NAME/output directory so HF does not
 # restore the old trainer global_step: the gate curriculum must begin at ratio START,
 # not be skipped because the source checkpoint happened to be at step > STEPS.
@@ -128,6 +141,9 @@ memnav_exp_cfg = ExpCfg(
         max_frame_num=_MAX_FRAME_NUM,
         # episode leg filter (None = all legs; 2 = two-leg episodes only)
         max_legs=_MAX_LEGS,
+        goal_a_min_k=_GOAL_A_MIN_K,
+        goal_swap_negatives=_GOAL_SWAP_WEIGHT > 0,
+        goal_swap_min_angle_deg=_GOAL_SWAP_MIN_ANGLE_DEG,
         # goal_append_warm's live-recompute depth before streaming the goal (deeper than
         # window_size on purpose): window_size's cold start at the window boundary starves
         # the goal's pose estimate (no real predecessors); goal_warm=64 empirically matches
@@ -150,6 +166,8 @@ memnav_exp_cfg = ExpCfg(
         w_retrieval=1.0,   # ranking InfoNCE (which candidate frame matches)
         w_gate=1.0,        # revisit/novel gate BCE (is there a match at all)
         w_aux_pose=0.5,
+        w_goal_swap=_GOAL_SWAP_WEIGHT,
+        goal_swap_margin=_GOAL_SWAP_MARGIN,
         # training-only decoder gate teacher forcing -> predicted-gate handoff
         gate_teacher_start=_GATE_TEACHER_START,
         gate_teacher_end=_GATE_TEACHER_END,

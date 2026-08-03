@@ -84,6 +84,18 @@ def check_imports() -> None:
     if (runtime.exp_cfg.il.w_retrieval_top1 != expected_top1_weight
             or runtime.exp_cfg.il.retrieval_top1_margin != expected_top1_margin):
         raise RuntimeError("retrieval top-1 settings are not wired to train config")
+    expected_goal_a = os.environ.get("MEMNAV_GOAL_A_MIN_K", "").strip()
+    expected_goal_a = int(expected_goal_a) if expected_goal_a else None
+    if runtime.exp_cfg.il.goal_a_min_k != expected_goal_a:
+        raise RuntimeError("MEMNAV_GOAL_A_MIN_K is not wired to train config")
+    expected_swap_weight = float(os.environ.get("MEMNAV_GOAL_SWAP_WEIGHT", "0.0"))
+    expected_swap_margin = float(os.environ.get("MEMNAV_GOAL_SWAP_MARGIN", "0.05"))
+    expected_swap_angle = float(os.environ.get("MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG", "30.0"))
+    if (runtime.exp_cfg.il.w_goal_swap != expected_swap_weight
+            or runtime.exp_cfg.il.goal_swap_margin != expected_swap_margin
+            or runtime.exp_cfg.il.goal_swap_min_angle_deg != expected_swap_angle
+            or runtime.exp_cfg.il.goal_swap_negatives != (expected_swap_weight > 0)):
+        raise RuntimeError("goal-swap settings are not wired to train config")
     print("[dependency-preflight] imports OK: " + " ".join(versions), flush=True)
 
 

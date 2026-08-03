@@ -22,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset, memnav_collate_fn
+from internnav.model.basemodel.memnav.goal_swap import goal_swap_margin_metrics
 from internnav.model.basemodel.memnav.memnav_policy import MemNavModelConfig, MemNavPolicy
 from internnav.model.basemodel.memnav.retrieval_losses import multi_positive_retrieval_losses
 from scripts.train.configs.memnav import memnav_exp_cfg
@@ -49,6 +50,24 @@ def deterministic_revisit(dataset: MemNav_Dataset):
     raise RuntimeError("dataset contains no revisit row with positive/negative contrast")
 
 
+def deterministic_early_goal_a(dataset: MemNav_Dataset):
+    """Load one Goal-A row at its earliest configured inference-time k."""
+    for idx, sample in enumerate(dataset.samples):
+        if sample["has_covis"]:
+            continue
+        k = int(sample["k_lo"])
+        with patch("numpy.random.randint", return_value=k):
+            item = dataset[idx]
+        if int(item["cur_step"]) != k or bool(item["is_revisit"].item()):
+            raise RuntimeError("deterministic early Goal-A selection did not hold")
+        if bool(item["cand_mask"].any()):
+            raise RuntimeError(f"early Goal-A k={k} unexpectedly has retrieval candidates")
+        if dataset.goal_swap_negatives and not bool(item["negative_goal_valid"].item()):
+            continue
+        return idx, item
+    raise RuntimeError("dataset contains no early Goal-A row")
+
+
 def main() -> None:
     torch.manual_seed(17)
     np.random.seed(17)
@@ -66,15 +85,31 @@ def main() -> None:
         window_size=il.window_size,
         num_scale=il.num_scale,
         max_legs=getattr(il, "max_legs", None),
+        goal_a_min_k=getattr(il, "goal_a_min_k", None),
+        goal_swap_negatives=getattr(il, "goal_swap_negatives", False),
+        goal_swap_min_angle_deg=getattr(il, "goal_swap_min_angle_deg", 30.0),
     )
     idx, item = deterministic_revisit(dataset)
-    batch = memnav_collate_fn([item])
+    items = [item]
+    early = None
+    if getattr(il, "goal_a_min_k", None) is not None:
+        early = deterministic_early_goal_a(dataset)
+        items.append(early[1])
+    batch = memnav_collate_fn(items)
     print(
         f"[full-preflight] sample={idx} k={batch['cur_steps'][0]} "
         f"goal={batch['goal_steps'][0]} pos={int(batch['batch_pos_mask'].sum())} "
         f"neg={int(batch['batch_neg_mask'].sum())}",
         flush=True,
     )
+    if early is not None:
+        print(
+            f"[full-preflight] early_goalA sample={early[0]} "
+            f"k={early[1]['cur_step']} goal={early[1]['goal_step']} "
+            f"candidates={int(early[1]['cand_mask'].sum())} "
+            f"negative_angle={early[1]['negative_goal_angle_deg']:.1f}deg",
+            flush=True,
+        )
 
     config = MemNavModelConfig(model_cfg=memnav_exp_cfg.model_dump())
     model = MemNavPolicy.from_pretrained(il.ckpt_to_load, config=config).cuda().train()
@@ -110,6 +145,7 @@ def main() -> None:
 
     teacher_ratio = 0.5
     batch["decoder_gate_teacher_ratio"] = teacher_ratio
+    batch["compute_goal_swap"] = bool(il.w_goal_swap > 0)
     torch.cuda.reset_peak_memory_stats()
     forward = model(batch)
     target = batch["batch_is_revisit"].cuda()
@@ -117,6 +153,11 @@ def main() -> None:
     expected_gate = predicted_gate + teacher_ratio * (target - predicted_gate)
     if not torch.allclose(forward["revisit_gate"], expected_gate):
         raise RuntimeError("decoder gate did not apply teacher blend")
+    if il.w_goal_swap > 0:
+        if len(items) < 2 or forward["noise_pred_swapped_goal"] is None:
+            raise RuntimeError("goal-swap pass was not produced for configured objective")
+        if int(forward["goal_anchor_idx"][-1].item()) != -1:
+            raise RuntimeError("early Goal-A row fabricated a revisit anchor")
 
     action_loss = (forward["noise_pred"] - forward["noise"]).square().mean()
     action_to_gate = torch.autograd.grad(
@@ -135,9 +176,21 @@ def main() -> None:
     gt_pose = batch["batch_goal_rel_pose"][:, :2].cuda()
     aux_loss = (forward["aux_pose"] - gt_pose).square().mean()
     aux_weight = il.w_aux_pose if forward["aux_pose"].requires_grad else 0.0
+    if forward["noise_pred_swapped_goal"] is not None:
+        swap = goal_swap_margin_metrics(
+            forward["noise_pred"],
+            forward["noise_pred_swapped_goal"],
+            forward["noise"],
+            (target < 0.5) & forward["goal_swap_valid"],
+            il.goal_swap_margin,
+        )
+    else:
+        zero = action_loss * 0.0
+        swap = {"loss": zero, "error_gap": zero.detach(),
+                "output_rms": zero.detach(), "active_count": target.new_zeros(())}
     loss = (action_loss + il.w_retrieval * rank_loss
             + il.w_retrieval_top1 * top1_loss + il.w_gate * gate_loss
-            + aux_weight * aux_loss)
+            + aux_weight * aux_loss + il.w_goal_swap * swap["loss"])
 
     model.zero_grad(set_to_none=True)
     loss.backward()
@@ -161,8 +214,14 @@ def main() -> None:
     print(
         f"[full-preflight] PASS loss={loss.item():.6f} "
         f"fusion={il.gate_fusion} top1={top1_loss.item():.6f} "
-        f"pred_gate={predicted_gate.item():.6f} decoder_gate={forward['revisit_gate'].item():.6f} "
-        f"action_dgate={action_to_gate.item():+.3e} peak_alloc={peak:.2f}GiB",
+        f"pred_gate_mean={predicted_gate.mean().item():.6f} "
+        f"decoder_gate_mean={forward['revisit_gate'].mean().item():.6f} "
+        f"action_dgate_max={action_to_gate.abs().max().item():.3e} "
+        f"goal_swap_n={int(swap['active_count'].item())} "
+        f"goal_swap_loss={swap['loss'].item():.6f} "
+        f"goal_swap_gap={swap['error_gap'].item():+.6f} "
+        f"goal_swap_rms={swap['output_rms'].item():.6f} "
+        f"peak_alloc={peak:.2f}GiB",
         flush=True,
     )
 

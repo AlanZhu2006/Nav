@@ -45,6 +45,7 @@
 # Overridable env vars (defaults shown):
 #   NAME=memnav_mp3d
 #   BATCH_SIZE=4             (per-GPU; effective global batch = 4 x NPROC = 8)
+#   LR=1e-4
 #   EPOCHS=10
 #   NUM_WORKERS=8            (per-GPU)
 #   NPROC=2                  (GPUs / DDP ranks; must be <= --gres=gpu:N)
@@ -58,6 +59,10 @@
 #   MEMNAV_GATE_TEACHER_END=0.0    (fully predicted gate after curriculum)
 #   MEMNAV_GATE_TEACHER_STEPS=1000 (linear handoff in optimizer steps)
 #   MEMNAV_INIT_CKPT=''        (optional weights-only warm start; use a fresh NAME)
+#   MEMNAV_GOAL_A_MIN_K=''     (40 enables early Goal-A inference-state coverage)
+#   MEMNAV_GOAL_SWAP_WEIGHT=0  (counterfactual Novel denoising; 0 = historical)
+#   MEMNAV_GOAL_SWAP_MARGIN=.05
+#   MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG=30
 #   MEMNAV_PREFLIGHT_ONLY=0    (1 = one real batch forward/backward, then exit)
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
 #
@@ -128,6 +133,10 @@ export MEMNAV_GATE_FUSION=${MEMNAV_GATE_FUSION:-complementary}
 export MEMNAV_RETRIEVAL_TOP1_WEIGHT=${MEMNAV_RETRIEVAL_TOP1_WEIGHT:-0.0}
 export MEMNAV_RETRIEVAL_TOP1_MARGIN=${MEMNAV_RETRIEVAL_TOP1_MARGIN:-0.2}
 export MEMNAV_INIT_CKPT=${MEMNAV_INIT_CKPT:-}
+export MEMNAV_GOAL_A_MIN_K=${MEMNAV_GOAL_A_MIN_K:-}
+export MEMNAV_GOAL_SWAP_WEIGHT=${MEMNAV_GOAL_SWAP_WEIGHT:-0.0}
+export MEMNAV_GOAL_SWAP_MARGIN=${MEMNAV_GOAL_SWAP_MARGIN:-0.05}
+export MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG=${MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG:-30.0}
 export MEMNAV_PREFLIGHT_ONLY=${MEMNAV_PREFLIGHT_ONLY:-0}
 # -1 = normal epoch-based training. The guarded preflight sets 1 and executes the
 # exact production train.py entrypoint for one optimizer step after gradient checks.
@@ -136,6 +145,7 @@ export MEMNAV_TRAIN_MAX_STEPS=${MEMNAV_TRAIN_MAX_STEPS:--1}
 # training knobs
 export NAME=${NAME:-memnav_mp3d}
 export BATCH_SIZE=${BATCH_SIZE:-4}             # per-GPU; effective = BATCH_SIZE x NPROC
+export LR=${LR:-1e-4}
 export EPOCHS=${EPOCHS:-10}
 export NUM_WORKERS=${NUM_WORKERS:-8}
 export NPROC=${NPROC:-2}                       # DDP ranks (GPUs); keep <= --gres=gpu:N
@@ -210,12 +220,13 @@ srun --export=ALL --ntasks=1 --ntasks-per-node=1 \
         echo "===== TRAIN ENV CHECK ====="
         command -v python; python -V
         python -c "import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available())"
-        echo "name=${NAME} bs/gpu=${BATCH_SIZE} ep=${EPOCHS} wk/gpu=${NUM_WORKERS} nproc=${NPROC}"
+        echo "name=${NAME} bs/gpu=${BATCH_SIZE} lr=${LR} ep=${EPOCHS} wk/gpu=${NUM_WORKERS} nproc=${NPROC}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
         echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} stream_group=${MEMNAV_STREAM_GROUP} max_legs=${MEMNAV_MAX_LEGS} versioned_cache=${MEMNAV_REQUIRE_VERSIONED_CACHE} save_steps=${MEMNAV_SAVE_STEPS}"
         echo "gate_teacher=${MEMNAV_GATE_TEACHER_START}->${MEMNAV_GATE_TEACHER_END} over ${MEMNAV_GATE_TEACHER_STEPS} steps"
         echo "gate_fusion=${MEMNAV_GATE_FUSION} retrieval_top1_weight=${MEMNAV_RETRIEVAL_TOP1_WEIGHT} margin=${MEMNAV_RETRIEVAL_TOP1_MARGIN}"
+        echo "goal_a_min_k=${MEMNAV_GOAL_A_MIN_K:-<historical>} goal_swap_weight=${MEMNAV_GOAL_SWAP_WEIGHT} goal_swap_margin=${MEMNAV_GOAL_SWAP_MARGIN} goal_swap_min_angle=${MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG}deg"
         echo "init_ckpt=${MEMNAV_INIT_CKPT:-<fresh>}"
         echo "entrypoint_max_steps=${MEMNAV_TRAIN_MAX_STEPS}"
         nvidia-smi -L || true
@@ -236,6 +247,7 @@ srun --export=ALL --ntasks=1 --ntasks-per-node=1 \
           --name "${NAME}"
           --model-name memnav
           --batch-size "${BATCH_SIZE}"
+          --lr "${LR}"
           --num-workers "${NUM_WORKERS}"
           --epochs "${EPOCHS}"
           --root-dir "${MEMNAV_ROOT_DIR}"

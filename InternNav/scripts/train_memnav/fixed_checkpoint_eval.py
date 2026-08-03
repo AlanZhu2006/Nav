@@ -453,6 +453,8 @@ def main() -> None:
         window_size=il.window_size,
         num_scale=il.num_scale,
         max_legs=getattr(il, "max_legs", None),
+        goal_a_min_k=getattr(il, "goal_a_min_k", None),
+        goal_swap_negatives=False,
     )
     manifest = build_manifest(dataset, args.samples_per_group, args.seed)
     args.out.mkdir(parents=True, exist_ok=True)

@@ -319,6 +319,9 @@ def main(config, runtime: TrainRuntime):
                 window_size=getattr(config.il, 'window_size', 8),
                 num_scale=getattr(config.il, 'num_scale', 8),
                 max_legs=getattr(config.il, 'max_legs', None),
+                goal_a_min_k=getattr(config.il, 'goal_a_min_k', None),
+                goal_swap_negatives=getattr(config.il, 'goal_swap_negatives', False),
+                goal_swap_min_angle_deg=getattr(config.il, 'goal_swap_min_angle_deg', 30.0),
             )
         else:
             if '3dgs' in config.il.lmdb_features_dir or '3dgs' in config.il.lmdb_features_dir:
@@ -380,6 +383,8 @@ def main(config, runtime: TrainRuntime):
             dataloader_pin_memory=False,
             optim='adamw_torch',
             learning_rate=config.il.lr,
+            weight_decay=float(config.il.weight_decay or 0.0),
+            warmup_ratio=float(config.il.warmup_ratio or 0.0),
             lr_scheduler_type='cosine',
             logging_steps=10.0,
             num_train_epochs=config.il.epochs,

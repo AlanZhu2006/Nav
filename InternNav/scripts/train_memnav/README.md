@@ -105,6 +105,45 @@ export MEMNAV_RETRIEVAL_TOP1_MARGIN=0.2
 零，只记录诊断值。`dependency_preflight.py` 会核对 fusion/top-1 环境变量确实进入
 训练配置，真实 batch preflight 还会检查 fusion buffer、top-1 loss 及梯度有限性。
 
+## Novel goal-collapse 修复训练
+
+同 state/same seed 的因果诊断确认，旧 MemNav 换目标图产生的候选变化仅为换
+diffusion seed 的 `0.13%--3.16%`。本轮用两个显式开关做受控修复：
+
+```bash
+export MEMNAV_GOAL_A_MIN_K=40
+export MEMNAV_GOAL_SWAP_WEIGHT=0.25
+export MEMNAV_GOAL_SWAP_MARGIN=0.05
+```
+
+第一项让 Goal-A 覆盖真实推理起点；k=40 时 retrieval candidate 允许全空，模型会跳过
+无意义的 revisit goal-pose append，并把 revisit token 置为 neutral。第二项固定当前
+state、history、diffusion noise、timestep 与 gate，从同一 MP3D 场景的其他 episode
+选择方位差至少 30° 的错误 goal，
+约束：
+
+```text
+MSE(wrong goal, expert noise) - MSE(correct goal, expert noise) >= 0.05
+```
+
+这是 ranking constraint，不为错误目标伪造动作标签。W&B 新增：
+
+- `action/goal_swap_margin_loss`；
+- `action/goal_swap_error_gap`（目标 >= `+0.05`）；
+- `action/goal_swap_output_rms`；
+- `action/goal_swap_active_rows`。
+
+权重默认仍为 0，旧实验不受影响。固定的八小时任务使用 residualgate1000 warm-start、
+all-leg、关闭重复 gate teacher curriculum，并通过真实双样本 preflight 后启动：
+
+```bash
+bash scripts/train_memnav/submit_novel_goalswap_8h.sh
+```
+
+同时 MemNav optimizer 已改为读取 `TrainingArguments` 中的 AdamW、weight decay、cosine
+schedule 与 warmup；提交日志必须出现 `AdamW ... weight_decay=0.0001` 和非零
+`warmup_steps`，否则视为配置未接通。
+
 ## 固定 checkpoint A/B 评测
 
 训练曲线来自不同随机 batch，不能单独证明新 checkpoint 泛化更好。使用

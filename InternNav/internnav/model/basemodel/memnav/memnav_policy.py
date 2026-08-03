@@ -402,8 +402,16 @@ class MemNavNet(nn.Module):
         current_state = self.build_current_state(enc["current"], enc["depth_feat"])
         revisit, aux_pose, R_rel = self.build_revisit(enc["cur_pose"], enc["goal_pose"],
                                                       enc["metric_scale"])
-        novel = self.novel(batch["batch_window_images"][:, -1].to(dev),   # current frame [B,3,H,W]
-                           batch["batch_goal_image"].to(dev))             # goal frame
+        # An all-masked early Goal-A row has no revisit anchor by construction.
+        # Keep its revisit feature exactly neutral instead of relying on a merely
+        # tiny sigmoid gate to suppress a fabricated pose token.
+        has_candidate = enc["has_candidate"].to(revisit).unsqueeze(-1)
+        revisit = revisit * has_candidate.unsqueeze(-1)
+        aux_pose = aux_pose * has_candidate
+
+        current_image = batch["batch_window_images"][:, -1].to(dev)
+        goal_image = batch["batch_goal_image"].to(dev)
+        novel = self.novel(current_image, goal_image)
         predicted_gate = enc["revisit_gate"]
         # Training-only curriculum: early action updates must actually see the
         # teacher-forced revisit token.  Otherwise an initially low predicted gate
@@ -425,8 +433,36 @@ class MemNavNet(nn.Module):
         noisy = self.noise_scheduler.add_noise(labels, noise, timesteps)
 
         noise_pred = self.predict_noise(noisy, timesteps, current_state, revisit, novel, gate)
+
+        # Optional counterfactual Novel pass. Current state, history, timestep,
+        # diffusion noise and gate remain identical; only the goal image is rolled
+        # across the local batch. The trainer applies a ranking margin instead of
+        # inventing an action label for the wrong goal.
+        noise_pred_swapped_goal = None
+        goal_swap_valid = torch.zeros(B, device=dev, dtype=torch.bool)
+        if self.training and bool(batch.get("compute_goal_swap", False)):
+            if batch.get("batch_negative_goal_image") is not None:
+                swapped_goal_image = batch["batch_negative_goal_image"].to(dev)
+                goal_swap_valid = batch["batch_negative_goal_valid"].to(dev).bool()
+            elif B > 1:
+                # Backward-compatible synthetic/unit-test fallback. Production
+                # training supplies direction-filtered same-scene negatives.
+                swapped_goal_image = torch.roll(goal_image, shifts=1, dims=0)
+                goal_swap_valid = torch.ones(B, device=dev, dtype=torch.bool)
+            else:
+                swapped_goal_image = None
+            if swapped_goal_image is not None:
+                goal_swap_valid &= (
+                    (goal_image - swapped_goal_image).square().mean(dim=(1, 2, 3)) > 1e-8
+                )
+                swapped_novel = self.novel(current_image, swapped_goal_image)
+                noise_pred_swapped_goal = self.predict_noise(
+                    noisy, timesteps, current_state, revisit, swapped_novel, gate
+                )
         return dict(
             noise_pred=noise_pred, noise=noise,
+            noise_pred_swapped_goal=noise_pred_swapped_goal,
+            goal_swap_valid=goal_swap_valid,
             aux_pose=aux_pose, R_rel=R_rel, ret_logits=enc["ret_logits"],
             predicted_revisit_gate=predicted_gate, revisit_gate=gate,
             gate_teacher_ratio=gate.new_tensor(gate_teacher_ratio if self.training else 0.0),
@@ -508,6 +544,7 @@ class MemNavNet(nn.Module):
             goal_cls = self.lingbot.dino(batch["batch_goal_image"].to(dev))["cls"]  # [B, D']
         mem_cls = batch["batch_mem_cls"].to(dev)
         cand_mask = batch["batch_cand_mask"].to(dev)   # revisit candidates E(k) = [amargin..k-t]
+        has_candidate = cand_mask.any(-1)               # early Goal-A rows may be all-masked
         # (trainable) retrieval — match index + gate logit + ranking logits (over candidates)
         match_idx, gate_logit, ret_logits = self.retrieval(goal_cls, mem_cls, cand_mask)
         revisit_gate = torch.sigmoid(gate_logit)       # P(revisit) for the decoder soft-gate
@@ -583,6 +620,15 @@ class MemNavNet(nn.Module):
                                 batch["rgb_dirs"][b], caches[jj]["cam_pose_enc"], cam_h)
                         if s is not None:
                             mscale[b] = s
+                    if not bool(has_candidate[b].item()):
+                        # Pure early-Novel row. There is no legal historical anchor,
+                        # so do not fabricate one by clamping argmax(all-masked)=0 to
+                        # ``lo`` and running an expensive goal-pose append. Inference
+                        # already skips this route when the revisit gate is negligible.
+                        m_of[b] = None
+                        goal_m[b] = -1
+                        goalp[b] = curp[b]
+                        continue
                     m = int(anchor[b].clamp(lo, k - 1).item())
                     m_of[b] = m
                     goal_m[b] = m   # post-clamp anchor actually used for goal_pose (may differ from anchor[b])
@@ -594,6 +640,8 @@ class MemNavNet(nn.Module):
                 # camera_pose stays per-sample (cheap: one camera-head forward).
                 groups = {}
                 for jj, b in enumerate(idx):
+                    if m_of[b] is None:
+                        continue
                     L = m_of[b] - max(S, m_of[b] - warm + 1) + 1
                     groups.setdefault(L, []).append((jj, b))
                 for members in groups.values():
@@ -626,6 +674,7 @@ class MemNavNet(nn.Module):
 
             match_idx=match_idx, anchor_idx=anchor, revisit_gate=revisit_gate,
             gate_logit=gate_logit, ret_logits=ret_logits,
+            has_candidate=has_candidate,
             goal_anchor_idx=torch.tensor(goal_m, device=dev, dtype=torch.long),  # [B] post-clamp m used for goal_pose
         )
 

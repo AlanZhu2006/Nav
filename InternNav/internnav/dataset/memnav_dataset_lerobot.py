@@ -118,6 +118,9 @@ class MemNav_Dataset(NavDP_Base_Datset):
         exclude_recent=83,
         goal_slack=4,
         add_goalA=True,
+        goal_a_min_k=None,
+        goal_swap_negatives=False,
+        goal_swap_min_angle_deg=30.0,
         max_legs=None,
         pred_digit=4,
         random_digit=False,
@@ -162,6 +165,21 @@ class MemNav_Dataset(NavDP_Base_Datset):
         self.exclude_recent = int(exclude_recent)
         self.goal_slack = int(goal_slack)   # min forward frames current(k) -> goal_step
         self.add_goalA = bool(add_goalA)
+        # Optional early-Novel coverage. Historical training required E(k) to be
+        # non-empty, so Goal A started at amargin+exclude_recent (122 for W=32).
+        # Novel inference starts as soon as the stream/window is valid (k=40).
+        # When configured, allow an empty retrieval candidate set and start from
+        # this real inference boundary instead.
+        self.goal_a_min_k = None if goal_a_min_k is None else int(goal_a_min_k)
+        if self.goal_a_min_k is not None and self.goal_a_min_k < 0:
+            raise ValueError(f"goal_a_min_k must be non-negative, got {self.goal_a_min_k}")
+        self.goal_swap_negatives = bool(goal_swap_negatives)
+        self.goal_swap_min_angle_deg = float(goal_swap_min_angle_deg)
+        if not 0.0 <= self.goal_swap_min_angle_deg <= 180.0:
+            raise ValueError(
+                "goal_swap_min_angle_deg must be in [0,180], got "
+                f"{self.goal_swap_min_angle_deg}"
+            )
         # Keep only episodes with n_legs <= max_legs (n_legs = #goals + 1). None = keep
         # all. max_legs=2 restricts training to two-leg episodes (goal A + goal B), i.e.
         # drops the three-leg (goal C) episodes the generator interleaves in the same tree.
@@ -240,8 +258,11 @@ class MemNav_Dataset(NavDP_Base_Datset):
                     self.trajectory_rgb_dir.append(rgb_dir)
                     for s in goal_samples:
                         s['traj_idx'] = ti
+                        s['scene_key'] = f'{group_dir}/{scene_dir}'
                         self.samples.append(s)
 
+        if self.goal_swap_negatives:
+            self._assign_goal_swap_candidates()
         self.repeat = max(1, int(repeat))
         n_traj = len(self.trajectory_dirs)
         n_samp = len(self.samples)
@@ -251,7 +272,9 @@ class MemNav_Dataset(NavDP_Base_Datset):
         n_goalA = n_samp - n_covis
         print(f"[MemNav_Dataset] {n_samp} goal-samples across {n_traj} episodes under "
               f"{root_dirs} (covis B/C={n_covis}, goalA={n_goalA}; "
-              f"revisit/novel dynamic per-k, exclude_recent={self.exclude_recent}, repeat={self.repeat})")
+              f"revisit/novel dynamic per-k, exclude_recent={self.exclude_recent}, "
+              f"goal_a_min_k={self.goal_a_min_k}, "
+              f"same_scene_goal_negatives={self.goal_swap_negatives}, repeat={self.repeat})")
         if n_samp == 0:
             raise RuntimeError(
                 f"No goal-samples found under {root_dirs}. Need '{self.feature_filename}' "
@@ -325,6 +348,7 @@ class MemNav_Dataset(NavDP_Base_Datset):
             out.append(dict(has_covis=True, goal_j=j, leg_start=leg_start, goal_step=goal_step,
                             k_lo=int(k_lo), k_hi=int(k_hi), goal_img_path=goal_img_path,
                             curve=curve, pos_hi=pos_hi, pos_lo=pos_lo, amargin=amargin,
+                            goal_world_pos=np.asarray(g.get('pos', [np.nan] * 3), dtype=np.float32),
                             yaw_habitat=float(g.get('yaw_habitat', 0.0))))
 
         # --- goal A (first milestone): no earlier pass, so ALWAYS novel under the unified
@@ -333,17 +357,56 @@ class MemNav_Dataset(NavDP_Base_Datset):
         if self.add_goalA and len(switches) >= 1:
             a_frame = int(switches[0]) - 1              # last frame of leg 1 (arrived at A)
             goal_step = a_frame
-            k_lo = amargin + t                          # E(k) non-empty (all-negative for A)
+            if self.goal_a_min_k is None:
+                k_lo = amargin + t                      # historical: E(k) must be non-empty
+            else:
+                # Earliest valid stream state is one frame after anchor_margin
+                # (num_scale + window for the default geometry). E(k) is allowed
+                # to be empty; RetrievalHead has an explicit all-masked Novel path.
+                k_lo = max(amargin + 1, self.goal_a_min_k)
             k_hi = goal_step - slack
             if k_hi >= k_lo and os.path.isfile(_rgb(a_frame)):
                 out.append(dict(has_covis=False, goal_j=-1, leg_start=0, goal_step=goal_step,
                                 k_lo=int(k_lo), k_hi=int(k_hi), goal_img_path=_rgb(a_frame),
-                                T_A=a_frame, amargin=amargin))
+                                T_A=a_frame, amargin=amargin,
+                                goal_world_pos=np.asarray(
+                                    meta.get('A', [np.nan] * 3), dtype=np.float32)))
         cam_h = float(meta.get('camera_height_m', 0.5))   # generator mount height (--cam_h)
         for sample in out:
             sample['frame_convention'] = frame_convention
             sample['camera_height_m'] = cam_h
         return out
+
+    def _assign_goal_swap_candidates(self):
+        """Attach same-scene, different-episode wrong-goal candidates.
+
+        Prefer the same goal type (A with A, B with B, ...), which prevents the
+        counterfactual task from being solved by scene or leg-type recognition.
+        The final direction filter is applied per sampled current frame in
+        ``__getitem__``; world coordinates select pairs but are never model inputs.
+        """
+        by_scene_goal = {}
+        by_scene = {}
+        for sample in self.samples:
+            by_scene_goal.setdefault(
+                (sample['scene_key'], sample['goal_j']), []
+            ).append(sample)
+            by_scene.setdefault(sample['scene_key'], []).append(sample)
+
+        for sample in self.samples:
+            pool = [other for other in by_scene_goal[
+                (sample['scene_key'], sample['goal_j'])
+            ] if other['traj_idx'] != sample['traj_idx']]
+            if not pool:
+                pool = [other for other in by_scene[sample['scene_key']]
+                        if other['traj_idx'] != sample['traj_idx']]
+            # Bound per-sample metadata while retaining varied directions. Stable
+            # path ordering makes the same commit/data deterministic across ranks.
+            pool = sorted(pool, key=lambda x: x['goal_img_path'])[:16]
+            sample['goal_swap_candidates'] = [
+                (other['goal_img_path'], other['goal_world_pos']) for other in pool
+                if np.isfinite(other['goal_world_pos']).all()
+            ]
 
     def __len__(self):
         return len(self.samples) * self.repeat
@@ -479,6 +542,34 @@ class MemNav_Dataset(NavDP_Base_Datset):
         window_idx = list(range(k - self.window_size + 1, k + 1))  # [k-W+1 .. k]
         window_images = self._load_images(rgb_dir, window_idx)     # [W, 3, H, W]
         goal_image = self._load_image_path(s['goal_img_path'])     # real goal_{j+1}.jpg [3, H, W]
+        negative_goal_image = goal_image if self.goal_swap_negatives else None
+        negative_goal_valid = False
+        negative_goal_angle_deg = 0.0
+        candidates = s.get('goal_swap_candidates', ())
+        if candidates:
+            # Dataset world is Z-up, so x-y is the ground plane. Choose the
+            # same-scene wrong target whose bearing differs most from the correct
+            # endpoint at this sampled current frame.
+            current_xy = extrinsics[k, :2, 3]
+            correct_vec = extrinsics[goal_step, :2, 3] - current_xy
+            correct_norm = float(np.linalg.norm(correct_vec))
+            best = None
+            if correct_norm > 1e-6:
+                for path, world_pos in candidates:
+                    wrong_vec = np.asarray(world_pos, dtype=np.float32)[:2] - current_xy
+                    wrong_norm = float(np.linalg.norm(wrong_vec))
+                    if wrong_norm < 0.5:
+                        continue
+                    cosine = float(np.clip(
+                        np.dot(correct_vec, wrong_vec) / (correct_norm * wrong_norm), -1.0, 1.0
+                    ))
+                    angle = float(np.degrees(np.arccos(cosine)))
+                    if best is None or angle > best[0]:
+                        best = (angle, path)
+            if best is not None and best[0] >= self.goal_swap_min_angle_deg:
+                negative_goal_angle_deg = best[0]
+                negative_goal_image = self._load_image_path(best[1])
+                negative_goal_valid = True
 
         return {
             # light tensors
@@ -496,6 +587,9 @@ class MemNav_Dataset(NavDP_Base_Datset):
             #   goal_cls is NOT cached for real goal images — the policy computes it
             #   from goal_image via the frozen context-free DINO trunk.
             'goal_image': goal_image,                       # [3, H, W]
+            'negative_goal_image': negative_goal_image,     # same-scene/different-episode goal
+            'negative_goal_valid': torch.tensor(negative_goal_valid),
+            'negative_goal_angle_deg': float(negative_goal_angle_deg),
             'window_images': window_images,                 # [W, 3, H, W]  (current local window [k-W+1..k])
             # pointers for the policy (loaded on GPU, per sample):
             #   - KV cache (scale_k/v, anchor_k/v) for the GCT window-forward
@@ -552,6 +646,12 @@ def memnav_collate_fn(batch):
         'batch_goal_rel_rotation': torch.stack([b['goal_rel_rotation'] for b in batch]),  # [B,3,3] rotation diagnostic GT
         # raw images (goal_cls is computed from batch_goal_image in the policy)
         'batch_goal_image':      torch.stack([b['goal_image'] for b in batch]),        # [B, 3, H, W]
+        'batch_negative_goal_image': (
+            torch.stack([b['negative_goal_image'] for b in batch])
+            if batch[0]['negative_goal_image'] is not None else None
+        ),
+        'batch_negative_goal_valid': torch.stack([b['negative_goal_valid'] for b in batch]),
+        'negative_goal_angles_deg': [b['negative_goal_angle_deg'] for b in batch],
         'batch_window_images':   torch.stack([b['window_images'] for b in batch]),     # [B, W, 3, H, W]
         # pointers (lists, length B) — the policy loads cache + lazy match frames per sample
         'cache_paths':           [b['cache_path'] for b in batch],

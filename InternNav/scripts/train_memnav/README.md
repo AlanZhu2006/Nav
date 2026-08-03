@@ -79,3 +79,26 @@ bash scripts/train_memnav/submit_gate_curriculum_8h.sh
 ```
 
 它封装的仍是上述 preflight/`afterok` 流程，不会跳过任何检查。
+
+## 固定 checkpoint A/B 评测
+
+训练曲线来自不同随机 batch，不能单独证明新 checkpoint 泛化更好。使用
+`fixed_checkpoint_eval.py` 做 checkpoint 对照时，两个模型必须共享完全相同的：
+
+- 独立 episode 清单、当前帧 `k`、目标和标签；
+- diffusion noise 与 timestep（每个样本重复多次后取均值）；
+- W32/schema-v2 cache、LingBot 权重、坐标与 metric-scale 配置；
+- 推理路径：`model.eval()`，不使用 GT-positive anchor，也不使用 teacher gate。
+
+正式 A/B 默认平衡抽取 novel Goal-A、novel covis、2/3-leg shallow/deep 六组，
+每条轨迹最多一个样本，并保存逐样本 JSONL、分组 summary 和 paired-bootstrap
+置信区间。提交仍采用真实路径预检 `--afterok` 正式评测：
+
+```bash
+bash scripts/train_memnav/submit_fixed_checkpoint_eval.sh
+```
+
+预检会用两个真实 checkpoint 跑六组各一个样本，覆盖容器依赖、GPU、dataloader、
+cache schema、LingBot、两次权重装载、真实 retrieval anchor、pose 和 diffusion decoder；
+只有预检 `COMPLETED 0:0` 后，72-sample/8-trial 的正式任务才启动。评测结果写入个人
+`/scratch/<user>/Research/...-results/`，不会写共享主仓库。

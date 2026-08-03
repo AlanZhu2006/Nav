@@ -79,6 +79,16 @@ parser.add_argument("--navdp_stop_threshold", type=float, default=-0.5)
 parser.add_argument("--success_dist", type=float, default=1.0)
 parser.add_argument("--max_steps", type=int, default=1200, help="frame budget per policy leg")
 parser.add_argument("--exec_horizon", type=int, default=8, help="frames between replans")
+parser.add_argument(
+    "--trajectory_selector",
+    choices=["server", "oracle_geodesic"],
+    default="server",
+    help=("evaluation-only candidate intervention: server uses the policy "
+          "server's selected trajectory; oracle_geodesic simulates one "
+          "execution horizon for every returned candidate and selects the "
+          "candidate with the smallest privileged Habitat geodesic distance "
+          "to the goal"),
+)
 parser.add_argument("--stuck_window", type=int, default=150)
 parser.add_argument("--stuck_dist", type=float, default=0.10)
 parser.add_argument("--agent_radius", type=float, default=0.30)
@@ -139,6 +149,14 @@ parser.add_argument("--seed", type=int, default=0,
 parser.add_argument("--episode_ids", type=str, default="",
                     help="optional comma-separated episode directory names")
 parser.add_argument("--episodes", type=int, default=0, help="cap #episodes (0 = all)")
+parser.add_argument(
+    "--leg1_goal_source",
+    choices=["own", "paired_swap"],
+    default="own",
+    help=("evaluation-only goal-conditioning control: paired_swap exchanges "
+          "the Goal-A image between adjacent episode pairs while preserving "
+          "each episode's true metric goal for scoring"),
+)
 parser.add_argument("--save_video", action="store_true")
 args = parser.parse_args()
 
@@ -294,6 +312,90 @@ def pursuit_step(pos, psi, path_xz, pf):
             return snap2, psi_new, 0.3 * v
         return pos, psi_new, 0.0                         # rotate in place (blocked)
     return snap, psi_new, v
+
+
+def select_plan_trajectory(response, pos, psi, pf, goal_xz):
+    """Return the trajectory used by the controller plus selector diagnostics.
+
+    ``oracle_geodesic`` is deliberately privileged and is only a causal
+    diagnostic.  It leaves the diffusion samples unchanged, rolls each one
+    forward through the same pure-pursuit controller for exactly the number of
+    frames that will be executed before replanning, and asks Habitat's
+    pathfinder for the remaining distance to the known evaluation goal.
+    """
+    selected = np.asarray(response["trajectory"], dtype=float)
+    info = dict(
+        trajectory_selector=args.trajectory_selector,
+        server_selected_idx=None,
+        oracle_selected_idx=None,
+        current_geodesic_m=None,
+        server_geodesic_after_horizon_m=None,
+        oracle_geodesic_after_horizon_m=None,
+        oracle_selector_regret_m=None,
+        candidate_progress_fraction=None,
+        candidate_geodesic_median_m=None,
+        server_collision_score=None,
+        oracle_collision_score=None,
+        collision_score_unique_count=None,
+    )
+    all_paths_raw = response.get("all_trajectory")
+    if all_paths_raw is not None:
+        all_paths = np.asarray(all_paths_raw, dtype=float)
+        if all_paths.ndim == 3 and all_paths.shape[1:] == selected.shape:
+            errors = np.max(np.abs(all_paths - selected[None]), axis=(1, 2))
+            info["server_selected_idx"] = int(np.argmin(errors))
+
+    if args.trajectory_selector == "server":
+        return selected, info
+    if all_paths_raw is None:
+        raise ValueError(
+            "--trajectory_selector oracle_geodesic requires all_trajectory "
+            "from the policy server")
+    all_paths = np.asarray(all_paths_raw, dtype=float)
+    if all_paths.ndim != 3 or all_paths.shape[-1] != 3 or len(all_paths) == 0:
+        raise ValueError(f"unexpected all_trajectory shape {all_paths.shape}")
+
+    scored = []
+    goal3 = np.asarray([goal_xz[0], pos[1], goal_xz[1]], dtype=float)
+    ok_current, current_remaining, _ = geodesic(pf, pos, goal3)
+    if ok_current and np.isfinite(current_remaining):
+        info["current_geodesic_m"] = float(current_remaining)
+    for candidate in all_paths:
+        candidate_world = waypoints_to_world(
+            candidate, [pos[0], pos[2]], psi)
+        trial_pos = np.asarray(pos, dtype=float).copy()
+        trial_psi = float(psi)
+        for _ in range(args.exec_horizon):
+            trial_pos, trial_psi, _ = pursuit_step(
+                trial_pos, trial_psi, candidate_world, pf)
+        ok, remaining, _ = geodesic(pf, trial_pos, goal3)
+        scored.append(float(remaining) if ok and np.isfinite(remaining)
+                      else float("inf"))
+    pick = int(np.argmin(scored))
+    info["oracle_selected_idx"] = pick
+    info["oracle_geodesic_after_horizon_m"] = scored[pick]
+    finite = np.asarray([x for x in scored if np.isfinite(x)], dtype=float)
+    if finite.size:
+        info["candidate_geodesic_median_m"] = float(np.median(finite))
+        if info["current_geodesic_m"] is not None:
+            info["candidate_progress_fraction"] = float(np.mean(
+                finite < info["current_geodesic_m"] - 1e-6))
+    server_pick = info["server_selected_idx"]
+    if server_pick is not None and np.isfinite(scored[server_pick]):
+        info["server_geodesic_after_horizon_m"] = scored[server_pick]
+        info["oracle_selector_regret_m"] = float(
+            scored[server_pick] - scored[pick])
+    collision_scores = response.get("all_values")
+    if collision_scores is not None:
+        collision_scores = np.asarray(collision_scores, dtype=float)
+        if collision_scores.shape == (len(all_paths),):
+            info["collision_score_unique_count"] = int(len(
+                np.unique(np.round(collision_scores, 4))))
+            if server_pick is not None:
+                info["server_collision_score"] = float(
+                    collision_scores[server_pick])
+            info["oracle_collision_score"] = float(collision_scores[pick])
+    return all_paths[pick], info
 
 
 # --------------------------------------------------------------------------- #
@@ -561,7 +663,8 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 frame, goal_jpg, depth=depth, forced_anchor=forced_anchor,
                 forced_gate=forced_gate)
             if "trajectory" in response:
-                way = np.asarray(response["trajectory"], float)
+                way, selector_info = select_plan_trajectory(
+                    response, pos, psi, pf, goal_xz)
                 way_world = waypoints_to_world(way, [pos[0], pos[2]], psi)
                 plans.append(dict(step=step, gate=response.get("gate"),
                                   match_idx=response.get("match_idx"), anchor=response.get("anchor"),
@@ -574,7 +677,8 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                   raw_score=response.get("raw_score"),
                                   goal_rel_yaw=response.get("goal_rel_yaw"),
                                   current_goal_cos=response.get("current_goal_cos"),
-                                  frame_idx=response.get("frame_idx")))
+                                  frame_idx=response.get("frame_idx"),
+                                  **selector_info))
 
                 aux = response.get("aux_pose")
                 rel_yaw = response.get("goal_rel_yaw")
@@ -751,7 +855,20 @@ def main():
         okB, geoB, _ = geodesic(pf, np.array([A_xz[0], start_floor[1], A_xz[1]]),
                                 np.array([B_xz[0], start_floor[1], B_xz[1]]))
 
-        goalA_jpg = open(os.path.join(rgb_dir, f"{switch - 1}.jpg"), "rb").read()
+        goalA_source_ep = ep_dir
+        if args.leg1_goal_source == "paired_swap":
+            partner_idx = ep_idx + 1 if ep_idx % 2 == 0 else ep_idx - 1
+            if partner_idx < 0 or partner_idx >= len(ep_dirs):
+                raise ValueError(
+                    "paired_swap requires complete adjacent episode pairs")
+            goalA_source_ep = ep_dirs[partner_idx]
+        goalA_source_meta = json.load(open(os.path.join(
+            goalA_source_ep, "meta", "gen_meta.json")))
+        goalA_source_switch = int(goalA_source_meta["switch_idx"])
+        goalA_source_rgb = os.path.join(
+            goalA_source_ep, "videos/chunk-000/observation.images.rgb")
+        goalA_jpg = open(os.path.join(
+            goalA_source_rgb, f"{goalA_source_switch - 1}.jpg"), "rb").read()
         goalB_jpg = open(os.path.join(ep_dir, "goal_1.jpg"), "rb").read()
 
         episode_seed = args.seed + ep_idx
@@ -813,6 +930,8 @@ def main():
             episode=os.path.basename(ep_dir),
             seed=episode_seed,
             server_backend=args.server_backend,
+            leg1_goal_source=args.leg1_goal_source,
+            leg1_goal_source_episode=os.path.basename(goalA_source_ep),
             reached_A=float(legA["reached"]), reached_B=float(legB["reached"]),
             spl_A=(spl(legA["reached"], geoA, legA["path_len"])
                    if args.leg1_mode == "policy" else float("nan")),
@@ -925,10 +1044,12 @@ def main():
     summary = dict(
         episodes=n, server_backend=args.server_backend,
         leg1_mode=args.leg1_mode, stop_after_leg1=args.stop_after_leg1,
+        leg1_goal_source=args.leg1_goal_source,
         cold=args.reset_memory,
         success_dist_m=args.success_dist,
         max_steps=args.max_steps,
         exec_horizon=args.exec_horizon,
+        trajectory_selector=args.trajectory_selector,
         navdp_stop_threshold=(args.navdp_stop_threshold
                               if args.server_backend == "navdp" else None),
         base_seed=args.seed, retrieval_override=args.retrieval_override,

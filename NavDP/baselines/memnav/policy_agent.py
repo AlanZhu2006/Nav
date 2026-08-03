@@ -565,8 +565,19 @@ class MemNavAgent:
                     obs = obstacle_points_from_depth(
                         d_cur, c_cur, fov_v, fov_h, h_est, ms)
                     paths_t = torch.as_tensor(paths, device=obs.device)
-                    scores, _ = score_trajectories(paths_t, obs, fov_h)
-                    pick = select_trajectory(paths_t, scores)
+                    # Optional diagnostic/controller alignment: one predicted
+                    # waypoint represents ``pred_digit=4`` source frames, while
+                    # the paired Habitat client replans every 8 frames.  Scoring
+                    # all 24 waypoints therefore judges hazards far beyond the
+                    # portion that will actually execute before the next plan.
+                    # Zero preserves the historical full-horizon behaviour.
+                    score_horizon = int(os.environ.get(
+                        "MEMNAV_COLLISION_HORIZON_WAYPOINTS", "0"))
+                    score_paths = paths_t
+                    if score_horizon > 0:
+                        score_paths = paths_t[:, :min(score_horizon, paths_t.shape[1])]
+                    scores, _ = score_trajectories(score_paths, obs, fov_h)
+                    pick = select_trajectory(score_paths, scores)
                     values = scores.float().cpu().tolist()
                 except Exception as e:
                     print(f"[MemNavAgent] collision select failed ({e}); "

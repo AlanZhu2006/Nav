@@ -20,10 +20,16 @@ RUN_ROOT=${RUN_ROOT:-${ROOT}/.diagnostics/novel_navdp_ab_20260803}
 RESULT_SET=${RESULT_SET:-${MODE}}
 PORT=${PORT:-18896}
 LABELS=${LABELS:-"navdp flowgate2600 gatecurr600 residualgate1000"}
+CUSTOM_LABEL=${CUSTOM_LABEL:-}
+CUSTOM_CKPT=${CUSTOM_CKPT:-}
 MAX_STEPS=${MAX_STEPS:-500}
 SEED=${SEED:-20260803}
 GATE_OVERRIDE=${GATE_OVERRIDE:-}
 GATE_SKIP_BELOW=${GATE_SKIP_BELOW:-0.0}
+COLLISION_SELECT=${COLLISION_SELECT:-1}
+COLLISION_HORIZON_WAYPOINTS=${COLLISION_HORIZON_WAYPOINTS:-0}
+TRAJECTORY_SELECTOR=${TRAJECTORY_SELECTOR:-server}
+LEG1_GOAL_SOURCE=${LEG1_GOAL_SOURCE:-own}
 
 HAB_PY=/home/asus/miniconda3/envs/habitat/bin/python
 MEMNAV_PY=/home/asus/miniconda3/envs/memnav/bin/python
@@ -39,6 +45,13 @@ declare -A CKPT
 CKPT[flowgate2600]=${SOURCE_RUN}/checkpoints/flowgate2600.memnav.ckpt
 CKPT[gatecurr600]=${SOURCE_RUN}/checkpoints/gatecurr600.memnav.ckpt
 CKPT[residualgate1000]=${RUN_ROOT}/checkpoints/residualgate1000.memnav.ckpt
+if [[ -n "${CUSTOM_LABEL}" || -n "${CUSTOM_CKPT}" ]]; then
+  if [[ -z "${CUSTOM_LABEL}" || -z "${CUSTOM_CKPT}" ]]; then
+    echo "ABORT: CUSTOM_LABEL and CUSTOM_CKPT must be set together" >&2
+    exit 2
+  fi
+  CKPT[${CUSTOM_LABEL}]=${CUSTOM_CKPT}
+fi
 
 mkdir -p "${RUN_ROOT}"/{logs,results,buffer}
 for required in "${EVALUATOR}" "${MEMNAV_SERVER}" "${NAVDP_SERVER}" \
@@ -123,7 +136,8 @@ for label in ${LABELS}; do
         MEMNAV_GROUND_SCALE_MAX=6.0 \
         MEMNAV_GATE_FUSION="${fusion}" \
         MEMNAV_AUX_POSE_CALIBRATION=empirical \
-        MEMNAV_COLLISION_SELECT=1 \
+        MEMNAV_COLLISION_SELECT="${COLLISION_SELECT}" \
+        MEMNAV_COLLISION_HORIZON_WAYPOINTS="${COLLISION_HORIZON_WAYPOINTS}" \
         MEMNAV_REPORT_TO=none \
         "${MEMNAV_PY}" -u "${MEMNAV_SERVER}" \
           --port "${PORT}" \
@@ -180,6 +194,8 @@ for label in ${LABELS}; do
         --success_dist 1.0 \
         --max_steps "${MAX_STEPS}" \
         --exec_horizon 8 \
+        --trajectory_selector "${TRAJECTORY_SELECTOR}" \
+        --leg1_goal_source "${LEG1_GOAL_SOURCE}" \
         --seed "${SEED}" \
         --terminal_uturn off \
         --terminal_visual_refine off \

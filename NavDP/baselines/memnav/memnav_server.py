@@ -47,7 +47,9 @@ parser.add_argument("--exclude_recent", type=int, default=83,
 parser.add_argument("--retrieval", choices=["head", "raw"], default="raw",
                     help="match selector: trained projection vs raw dino-cls cosine")
 parser.add_argument("--gate_skip_below", type=float, default=0.0,
-                    help="skip the goal-insert tower when trained gate < this (0 = never skip)")
+                    help=("skip the goal-insert tower when trained gate < this "
+                          "(0 = never skip); this does not hard-clamp the soft "
+                          "decoder gate"))
 parser.add_argument("--anchor_switch_margin", type=float, default=0.01,
                     help="sticky-anchor ratchet: switch match only on a clear score win")
 parser.add_argument("--flow_gate", type=str, default="auto",

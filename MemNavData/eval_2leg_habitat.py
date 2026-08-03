@@ -60,9 +60,22 @@ parser.add_argument("--scene", type=str, required=True, help="MP3D .glb (navmesh
 parser.add_argument("--port", type=int, default=18888)
 parser.add_argument("--host", type=str, default="localhost")
 parser.add_argument("--out", type=str, default="./eval2leg_out")
+parser.add_argument(
+    "--server_backend",
+    choices=["memnav", "navdp"],
+    default="memnav",
+    help=("HTTP protocol exposed by the policy server.  The NavDP adapter "
+          "supplies metric depth and removes the singleton batch dimension."),
+)
 parser.add_argument("--leg1_mode", choices=["replay", "policy"], default="replay")
+parser.add_argument(
+    "--stop_after_leg1",
+    action="store_true",
+    help="evaluate only the start->A image-goal leg (the controlled novel-only arm)",
+)
 parser.add_argument("--reset_memory", action="store_true",
                     help="cold arm: wipe server memory at the A->B switch")
+parser.add_argument("--navdp_stop_threshold", type=float, default=-0.5)
 parser.add_argument("--success_dist", type=float, default=1.0)
 parser.add_argument("--max_steps", type=int, default=1200, help="frame budget per policy leg")
 parser.add_argument("--exec_horizon", type=int, default=8, help="frames between replans")
@@ -142,39 +155,87 @@ def jpg_bytes(rgb):
     return buf.getvalue()
 
 
-def srv_reset(camera_height=CAM_H, seed=None, episode_len=None):
-    payload = {"camera_height": camera_height}
-    if seed is not None:
-        payload["seed"] = int(seed)
-    if episode_len is not None:
-        payload["episode_len"] = int(episode_len)
+def depth_png_bytes(depth):
+    """Habitat metric depth -> the uint16/1e4 wire format used by NavDP."""
+    if depth is None:
+        raise ValueError("NavDP planning requires a metric depth image")
+    buf = io.BytesIO()
+    depth_u16 = np.clip(np.asarray(depth) * 10000.0, 0, 65535).astype(np.uint16)
+    Image.fromarray(depth_u16).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
+              camera_intrinsic=None):
+    if args.server_backend == "navdp":
+        if camera_intrinsic is None:
+            raise ValueError("NavDP reset requires camera_intrinsic")
+        payload = {
+            "intrinsic": np.asarray(camera_intrinsic, dtype=float).tolist(),
+            "stop_threshold": float(args.navdp_stop_threshold),
+            "batch_size": 1,
+        }
+        if seed is not None:
+            payload["seed"] = int(seed)
+    else:
+        payload = {"camera_height": camera_height}
+        if seed is not None:
+            payload["seed"] = int(seed)
+        if episode_len is not None:
+            payload["episode_len"] = int(episode_len)
     r = requests.post(f"{BASE}/navigator_reset", json=payload)
     r.raise_for_status()
     return r.json()["algo"]
 
 
 def srv_memory(image_jpg):
+    # NavDP's memory is the last eight *decision observations* and is advanced
+    # inside imagegoal_step.  Streaming the seven controller interpolation
+    # frames would change its intended temporal stride, and its server has no
+    # memory_step endpoint.
+    if args.server_backend == "navdp":
+        return {"frame_idx": None}
     r = requests.post(f"{BASE}/memory_step", files={"image": ("image.jpg", image_jpg)})
     r.raise_for_status()
     return r.json()
 
 
-def srv_plan(image_jpg, goal_jpg, forced_anchor=None, forced_gate=None):
+def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
+             forced_gate=None):
     data = {}
     if forced_anchor is not None:
         data["forced_anchor"] = str(int(forced_anchor))
     if forced_gate is not None:
         data["forced_gate"] = str(float(forced_gate))
-    r = requests.post(f"{BASE}/imagegoal_step",
-                      files={"image": ("image.jpg", image_jpg),
-                             "goal": ("goal.jpg", goal_jpg)},
-                      data=data)
+    files = {
+        "image": ("image.jpg", image_jpg),
+        "goal": ("goal.jpg", goal_jpg),
+    }
+    if args.server_backend == "navdp":
+        files["depth"] = ("depth.png", depth_png_bytes(depth))
+    r = requests.post(f"{BASE}/imagegoal_step", files=files, data=data)
     r.raise_for_status()
-    return r.json()
+    out = r.json()
+    if args.server_backend == "navdp" and "trajectory" in out:
+        trajectory = np.asarray(out["trajectory"], dtype=float)
+        if trajectory.ndim == 3 and trajectory.shape[0] == 1:
+            trajectory = trajectory[0]
+        if trajectory.ndim != 2 or trajectory.shape[-1] != 3:
+            raise ValueError(
+                f"unexpected NavDP trajectory shape {trajectory.shape}")
+        out["trajectory"] = trajectory.tolist()
+        # These fields do not exist in original NavDP.  Keep them explicit so
+        # downstream logs distinguish "no gate" from a predicted zero gate.
+        out.setdefault("gate", None)
+        out.setdefault("predicted_gate", None)
+        out.setdefault("match_idx", None)
+    return out
 
 
 def srv_similarity(image_jpg, goal_jpg):
     """Direct visual check without appending to or retrieving from memory."""
+    if args.server_backend == "navdp":
+        return {"current_goal_cos": None}
     r = requests.post(
         f"{BASE}/imagegoal_similarity",
         files={"image": ("image.jpg", image_jpg),
@@ -347,7 +408,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
 
     total_budget = args.max_steps + (args.terminal_budget if terminal_mode != "off" else 0)
     for step in range(total_budget):
-        rgb, _depth = render(sim, pos + np.array([0, CAM_H, 0]), psi)
+        rgb, depth = render(sim, pos + np.array([0, CAM_H, 0]), psi)
         frame = jpg_bytes(rgb)
         if writer is not None:
             writer.append_data(rgb)
@@ -497,7 +558,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
         response = None
         if step % args.exec_horizon == 0:
             response = srv_plan(
-                frame, goal_jpg, forced_anchor=forced_anchor,
+                frame, goal_jpg, depth=depth, forced_anchor=forced_anchor,
                 forced_gate=forced_gate)
             if "trajectory" in response:
                 way = np.asarray(response["trajectory"], float)
@@ -640,6 +701,8 @@ def spl(reached, geo, plen):
 
 def main():
     os.makedirs(args.out, exist_ok=True)
+    if args.stop_after_leg1 and args.leg1_mode != "policy":
+        raise ValueError("--stop_after_leg1 requires --leg1_mode policy")
     try:
         import imageio
     except ImportError:
@@ -655,9 +718,13 @@ def main():
 
     sim = make_sim(args.scene, "", agent_radius=args.agent_radius)
     pf = sim.pathfinder
-    algo = srv_reset(seed=args.seed)
+    # Original NavDP constructs its agent on the first reset and therefore
+    # needs the episode camera intrinsic.  MemNav can be probed immediately.
+    algo = ("navdp" if args.server_backend == "navdp"
+            else srv_reset(seed=args.seed))
     print(f"[eval2leg] server algo={algo}, {len(ep_dirs)} episodes, "
-          f"leg1={args.leg1_mode}, cold={args.reset_memory}")
+          f"backend={args.server_backend}, leg1={args.leg1_mode}, "
+          f"stop_after_leg1={args.stop_after_leg1}, cold={args.reset_memory}")
 
     metrics = []
     for ep_idx, ep_dir in enumerate(ep_dirs):
@@ -689,7 +756,8 @@ def main():
 
         episode_seed = args.seed + ep_idx
         srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)),
-                  seed=episode_seed, episode_len=int(meta["n_frames"]))
+                  seed=episode_seed, episode_len=int(meta["n_frames"]),
+                  camera_intrinsic=camera_intrinsic)
         writer = None
         if args.save_video and imageio is not None:
             writer = imageio.get_writer(
@@ -704,15 +772,21 @@ def main():
         else:
             legA = run_policy_leg(
                 sim, pf, start_floor, start_psi, goalA_jpg, A_xz, geoA, writer,
-                terminal_mode="off")
+                terminal_mode="off", forced_gate=args.gate_override)
             pos, psi = legA["end_pos"], legA["end_psi"]
 
         # ---- leg 2 ----
-        legB = dict(reached=False, path_len=0.0, steps=0, plans=[])
-        if legA["reached"]:
+        legB = dict(
+            reached=False, path_len=0.0, path_len_at_reach=None,
+            step_at_reach=None, steps=0, plans=[],
+            final_goal_dist_m=float(np.linalg.norm(
+                np.asarray([pos[0], pos[2]]) - B_xz)),
+        )
+        if legA["reached"] and not args.stop_after_leg1:
             if args.reset_memory:
                 srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)),
-                          seed=episode_seed, episode_len=int(meta["n_frames"]))
+                          seed=episode_seed, episode_len=int(meta["n_frames"]),
+                          camera_intrinsic=camera_intrinsic)
             legB = run_policy_leg(
                 sim, pf, pos, psi, goalB_jpg, B_xz, geoB, writer,
                 terminal_mode=args.terminal_uturn,
@@ -724,9 +798,21 @@ def main():
 
         if writer is not None:
             writer.close()
+        gate_A = [float(p["gate"]) for p in legA["plans"]
+                  if p.get("gate") is not None and np.isfinite(p["gate"])]
+        predicted_gate_A = [float(p["predicted_gate"]) for p in legA["plans"]
+                            if p.get("predicted_gate") is not None
+                            and np.isfinite(p["predicted_gate"])]
+        gate_B = [float(p["gate"]) for p in legB["plans"]
+                  if p.get("gate") is not None and np.isfinite(p["gate"])]
+        final_dist_A = float(legA.get(
+            "final_goal_dist_m",
+            np.linalg.norm(np.asarray([pos[0], pos[2]]) - A_xz),
+        ))
         m = dict(
             episode=os.path.basename(ep_dir),
             seed=episode_seed,
+            server_backend=args.server_backend,
             reached_A=float(legA["reached"]), reached_B=float(legB["reached"]),
             spl_A=(spl(legA["reached"], geoA, legA["path_len"])
                    if args.leg1_mode == "policy" else float("nan")),
@@ -740,6 +826,7 @@ def main():
             spl_B_with_terminal=spl(legB["reached"], geoB, legB["path_len"]),
             geo_A=geoA, geo_B=geoB,
             len_A=legA["path_len"], len_B=legB["path_len"],
+            final_dist_A=final_dist_A,
             len_B_at_reach=legB.get("path_len_at_reach"),
             steps_A=legA["steps"], steps_B=legB["steps"],
             steps_B_at_reach=legB.get("step_at_reach"),
@@ -747,8 +834,21 @@ def main():
             retrieval_override=args.retrieval_override,
             gate_override=args.gate_override,
             gt_covis_anchor=B.get("covis_argmax"),
-            gate_B_mean=(float(np.mean([p["gate"] for p in legB["plans"]])) if legB["plans"] else float("nan")),
-            gate_B_max=(float(np.max([p["gate"] for p in legB["plans"]])) if legB["plans"] else float("nan")),
+            gate_A_mean=(float(np.mean(gate_A)) if gate_A else float("nan")),
+            gate_A_max=(float(np.max(gate_A)) if gate_A else float("nan")),
+            gate_A_false_revisit_rate=(float(np.mean(np.asarray(gate_A) >= 0.5))
+                                      if gate_A else float("nan")),
+            gate_A_plan_count=len(gate_A),
+            gate_A_false_revisit_count=int(np.sum(np.asarray(gate_A) >= 0.5)),
+            predicted_gate_A_mean=(float(np.mean(predicted_gate_A))
+                                   if predicted_gate_A else float("nan")),
+            predicted_gate_A_max=(float(np.max(predicted_gate_A))
+                                  if predicted_gate_A else float("nan")),
+            predicted_gate_A_plan_count=len(predicted_gate_A),
+            predicted_gate_A_false_revisit_count=int(np.sum(
+                np.asarray(predicted_gate_A) >= 0.5)),
+            gate_B_mean=(float(np.mean(gate_B)) if gate_B else float("nan")),
+            gate_B_max=(float(np.max(gate_B)) if gate_B else float("nan")),
             terminal_mode=legB.get("terminal_mode"),
             terminal_attempted=legB.get("terminal_attempted"),
             terminal_completed=legB.get("terminal_completed"),
@@ -794,8 +894,11 @@ def main():
         json.dump(dict(legA=legA["plans"], legB=legB["plans"]),
                   open(os.path.join(args.out, m["episode"] + "_plans.json"), "w"))
         metrics.append(m)
-        print(f"[{m['episode']}] A={m['reached_A']:.0f} B={m['reached_B']:.0f} "
-              f"splB={m['spl_B']:.2f} lenB={m['len_B']:.1f}/{geoB:.1f}m gateB={m['gate_B_mean']:.2f}/{m['gate_B_max']:.2f}")
+        print(f"[{m['episode']}] A={m['reached_A']:.0f} "
+              f"splA={m['spl_A']:.2f} lenA={m['len_A']:.1f}/{geoA:.1f}m "
+              f"distA={m['final_dist_A']:.2f} "
+              f"gateA={m['gate_A_mean']:.2f}/{m['gate_A_max']:.2f} "
+              f"B={m['reached_B']:.0f} splB={m['spl_B']:.2f}")
 
         with open(os.path.join(args.out, "metric.csv"), "w", newline="") as f:
             wcsv = csv.DictWriter(f, fieldnames=list(metrics[0].keys()))
@@ -810,11 +913,52 @@ def main():
     visual_checked = [m for m in attempted if m.get("visual_yaw_checked")]
     visual_executed = [m for m in visual_checked if m.get("visual_refine_executed")]
     visual_completed = [m for m in visual_executed if m.get("visual_refine_completed")]
+    gate_A_rows = [m for m in metrics if np.isfinite(m["gate_A_mean"])]
+    gate_A_plan_count = sum(m["gate_A_plan_count"] for m in metrics)
+    gate_A_false_count = sum(m["gate_A_false_revisit_count"] for m in metrics)
+    predicted_gate_A_rows = [m for m in metrics
+                             if np.isfinite(m["predicted_gate_A_mean"])]
+    predicted_gate_A_plan_count = sum(
+        m["predicted_gate_A_plan_count"] for m in metrics)
+    predicted_gate_A_false_count = sum(
+        m["predicted_gate_A_false_revisit_count"] for m in metrics)
     summary = dict(
-        episodes=n, leg1_mode=args.leg1_mode, cold=args.reset_memory,
+        episodes=n, server_backend=args.server_backend,
+        leg1_mode=args.leg1_mode, stop_after_leg1=args.stop_after_leg1,
+        cold=args.reset_memory,
+        success_dist_m=args.success_dist,
+        max_steps=args.max_steps,
+        exec_horizon=args.exec_horizon,
+        navdp_stop_threshold=(args.navdp_stop_threshold
+                              if args.server_backend == "navdp" else None),
         base_seed=args.seed, retrieval_override=args.retrieval_override,
         gate_override=args.gate_override,
         SR_A=(nA / n) if n and args.leg1_mode == "policy" else None,
+        mean_spl_A=(float(np.nanmean([m["spl_A"] for m in metrics]))
+                    if n and args.leg1_mode == "policy" else None),
+        mean_final_dist_A=(float(np.mean([m["final_dist_A"] for m in metrics]))
+                           if n and args.leg1_mode == "policy" else None),
+        # Plan-weighted means are comparable across episodes with different
+        # stopping times.  Episode-level max/rate below remains macro-averaged.
+        mean_gate_A=(sum(m["gate_A_mean"] * m["gate_A_plan_count"]
+                         for m in gate_A_rows) / gate_A_plan_count
+                     if gate_A_plan_count else None),
+        false_revisit_plan_rate_A=(gate_A_false_count / gate_A_plan_count
+                                   if gate_A_plan_count else None),
+        false_revisit_episode_rate_A=(float(np.mean(
+            [m["gate_A_max"] >= 0.5 for m in gate_A_rows]))
+                                      if gate_A_rows else None),
+        mean_predicted_gate_A=(sum(
+            m["predicted_gate_A_mean"] * m["predicted_gate_A_plan_count"]
+            for m in predicted_gate_A_rows) / predicted_gate_A_plan_count
+                               if predicted_gate_A_plan_count else None),
+        predicted_false_revisit_plan_rate_A=(
+            predicted_gate_A_false_count / predicted_gate_A_plan_count
+            if predicted_gate_A_plan_count else None),
+        predicted_false_revisit_episode_rate_A=(float(np.mean(
+            [m["predicted_gate_A_max"] >= 0.5
+             for m in predicted_gate_A_rows]))
+                                                if predicted_gate_A_rows else None),
         SR_B_given_A=(sum(m["reached_B"] for m in condB) / len(condB)) if condB else 0.0,
         mean_spl_B=float(np.nanmean([m["spl_B"] for m in condB])) if condB else 0.0,
         mean_spl_B_with_terminal=(float(np.nanmean(

@@ -12,7 +12,7 @@
 #SBATCH --mem=64G
 #SBATCH --partition=h200_public
 #SBATCH --gres=gpu:h200:1
-#SBATCH --account=torch_pr_926_general
+#SBATCH --account=torch_pr_769_tandon_advanced
 #SBATCH --export=ALL
 
 set -euo pipefail

@@ -114,6 +114,28 @@ memnav_exp_cfg = ExpCfg(
         require_versioned_cache=_REQUIRE_VERSIONED_CACHE,
         # ground-scale gate ceiling (MEMNAV_GROUND_SCALE_MAX; scale_mode='ground')
         ground_scale_max=_GROUND_SCALE_MAX,
+        # Counterfactual Novel conditioning (goal-swap rank loss, goal_swap.py): the
+        # measured collapse (wrong-goal swap moves candidates by 0.13-3.16% of seed
+        # variation vs NavDP's 176.8%) is a shortcut the action MSE never penalizes.
+        # Same state/noise/timestep/gate, direction-filtered same-scene wrong goal
+        # must explain the expert action worse by the margin.
+        # MASTER SWITCH: MEMNAV_GOAL_SWAP=0 turns the whole feature off (no negative
+        # pool, no second decode); MEMNAV_GOAL_SWAP_WEIGHT tunes it when on.
+        w_goal_swap=(
+            float(os.environ.get('MEMNAV_GOAL_SWAP_WEIGHT', '0.25'))
+            if os.environ.get('MEMNAV_GOAL_SWAP', '1').lower() in ('1', 'true', 'yes')
+            else 0.0),
+        goal_swap_margin=float(os.environ.get('MEMNAV_GOAL_SWAP_MARGIN', '0.05')),
+        goal_swap_min_angle_deg=float(os.environ.get('MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG', '30.0')),
+        # Early Goal-A coverage: empty/unset keeps the historical k>=amargin+83
+        # requirement; 40 matches the first valid W=32/S=8 inference state (empty
+        # E(k) rows skip the revisit goal-pose append and zero the revisit feature).
+        goal_a_min_k=(int(os.environ['MEMNAV_GOAL_A_MIN_K'])
+                      if os.environ.get('MEMNAV_GOAL_A_MIN_K', '').strip() else None),
+        # Freeze the NavDP-warm-started novel backbone (use with MEMNAV_CKPT_TO_LOAD
+        # from warmstart_navdp.py): a frozen encoder cannot collapse to a constant.
+        freeze_novel_backbone=os.environ.get(
+            'MEMNAV_FREEZE_NOVEL_BACKBONE', '').lower() in ('1', 'true', 'yes'),
         # decoder-gate routing + curriculum (diag_retrieval/diag_decgate_zsweep.py on
         # ckpt-5570: the action loss is locally optimal in z, so dec_gate_a/b had
         # nothing to descend — the routing has to be scaffolded, not re-parameterized).

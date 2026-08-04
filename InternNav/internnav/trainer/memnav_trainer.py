@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
 from internnav.model.basemodel.memnav.decgate_schedule import linear_teacher_ratio
+from internnav.model.basemodel.memnav.goal_swap import goal_swap_margin_metrics
 from internnav.trainer.base import BaseTrainer
 
 
@@ -23,6 +24,11 @@ class MemNavTrainer(BaseTrainer):
         self.w_retr = getattr(config.il, "w_retrieval", 1.0)     # ranking InfoNCE
         self.w_gate = getattr(config.il, "w_gate", 1.0)          # revisit/novel BCE
         self.w_aux = getattr(config.il, "w_aux_pose", 0.5)
+        # counterfactual Novel conditioning (goal_swap.py); weight 0 = historical behavior
+        self.w_goal_swap = float(getattr(config.il, "w_goal_swap", 0.0) or 0.0)
+        self.goal_swap_margin = float(getattr(config.il, "goal_swap_margin", 0.05))
+        if self.w_goal_swap < 0 or self.goal_swap_margin < 0:
+            raise ValueError("goal-swap weight and margin must be non-negative")
         self.model_device = (self.model.module if hasattr(self.model, "module") else self.model).device
         # Rotation-specific local-frame correction for the rotation-accuracy diagnostic
         # (compute_loss, R_rel vs batch_goal_rel_rotation). NOT RevisitMerge.aux_pose_head's
@@ -75,6 +81,10 @@ class MemNavTrainer(BaseTrainer):
         'dec_gate_a': 'action/dec_gate_a',
         'dec_gate_b': 'action/dec_gate_b',
         'decgate_teacher_ratio': 'action/decgate_teacher_ratio',
+        'goal_swap_loss': 'action/goal_swap_margin_loss',
+        'goal_swap_gap': 'action/goal_swap_error_gap',
+        'goal_swap_rms': 'action/goal_swap_output_rms',
+        'goal_swap_active': 'action/goal_swap_active_rows',
         # (2) camera pose
         'aux_loss': 'pose/aux_loss',
         'aux_loss_shallow': 'pose/aux_loss_shallow',
@@ -135,6 +145,14 @@ class MemNavTrainer(BaseTrainer):
             int(getattr(il_cfg, 'decgate_teacher_steps', 0) or 0),
         )
         inputs['decgate_teacher_ratio'] = decgate_ratio
+        # counterfactual pass only when it can produce active rows: weight on, at
+        # least one novel row, and either real filtered negatives or a rollable batch
+        inputs['compute_goal_swap'] = bool(
+            self.w_goal_swap > 0
+            and (inputs['batch_is_revisit'] < 0.5).any().item()
+            and (inputs.get('batch_negative_goal_image') is not None
+                 or inputs['batch_is_revisit'].numel() > 1)
+        )
         fwd = model(inputs)                                       # forward(batch) moves tensors internally
 
         # --- diffusion action loss (always goal-conditioned). Kept per-sample first
@@ -187,8 +205,37 @@ class MemNavTrainer(BaseTrainer):
         aux_loss = (per * revisit).sum() / revisit.sum().clamp(min=1.0)
         R_rel = fwd["R_rel"]                                      # [B,3,3] predicted relative rotation
 
+        # --- counterfactual goal-conditioned denoising: same current/history/noise/
+        # timestep/gate, but a direction-filtered wrong goal must explain this row's
+        # expert action WORSE than the correct goal by goal_swap_margin. Directly
+        # penalizes the measured "goal image has nearly no effect" collapse without
+        # fabricating a wrong-goal action label. Novel rows only — on revisit rows
+        # the swapped pass shares the (correct) memory pathway, so a similar action
+        # is legitimate there and ranking it would fight memory use. ---
+        if inputs['compute_goal_swap']:
+            if fwd["noise_pred_swapped_goal"] is None:
+                raise RuntimeError("goal-swap objective requested but model returned no swapped pass")
+            novel_rows = inputs["batch_is_revisit"].to(dev) < 0.5
+            swap_metrics = goal_swap_margin_metrics(
+                fwd["noise_pred"],
+                fwd["noise_pred_swapped_goal"],
+                noise,
+                novel_rows & fwd["goal_swap_valid"],
+                self.goal_swap_margin,
+            )
+        else:
+            zero = action_loss * 0.0
+            swap_metrics = {
+                "loss": zero,
+                "error_gap": zero.detach(),
+                "output_rms": zero.detach(),
+                "active_count": torch.zeros((), device=dev, dtype=torch.long),
+            }
+        goal_swap_loss = swap_metrics["loss"]
+
         loss = (action_loss + self.w_retr * rank_loss
-                + self.w_gate * gate_loss + self.w_aux * aux_loss)
+                + self.w_gate * gate_loss + self.w_aux * aux_loss
+                + self.w_goal_swap * goal_swap_loss)
 
         with torch.no_grad():
             # --- action-loss split by goal category: overall (already `action_loss`),
@@ -333,6 +380,13 @@ class MemNavTrainer(BaseTrainer):
                 'dec_gate_b': mm.core.dec_gate_b.item(),
                 'decgate_teacher_ratio': decgate_ratio,
             }
+            if self.w_goal_swap > 0:
+                log_payload.update({
+                    'goal_swap_loss': goal_swap_loss.item(),
+                    'goal_swap_gap': swap_metrics['error_gap'].item(),
+                    'goal_swap_rms': swap_metrics['output_rms'].item(),
+                    'goal_swap_active': float(swap_metrics['active_count'].item()),
+                })
             # revisit-only metrics (aux_loss, rot_err_deg, pos_err_m, pos_dir_err_deg,
             # seen_match_acc): only logged when this batch actually contains revisit rows
             # -- otherwise the masked-mean formula silently reports 0 (0/clamp(0,min=1)),

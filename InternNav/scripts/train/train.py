@@ -258,6 +258,9 @@ def main(config, model_class, model_config_class):
                 window_size=getattr(config.il, 'window_size', 8),
                 num_scale=getattr(config.il, 'num_scale', 8),
                 max_legs=getattr(config.il, 'max_legs', None),
+                goal_swap_negatives=float(getattr(config.il, 'w_goal_swap', 0.0) or 0.0) > 0,
+                goal_swap_min_angle_deg=getattr(config.il, 'goal_swap_min_angle_deg', 30.0),
+                goal_a_min_k=getattr(config.il, 'goal_a_min_k', None),
             )
         else:
             if '3dgs' in config.il.lmdb_features_dir or '3dgs' in config.il.lmdb_features_dir:

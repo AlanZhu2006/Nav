@@ -154,6 +154,28 @@ def cascade_metrics(labels: np.ndarray, decisions: np.ndarray) -> dict:
     }
 
 
+def grouped_top1_metrics(groups: np.ndarray, labels: np.ndarray,
+                         probabilities: np.ndarray,
+                         decisions: np.ndarray) -> dict:
+    groups = np.asarray(groups, dtype=str).reshape(-1)
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    probabilities = np.asarray(probabilities, dtype=np.float64).reshape(-1)
+    decisions = np.asarray(decisions, dtype=np.int8).reshape(-1)
+    if not (groups.shape == labels.shape == probabilities.shape
+            == decisions.shape):
+        raise ValueError("grouped top1 inputs must be aligned")
+    result = {}
+    for group in sorted(np.unique(groups)):
+        selected = groups == group
+        result[group] = {
+            "classification": binary_metrics(
+                labels[selected], probabilities[selected]),
+            "selective_cascade": cascade_metrics(
+                labels[selected], decisions[selected]),
+        }
+    return result
+
+
 def threshold_dict(thresholds) -> dict:
     return {
         "reject_max": (float(thresholds.reject_max)
@@ -403,7 +425,8 @@ def metric_value(metrics: dict, key: str) -> float:
 
 
 def evaluate_family(name: str, features: np.ndarray, labels: np.ndarray,
-                    scenes: np.ndarray, train_mask: np.ndarray,
+                    scenes: np.ndarray, kinds: np.ndarray,
+                    train_mask: np.ndarray,
                     test_mask: np.ndarray, top1_mask: np.ndarray,
                     c_values: Sequence[float], seed: int,
                     min_top1_calibration: int):
@@ -446,6 +469,10 @@ def evaluate_family(name: str, features: np.ndarray, labels: np.ndarray,
         calibration_labels, calibration_probability, min_samples=1)
     heldout_top1_probability = heldout_probability[heldout_top1]
     heldout_top1_labels = heldout_labels[heldout_top1]
+    heldout_top1_scenes = scenes[test_mask][heldout_top1]
+    heldout_top1_kinds = kinds[test_mask][heldout_top1]
+    heldout_decisions = selective_decisions(
+        heldout_top1_probability, thresholds)
 
     scaler = model.named_steps["standardscaler"]
     logistic = model.named_steps["logisticregression"]
@@ -463,8 +490,13 @@ def evaluate_family(name: str, features: np.ndarray, labels: np.ndarray,
                 heldout_top1_labels, heldout_top1_probability),
             "top1_selective_thresholds": threshold_dict(thresholds),
             "top1_selective_cascade": cascade_metrics(
-                heldout_top1_labels,
-                selective_decisions(heldout_top1_probability, thresholds)),
+                heldout_top1_labels, heldout_decisions),
+            "top1_by_kind": grouped_top1_metrics(
+                heldout_top1_kinds, heldout_top1_labels,
+                heldout_top1_probability, heldout_decisions),
+            "top1_by_scene": grouped_top1_metrics(
+                heldout_top1_scenes, heldout_top1_labels,
+                heldout_top1_probability, heldout_decisions),
             "top1_min1_tail_capacity": {
                 "thresholds": threshold_dict(min1_thresholds),
                 "cascade": cascade_metrics(
@@ -547,8 +579,8 @@ def main() -> None:
         raise ValueError(f"teacher CSV missing columns: {sorted(missing_columns)}")
     if frame.duplicated(["session_id", "candidate_path"]).any():
         raise ValueError("teacher CSV contains duplicate session/candidate pairs")
-    if not frame["teacher_pass"].isin([0, 1]).all():
-        raise ValueError("teacher labels must be binary")
+    if not frame["teacher_pass"].isin([-1, 0, 1]).all():
+        raise ValueError("teacher labels must be -1 (unevaluated), 0, or 1")
     cls_by_path, cls_weight_sha = load_cls_cache(args.cls_cache)
     if cls_weight_sha != weight_sha:
         raise RuntimeError("CLS cache and requested weights have different SHA")
@@ -580,6 +612,13 @@ def main() -> None:
     if len(train_scenes) < 3:
         raise ValueError("at least three non-heldout training scenes are required")
     selected = select_hard_candidates(frame, args.top_k)
+    if not selected["teacher_pass"].isin([0, 1]).all():
+        missing = selected.loc[
+            ~selected["teacher_pass"].isin([0, 1]),
+            ["session_id", "candidate_rank"]].iloc[0]
+        raise ValueError(
+            "hard top-K contains an unevaluated teacher label: "
+            f"{missing.session_id} rank={missing.candidate_rank}")
     train_mask = selected["scene"].isin(train_scenes).to_numpy()
     test_mask = selected["scene"].isin(sorted(heldout_set)).to_numpy()
     if np.any(train_mask & test_mask) or not train_mask.any() or not test_mask.any():
@@ -587,6 +626,7 @@ def main() -> None:
     top1_mask = selected["candidate_rank"].eq(1).to_numpy()
     labels = selected["teacher_pass"].to_numpy(dtype=np.int64)
     scenes = selected["scene"].to_numpy(dtype=str)
+    kinds = selected["kind"].to_numpy(dtype=str)
 
     mappings = parse_path_maps(args.path_map)
     selected_raw_paths = set(selected["query_path"]).union(
@@ -620,7 +660,7 @@ def main() -> None:
     heldout_probabilities = {}
     for name, features in feature_families.items():
         result, model_payload, heldout_probability = evaluate_family(
-            name, features, labels, scenes, train_mask, test_mask,
+            name, features, labels, scenes, kinds, train_mask, test_mask,
             top1_mask, c_values, args.seed, args.min_top1_calibration)
         evaluations[name] = result
         portable[name] = dict(model_payload, feature_names=family_names[name])
@@ -676,6 +716,8 @@ def main() -> None:
         "heldout_pairs": int(test_mask.sum()),
         "train_top1_sessions": int(np.sum(train_mask & top1_mask)),
         "heldout_top1_sessions": int(np.sum(test_mask & top1_mask)),
+        "unevaluated_teacher_pairs": int(
+            frame["teacher_pass"].eq(-1).sum()),
         "feature_timing": feature_timing,
         "candidate_C": list(c_values),
         "primary_family": primary,

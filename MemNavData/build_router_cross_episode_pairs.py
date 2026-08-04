@@ -6,11 +6,18 @@ paired.  Frames sampled from one episode query the full trajectory of its
 partner.  Optionally, post-switch return-leg frames query only the same
 episode's pre-switch memory.  Frozen DINO cosine supplies retrieval scores and
 the unchanged SIFT/essential-matrix verifier supplies pair labels.  No
-navigation success, simulator pose, or held-out-scene query is used.
+navigation success, simulator pose, or held-out-scene query is used for
+training or calibration.
 
-The output retains the original teacher CSV (including its untouched held-out
-evaluation sessions) and appends only new training-scene sessions.  A separate
-patch/temporal router script subsequently performs scene-disjoint training.
+The output retains the original teacher CSV and appends explicitly role-tagged
+training or evaluation sessions.  A separate patch/temporal router script
+subsequently performs scene-disjoint training; evaluation-scene rows are never
+used for model selection or confidence calibration.
+
+When ``--teacher-top-k`` is positive, all frozen-DINO scores are retained for
+temporal features but expensive geometry is evaluated only on the exact hard
+top-K consumed by the downstream experiment.  Other rows receive label -1 and
+cannot be selected for training.
 """
 
 from __future__ import annotations
@@ -153,13 +160,31 @@ def return_query_indices(frame_count: int, switch: int, stride: int,
     ]
 
 
+def hard_teacher_frames(candidate_frames: Sequence[int],
+                        scores: Sequence[float], top_k: int) -> frozenset[int]:
+    """Select deterministic high-cosine candidates that require geometry."""
+    frames = [int(frame) for frame in candidate_frames]
+    score_values = [float(score) for score in scores]
+    if len(frames) != len(score_values) or not frames:
+        raise ValueError("candidate frames and scores must be non-empty/aligned")
+    if len(set(frames)) != len(frames):
+        raise ValueError("candidate frames must be unique")
+    if top_k < 0 or not np.isfinite(score_values).all():
+        raise ValueError("top-K must be non-negative and scores finite")
+    count = len(frames) if top_k == 0 else min(top_k, len(frames))
+    order = sorted(
+        range(len(frames)), key=lambda index: (-score_values[index], frames[index]))
+    return frozenset(frames[index] for index in order[:count])
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-teacher-csv", type=Path, required=True)
     parser.add_argument("--cls-cache", type=Path, required=True)
     parser.add_argument("--out-csv", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--train-scene", action="append", required=True)
+    parser.add_argument("--train-scene", action="append", default=[])
+    parser.add_argument("--evaluation-scene", action="append", default=[])
     parser.add_argument(
         "--path-map", action="append", default=[],
         help="optional OLD=NEW prefix replacement for moved episode images")
@@ -172,6 +197,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--return-query-margin", type=int, default=16)
     parser.add_argument("--return-candidate-stride", type=int, default=1)
     parser.add_argument("--max-return-queries-per-episode", type=int, default=0)
+    parser.add_argument(
+        "--teacher-top-k", type=int, default=0,
+        help="evaluate geometry only for this many DINO candidates; 0 means all")
     parser.add_argument("--expected-base-sha", default="")
     return parser.parse_args()
 
@@ -187,7 +215,8 @@ def main() -> None:
         raise ValueError("query/candidate stride must be positive")
     if (args.query_margin < 0 or args.max_queries_per_episode < 0
             or args.return_query_margin < 0
-            or args.max_return_queries_per_episode < 0):
+            or args.max_return_queries_per_episode < 0
+            or args.teacher_top_k < 0):
         raise ValueError("query margin/maximum must be non-negative")
     for required in (args.base_teacher_csv, args.cls_cache):
         if not required.is_file():
@@ -205,12 +234,20 @@ def main() -> None:
     if missing:
         raise ValueError(f"base teacher CSV missing columns: {sorted(missing)}")
     train_scenes = tuple(sorted(set(args.train_scene)))
-    absent = set(train_scenes) - set(frame["scene"].unique())
+    evaluation_scenes = tuple(sorted(set(args.evaluation_scene)))
+    overlap = set(train_scenes) & set(evaluation_scenes)
+    if overlap:
+        raise ValueError(
+            f"scenes cannot be both training and evaluation: {sorted(overlap)}")
+    selected_scenes = tuple(sorted(set(train_scenes) | set(evaluation_scenes)))
+    if not selected_scenes:
+        raise ValueError("at least one training or evaluation scene is required")
+    absent = set(selected_scenes) - set(frame["scene"].unique())
     if absent:
-        raise ValueError(f"training scenes absent from base CSV: {sorted(absent)}")
+        raise ValueError(f"selected scenes absent from base CSV: {sorted(absent)}")
     cls_by_path, cls_weight_sha = load_cls_cache(args.cls_cache)
     mappings = parse_path_maps(args.path_map)
-    episodes = collect_episode_frames(frame, train_scenes)
+    episodes = collect_episode_frames(frame, selected_scenes)
 
     readable = {}
     for paths in episodes.values():
@@ -234,6 +271,7 @@ def main() -> None:
     matcher = cv2.BFMatcher()
     started = time.perf_counter()
     added_pairs = 0
+    added_evaluated = 0
     added_positive = 0
     added_sessions = 0
     per_scene = {}
@@ -245,13 +283,18 @@ def main() -> None:
         for row in frame.to_dict(orient="records"):
             writer.writerow(row)
 
-        for scene in train_scenes:
+        for scene in selected_scenes:
+            role = "train" if scene in train_scenes else "evaluation"
+            cross_kind = f"cross_episode_{role}"
+            return_kind = f"within_episode_return_{role}"
             partner_by_episode = paired_episode_names(episodes, scene)
             scene_by_kind = {
-                "cross_episode_train": {
-                    "sessions": 0, "pairs": 0, "positive": 0},
-                "within_episode_return_train": {
-                    "sessions": 0, "pairs": 0, "positive": 0},
+                cross_kind: {
+                    "sessions": 0, "pairs": 0, "evaluated": 0,
+                    "positive": 0},
+                return_kind: {
+                    "sessions": 0, "pairs": 0, "evaluated": 0,
+                    "positive": 0},
             }
 
             def write_session(*, episode: str, kind: str, session_id: str,
@@ -259,22 +302,39 @@ def main() -> None:
                               candidate_paths: Dict[int, str],
                               candidate_stride: int,
                               intrinsic: np.ndarray) -> None:
-                nonlocal added_pairs, added_positive, added_sessions
+                nonlocal added_pairs, added_evaluated
+                nonlocal added_positive, added_sessions
                 query_features = sift_description(readable[query_raw], sift)
                 session_positive = 0
                 session_pairs = 0
-                for candidate_frame in sorted(candidate_paths)[
-                        ::candidate_stride]:
+                session_evaluated = 0
+                candidate_frames = sorted(candidate_paths)[::candidate_stride]
+                score_by_frame = {
+                    candidate_frame: float(
+                        cls_by_path[query_raw]
+                        @ cls_by_path[candidate_paths[candidate_frame]])
+                    for candidate_frame in candidate_frames}
+                evaluated_frames = hard_teacher_frames(
+                    candidate_frames,
+                    [score_by_frame[frame] for frame in candidate_frames],
+                    args.teacher_top_k)
+                for candidate_frame in candidate_frames:
                     candidate_raw = candidate_paths[candidate_frame]
-                    geometry = geometric_teacher(
-                        query_features, readable[candidate_raw],
-                        intrinsic, sift, matcher)
-                    passed = bool(
-                        geometry["matches"] >= 20
-                        and geometry["inliers"] >= 12
-                        and geometry["inlier_ratio"] >= 0.50)
-                    cosine = float(
-                        cls_by_path[query_raw] @ cls_by_path[candidate_raw])
+                    if candidate_frame in evaluated_frames:
+                        geometry = geometric_teacher(
+                            query_features, readable[candidate_raw],
+                            intrinsic, sift, matcher)
+                        passed = int(
+                            geometry["matches"] >= 20
+                            and geometry["inliers"] >= 12
+                            and geometry["inlier_ratio"] >= 0.50)
+                        session_evaluated += 1
+                        session_positive += passed
+                    else:
+                        geometry = dict(
+                            matches=0, inliers=0, inlier_ratio=0.0,
+                            error="not evaluated outside hard top-K")
+                        passed = -1
                     output = dict(
                         session_id=session_id,
                         scene=scene,
@@ -283,24 +343,26 @@ def main() -> None:
                         query_path=query_raw,
                         candidate_path=candidate_raw,
                         candidate_frame=int(candidate_frame),
-                        teacher_pass=int(passed),
+                        teacher_pass=passed,
                         **geometry,
-                        dino_cosine=cosine,
+                        dino_cosine=score_by_frame[candidate_frame],
                     )
                     writer.writerow({name: output.get(name, "")
                                      for name in fieldnames})
                     session_pairs += 1
-                    session_positive += int(passed)
                 counts = scene_by_kind[kind]
                 counts["sessions"] += 1
                 counts["pairs"] += session_pairs
+                counts["evaluated"] += session_evaluated
                 counts["positive"] += session_positive
                 added_sessions += 1
                 added_pairs += session_pairs
+                added_evaluated += session_evaluated
                 added_positive += session_positive
                 print(
                     f"[router-teacher] {session_id} "
-                    f"positive={session_positive}/{session_pairs}",
+                    f"positive={session_positive}/"
+                    f"{session_evaluated}/{session_pairs}",
                     flush=True)
 
             for episode, partner in sorted(partner_by_episode.items()):
@@ -326,7 +388,7 @@ def main() -> None:
                         f"{scene}/{episode}/cross_{partner}_f{query_frame:05d}")
                     write_session(
                         episode=episode,
-                        kind="cross_episode_train",
+                        kind=cross_kind,
                         session_id=session_id,
                         query_raw=query_raw,
                         candidate_paths=candidate_paths,
@@ -346,7 +408,7 @@ def main() -> None:
                             f"{scene}/{episode}/return_f{query_frame:05d}")
                         write_session(
                             episode=episode,
-                            kind="within_episode_return_train",
+                            kind=return_kind,
                             session_id=session_id,
                             query_raw=candidate_paths[query_frame],
                             candidate_paths=memory_paths,
@@ -356,12 +418,16 @@ def main() -> None:
                 counts["pairs"] for counts in scene_by_kind.values())
             scene_positive = sum(
                 counts["positive"] for counts in scene_by_kind.values())
+            scene_evaluated = sum(
+                counts["evaluated"] for counts in scene_by_kind.values())
             scene_sessions = sum(
                 counts["sessions"] for counts in scene_by_kind.values())
             per_scene[scene] = {
                 "sessions": scene_sessions,
                 "pairs": scene_pairs,
+                "evaluated": scene_evaluated,
                 "positive": scene_positive,
+                "role": role,
                 "by_kind": scene_by_kind,
             }
     partial.replace(args.out_csv)
@@ -372,6 +438,7 @@ def main() -> None:
         "cls_cache": str(args.cls_cache.resolve()),
         "cls_weight_sha256": cls_weight_sha,
         "train_scenes": list(train_scenes),
+        "evaluation_scenes": list(evaluation_scenes),
         "query_stride": args.query_stride,
         "query_margin": args.query_margin,
         "candidate_stride": args.candidate_stride,
@@ -382,11 +449,14 @@ def main() -> None:
         "return_candidate_stride": args.return_candidate_stride,
         "max_return_queries_per_episode": (
             args.max_return_queries_per_episode),
+        "teacher_top_k": args.teacher_top_k,
         "base_pairs": int(len(frame)),
         "added_sessions": added_sessions,
         "added_pairs": added_pairs,
+        "added_evaluated": added_evaluated,
+        "added_unlabeled": added_pairs - added_evaluated,
         "added_positive": added_positive,
-        "added_negative": added_pairs - added_positive,
+        "added_negative": added_evaluated - added_positive,
         "seconds": elapsed,
         "milliseconds_per_added_pair": (
             1000.0 * elapsed / max(added_pairs, 1)),

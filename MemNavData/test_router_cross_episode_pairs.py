@@ -4,6 +4,7 @@ import pandas as pd
 
 from MemNavData.build_router_cross_episode_pairs import (
     collect_episode_frames,
+    hard_teacher_frames,
     paired_episode_names,
     query_indices,
     return_query_indices,
@@ -61,6 +62,16 @@ class CrossEpisodePairBuilderTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             return_query_indices(
                 200, switch=200, stride=10, margin=10, maximum=3)
+
+    def test_hard_teacher_frames_use_score_then_frame_tiebreak(self):
+        selected = hard_teacher_frames(
+            [30, 10, 20, 40], [0.7, 0.9, 0.9, 0.1], top_k=2)
+        self.assertEqual(selected, frozenset({10, 20}))
+        self.assertEqual(
+            hard_teacher_frames([2, 1], [0.1, 0.2], top_k=0),
+            frozenset({1, 2}))
+        with self.assertRaises(ValueError):
+            hard_teacher_frames([1, 1], [0.1, 0.2], top_k=1)
 
 
 if __name__ == "__main__":

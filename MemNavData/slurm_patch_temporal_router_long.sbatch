@@ -49,6 +49,7 @@ exec singularity exec --nv \
   "${BASE_SIF}" \
   env \
     MODE=full \
+    INCLUDE_RETURN=0 \
     ROOT="${ROOT}" \
     RUN_ROOT="${RESULT_BASE}/job_${SLURM_JOB_ID}" \
     MEMNAV_PY="${MEMNAV_PY}" \

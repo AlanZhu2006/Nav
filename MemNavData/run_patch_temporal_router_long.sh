@@ -11,11 +11,21 @@ case "${MODE}" in
   smoke|full) ;;
   *) echo "ABORT: MODE must be smoke or full" >&2; exit 2 ;;
 esac
+INCLUDE_RETURN=${INCLUDE_RETURN:-0}
+case "${INCLUDE_RETURN}" in
+  0|1) ;;
+  *) echo "ABORT: INCLUDE_RETURN must be 0 or 1" >&2; exit 2 ;;
+esac
+ALLOW_DIRTY_TASK_FILES=${ALLOW_DIRTY_TASK_FILES:-0}
+case "${ALLOW_DIRTY_TASK_FILES}" in
+  0|1) ;;
+  *) echo "ABORT: ALLOW_DIRTY_TASK_FILES must be 0 or 1" >&2; exit 2 ;;
+esac
 
 ROOT=${ROOT:-/home/asus/Research/Nav-axis-uturn}
 RUN_ROOT=${RUN_ROOT:?set RUN_ROOT to a new output directory}
 MEMNAV_PY=${MEMNAV_PY:-/home/asus/miniconda3/envs/memnav/bin/python}
-LINGBOT_REPO=${LINGBOT_REPO:-${ROOT}/NavDP/baselines/memnav/lingbot-map}
+LINGBOT_REPO=${LINGBOT_REPO:?set LINGBOT_REPO to the pinned LingBot checkout}
 WEIGHTS=${WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
 BASE_DIR=${BASE_DIR:-${ROOT}/.diagnostics/router_distillation_20260804/fixed_train4_test5_exact}
 BASE_TEACHER=${BASE_TEACHER:-${BASE_DIR}/teacher_pairs.csv}
@@ -32,6 +42,7 @@ UNIT_TESTS=(
   MemNavData.test_reliability_router
   MemNavData.test_patch_temporal_router
   MemNavData.test_router_cross_episode_pairs
+  MemNavData.test_router_dataset_selection
 )
 TRAIN_SCENES=(17DRP5sb8fy 1LXtFkjw3qL 1pXnuDYAj8r Uxmj2M2itWa)
 HELDOUT_SCENES=(e9zR4mvMWw7 rqfALeAoiTq s8pcmisQ38h yqstnuAEVhm zsNo4HB9uLZ)
@@ -73,14 +84,18 @@ if [[ -n "${EXPECTED_COMMIT:-}" ]]; then
     exit 1
   }
 fi
-git -C "${ROOT}" diff --quiet -- \
-  MemNavData/patch_temporal_router.py \
-  MemNavData/diag_patch_temporal_router.py \
-  MemNavData/build_router_cross_episode_pairs.py \
-  MemNavData/run_patch_temporal_router_long.sh || {
-    echo "ABORT: router task files differ from the checked-out commit" >&2
-    exit 1
-  }
+if [[ "${ALLOW_DIRTY_TASK_FILES}" != 1 ]]; then
+  git -C "${ROOT}" diff --quiet -- \
+    MemNavData/patch_temporal_router.py \
+    MemNavData/diag_patch_temporal_router.py \
+    MemNavData/build_router_cross_episode_pairs.py \
+    MemNavData/run_patch_temporal_router_long.sh || {
+      echo "ABORT: router task files differ from the checked-out commit" >&2
+      exit 1
+    }
+else
+  echo "WARNING: dirty task files allowed for local smoke only"
+fi
 
 cd "${ROOT}"
 "${MEMNAV_PY}" -m py_compile \
@@ -116,11 +131,16 @@ EXPAND_ARGS=(
   --out-csv "${EXPANDED}"
   --report "${EXPANSION_REPORT}"
   --expected-base-sha "${EXPECTED_BASE_SHA}"
-  --include-return
 )
 for scene in "${TRAIN_SCENES[@]}"; do
   EXPAND_ARGS+=(--train-scene "${scene}")
 done
+for scene in "${HELDOUT_SCENES[@]}"; do
+  EXPAND_ARGS+=(--evaluation-scene "${scene}")
+done
+if [[ "${INCLUDE_RETURN}" == 1 ]]; then
+  EXPAND_ARGS+=(--include-return)
+fi
 for mapping in ${PATH_MAPS:-}; do
   EXPAND_ARGS+=(--path-map "${mapping}")
 done
@@ -145,10 +165,12 @@ else
   GRID_SIZE=8
   BATCH_SIZE=24
 fi
+EXPAND_ARGS+=(--teacher-top-k "${TOP_K}")
 
 echo "[stage 1/2] training-only geometry-teacher expansion"
 "${MEMNAV_PY}" -u "${BUILDER}" "${EXPAND_ARGS[@]}"
-"${MEMNAV_PY}" - "${BASE_TEACHER}" "${EXPANDED}" <<'PY'
+"${MEMNAV_PY}" - "${BASE_TEACHER}" "${EXPANDED}" \
+  "${INCLUDE_RETURN}" <<'PY'
 import sys
 import pandas as pd
 
@@ -159,28 +181,36 @@ train_scenes = {
 heldout_scenes = {
     "e9zR4mvMWw7", "rqfALeAoiTq", "s8pcmisQ38h", "yqstnuAEVhm",
     "zsNo4HB9uLZ"}
+include_return = bool(int(sys.argv[3]))
 if len(expanded) <= len(base):
     raise RuntimeError("expansion did not add any training pairs")
 if not base.equals(expanded.iloc[:len(base)].reset_index(drop=True)):
     raise RuntimeError("base teacher rows changed during expansion")
 added = expanded.iloc[len(base):]
-if not set(added["scene"]).issubset(train_scenes):
-    raise RuntimeError("expanded rows contain a non-training scene")
-if set(added["scene"]) != train_scenes:
-    raise RuntimeError("expanded rows do not cover all training scenes")
-if set(added["kind"]) != {
-        "cross_episode_train", "within_episode_return_train"}:
-    raise RuntimeError("unexpected expanded session kind")
+train_added = added[added["kind"].str.endswith("_train")]
+evaluation_added = added[added["kind"].str.endswith("_evaluation")]
+if set(train_added["scene"]) != train_scenes:
+    raise RuntimeError("training expansion has an incorrect scene split")
+if set(evaluation_added["scene"]) != heldout_scenes:
+    raise RuntimeError("evaluation expansion has an incorrect scene split")
+expected_train_kinds = {"cross_episode_train"}
+expected_evaluation_kinds = {"cross_episode_evaluation"}
+if include_return:
+    expected_train_kinds.add("within_episode_return_train")
+    expected_evaluation_kinds.add("within_episode_return_evaluation")
+if set(train_added["kind"]) != expected_train_kinds:
+    raise RuntimeError("unexpected training expansion kind")
+if set(evaluation_added["kind"]) != expected_evaluation_kinds:
+    raise RuntimeError("unexpected evaluation expansion kind")
 if expanded.duplicated(["session_id", "candidate_path"]).any():
     raise RuntimeError("duplicate session/candidate pair after expansion")
-base_heldout = base[base["scene"].isin(heldout_scenes)].reset_index(drop=True)
-expanded_heldout = expanded[
-    expanded["scene"].isin(heldout_scenes)].reset_index(drop=True)
-if not base_heldout.equals(expanded_heldout):
-    raise RuntimeError("held-out rows changed during training expansion")
+if not train_added["teacher_pass"].isin([-1, 0, 1]).all():
+    raise RuntimeError("invalid sparse teacher label in training expansion")
+if not evaluation_added["teacher_pass"].isin([-1, 0, 1]).all():
+    raise RuntimeError("invalid sparse teacher label in evaluation expansion")
 print(
-    "split audit OK:", len(added), "training-only pairs;",
-    len(expanded_heldout), "held-out pairs unchanged")
+    "split audit OK:", len(train_added), "training pairs;",
+    len(evaluation_added), "evaluation-only pairs")
 PY
 
 DIAG_ARGS=(

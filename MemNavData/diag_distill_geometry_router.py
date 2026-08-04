@@ -29,13 +29,11 @@ from dataclasses import dataclass
 import gc
 import hashlib
 import json
-import math
-import os
 from pathlib import Path
 import subprocess
 import sys
 import time
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -149,6 +147,55 @@ def load_episodes(root: Path) -> List[Episode]:
     if not episodes:
         raise ValueError(f"no episodes found under {root}")
     return episodes
+
+
+def select_episodes(episodes: Sequence[Episode],
+                    include_scenes: Sequence[str],
+                    maximum_per_scene: int) -> List[Episode]:
+    """Apply a deterministic, scene-balanced subset before building sessions."""
+    if maximum_per_scene < 0:
+        raise ValueError("maximum episodes per scene must be non-negative")
+    requested = set(include_scenes)
+    available = {episode.scene for episode in episodes}
+    missing = requested - available
+    if missing:
+        raise ValueError(f"requested scenes are absent: {sorted(missing)}")
+    selected = [
+        episode for episode in episodes
+        if not requested or episode.scene in requested]
+    by_scene: Dict[str, List[Episode]] = {}
+    for episode in selected:
+        by_scene.setdefault(episode.scene, []).append(episode)
+    result = []
+    for scene in sorted(by_scene):
+        scene_episodes = sorted(
+            by_scene[scene], key=lambda episode: episode.name)
+        if maximum_per_scene:
+            scene_episodes = scene_episodes[:maximum_per_scene]
+        result.extend(scene_episodes)
+    if not result:
+        raise ValueError("episode selection is empty")
+    return result
+
+
+def cosine_similarity_rows(goal: np.ndarray,
+                           memory: np.ndarray) -> np.ndarray:
+    """Compute normalized row cosine without materializing 2049-D features."""
+    goal = np.asarray(goal)
+    memory = np.asarray(memory)
+    if (goal.ndim != 2 or memory.shape != goal.shape
+            or goal.shape[1] == 0):
+        raise ValueError("goal/memory must have equal non-empty [N, D] shape")
+    if not np.isfinite(goal).all() or not np.isfinite(memory).all():
+        raise ValueError("goal/memory embeddings must be finite")
+    goal_norm = np.linalg.norm(goal, axis=1)
+    memory_norm = np.linalg.norm(memory, axis=1)
+    if np.any(goal_norm <= 0.0) or np.any(memory_norm <= 0.0):
+        raise ValueError("exact DINO embeddings must have non-zero norm")
+    cosine = np.einsum(
+        "ij,ij->i", goal, memory, dtype=np.float64)
+    cosine /= goal_norm * memory_norm
+    return np.clip(cosine, -1.0, 1.0)
 
 
 def build_sessions(episodes: Sequence[Episode], stride: int) -> List[Session]:
@@ -789,6 +836,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--heldout-scene", action="append", default=[],
         help="repeat for a fixed train-scene to heldout-scene evaluation")
+    parser.add_argument(
+        "--include-scene", action="append", default=[],
+        help="repeat to load only these scenes before session construction")
+    parser.add_argument(
+        "--max-episodes-per-scene", type=int, default=0,
+        help="deterministically keep the first N episodes per scene; 0 keeps all")
     parser.add_argument("--lingbot-repo", type=Path, required=True)
     parser.add_argument("--weights", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
@@ -797,14 +850,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-stride", type=int, default=1)
     parser.add_argument("--min-calibration", type=int, default=20)
     parser.add_argument("--seed", type=int, default=20260804)
+    parser.add_argument(
+        "--teacher-only", action="store_true",
+        help="write exact CLS/cosine and geometry labels without fitting a head")
     parser.add_argument("--expected-weight-sha", default=DEFAULT_WEIGHT_SHA)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    if args.batch_size < 1 or args.candidate_stride < 1:
-        raise ValueError("batch size and candidate stride must be positive")
+    if (args.batch_size < 1 or args.candidate_stride < 1
+            or args.max_episodes_per_scene < 0):
+        raise ValueError(
+            "batch size/candidate stride must be positive and episode maximum "
+            "must be non-negative")
     for required in (*args.episode_root, args.lingbot_repo, args.weights):
         if not required.exists():
             raise FileNotFoundError(required)
@@ -827,6 +886,14 @@ def main() -> None:
     identities = [(episode.scene, episode.name) for episode in episodes]
     if len(identities) != len(set(identities)):
         raise ValueError("duplicate scene/episode identities across episode roots")
+    episodes = select_episodes(
+        episodes, args.include_scene, args.max_episodes_per_scene)
+    heldout_absent = set(args.heldout_scene) - {
+        episode.scene for episode in episodes}
+    if heldout_absent:
+        raise ValueError(
+            f"held-out scenes are absent after selection: "
+            f"{sorted(heldout_absent)}")
     sessions = build_sessions(episodes, args.candidate_stride)
     all_paths = sorted({
         path for session in sessions
@@ -849,18 +916,13 @@ def main() -> None:
     goal_embeddings = embeddings[[path_index[row["query_path"]] for row in rows]]
     memory_embeddings = embeddings[[
         path_index[row["candidate_path"]] for row in rows]]
-    features = symmetric_relation_features(goal_embeddings, memory_embeddings)
-    cosine = features[:, -1].astype(np.float64)
+    cosine = cosine_similarity_rows(goal_embeddings, memory_embeddings)
     labels = np.asarray([row["teacher_pass"] for row in rows], dtype=np.int64)
     scenes = np.asarray([row["scene"] for row in rows])
     if len(np.unique(scenes)) < 3:
         raise ValueError("scene-disjoint evaluation requires at least three scenes")
     if len(np.unique(labels)) != 2:
         raise ValueError("geometry teacher produced only one class")
-
-    report, portable, _final_model = evaluate_scene_disjoint(
-        features, cosine, labels, scenes, rows,
-        args.min_calibration, args.seed, args.heldout_scene)
 
     with open(args.out_dir / "teacher_pairs.csv", "w", newline="",
               encoding="utf-8") as handle:
@@ -869,6 +931,60 @@ def main() -> None:
         writer.writeheader()
         for row, score in zip(rows, cosine):
             writer.writerow(dict(row, dino_cosine=float(score)))
+
+    common_manifest = {
+        "deployment_approved": False,
+        "feature_version": FEATURE_VERSION,
+        "created_at_unix": time.time(),
+        "repo_root": str(Path(__file__).resolve().parents[1]),
+        "repo_commit": git_value(
+            Path(__file__).resolve().parents[1], "rev-parse", "HEAD"),
+        "lingbot_repo": str(args.lingbot_repo.resolve()),
+        "lingbot_commit": dependency_commit,
+        "lingbot_weights": str(args.weights.resolve()),
+        "lingbot_weight_sha256": weight_sha,
+        "episode_roots": [str(path.resolve()) for path in args.episode_root],
+        "included_scenes": sorted(set(args.include_scene)),
+        "max_episodes_per_scene": args.max_episodes_per_scene,
+        "heldout_scenes": list(args.heldout_scene),
+        "episodes": len(episodes),
+        "scenes": len({episode.scene for episode in episodes}),
+        "sessions": len(sessions),
+        "candidate_stride": args.candidate_stride,
+        "pairs": len(rows),
+        "teacher_positive": int(labels.sum()),
+        "teacher_negative": int((labels == 0).sum()),
+        "dino_timing": dino_timing,
+        "geometry_teacher_timing": teacher_timing,
+    }
+    if args.teacher_only:
+        manifest = dict(
+            common_manifest,
+            mode="teacher_only",
+            reason=(
+                "exact CLS/cosine and geometry teacher generation only; "
+                "no learned router was fit"),
+            evaluation=None,
+        )
+        with open(args.out_dir / "report.json", "w",
+                  encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        print(json.dumps({
+            "out_dir": str(args.out_dir),
+            "mode": "teacher_only",
+            "scenes": manifest["scenes"],
+            "episodes": manifest["episodes"],
+            "pairs": manifest["pairs"],
+            "positive": manifest["teacher_positive"],
+        }, indent=2), flush=True)
+        return
+
+    features = symmetric_relation_features(goal_embeddings, memory_embeddings)
+
+    report, portable, _final_model = evaluate_scene_disjoint(
+        features, cosine, labels, scenes, rows,
+        args.min_calibration, args.seed, args.heldout_scene)
 
     with open(args.out_dir / "top1_sessions.csv", "w", newline="",
               encoding="utf-8") as handle:
@@ -887,33 +1003,12 @@ def main() -> None:
         portable.predict_proba_from_features(features[:1])
     head_us = 1e6 * (time.perf_counter() - started) / repetitions
 
-    manifest = {
-        "deployment_approved": False,
+    manifest = dict(common_manifest, **{
         "reason": (
             f"local feasibility diagnostic on "
             f"{len({episode.scene for episode in episodes})} scenes / "
             f"{len(episodes)} episodes; "
             "requires larger scene-disjoint calibration and closed-loop A/B"),
-        "feature_version": FEATURE_VERSION,
-        "created_at_unix": time.time(),
-        "repo_root": str(Path(__file__).resolve().parents[1]),
-        "repo_commit": git_value(
-            Path(__file__).resolve().parents[1], "rev-parse", "HEAD"),
-        "lingbot_repo": str(args.lingbot_repo.resolve()),
-        "lingbot_commit": dependency_commit,
-        "lingbot_weights": str(args.weights.resolve()),
-        "lingbot_weight_sha256": weight_sha,
-        "episode_roots": [str(path.resolve()) for path in args.episode_root],
-        "heldout_scenes": list(args.heldout_scene),
-        "episodes": len(episodes),
-        "scenes": len({episode.scene for episode in episodes}),
-        "sessions": len(sessions),
-        "candidate_stride": args.candidate_stride,
-        "pairs": len(rows),
-        "teacher_positive": int(labels.sum()),
-        "teacher_negative": int((labels == 0).sum()),
-        "dino_timing": dino_timing,
-        "geometry_teacher_timing": teacher_timing,
         "portable_head_microseconds_per_pair": head_us,
         "evaluation": report,
         "final_diagnostic_thresholds": {
@@ -924,7 +1019,7 @@ def main() -> None:
             "accept_calibration_count": (
                 portable.thresholds.accept_calibration_count),
         },
-    }
+    })
     with open(args.out_dir / "report.json", "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=2, sort_keys=True)
         handle.write("\n")

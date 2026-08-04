@@ -1,5 +1,12 @@
 # MemNav × NavDP 自动几何可靠性路由：审计、修复与正式结果
 
+> **2026-08-04 controller follow-up:** 在完全相同的 10 条 episode 上，使用冻结
+> NavDP 完成 Goal A、再由 gatecurr600 原生 diffusion decoder 直接控制 Goal B，得到
+> 同样的联合 SR `8/10` 和条件 Goal-B SR `8/9`。因此不能把这里相对纯 NavDP 的提升
+> 归因于 point-goal controller；当前最清楚的贡献是长期记忆几何和无需 phase 先验的
+> 自动可靠性路由。完整成对结果见
+> `MemNavData/GATECURR_DIRECT_CONTROLLER_AB_20260804.md`。
+
 日期：2026-08-04
 工作目录：`/home/asus/Research/Nav-axis-uturn`
 基线提交：`f4cbcb726f6848e6e41bb342d4985eca5af93f7b`

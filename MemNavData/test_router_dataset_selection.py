@@ -1,12 +1,17 @@
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
 from MemNavData.diag_distill_geometry_router import (
     Episode,
     cosine_similarity_rows,
+    git_value as distill_git_value,
     select_episodes,
+)
+from MemNavData.diag_patch_temporal_router import (
+    git_value as patch_git_value,
 )
 from MemNavData.reliability_router import symmetric_relation_features
 
@@ -25,6 +30,30 @@ def episode(scene: str, name: str) -> Episode:
 
 
 class RouterDatasetSelectionTest(unittest.TestCase):
+    def test_git_provenance_scopes_safe_directory_to_dependency(self):
+        root = Path("/shared/readonly/lingbot-map")
+        expected_command = [
+            "git", "-c", f"safe.directory={root}",
+            "-C", str(root), "rev-parse", "HEAD",
+        ]
+        for module, function, missing in (
+            ("MemNavData.diag_distill_geometry_router", distill_git_value,
+             None),
+            ("MemNavData.diag_patch_temporal_router", patch_git_value, ""),
+        ):
+            with self.subTest(module=module):
+                with mock.patch(
+                        f"{module}.subprocess.check_output",
+                        return_value="abc123\n") as check:
+                    self.assertEqual(function(root, "rev-parse", "HEAD"),
+                                     "abc123")
+                    self.assertEqual(check.call_args.args[0], expected_command)
+                with mock.patch(
+                        f"{module}.subprocess.check_output",
+                        side_effect=OSError):
+                    self.assertEqual(function(root, "rev-parse", "HEAD"),
+                                     missing)
+
     def test_cosine_only_path_matches_full_relation_features(self):
         goal = np.asarray([[1.0, 2.0, 3.0], [-2.0, 1.0, 0.5]])
         memory = np.asarray([[3.0, -1.0, 2.0], [0.2, 4.0, -1.0]])

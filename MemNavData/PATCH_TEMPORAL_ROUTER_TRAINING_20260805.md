@@ -60,8 +60,10 @@ leave-one-training-scene-out OOF 和 selective threshold 校准。开发场景�
 - LingBot commit：`7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2`。
 
 Runner 会校验上述哈希、LingBot commit、Nav commit、CUDA、Python import、编译、
-18 个 router 单元测试以及工作树中的任务文件。`LINGBOT_REPO` 必须显式指定，避免子目录
-缺少 LingBot checkout 时误用不存在的默认路径。
+19 个 router 单元测试以及工作树中的任务文件。`LINGBOT_REPO` 必须显式指定，避免子目录
+缺少 LingBot checkout 时误用不存在的默认路径。共享 LingBot checkout 属于另一个 Unix
+用户；commit 检查只对这一条 Git 命令传入精确的 `safe.directory`，不写用户级或系统级
+Git 配置，也不修改共享仓库。
 
 ## 4. Sparse teacher 修复
 

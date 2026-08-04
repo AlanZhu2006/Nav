@@ -75,9 +75,13 @@ def sha256(path: Path) -> str:
 
 
 def git_value(root: Path, *args: str) -> str:
+    resolved = root.resolve()
     try:
         return subprocess.check_output(
-            ["git", "-C", str(root), *args], text=True,
+            [
+                "git", "-c", f"safe.directory={resolved}",
+                "-C", str(resolved), *args,
+            ], text=True,
             stderr=subprocess.DEVNULL).strip()
     except (OSError, subprocess.CalledProcessError):
         return ""

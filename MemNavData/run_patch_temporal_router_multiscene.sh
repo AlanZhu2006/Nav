@@ -38,7 +38,12 @@ TASK_FILES=(
   MemNavData/patch_temporal_router.py
   MemNavData/diag_patch_temporal_router.py
   MemNavData/run_patch_temporal_router_multiscene.sh
+  MemNavData/slurm_patch_temporal_router_multiscene.sbatch
   MemNavData/router_multiscene_split_20260805.json
+  MemNavData/test_reliability_router.py
+  MemNavData/test_patch_temporal_router.py
+  MemNavData/test_router_cross_episode_pairs.py
+  MemNavData/test_router_dataset_selection.py
 )
 
 if [[ -e "${RUN_ROOT}" ]]; then
@@ -61,7 +66,9 @@ done
 
 actual_split_sha=$(sha256sum "${SPLIT_MANIFEST}" | awk '{print $1}')
 actual_weight_sha=$(sha256sum "${WEIGHTS}" | awk '{print $1}')
-actual_lingbot_commit=$(git -C "${LINGBOT_REPO}" rev-parse HEAD)
+actual_lingbot_commit=$(
+  git -c safe.directory="${LINGBOT_REPO}" \
+    -C "${LINGBOT_REPO}" rev-parse HEAD)
 [[ "${actual_split_sha}" == "${EXPECTED_SPLIT_SHA}" ]] || {
   echo "ABORT: split SHA mismatch ${actual_split_sha}" >&2; exit 1; }
 [[ "${actual_weight_sha}" == "${EXPECTED_WEIGHT_SHA}" ]] || {
@@ -76,6 +83,10 @@ if [[ -n "${EXPECTED_COMMIT:-}" && "${actual_commit}" != "${EXPECTED_COMMIT}" ]]
 fi
 git -C "${ROOT}" diff --quiet -- "${TASK_FILES[@]}" || {
   echo "ABORT: router task files differ from the checked-out commit" >&2
+  exit 1
+}
+git -C "${ROOT}" diff --cached --quiet -- "${TASK_FILES[@]}" || {
+  echo "ABORT: staged router task files differ from the checked-out commit" >&2
   exit 1
 }
 

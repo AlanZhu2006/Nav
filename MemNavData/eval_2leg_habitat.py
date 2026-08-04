@@ -40,7 +40,7 @@ import numpy as np
 import requests
 from PIL import Image
 
-from generate_twoleg import (M_W, geodesic, make_sim, render, yaw_facing)
+from generate_twoleg import (K, M_W, geodesic, make_sim, render, yaw_facing)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--episode_root", type=str, required=True,
@@ -64,14 +64,19 @@ parser.add_argument("--max_turn_deg", type=float, default=4.5)
 parser.add_argument("--lookahead", type=float, default=0.7)
 parser.add_argument("--episodes", type=int, default=0, help="cap #episodes (0 = all)")
 parser.add_argument("--save_video", action="store_true")
+parser.add_argument("--dump_traj", action="store_true",
+                    help="save executed path + per-plan candidate fans (world frame) per leg")
+parser.add_argument("--leg1_only", action="store_true",
+                    help="policy mode: run leg-1 only (diagnostics)")
 args = parser.parse_args()
 
 BASE = f"http://{args.host}:{args.port}"
 CAM_H = 0.5
+ALGO = "unknown"        # set by srv_reset(); gates memnav-only endpoints
 
 
 # --------------------------------------------------------------------------- #
-# HTTP helpers
+# HTTP helpers (speak both dialects: memnav server + stock NavDP baselines)
 # --------------------------------------------------------------------------- #
 def jpg_bytes(rgb):
     buf = io.BytesIO()
@@ -79,23 +84,43 @@ def jpg_bytes(rgb):
     return buf.getvalue()
 
 
-def srv_reset(camera_height=CAM_H):
-    r = requests.post(f"{BASE}/navigator_reset", json={"camera_height": camera_height})
+def depth_png_bytes(depth_m):
+    """metres -> uint16 PNG *10000 (NavDP wire convention)."""
+    d16 = np.clip(np.asarray(depth_m, np.float32) * 10000.0, 0, 65535).astype(np.uint16)
+    buf = io.BytesIO()
+    Image.fromarray(d16).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def srv_reset(camera_height=CAM_H, episode_len=None):
+    global ALGO
+    r = requests.post(f"{BASE}/navigator_reset",
+                      json={"camera_height": camera_height, "episode_len": episode_len,
+                            "intrinsic": K.tolist(), "stop_threshold": -3.0, "batch_size": 1})
     r.raise_for_status()
-    return r.json()["algo"]
+    ALGO = r.json()["algo"]
+    return ALGO
 
 
 def srv_memory(image_jpg):
+    if ALGO != "memnav":     # stock baselines have no streaming-memory endpoint
+        return {}
     r = requests.post(f"{BASE}/memory_step", files={"image": ("image.jpg", image_jpg)})
     r.raise_for_status()
     return r.json()
 
 
-def srv_plan(image_jpg, goal_jpg):
-    r = requests.post(f"{BASE}/imagegoal_step",
-                      files={"image": ("image.jpg", image_jpg), "goal": ("goal.jpg", goal_jpg)})
+def srv_plan(image_jpg, goal_jpg, depth_png=None):
+    files = {"image": ("image.jpg", image_jpg), "goal": ("goal.jpg", goal_jpg)}
+    if depth_png is not None:
+        files["depth"] = ("depth.png", depth_png)
+    r = requests.post(f"{BASE}/imagegoal_step", files=files)
     r.raise_for_status()
-    return r.json()
+    out = r.json()
+    traj = np.asarray(out.get("trajectory", []), float)
+    if traj.ndim == 3:       # stock servers return [batch, T, 3]
+        out["trajectory"] = traj[0].tolist()
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -155,13 +180,14 @@ def pursuit_step(pos, psi, path_xz, pf):
 def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None):
     """Policy-driven leg. Returns dict(reached, path_len, end_pos, end_psi, steps)."""
     path_len, history, way_world, plans = 0.0, [], None, []
+    exec_xy, fans = [], []          # dump_traj: executed path + per-plan candidates
     for step in range(args.max_steps):
-        rgb, _depth = render(sim, pos + np.array([0, CAM_H, 0]), psi)
+        rgb, depth = render(sim, pos + np.array([0, CAM_H, 0]), psi)
         frame = jpg_bytes(rgb)
         if writer is not None:
             writer.append_data(rgb)
         if step % args.exec_horizon == 0:
-            resp = srv_plan(frame, goal_jpg)
+            resp = srv_plan(frame, goal_jpg, depth_png_bytes(depth))
             if "trajectory" in resp:
                 way = np.asarray(resp["trajectory"], float)
                 way_world = waypoints_to_world(way, [pos[0], pos[2]], psi)
@@ -169,18 +195,27 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None):
                                   match_idx=resp.get("match_idx"), anchor=resp.get("anchor"),
                                   raw_score=resp.get("raw_score"),
                                   frame_idx=resp.get("frame_idx")))
+                if args.dump_traj:
+                    allt = np.asarray(resp.get("all_trajectory", []), float)
+                    if allt.ndim == 3:
+                        fans.append(dict(step=step, pos=[pos[0], pos[2]], psi=float(psi),
+                                         sel=way_world.tolist(),
+                                         cands=[waypoints_to_world(t, [pos[0], pos[2]], psi).tolist()
+                                                for t in allt]))
         else:
             srv_memory(frame)
         if way_world is not None:
             pos, psi, dl = pursuit_step(pos, psi, way_world, pf)
             path_len += dl
         history.append(np.array([pos[0], pos[2]]))
+        if args.dump_traj:
+            exec_xy.append([pos[0], pos[2]])
         if np.linalg.norm(np.array([pos[0], pos[2]]) - goal_xz) < args.success_dist:
-            return dict(reached=True, path_len=path_len, end_pos=pos, end_psi=psi, steps=step + 1, plans=plans)
+            return dict(reached=True, path_len=path_len, end_pos=pos, end_psi=psi, steps=step + 1, plans=plans, exec_xy=exec_xy, fans=fans)
         if len(history) > args.stuck_window and \
            np.linalg.norm(history[-1] - history[-args.stuck_window]) < args.stuck_dist:
-            return dict(reached=False, path_len=path_len, end_pos=pos, end_psi=psi, steps=step + 1, plans=plans)
-    return dict(reached=False, path_len=path_len, end_pos=pos, end_psi=psi, steps=args.max_steps, plans=plans)
+            return dict(reached=False, path_len=path_len, end_pos=pos, end_psi=psi, steps=step + 1, plans=plans, exec_xy=exec_xy, fans=fans)
+    return dict(reached=False, path_len=path_len, end_pos=pos, end_psi=psi, steps=args.max_steps, plans=plans, exec_xy=exec_xy, fans=fans)
 
 
 def spl(reached, geo, plen):
@@ -227,7 +262,8 @@ def main():
         goalA_jpg = open(os.path.join(rgb_dir, f"{switch - 1}.jpg"), "rb").read()
         goalB_jpg = open(os.path.join(ep_dir, "goal_1.jpg"), "rb").read()
 
-        srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)))
+        srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)),
+                  episode_len=int(meta["n_frames"]))
         writer = None
         if args.save_video and imageio is not None:
             writer = imageio.get_writer(
@@ -235,19 +271,43 @@ def main():
 
         # ---- leg 1 ----
         if args.leg1_mode == "replay":
-            for i in range(switch):
-                srv_memory(open(os.path.join(rgb_dir, f"{i}.jpg"), "rb").read())
+            if ALGO == "memnav":     # stock baselines have no long memory to fill
+                for i in range(switch):
+                    srv_memory(open(os.path.join(rgb_dir, f"{i}.jpg"), "rb").read())
             pos, psi = parquet_pose_hab(rows.iloc[switch - 1]["action"])
             legA = dict(reached=True, path_len=geoA, steps=switch, plans=[])   # scripted: SPL_A undefined
         else:
             legA = run_policy_leg(sim, pf, start_floor, start_psi, goalA_jpg, A_xz, geoA, writer)
             pos, psi = legA["end_pos"], legA["end_psi"]
+            if args.dump_traj:
+                np.savez(os.path.join(args.out, os.path.basename(ep_dir) + "_legA.npz"),
+                         exec_xy=np.array(legA.get("exec_xy", [])),
+                         start=np.array([start_floor[0], start_floor[2]]),
+                         start_psi=start_psi, goal=A_xz, geo=geoA,
+                         reached=float(legA["reached"]),
+                         fans=json.dumps(legA.get("fans", [])))
+            if args.leg1_only:
+                m = dict(episode=os.path.basename(ep_dir), reached_A=float(legA["reached"]),
+                         reached_B=float("nan"), spl_A=spl(legA["reached"], geoA, legA["path_len"]),
+                         spl_B=float("nan"), geo_A=geoA, geo_B=geoB, len_A=legA["path_len"],
+                         len_B=0.0, steps_A=legA["steps"], steps_B=0, covis=B.get("covis"),
+                         recall_gap=B.get("recall_gap"), gate_B_mean=float("nan"), gate_B_max=float("nan"))
+                metrics.append(m)
+                print(f"[{m['episode']}] A={m['reached_A']:.0f} splA={m['spl_A']:.2f} "
+                      f"lenA={m['len_A']:.1f}/{geoA:.1f}m")
+                with open(os.path.join(args.out, "metric.csv"), "w", newline="") as f:
+                    wcsv = csv.DictWriter(f, fieldnames=list(metrics[0].keys()))
+                    wcsv.writeheader(); wcsv.writerows(metrics)
+                if writer is not None:
+                    writer.close()
+                continue
 
         # ---- leg 2 ----
         legB = dict(reached=False, path_len=0.0, steps=0, plans=[])
         if legA["reached"]:
             if args.reset_memory:
-                srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)))
+                srv_reset(camera_height=float(meta.get("camera_height_m", CAM_H)),
+                          episode_len=int(meta["n_frames"]))
             legB = run_policy_leg(sim, pf, pos, psi, goalB_jpg, B_xz, geoB, writer)
 
         if writer is not None:
@@ -262,8 +322,8 @@ def main():
             len_A=legA["path_len"], len_B=legB["path_len"],
             steps_A=legA["steps"], steps_B=legB["steps"],
             covis=B.get("covis"), recall_gap=B.get("recall_gap"),
-            gate_B_mean=(float(np.mean([p["gate"] for p in legB["plans"]])) if legB["plans"] else float("nan")),
-            gate_B_max=(float(np.max([p["gate"] for p in legB["plans"]])) if legB["plans"] else float("nan")),
+            gate_B_mean=(float(np.mean(gB)) if (gB := [p["gate"] for p in legB["plans"] if p["gate"] is not None]) else float("nan")),
+            gate_B_max=(float(np.max(gB)) if gB else float("nan")),
         )
         json.dump(dict(legA=legA["plans"], legB=legB["plans"]),
                   open(os.path.join(args.out, m["episode"] + "_plans.json"), "w"))

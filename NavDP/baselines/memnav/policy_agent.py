@@ -27,14 +27,29 @@ import shutil
 import numpy as np
 import torch
 
+# Length-tiered flow-gate thresholds — MUST mirror the training precompute policy
+# (scripts/train_memnav/precompute_flowgate_full.sbatch, 2026-07-28 sweep): smallest
+# threshold whose fitted keyframe count fits the 270-kf budget (8 scale + kf < 280).
+FLOW_TIERS = [(702, 20.0), (877, 25.0), (1075, 30.0), (1506, 40.0), (2048, 50.0)]
+FLOW_GAP = 30
 
-# ----------------------------------------------------------------------------- #
-# helpers
-# ----------------------------------------------------------------------------- #
+
+def flow_threshold_for_length(n_frames):
+    for hi, thr in FLOW_TIERS:
+        if n_frames <= hi:
+            return thr
+    return 60.0   # tier60 rework bucket; training excluded >2048-frame episodes
+
+
 class MemNavAgent:
     def __init__(self, checkpoint, internnav_root, device="cuda:0",
                  exclude_recent=83, num_samples=16, buffer_root=None,
-                 gate_skip_below=0.0, retrieval_mode="raw", anchor_switch_margin=0.01):
+                 gate_skip_below=0.0, retrieval_mode="raw", anchor_switch_margin=0.01,
+                 flow_gate="auto"):
+        # flow_gate: "auto" = per-episode length-tiered threshold (training policy),
+        #            "off"  = dense capture (pre-flowgate checkpoints, e.g. ckpt-1500),
+        #            float  = fixed threshold in px.
+        self.flow_gate = flow_gate
         import sys
         if internnav_root not in sys.path:
             sys.path.insert(0, internnav_root)
@@ -83,12 +98,26 @@ class MemNavAgent:
     # ------------------------------------------------------------------ #
     # episode lifecycle
     # ------------------------------------------------------------------ #
-    def reset(self, camera_height=0.5):
+    def reset(self, camera_height=0.5, episode_len=None):
         self._episode_counter += 1
         self.rgb_dir = os.path.join(self.buffer_root, f"ep_{self._episode_counter:04d}")
         shutil.rmtree(self.rgb_dir, ignore_errors=True)
         os.makedirs(self.rgb_dir, exist_ok=True)
         self.camera_height = float(camera_height)
+        # resolve this episode's flow threshold (0 = dense capture)
+        if self.flow_gate == "off":
+            self.flow_threshold = 0.0
+        elif self.flow_gate == "auto":
+            self.flow_threshold = flow_threshold_for_length(int(episode_len)) \
+                if episode_len else FLOW_TIERS[0][1]
+        else:
+            self.flow_threshold = float(self.flow_gate)
+        self.flow_gap = FLOW_GAP
+        self._last_episode_len = episode_len
+        self._last_kf_pose = None        # [1,1,9] gate reference (last committed keyframe)
+        self._last_kf_idx = self.S - 1
+        self.anchor_frame_indices = []   # raw frame index per stored anchor row
+        self.cam_frame_indices = []      # raw frame index per stored cam-KV row
         self.n = 0                       # frames streamed so far
         self._pending = []               # preprocessed frames waiting for the scale block
         self._window_imgs = []           # last W preprocessed frames (cpu), for window_forward
@@ -179,9 +208,23 @@ class MemNavAgent:
             self.cam_pose.extend([pose[i].cpu() for i in range(self.S)])
             ck, cv = self._read_cam_newest(self.S)
             self.cam_k.extend(ck); self.cam_v.extend(cv)
+            # flow gate: reference = last scale frame (precompute:481-482);
+            # cam rows for the scale frames are always kept (precompute:460)
+            self._last_kf_pose = pl[-1][:, -1:].float()
+            self._last_kf_idx = self.S - 1
+            self.cam_frame_indices = list(range(self.S))
             self._pending = []
         else:
-            # causal per-frame stream (num_frame_per_block=1) + write-once capture
+            # causal per-frame stream + flow-gated commit-then-drop
+            # (mirrors precompute_lingbot_features.py:490-575). The forward always
+            # runs in append mode; if the flow gate rejects the frame, the KV
+            # append is undone. dino_cls / cam_pose / live tokens stay DENSE.
+            agg_mod = self.lb.agg
+            gate_on = self.flow_threshold > 0
+            if gate_on:
+                saved_kv = dict(agg_mod.kv_cache)
+                saved_cam = [dict(d) for d in ch.kv_cache]
+                saved_total = int(agg_mod.total_frames_processed)
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 agg, _ = self.lb.model._aggregate_features(
                     img[None, None].to(self.device),
@@ -191,11 +234,41 @@ class MemNavAgent:
             self._last_tokens = agg[-1][:, -1]
             self._last_agg = [layer for layer in agg]
             self.dino_cls.extend(self._pop_cls(1))
-            ak, av = self._read_anchor_newest()
-            self.anchor_k.append(ak); self.anchor_v.append(av)
             self.cam_pose.append(pl[-1][0].float()[-1].cpu())
-            ck, cv = self._read_cam_newest(1)
-            self.cam_k.extend(ck); self.cam_v.extend(cv)
+
+            if gate_on:
+                cur_pose_g = pl[-1][:, -1:].float()               # [1,1,9]
+                if idx == self.S:
+                    is_kf = True                                  # first post-scale frame
+                else:
+                    from lingbot_map.models.gct_stream_window import _compute_flow_magnitude
+                    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                        dpred = self.lb.model._predict_depth(
+                            agg, img[None, None].to(self.device), self._psi)["depth"].float()
+                    flow = _compute_flow_magnitude(cur_pose_g, self._last_kf_pose,
+                                                   dpred, tuple(dpred.shape[2:4]))
+                    is_kf = (flow > self.flow_threshold
+                             or (idx - self._last_kf_idx) >= self.flow_gap)
+            else:
+                is_kf = True                                      # dense path: keep all
+
+            if is_kf:
+                if gate_on:
+                    self._last_kf_pose, self._last_kf_idx = cur_pose_g, idx
+                ak, av = self._read_anchor_newest()
+                self.anchor_k.append(ak); self.anchor_v.append(av)
+                self.anchor_frame_indices.append(idx)
+                ck, cv = self._read_cam_newest(1)
+                self.cam_k.extend(ck); self.cam_v.extend(cv)
+                self.cam_frame_indices.append(idx)
+            else:
+                # drop: undo the KV append. total_frames_processed rewinds
+                # (compressed timeline); the camera head's frame_idx is
+                # deliberately NOT restored (raw timeline) — precompute:535-537.
+                agg_mod.kv_cache.clear()
+                agg_mod.kv_cache.update(saved_kv)
+                ch.kv_cache = saved_cam
+                agg_mod.total_frames_processed = saved_total
         self.n += 1
         return idx
 
@@ -240,13 +313,21 @@ class MemNavAgent:
             L, H, d = self.scale_k.shape[0], self.scale_k.shape[1], self.scale_k.shape[-1]
             ak = self.scale_k.new_zeros((L, H, 0, self.psi, d))
             av = self.scale_k.new_zeros((L, H, 0, self.psi, d))
-        return dict(
+        cache = dict(
             scale_k=self.scale_k, scale_v=self.scale_v,
             anchor_k=ak, anchor_v=av,
             cam_k=torch.stack(self.cam_k, 0), cam_v=torch.stack(self.cam_v, 0),
             cam_pose_enc=torch.stack(self.cam_pose, 0).to(self.device),
             ground_h_est=None,
         )
+        if self.flow_threshold > 0:
+            # sparse keyframe layout (schema v2): raw-frame indices per stored row,
+            # consumed by _inject/_inject_camera for prefix-count row translation.
+            cache["anchor_frame_indices"] = torch.as_tensor(self.anchor_frame_indices,
+                                                            dtype=torch.long)
+            cache["cam_frame_indices"] = torch.as_tensor(self.cam_frame_indices,
+                                                         dtype=torch.long)
+        return cache
 
     def _get_metric_scale(self):
         if self._metric_scale is None and self.n >= self.S:
@@ -292,10 +373,20 @@ class MemNavAgent:
             # decoder tilt: the decoder-owned affine, as in training (NOT the BCE gate)
             dec_gate_logit = self.core.dec_gate_a * max_cos + self.core.dec_gate_b
 
+            # match scoring — both modes yield a STATIC per-frame cosine in [-1,1]
+            # (goal fixed, cls write-once), so the sticky-anchor ratchet applies to
+            # either. "raw" = unprojected dino cls (ckpt-1500: trained head was
+            # anti-correlated); "head" = trained projection (ckpt-2600+: corr +0.55,
+            # beats raw — training-faithful choice).
             raw_score = None
-            if self.retrieval_mode == "raw" and cand.any():
+            if cand.any():
                 import torch.nn.functional as Fnn
-                raw_cos = Fnn.cosine_similarity(goal_cls.unsqueeze(1), mem_cls, dim=-1)[0]
+                if self.retrieval_mode == "raw":
+                    raw_cos = Fnn.cosine_similarity(goal_cls.unsqueeze(1), mem_cls, dim=-1)[0]
+                else:
+                    gq = Fnn.normalize(self.core.retrieval.proj_goal(goal_cls), dim=-1)
+                    mk = Fnn.normalize(self.core.retrieval.proj_mem(mem_cls), dim=-1)
+                    raw_cos = (gq.unsqueeze(1) * mk).sum(-1)[0]
                 raw_cos = raw_cos.masked_fill(~cand[0], -1.0)
                 cand_best = int(raw_cos.argmax().item())
                 raw_score = float(raw_cos[cand_best].item())
@@ -339,7 +430,8 @@ class MemNavAgent:
                 _, goal_agg = self.lb.goal_append_warm(
                     goal_img, cache, anchor, self.rgb_dir, warm_full, return_agg=True)
                 goal_pose = self.lb.camera_pose(
-                    cache["cam_k"], cache["cam_v"], anchor + 1, goal_agg)[-1][None]
+                    cache["cam_k"], cache["cam_v"], anchor + 1, goal_agg,
+                    cam_frame_indices=cache.get("cam_frame_indices"))[-1][None]
                 self._goal_cache[pkey] = goal_pose
 
             mscale = torch.tensor([self._get_metric_scale()], device=dev, dtype=torch.float32)

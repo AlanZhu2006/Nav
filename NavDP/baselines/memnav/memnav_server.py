@@ -45,6 +45,10 @@ parser.add_argument("--gate_skip_below", type=float, default=0.0,
                     help="skip the goal-insert tower when trained gate < this (0 = never skip)")
 parser.add_argument("--anchor_switch_margin", type=float, default=0.01,
                     help="sticky-anchor ratchet: switch match only on a clear score win")
+parser.add_argument("--flow_gate", type=str, default="auto",
+                    help="'auto' = length-tiered training policy (needs episode_len in "
+                         "/navigator_reset), 'off' = dense capture (pre-flowgate ckpts), "
+                         "or a fixed threshold in px")
 parser.add_argument("--buffer_root", type=str, default="/tmp/memnav_server_buffer")
 args = parser.parse_args()
 
@@ -61,6 +65,7 @@ agent = MemNavAgent(
     gate_skip_below=args.gate_skip_below,
     retrieval_mode=args.retrieval,
     anchor_switch_margin=args.anchor_switch_margin,
+    flow_gate=args.flow_gate,
 )
 
 app = Flask(__name__)
@@ -70,14 +75,16 @@ app = Flask(__name__)
 def navigator_reset():
     payload = request.get_json(silent=True) or {}
     cam_h = float(payload.get("camera_height", 0.5))
-    agent.reset(camera_height=cam_h)
-    return jsonify({"algo": "memnav"})
+    ep_len = payload.get("episode_len")
+    agent.reset(camera_height=cam_h, episode_len=ep_len)
+    return jsonify({"algo": "memnav", "flow_threshold": agent.flow_threshold})
 
 
 @app.route("/navigator_reset_env", methods=["POST"])
 def navigator_reset_env():
     # single-env server: same as a full reset (used by the cold/reset-memory arm)
-    agent.reset(camera_height=agent.camera_height)
+    agent.reset(camera_height=agent.camera_height,
+                episode_len=getattr(agent, "_last_episode_len", None))
     return jsonify({"algo": "memnav"})
 
 

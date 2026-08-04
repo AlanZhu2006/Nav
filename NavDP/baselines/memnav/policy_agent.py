@@ -380,16 +380,20 @@ class MemNavAgent:
             # beats raw — training-faithful choice).
             raw_score = None
             if cand.any():
-                import torch.nn.functional as Fnn
                 if self.retrieval_mode == "raw":
+                    import torch.nn.functional as Fnn
                     raw_cos = Fnn.cosine_similarity(goal_cls.unsqueeze(1), mem_cls, dim=-1)[0]
+                    raw_cos = raw_cos.masked_fill(~cand[0], -1.0)
+                    cand_best = int(raw_cos.argmax().item())
+                    raw_score = float(raw_cos[cand_best].item())
                 else:
-                    gq = Fnn.normalize(self.core.retrieval.proj_goal(goal_cls), dim=-1)
-                    mk = Fnn.normalize(self.core.retrieval.proj_mem(mem_cls), dim=-1)
-                    raw_cos = (gq.unsqueeze(1) * mk).sum(-1)[0]
-                raw_cos = raw_cos.masked_fill(~cand[0], -1.0)
-                cand_best = int(raw_cos.argmax().item())
-                raw_score = float(raw_cos[cand_best].item())
+                    # head mode: retrieval already scored this space — match_idx is the
+                    # argmax of cos/temp (temp>0 preserves argmax) and max_cos the
+                    # candidate-masked max with the same -1.0 floor, so read them off
+                    # instead of re-running the projections (keeps anchor and gate on
+                    # one scoring function by construction).
+                    cand_best = int(match_idx.item())
+                    raw_score = float(max_cos.item())
                 st = self._anchor_state.get(gkey)
                 # ratchet: keep the incumbent unless the new best clearly beats it
                 if st is not None and raw_score <= st["score"] + self.anchor_switch_margin:

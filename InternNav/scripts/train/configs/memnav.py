@@ -114,6 +114,24 @@ memnav_exp_cfg = ExpCfg(
         require_versioned_cache=_REQUIRE_VERSIONED_CACHE,
         # ground-scale gate ceiling (MEMNAV_GROUND_SCALE_MAX; scale_mode='ground')
         ground_scale_max=_GROUND_SCALE_MAX,
+        # decoder-gate routing + curriculum (diag_retrieval/diag_decgate_zsweep.py on
+        # ckpt-5570: the action loss is locally optimal in z, so dec_gate_a/b had
+        # nothing to descend — the routing has to be scaffolded, not re-parameterized).
+        # fusion: symmetric (±z/2 tilt) | residual (revisit +z, novel untouched) |
+        #         value_scale (revisit values *= sigmoid(z); no attention bias)
+        dec_gate_fusion=os.environ.get('MEMNAV_DECGATE_FUSION', 'symmetric'),
+        dec_gate_scale_novel=os.environ.get(
+            'MEMNAV_DECGATE_SCALE_NOVEL', '').lower() in ('1', 'true', 'yes'),
+        # neutral router init (NOT the classifier's 10/-8, which starts the gate closed)
+        dec_gate_init_a=float(os.environ.get('MEMNAV_DECGATE_INIT_A', '0.0')),
+        dec_gate_init_b=float(os.environ.get('MEMNAV_DECGATE_INIT_B', '0.0')),
+        # logit-space teacher curriculum: decoder gate = ±teacher_z by GT label at
+        # ratio 1, annealed linearly to the predicted gate over teacher_steps
+        # (steps=0 disables; consumed by MemNavTrainer.compute_loss)
+        decgate_teacher_start=float(os.environ.get('MEMNAV_DECGATE_TEACHER_START', '1.0')),
+        decgate_teacher_end=float(os.environ.get('MEMNAV_DECGATE_TEACHER_END', '0.0')),
+        decgate_teacher_steps=int(os.environ.get('MEMNAV_DECGATE_TEACHER_STEPS', '500')),
+        decgate_teacher_z=float(os.environ.get('MEMNAV_DECGATE_TEACHER_Z', '3.0')),
         # policy / diffusion
         predict_size=24,
         temporal_depth=8,

@@ -24,6 +24,9 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from transformers import PretrainedConfig, PreTrainedModel
 
 from internnav.model.basemodel.memnav.cache_schema import validate_cache_pair
+from internnav.model.basemodel.memnav.decgate_schedule import (
+    DECGATE_FUSIONS, Z_CLAMP, blend_decoder_gate_logit, branch_bias_values,
+    decgate_fusion_code)
 from internnav.model.basemodel.memnav.lingbot_stream import (
     LingBotStream, ground_scale_from_h_est, GROUND_SCALE_RANGE)
 from internnav.model.encoder.navdp_backbone import (
@@ -271,7 +274,9 @@ class MemNavNet(nn.Module):
                  token_dim=384, heads=8, m_rgbd=4, m_depth=4, m_revisit=4, m_novel=4,
                  predict_size=24, temporal_depth=8, num_diffusion_iters=10, goal_warm=64,
                  aux_pose_calibration='empirical', scale_mode='ground', ground_scale_max=None,
-                 require_versioned_cache=False, device="cuda"):
+                 require_versioned_cache=False, dec_gate_fusion='symmetric',
+                 dec_gate_scale_novel=False, dec_gate_init=(0.0, 0.0),
+                 decgate_teacher_z=3.0, device="cuda"):
         super().__init__()
         # ground-scale gate ceiling (scale_mode='ground'): corrected estimates above this
         # fall back to the pooled constant. None -> module default GROUND_SCALE_RANGE[1].
@@ -337,12 +342,30 @@ class MemNavNet(nn.Module):
         # classification-optimal boundary at P≈0.26 while the shared gate fed the decoder
         # P≈0.54 on true revisits). dec_* is trained ONLY by the action loss, on
         # max_cos.detach() — the projection space stays owned by the retrieval losses.
-        # Same init as the head's gate so step-0 behavior matches; subsumes the old
-        # branch_bias 2-vector (dec_gate_b IS the decoder-side offset, plus a slope).
-        self.dec_gate_a = nn.Parameter(torch.tensor(10.0))
-        self.dec_gate_b = nn.Parameter(torch.tensor(-8.0))
+        # Default init is NEUTRAL (0, 0), not the classifier's (10, -8): copying the
+        # classifier init gave z ≈ -5 with fresh projections, suppressing the revisit
+        # branch from step 0 and freezing the scalars at a routing-indifferent local
+        # optimum (diag_decgate_zsweep.py on ckpt-5570: loss flat in z at ±2, worse at
+        # ±4 — nothing to descend). A router should start agnostic, not closed.
+        self.dec_gate_a = nn.Parameter(torch.tensor(float(dec_gate_init[0])))
+        self.dec_gate_b = nn.Parameter(torch.tensor(float(dec_gate_init[1])))
+        # fusion mode + curriculum magnitude (see decgate_schedule.py). Buffers persist
+        # the mode in checkpoints; _sync_decgate_fusion() restores the python attrs
+        # after from_pretrained so a loaded checkpoint keeps its trained semantics.
+        self.dec_gate_fusion = str(dec_gate_fusion)
+        self.dec_gate_scale_novel = bool(dec_gate_scale_novel)
+        self.decgate_teacher_z = float(decgate_teacher_z)
+        self.register_buffer("dec_gate_fusion_code",
+                             torch.tensor(decgate_fusion_code(self.dec_gate_fusion)))
+        self.register_buffer("dec_gate_scale_novel_code",
+                             torch.tensor(float(self.dec_gate_scale_novel)))
 
         self.to(device)   # move trainable heads to device (lingbot.model already there)
+
+    def _sync_decgate_fusion(self):
+        """Restore fusion-mode python attrs from the checkpoint buffers after load."""
+        self.dec_gate_fusion = DECGATE_FUSIONS[int(self.dec_gate_fusion_code.item())]
+        self.dec_gate_scale_novel = bool(self.dec_gate_scale_novel_code.item())
 
     def build_current_state(self, current, depth_feat):
         """current [B,P,2C] (post-GCT), depth_feat [B,Pf,Cd] -> current_state [B, m_rgbd+m_depth, token_dim]."""
@@ -365,33 +388,44 @@ class MemNavNet(nn.Module):
         return mem + self.cond_pos_embed(mem)
 
     def _gate_mask(self, dec_gate_logit):
-        """Per-sample cross-attention bias [B*heads, predict_size, mem_len] — SYMMETRIC
-        revisit/novel tilt with zero common mode:
-          revisit cols += +z/2, novel cols += -z/2   (z = dec_gate_a·max_cos + dec_gate_b)
-        Only the pair's difference (= z, the decoder gate logit) shapes the revisit-vs-
-        novel split, and the pair's mean bias vs the ungated time/current_state (obstacle)
-        columns is 0 regardless of gate confidence. The old log(g)/log(1-g) form leaked
-        common mode: an uncertain gate suppressed BOTH direction branches by log(0.5)
-        relative to current_state — coupling direction-confidence to obstacle weighting.
-        Softmax invariance does NOT hide that (it only removes constants added to ALL
-        columns), hence the explicit zero-mean construction here."""
+        """Per-sample cross-attention bias [B*heads, predict_size, mem_len].
+
+        symmetric: revisit cols += +z/2, novel cols += -z/2 — zero common mode: only
+        the pair's difference (= z) shapes the revisit-vs-novel split, and the pair's
+        mean bias vs the ungated time/current_state (obstacle) columns is 0 regardless
+        of gate confidence. The old log(g)/log(1-g) form leaked common mode (an
+        uncertain gate suppressed BOTH direction branches vs current_state); softmax
+        invariance only removes constants added to ALL columns.
+        residual: revisit cols += z, novel cols += 0 — the visual-goal branch is the
+        always-on base policy and memory is strictly additive (the fixed-eval finding
+        that the visual branch has value even on GT revisits)."""
         B = dec_gate_logit.shape[0]
         bias = dec_gate_logit.new_zeros(B, self.mem_len)
         rs, re = 1 + self.n_cs, 1 + self.n_cs + self.n_rev
         ns, ne = re, re + self.n_nov
-        # same ±9.2 tilt ceiling the old g∈[1e-4, 1-1e-4] clamp imposed on log-odds
-        z = dec_gate_logit.clamp(-9.2, 9.2)
-        bias[:, rs:re] = (0.5 * z).unsqueeze(1)      # revisit
-        bias[:, ns:ne] = (-0.5 * z).unsqueeze(1)     # novel
+        rev_bias, nov_bias = branch_bias_values(dec_gate_logit, self.dec_gate_fusion)
+        bias[:, rs:re] = rev_bias.unsqueeze(1)
+        bias[:, ns:ne] = nov_bias.unsqueeze(1)
         bias = bias[:, None, None, :].expand(B, self.heads, self.predict_size, self.mem_len)
         return bias.reshape(B * self.heads, self.predict_size, self.mem_len)
 
     def predict_noise(self, noisy, timestep, current_state, revisit, novel, dec_gate_logit):
+        if self.dec_gate_fusion == 'value_scale':
+            # gate the token VALUES, not the attention logits: gradient to z scales
+            # with the readout magnitude instead of the attention weight on a
+            # suppressed column, so a closed gate still passes usable gradient
+            g = torch.sigmoid(dec_gate_logit.clamp(-Z_CLAMP, Z_CLAMP))
+            revisit = revisit * g[:, None, None]
+            if self.dec_gate_scale_novel:
+                novel = novel * (1.0 - g)[:, None, None]
+            mask = None
+        else:
+            mask = self._gate_mask(dec_gate_logit)
         a = self.input_embed(noisy)
         a = a + self.out_pos_embed(a)
         mem = self._memory(current_state, revisit, novel, timestep)
         out = self.decoder(tgt=a, memory=mem, tgt_mask=self.tgt_mask,
-                           memory_mask=self._gate_mask(dec_gate_logit))
+                           memory_mask=mask)
         return self.action_head(self.layernorm(out))
 
     def forward(self, batch):
@@ -403,6 +437,16 @@ class MemNavNet(nn.Module):
         novel = self.novel(batch["batch_window_images"][:, -1].to(dev),   # current frame [B,3,H,W]
                            batch["batch_goal_image"].to(dev))             # goal frame
         dec_gate_logit = enc["dec_gate_logit"]
+        # logit-space gate curriculum (train only): early on the decoder routes by the
+        # GT revisit label so it must LEARN to read the (teacher-anchored) revisit
+        # tokens before the predicted gate takes over — breaking the closed-gate
+        # deadlock diag_decgate_zsweep.py measured on ckpt-5570. Trainer injects the
+        # annealed ratio; absent key (eval / legacy callers) => pure predicted path.
+        teacher_ratio = float(batch.get("decgate_teacher_ratio", 0.0) or 0.0)
+        if self.training and teacher_ratio > 0.0:
+            dec_gate_logit = blend_decoder_gate_logit(
+                dec_gate_logit, batch["batch_is_revisit"].to(dev),
+                teacher_ratio, self.decgate_teacher_z)
 
         labels = batch["batch_labels"].to(dev)          # [B, predict_size, 3]
         B = labels.shape[0]
@@ -645,7 +689,11 @@ class MemNavPolicy(PreTrainedModel):
             sd = torch.load(path, map_location='cpu')
             sd = sd.get('state_dict', sd) if isinstance(sd, dict) else sd
             inc = model.load_state_dict(sd, strict=False)
-            print(f"[memnav] loaded {path}: missing={len(inc.missing_keys)} unexpected={len(inc.unexpected_keys)}")
+            # the checkpoint's persisted fusion mode wins over the config's (a legacy
+            # checkpoint without the buffers keeps the config/default mode)
+            model.core._sync_decgate_fusion()
+            print(f"[memnav] loaded {path}: missing={len(inc.missing_keys)} unexpected={len(inc.unexpected_keys)} "
+                  f"dec_gate_fusion={model.core.dec_gate_fusion}")
         return model
 
     def __init__(self, config: MemNavModelConfig):
@@ -673,6 +721,10 @@ class MemNavPolicy(PreTrainedModel):
             scale_mode=il.get('scale_mode', 'ground'),
             require_versioned_cache=bool(il.get('require_versioned_cache', False)),
             ground_scale_max=il.get('ground_scale_max'),
+            dec_gate_fusion=il.get('dec_gate_fusion', 'symmetric'),
+            dec_gate_scale_novel=bool(il.get('dec_gate_scale_novel', False)),
+            dec_gate_init=(il.get('dec_gate_init_a', 0.0), il.get('dec_gate_init_b', 0.0)),
+            decgate_teacher_z=il.get('decgate_teacher_z', 3.0),
             lingbot_kwargs=lingbot_kwargs or None, device=str(self._device),
         )
 

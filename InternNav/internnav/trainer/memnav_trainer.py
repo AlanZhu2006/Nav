@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, DistributedSampler
 
 from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
+from internnav.model.basemodel.memnav.decgate_schedule import linear_teacher_ratio
 from internnav.trainer.base import BaseTrainer
 
 
@@ -73,6 +74,7 @@ class MemNavTrainer(BaseTrainer):
         'seen_match_acc': 'retrieval/seen_match_acc',
         'dec_gate_a': 'action/dec_gate_a',
         'dec_gate_b': 'action/dec_gate_b',
+        'decgate_teacher_ratio': 'action/decgate_teacher_ratio',
         # (2) camera pose
         'aux_loss': 'pose/aux_loss',
         'aux_loss_shallow': 'pose/aux_loss_shallow',
@@ -123,6 +125,16 @@ class MemNavTrainer(BaseTrainer):
     # ------------------------------------------------------------------ #
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         dev = next(model.parameters()).device
+        # decoder-gate curriculum ratio for this optimizer step (see decgate_schedule /
+        # MemNavNet.forward; steps=0 in the config disables the blend entirely)
+        il_cfg = self.config.il
+        decgate_ratio = linear_teacher_ratio(
+            int(self.state.global_step),
+            float(getattr(il_cfg, 'decgate_teacher_start', 0.0) or 0.0),
+            float(getattr(il_cfg, 'decgate_teacher_end', 0.0) or 0.0),
+            int(getattr(il_cfg, 'decgate_teacher_steps', 0) or 0),
+        )
+        inputs['decgate_teacher_ratio'] = decgate_ratio
         fwd = model(inputs)                                       # forward(batch) moves tensors internally
 
         # --- diffusion action loss (always goal-conditioned). Kept per-sample first
@@ -319,6 +331,7 @@ class MemNavTrainer(BaseTrainer):
                 'gate_b': mm.core.retrieval.gate_b.item(),
                 'dec_gate_a': mm.core.dec_gate_a.item(),
                 'dec_gate_b': mm.core.dec_gate_b.item(),
+                'decgate_teacher_ratio': decgate_ratio,
             }
             # revisit-only metrics (aux_loss, rot_err_deg, pos_err_m, pos_dir_err_deg,
             # seen_match_acc): only logged when this batch actually contains revisit rows

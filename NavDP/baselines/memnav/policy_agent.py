@@ -157,6 +157,11 @@ class MemNavAgent:
         self._goal_cache = {}            # (goal_md5, anchor) -> goal_pose; goal_md5 -> goal_cls
         self._anchor_state = {}          # goal_md5 -> dict(m, score): sticky-anchor ratchet
         self._goal_start_frame = {}      # goal_md5 -> first frame queried for this goal
+        # SIFT/essential verification is a deterministic function of the goal,
+        # immutable history image, and per-episode intrinsic.  Cache both
+        # positive and negative results so temporal confirmation checks anchor
+        # stability instead of recomputing the identical image pair.
+        self._retrieval_verification_cache = {}
         # tower-1 live capture: the current frame's post-GCT tokens + agg list from the
         # CONTINUOUS stream. Training used window_forward's cold-cache recompute only
         # because samples load from disk; at eval the live stream supersedes it.
@@ -202,13 +207,45 @@ class MemNavAgent:
         similar-looking but geometrically unrelated corridor before the
         memory route is allowed to latch. Streaming model state is untouched.
         """
+        import hashlib
+        import time
+
+        started = time.perf_counter()
         anchor = int(anchor)
         empty = dict(matches=0, inliers=0, inlier_ratio=0.0, anchor=anchor)
         if anchor < 0 or anchor >= self.n:
-            return dict(empty, error=f"anchor {anchor} outside [0, {self.n - 1}]")
+            return dict(
+                empty, error=f"anchor {anchor} outside [0, {self.n - 1}]",
+                cached=False,
+                verification_ms=1000.0 * (time.perf_counter() - started))
         anchor_path = os.path.join(self.rgb_dir, f"{anchor}.jpg")
         if not os.path.isfile(anchor_path):
-            return dict(empty, error=f"anchor image missing: {anchor_path}")
+            return dict(
+                empty, error=f"anchor image missing: {anchor_path}",
+                cached=False,
+                verification_ms=1000.0 * (time.perf_counter() - started))
+
+        goal_key = hashlib.md5(goal_jpg_bytes).hexdigest()
+        cache_key = (goal_key, anchor)
+        cached = self._retrieval_verification_cache.get(cache_key)
+        if cached is not None:
+            result = dict(cached)
+            result["cached"] = True
+            result["verification_ms"] = 1000.0 * (
+                time.perf_counter() - started)
+            return result
+
+        def finish(result):
+            result = dict(result)
+            elapsed_ms = 1000.0 * (time.perf_counter() - started)
+            result.update(
+                cached=False,
+                verification_ms=elapsed_ms,
+                uncached_verification_ms=elapsed_ms,
+            )
+            self._retrieval_verification_cache[cache_key] = dict(result)
+            return result
+
         try:
             import cv2
             anchor_gray = cv2.imread(anchor_path, cv2.IMREAD_GRAYSCALE)
@@ -216,12 +253,13 @@ class MemNavAgent:
                 np.frombuffer(goal_jpg_bytes, dtype=np.uint8),
                 cv2.IMREAD_GRAYSCALE)
             if anchor_gray is None or goal_gray is None:
-                return dict(empty, error="image decode failed")
+                return finish(dict(empty, error="image decode failed"))
             sift = cv2.SIFT_create(nfeatures=4000)
             anchor_kp, anchor_desc = sift.detectAndCompute(anchor_gray, None)
             goal_kp, goal_desc = sift.detectAndCompute(goal_gray, None)
             if anchor_desc is None or goal_desc is None:
-                return dict(empty, error="insufficient image features")
+                return finish(dict(
+                    empty, error="insufficient image features"))
             pairs = cv2.BFMatcher().knnMatch(anchor_desc, goal_desc, k=2)
             good = [pair[0] for pair in pairs
                     if len(pair) == 2
@@ -230,7 +268,8 @@ class MemNavAgent:
             base = dict(matches=matches, inliers=0, inlier_ratio=0.0,
                         anchor=anchor)
             if matches < 8:
-                return dict(base, error="too few ratio-test matches")
+                return finish(dict(
+                    base, error="too few ratio-test matches"))
             anchor_pts = np.float32([anchor_kp[m.queryIdx].pt for m in good])
             goal_pts = np.float32([goal_kp[m.trainIdx].pt for m in good])
             inliers = 0
@@ -264,15 +303,16 @@ class MemNavAgent:
                     anchor_pts, goal_pts, cv2.FM_RANSAC, 1.5, 0.999)
                 if mask is not None:
                     inliers = int(np.asarray(mask).astype(bool).sum())
-            return dict(
+            return finish(dict(
                 error=None,
                 matches=matches,
                 inliers=inliers,
                 inlier_ratio=float(inliers / matches),
                 anchor=anchor,
-            )
+            ))
         except Exception as exc:
-            return dict(empty, error=f"overlap verification failed: {exc}")
+            return finish(dict(
+                empty, error=f"overlap verification failed: {exc}"))
 
     # ------------------------------------------------------------------ #
     # capture-stream internals (mirrors precompute extract_trajectory)

@@ -1,5 +1,13 @@
 # MemNav × NavDP 自动几何可靠性路由：审计、修复与正式结果
 
+> **2026-08-04 learned-router follow-up:** 使用 4 个训练/校准场景和 5 个完全
+> held-out 场景（22,267 个图像对）尝试把几何 verifier 蒸馏到已有 DINO CLS。
+> relation head 和 cosine-only 在严格 scene-disjoint 零错误阈值下都需要 100% 回退
+> 几何，因此 learned head 不接入部署。相同 goal-anchor 的第二次几何确认现在使用
+> per-episode 结果缓存，判定不变，实测平均延迟由 24.283 ms 降到 0.068 ms。完整
+> 方法、负结果和依赖检查见
+> `MemNavData/LEARNED_RELIABILITY_ROUTER_20260804.md`。
+
 > **2026-08-04 controller follow-up:** 在完全相同的 10 条 episode 上，使用冻结
 > NavDP 完成 Goal A、再由 gatecurr600 原生 diffusion decoder 直接控制 Goal B，得到
 > 同样的联合 SR `8/10` 和条件 Goal-B SR `8/9`。因此不能把这里相对纯 NavDP 的提升

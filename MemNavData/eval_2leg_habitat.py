@@ -384,7 +384,9 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                      or (advantage is not None
                          and advantage >= args.router_advantage_threshold)))
             overlap = dict(
-                matches=None, inliers=None, inlier_ratio=None, error=None)
+                matches=None, inliers=None, inlier_ratio=None, error=None,
+                cached=None, verification_ms=None,
+                uncached_verification_ms=None)
             # Once latched, keep the route stable for this goal. Before then,
             # DINO is only a cheap high-recall prefilter; metric-pose recovery
             # is permitted only after two-view geometry confirms the candidate.
@@ -428,6 +430,11 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 router_overlap_inliers=overlap.get("inliers"),
                 router_overlap_inlier_ratio=overlap.get("inlier_ratio"),
                 router_overlap_error=overlap.get("error"),
+                router_overlap_cached=overlap.get("cached"),
+                router_overlap_verification_ms=overlap.get(
+                    "verification_ms"),
+                router_overlap_uncached_verification_ms=overlap.get(
+                    "uncached_verification_ms"),
                 router_pass=passed,
                 router_streak=int(state["streak"]),
                 router_active=router_active,
@@ -1058,6 +1065,13 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                       "router_overlap_inlier_ratio"),
                                   router_overlap_error=response.get(
                                       "router_overlap_error"),
+                                  router_overlap_cached=response.get(
+                                      "router_overlap_cached"),
+                                  router_overlap_verification_ms=response.get(
+                                      "router_overlap_verification_ms"),
+                                  router_overlap_uncached_verification_ms=(
+                                      response.get(
+                                          "router_overlap_uncached_verification_ms")),
                                   router_pass=response.get("router_pass"),
                                   router_streak=response.get("router_streak"),
                                   router_active=response.get("router_active"),

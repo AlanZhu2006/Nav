@@ -60,7 +60,7 @@ leave-one-training-scene-out OOF 和 selective threshold 校准。开发场景�
 - LingBot commit：`7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2`。
 
 Runner 会校验上述哈希、LingBot commit、Nav commit、CUDA、Python import、编译、
-14 个 router 单元测试以及工作树中的任务文件。`LINGBOT_REPO` 必须显式指定，避免子目录
+18 个 router 单元测试以及工作树中的任务文件。`LINGBOT_REPO` 必须显式指定，避免子目录
 缺少 LingBot checkout 时误用不存在的默认路径。
 
 ## 4. Sparse teacher 修复
@@ -185,6 +185,50 @@ HPC 只读盘点确认无需重新生成 Habitat 数据：固定 SquashFS overla
 生成 sparse teacher，第三阶段训练和审计 patch+temporal。只有 development 上的
 scene-jackknife、误差数和 coverage 同时稳定改善，才冻结模型并启用 4 个 final-reserved
 场景；再通过最终盲测后才进入闭环导航 A/B。
+
+### 8.1 远端同源数据的本机 smoke
+
+为避免 HPC GPU 组配额阻塞验证，从固定 overlay 只读同步了 smoke 所需的最小切片：
+
+```text
+.diagnostics/router_multiscene_smoke_20260805/episodes
+```
+
+切片只含 RGB、goal、meta 和 parquet，不含 depth，共 6 个场景、12 个 episode、4,701 张
+RGB，216 MiB。它来自与 HPC runner 相同的
+`mp3d_revisit_v0_pt1.sqf`；overlay 大小为 `128854888448` bytes，首 1 MiB SHA256 为
+`43d803c2b39735e764f0c6df8f7c40a7035a1c23789e22fcc9831d29928c801b`。逐 episode 检查了：
+
+- RGB 帧号从 0 连续到 `n_frames - 1`；
+- parquet 行数等于 RGB 帧数；
+- meta、parquet、goal、首帧和末帧的 SHA256 与远端一致；
+- 本机已有的同名旧数据不能复用。例如 `17DRP5sb8fy/episode_0000` 旧数据有 425 帧，
+  本次冻结 overlay 对应 412 帧，关键文件哈希也不同。
+
+本机使用固定 LingBot commit/权重完整跑通三阶段：
+
+- exact DINO：4,677 张唯一图像；
+- base teacher：6,833 对，其中 941 positive；
+- cross expansion：新增 1,170 对，只给 DINO hard top-4 的 48 对运行几何 teacher，
+  得到 7 positive、41 negative；
+- patch/temporal：144 对关系特征；无 NaN、无重复 pair、无 scene role 交叉，4 个
+  final-reserved 场景均未出现；重建 DINO cosine 最大绝对误差为 `7.76e-5`。
+
+两个 development 场景上的 12 个 top-1 session 结果为：
+
+| 特征 | Accuracy | ROC AUC | AP | 自动判断 | FA / FR |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| global cosine | 0.8333 | 0.9259 | 0.8667 | 7/12 | 0 / 0 |
+| temporal | 0.9167 | 1.0000 | 1.0000 | 7/12 | 0 / 0 |
+| patch | 0.7500 | 0.8889 | 0.6389 | 8/12 | 0 / 0 |
+| patch + temporal | 0.9167 | 0.9259 | 0.8056 | 7/12 | 0 / 0 |
+
+这里的 12 条只用于 smoke，不能与 59 条 medium report 拼接或宣称泛化提升。尤其是
+4 个 held-out cross-episode top-1 全是 negative：DINO top-1 没有命中几何正例时，
+learned verifier 可以安全拒绝错误候选，却不能找回 top-K 外的正确帧。按
+`min_samples=4` 校准时也没有 automatic-accept 区间，7 个自动判断全部是 reject；其余
+5 个必须回退几何验证。因此本机结果只把多场景 full audit 从“代码未经运行”提升为
+“管线可运行”，没有改变 `deployment_approved=false` 的结论。
 
 若仍训练 learned verifier，下一版应保留二维 patch 坐标和显式 correspondence/cost
 volume，加入可微几何一致性，而不是继续增加 shallow logistic 的参数。SIFT/RANSAC 保留

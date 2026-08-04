@@ -287,8 +287,10 @@ class MemNavAgent:
             hi = k - self.exclude_recent
             if hi >= lo:
                 cand[0, lo:hi + 1] = True
-            match_idx, gate_logit, _ = self.core.retrieval(goal_cls, mem_cls, cand)
-            gate = torch.sigmoid(gate_logit)     # trained gate: decoder soft-bias, as in training
+            match_idx, gate_logit, _, max_cos = self.core.retrieval(goal_cls, mem_cls, cand)
+            gate = torch.sigmoid(gate_logit)     # calibrated P(revisit): warm-skip + logging
+            # decoder tilt: the decoder-owned affine, as in training (NOT the BCE gate)
+            dec_gate_logit = self.core.dec_gate_a * max_cos + self.core.dec_gate_b
 
             raw_score = None
             if self.retrieval_mode == "raw" and cand.any():
@@ -324,7 +326,7 @@ class MemNavAgent:
             # revisit (or the pose is already cached). When skipped, the revisit
             # readout is zeroed — NOTE this is a deliberate eval-time deviation:
             # training always computes revisit tokens and lets the soft gate
-            # (log(gate) attention bias) mask them; zeroing changes what low-gate
+            # (±z/2 symmetric attention tilt) mask them; zeroing changes what low-gate
             # steps condition on. Revisit if warm-arm results look off.
             goal_pose = self._goal_cache.get(pkey)
             if goal_pose is None and float(gate.item()) >= self.gate_skip_below:
@@ -354,7 +356,7 @@ class MemNavAgent:
             cs = current_state.expand(N, -1, -1)
             rv = revisit.expand(N, -1, -1)
             nv = novel.expand(N, -1, -1)
-            gt = gate.expand(N)
+            gt = dec_gate_logit.expand(N)
             sched = self.core.noise_scheduler
             naction = torch.randn((N, self.core.predict_size, 3), device=dev)
             sched.set_timesteps(sched.config.num_train_timesteps)

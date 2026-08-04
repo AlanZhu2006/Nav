@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --account=torch_pr_769_tandon_advanced
 #SBATCH --partition=a100_tandon,h100_tandon,h200_tandon
 #SBATCH --gres=gpu:2
@@ -40,7 +40,7 @@
 #
 # Runs 2-GPU DDP (torchrun --nproc_per_node=2) for ~2x throughput. BATCH_SIZE is
 # per-GPU, so the effective global batch is 2x BATCH_SIZE. NUM_WORKERS is also per-GPU
-# (2 x 8 = 16 = cpus-per-task). MEMNAV_MAX_LEGS=2 trains on two-leg episodes only.
+# (2 x 8 = 16 = cpus-per-task). MEMNAV_MAX_LEGS defaults to 0 = all legs (2- and 3-leg).
 #
 # Overridable env vars (defaults shown):
 #   NAME=memnav_mp3d
@@ -48,7 +48,7 @@
 #   EPOCHS=10
 #   NUM_WORKERS=8            (per-GPU)
 #   NPROC=2                  (GPUs / DDP ranks; must be <= --gres=gpu:N)
-#   MEMNAV_MAX_LEGS=2        (2 = two-leg episodes only; unset/0 = all legs)
+#   MEMNAV_MAX_LEGS=0        (unset/0 = all legs, 2-leg + 3-leg; 2 = two-leg only)
 #   MEMNAV_GROUND_SCALE_MAX=6.0  (ground-scale clamp ceiling; corrected per-episode scale
 #                            estimates above this are CLAMPED to it. 6.0 leaves ~95.6% of
 #                            pt1 eps untouched; the ~4% above clamp to 6.0.)
@@ -68,15 +68,23 @@ BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 REPO_ROOT=/scratch/lg154/Research/Nav/InternNav
 
 # in-container overlay path (frames) + host feature tree (caches)
+# Default feature tree = the FLOW-GATED caches (precompute_flowgate_full.sbatch,
+# per-episode thr 20/25/30/40/50px by length, gap 30, --skip_scale). The old dense
+# tree mp3d_revisit_v0_feat was deleted from disk (2026-07-28) to free space.
 export MEMNAV_ROOT_DIR=/mp3d_revisit_v0/vln_n1/traj_data
-export MEMNAV_FEATURE_ROOT=/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat/vln_n1/traj_data
+export MEMNAV_FEATURE_ROOT=${MEMNAV_FEATURE_ROOT:-/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat_flowgate/vln_n1/traj_data}
 export LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
 export LINGBOT_WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
 
 # memory-partition geometry — MUST match the precompute
+# (flowgate tree: --kv_cache_sliding_window 32 --num_scale_frames 8 --max_frame_num 2048)
 export MEMNAV_WINDOW=32
 export MEMNAV_NUM_SCALE=8
 export MEMNAV_MAX_FRAME_NUM=2048
+# Fail closed on legacy/pre-schema caches: the flowgate tree is schema v2 with
+# per-episode keyframe_policy=flow_gate_v1 provenance; the loader validates each
+# cache's stored flow_threshold/gap/window against this training geometry.
+export MEMNAV_REQUIRE_VERSIONED_CACHE=${MEMNAV_REQUIRE_VERSIONED_CACHE:-1}
 
 # Batch G trajectory streams on the aggregator's batch dim inside encode_memory
 # (window_forward + goal_append_warm). 1 = original one-at-a-time loop; >1 collapses
@@ -84,12 +92,13 @@ export MEMNAV_MAX_FRAME_NUM=2048
 # at ~Gx resident KV (the batch is processed in chunks of G so peak memory is bounded).
 # Default G=1: in practice G>1 slowed our runs (fatter forwards), and the per-sample
 # loop keeps the GPU continuously busy (high util). Numerically equivalent to G=4
-# (validated: scripts/diag_batched_window.py — cos>0.9999, poses match).
+# (validated: scripts/diag_perf/diag_batched_window.py — cos>0.9999, poses match).
 export MEMNAV_STREAM_GROUP=${MEMNAV_STREAM_GROUP:-1}
 
-# episode leg filter: 2 = train on two-leg episodes only (drops three-leg goal-C
-# episodes). Read by scripts/train/configs/memnav.py -> MemNav_Dataset(max_legs=...).
-export MEMNAV_MAX_LEGS=${MEMNAV_MAX_LEGS:-2}
+# episode leg filter: 0/unset = ALL episodes (2-leg AND 3-leg — the default for
+# flowgate training); 2 = two-leg only. Read by scripts/train/configs/memnav.py
+# -> MemNav_Dataset(max_legs=...).
+export MEMNAV_MAX_LEGS=${MEMNAV_MAX_LEGS:-0}
 
 # ground-scale clamp ceiling (scale_mode='ground'): corrected per-episode scale estimates
 # above this are CLAMPED to it (ground_scale_from_h_est clamps, no longer rejects). Default

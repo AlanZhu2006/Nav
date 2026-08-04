@@ -55,6 +55,11 @@ class RetrievalHead(nn.Module):
       - match_idx : argmax candidate frame (drives LingBotStream.goal_append)
       - gate_logit: [B] pre-sigmoid revisit logit (BCE target)
       - ret_logits: [B, L] cosine/temp over candidates (-inf elsewhere) for InfoNCE
+      - max_cos   : [B] the gate feature itself, so the decoder can apply its OWN
+                    affine (MemNavNet.dec_gate_a/b) — BCE calibrates gate_a/gate_b as
+                    a classifier, which is a different optimum than the attention-tilt
+                    scale the action loss wants (probe on ckpt-2600: classification
+                    boundary ~1 logit below where the shared gate put it).
     """
 
     def __init__(self, dino_dim=1024, proj_dim=256, temp_init=0.07):
@@ -86,7 +91,7 @@ class RetrievalHead(nn.Module):
         gate_logit = self.gate_a * max_cos + self.gate_b        # [B]
 
         match_idx = ret_logits.argmax(-1)                       # best candidate frame
-        return match_idx, gate_logit, ret_logits
+        return match_idx, gate_logit, ret_logits, max_cos
 
 
 # --------------------------------------------------------------------------- #
@@ -326,11 +331,16 @@ class MemNavNet(nn.Module):
         self.register_buffer("tgt_mask",
                              tgt.float().masked_fill(tgt == 0, float("-inf")).masked_fill(tgt == 1, 0.0))
 
-        # global prior on revisit vs novel, ADDED to the per-sample gate bias in the decoder
-        # cross-attention. [0]=revisit, [1]=novel; only the difference matters (softmax).
-        # Learnable by default (the model tunes the global balance); to force/ablate a weighting
-        # set `net.branch_bias.data = torch.tensor([r, n])` and `net.branch_bias.requires_grad_(False)`.
-        self.branch_bias = nn.Parameter(torch.zeros(2))
+        # Decoder-OWNED gate affine on the retrieval max-cos (SEPARATE from the head's
+        # gate_a/gate_b): BCE calibrates those as a classifier, but the decoder needs an
+        # attention *mixing temperature*, and the two optima differ (ckpt-2600 probe:
+        # classification-optimal boundary at P≈0.26 while the shared gate fed the decoder
+        # P≈0.54 on true revisits). dec_* is trained ONLY by the action loss, on
+        # max_cos.detach() — the projection space stays owned by the retrieval losses.
+        # Same init as the head's gate so step-0 behavior matches; subsumes the old
+        # branch_bias 2-vector (dec_gate_b IS the decoder-side offset, plus a slope).
+        self.dec_gate_a = nn.Parameter(torch.tensor(10.0))
+        self.dec_gate_b = nn.Parameter(torch.tensor(-8.0))
 
         self.to(device)   # move trainable heads to device (lingbot.model already there)
 
@@ -354,26 +364,34 @@ class MemNavNet(nn.Module):
         mem = torch.cat([time_emb, current_state, revisit, novel], dim=1)
         return mem + self.cond_pos_embed(mem)
 
-    def _gate_mask(self, gate):
-        """Per-sample cross-attention bias [B*heads, predict_size, mem_len] — directs
-        attention without scaling the readouts.
-          revisit cols += log(gate), novel cols += log(1-gate)"""
-        B = gate.shape[0]
-        bias = gate.new_zeros(B, self.mem_len)
+    def _gate_mask(self, dec_gate_logit):
+        """Per-sample cross-attention bias [B*heads, predict_size, mem_len] — SYMMETRIC
+        revisit/novel tilt with zero common mode:
+          revisit cols += +z/2, novel cols += -z/2   (z = dec_gate_a·max_cos + dec_gate_b)
+        Only the pair's difference (= z, the decoder gate logit) shapes the revisit-vs-
+        novel split, and the pair's mean bias vs the ungated time/current_state (obstacle)
+        columns is 0 regardless of gate confidence. The old log(g)/log(1-g) form leaked
+        common mode: an uncertain gate suppressed BOTH direction branches by log(0.5)
+        relative to current_state — coupling direction-confidence to obstacle weighting.
+        Softmax invariance does NOT hide that (it only removes constants added to ALL
+        columns), hence the explicit zero-mean construction here."""
+        B = dec_gate_logit.shape[0]
+        bias = dec_gate_logit.new_zeros(B, self.mem_len)
         rs, re = 1 + self.n_cs, 1 + self.n_cs + self.n_rev
         ns, ne = re, re + self.n_nov
-        g = gate.clamp(1e-4, 1 - 1e-4)
-        bias[:, rs:re] = torch.log(g).unsqueeze(1) + self.branch_bias[0]      # revisit
-        bias[:, ns:ne] = torch.log(1 - g).unsqueeze(1) + self.branch_bias[1]  # novel
+        # same ±9.2 tilt ceiling the old g∈[1e-4, 1-1e-4] clamp imposed on log-odds
+        z = dec_gate_logit.clamp(-9.2, 9.2)
+        bias[:, rs:re] = (0.5 * z).unsqueeze(1)      # revisit
+        bias[:, ns:ne] = (-0.5 * z).unsqueeze(1)     # novel
         bias = bias[:, None, None, :].expand(B, self.heads, self.predict_size, self.mem_len)
         return bias.reshape(B * self.heads, self.predict_size, self.mem_len)
 
-    def predict_noise(self, noisy, timestep, current_state, revisit, novel, gate):
+    def predict_noise(self, noisy, timestep, current_state, revisit, novel, dec_gate_logit):
         a = self.input_embed(noisy)
         a = a + self.out_pos_embed(a)
         mem = self._memory(current_state, revisit, novel, timestep)
         out = self.decoder(tgt=a, memory=mem, tgt_mask=self.tgt_mask,
-                           memory_mask=self._gate_mask(gate))
+                           memory_mask=self._gate_mask(dec_gate_logit))
         return self.action_head(self.layernorm(out))
 
     def forward(self, batch):
@@ -384,7 +402,7 @@ class MemNavNet(nn.Module):
                                                       enc["metric_scale"])
         novel = self.novel(batch["batch_window_images"][:, -1].to(dev),   # current frame [B,3,H,W]
                            batch["batch_goal_image"].to(dev))             # goal frame
-        gate = enc["revisit_gate"]
+        dec_gate_logit = enc["dec_gate_logit"]
 
         labels = batch["batch_labels"].to(dev)          # [B, predict_size, 3]
         B = labels.shape[0]
@@ -392,10 +410,11 @@ class MemNavNet(nn.Module):
         timesteps = torch.randint(0, self.noise_scheduler.config.num_train_timesteps, (B,), device=dev)
         noisy = self.noise_scheduler.add_noise(labels, noise, timesteps)
 
-        noise_pred = self.predict_noise(noisy, timesteps, current_state, revisit, novel, gate)
+        noise_pred = self.predict_noise(noisy, timesteps, current_state, revisit, novel, dec_gate_logit)
         return dict(
             noise_pred=noise_pred, noise=noise,
-            aux_pose=aux_pose, R_rel=R_rel, ret_logits=enc["ret_logits"], revisit_gate=gate,
+            aux_pose=aux_pose, R_rel=R_rel, ret_logits=enc["ret_logits"],
+            revisit_gate=enc["revisit_gate"], dec_gate_logit=dec_gate_logit,
             gate_logit=enc["gate_logit"], match_idx=enc["match_idx"], anchor_idx=enc["anchor_idx"],
             goal_anchor_idx=enc["goal_anchor_idx"],
         )
@@ -475,8 +494,11 @@ class MemNavNet(nn.Module):
         mem_cls = batch["batch_mem_cls"].to(dev)
         cand_mask = batch["batch_cand_mask"].to(dev)   # revisit candidates E(k) = [amargin..k-t]
         # (trainable) retrieval — match index + gate logit + ranking logits (over candidates)
-        match_idx, gate_logit, ret_logits = self.retrieval(goal_cls, mem_cls, cand_mask)
-        revisit_gate = torch.sigmoid(gate_logit)       # P(revisit) for the decoder soft-gate
+        match_idx, gate_logit, ret_logits, max_cos = self.retrieval(goal_cls, mem_cls, cand_mask)
+        revisit_gate = torch.sigmoid(gate_logit)       # calibrated P(revisit) — BCE/diagnostics
+        # decoder gate: separate affine on the SAME feature; detach() so the action loss
+        # trains dec_gate_a/b only, never the projections (see dec_gate_* in __init__)
+        dec_gate_logit = self.dec_gate_a * max_cos.detach() + self.dec_gate_b
 
         # goal_append anchor: at TRAIN time teacher-force it to a GT co-visible frame so the
         # goal_pose (-> aux + revisit token) is well-anchored from step 1, decoupling those
@@ -591,7 +613,7 @@ class MemNavNet(nn.Module):
             metric_scale=torch.tensor(mscale, device=dev, dtype=torch.float32),  # [B] lingbot->meters
 
             match_idx=match_idx, anchor_idx=anchor, revisit_gate=revisit_gate,
-            gate_logit=gate_logit, ret_logits=ret_logits,
+            gate_logit=gate_logit, dec_gate_logit=dec_gate_logit, ret_logits=ret_logits,
             goal_anchor_idx=torch.tensor(goal_m, device=dev, dtype=torch.long),  # [B] post-clamp m used for goal_pose
         )
 
@@ -672,7 +694,7 @@ if __name__ == "__main__":
     cand_mask = torch.ones(B, L, dtype=torch.bool)
     cand_mask[0, 40:] = False  # sample 0: fewer candidates
     cand_mask[1, :] = False    # sample 1: no candidate -> novel (gate floor)
-    m, gate_logit, logits = rh(goal_cls, mem_cls, cand_mask)
+    m, gate_logit, logits, max_cos = rh(goal_cls, mem_cls, cand_mask)
     gate = torch.sigmoid(gate_logit)
     print(f"RetrievalHead: match_idx={m.tolist()} gate={[round(x,3) for x in gate.tolist()]} logits={tuple(logits.shape)}")
     # decoupled losses: InfoNCE (ranking) + BCE (gate)

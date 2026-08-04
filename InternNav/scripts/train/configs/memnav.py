@@ -83,7 +83,9 @@ memnav_exp_cfg = ExpCfg(
         save_interval_steps=_SAVE_STEPS,
         save_filter_frozen_weights=True,
         load_from_ckpt=False,
-        ckpt_to_load='',
+        # optional init weights (e.g. NavDP warm-start from warmstart_navdp.py);
+        # loaded strict=False by MemNavPolicy.from_pretrained — unmapped heads stay fresh
+        ckpt_to_load=os.environ.get('MEMNAV_CKPT_TO_LOAD', ''),
         report_to=os.environ.get('MEMNAV_REPORT_TO', 'wandb'),
         # data + frozen-LingBot paths (override via MEMNAV_ROOT_DIR / LINGBOT_REPO / LINGBOT_WEIGHTS)
         root_dir=_ROOT_DIR,

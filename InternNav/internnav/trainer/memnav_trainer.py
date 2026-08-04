@@ -68,7 +68,11 @@ class MemNavTrainer(BaseTrainer):
         'gate_seen': 'retrieval/gate_seen',
         'gate_unseen': 'retrieval/gate_unseen',
         'gate_sep': 'retrieval/gate_sep',
+        'gate_a': 'retrieval/gate_a',
+        'gate_b': 'retrieval/gate_b',
         'seen_match_acc': 'retrieval/seen_match_acc',
+        'dec_gate_a': 'action/dec_gate_a',
+        'dec_gate_b': 'action/dec_gate_b',
         # (2) camera pose
         'aux_loss': 'pose/aux_loss',
         'aux_loss_shallow': 'pose/aux_loss_shallow',
@@ -136,6 +140,10 @@ class MemNavTrainer(BaseTrainer):
         # other candidates on REVISIT rows; (b) an affine-on-max-cosine gate (in the head)
         # is trained by BCE to decide revisit vs novel. The candidate set E(k) already
         # excludes the recent approach window, which is what makes both signals separable.
+        # NOTE the decoder does NOT consume this BCE-calibrated gate: it applies its own
+        # affine of the same (detached) max-cos, trained only by the action loss
+        # (MemNavNet.dec_gate_a/b + _gate_mask) — classifier calibration and attention
+        # mixing temperature are different optima, so the params are separated.
         ret_logits = fwd["ret_logits"]                           # [B, L] cos/temp over candidates
         gate_logit = fwd["gate_logit"]                           # [B] pre-sigmoid revisit logit
         pos = inputs["batch_pos_mask"].to(dev).bool()            # [B, L]
@@ -293,6 +301,11 @@ class MemNavTrainer(BaseTrainer):
         # gate by logging_steps to match train/loss cadence and avoid extra .item() syncs.
         if self.state.global_step % self.args.logging_steps == 0:
             # Bare metric names; log() re-sections them for wandb (see _WB_TARGET).
+            # compute_loss receives DDP(DDP(policy)): train.py wraps once, accelerate
+            # wraps again — unwrap until we hit the policy.
+            mm = model
+            while isinstance(mm, torch.nn.parallel.DistributedDataParallel):
+                mm = mm.module
             log_payload = {
                 'action_loss': action_loss.item(),
                 'retrieval_loss': rank_loss.item(),
@@ -301,6 +314,11 @@ class MemNavTrainer(BaseTrainer):
                 'gate_seen': gate_seen.item(),
                 'gate_unseen': gate_unseen.item(),
                 'gate_sep': gate_sep.item(),
+                # calibration scalars (the flowgate stall was invisible without these)
+                'gate_a': mm.core.retrieval.gate_a.item(),
+                'gate_b': mm.core.retrieval.gate_b.item(),
+                'dec_gate_a': mm.core.dec_gate_a.item(),
+                'dec_gate_b': mm.core.dec_gate_b.item(),
             }
             # revisit-only metrics (aux_loss, rot_err_deg, pos_err_m, pos_dir_err_deg,
             # seen_match_acc): only logged when this batch actually contains revisit rows
@@ -357,20 +375,41 @@ class MemNavTrainer(BaseTrainer):
         return (loss, outputs) if return_outputs else loss
 
     # ------------------------------------------------------------------ #
+    # Gate-calibration scalars get their own 10x-lr param group. With Adam the per-step
+    # displacement is ~lr regardless of gradient magnitude, so at lr=1e-4 a scalar can
+    # drift at most ~0.26 over 2.6k steps — exactly the stall measured on the flowgate
+    # run (gate_a/gate_b moved +0.16/+0.14 from init while the classification-optimal
+    # boundary sat ~1 logit away; ckpt-2600 probe).
+    _CALIB_SUFFIXES = ("retrieval.gate_a", "retrieval.gate_b", "dec_gate_a", "dec_gate_b")
+
     def create_optimizer(self):
         rank = dist.get_rank() if dist.is_initialized() else 0
         lr = getattr(self.config.il, "lr", 1e-4)
         m = self.model.module if hasattr(self.model, "module") else self.model
-        params = [p for p in m.parameters() if p.requires_grad]       # frozen LingBot excluded
-        self.optimizer = torch.optim.Adam(params, lr=lr)
+        base, calib = [], []                                          # frozen LingBot excluded
+        for name, p in m.named_parameters():
+            if not p.requires_grad:
+                continue
+            (calib if name.endswith(self._CALIB_SUFFIXES) else base).append(p)
+        self.optimizer = torch.optim.Adam(
+            [dict(params=base, lr=lr), dict(params=calib, lr=10 * lr)])
         if rank == 0:
-            n = sum(p.numel() for p in params)
-            print(f"[Rank 0] Adam lr={lr}; trainable params: {n:,} ({len(params)} tensors)")
+            n = sum(p.numel() for p in base) + sum(p.numel() for p in calib)
+            print(f"[Rank 0] Adam lr={lr} ({len(calib)} calib scalars @ {10 * lr:g}); "
+                  f"trainable params: {n:,} ({len(base) + len(calib)} tensors)")
         return self.optimizer
 
     def create_scheduler(self, optimizer, num_training_steps: int):
-        self.lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=1.0, end_factor=0.5, total_iters=10000)
+        # Cosine decay with linear warmup over the ACTUAL run length (num_training_steps
+        # comes from HF: epochs x steps/epoch). The previous LinearLR(1.0 -> 0.5 over a
+        # fixed 10k iters) barely decayed inside a 5.6k-step run — the flowgate run sat
+        # at near-peak lr the whole time (wandb's lr_scheduler_type=cosine was a stale
+        # TrainingArguments record, not what actually ran). The multiplicative lambda
+        # applies to BOTH param groups, so the calib group keeps its 10x ratio throughout.
+        from transformers import get_cosine_schedule_with_warmup
+        warmup = int(getattr(self.config.il, "warmup_ratio", 0.05) * num_training_steps)
+        self.lr_scheduler = get_cosine_schedule_with_warmup(
+            optimizer, num_warmup_steps=warmup, num_training_steps=num_training_steps)
         return self.lr_scheduler
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):

@@ -55,6 +55,9 @@ def main():
     ap.add_argument("--dino_batch", type=int, default=16)
     ap.add_argument("--out", default=None, help="npz of per-sample scalars")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--retrieval_ckpt", default=None,
+                    help="memnav.ckpt to pull core.retrieval.* from; adds projected-space "
+                         "(p_*) scalars next to the raw-CLS ones on the SAME samples")
     args = ap.parse_args()
 
     root = os.environ["MEMNAV_ROOT_DIR"]
@@ -70,32 +73,25 @@ def main():
     ds = MemNav_Dataset(root, predict_size=24, image_size=518, lingbot_repo=repo,
                         feature_root=feat, window_size=W, num_scale=NS)
 
-    # ---- bucket samples: (group, traj_idx, goal_path, mem_end, pos_idx, neg_idx) ----
-    buckets = {"covis_revisit": [], "goalA_revisit": [], "covis_novel": []}
+    # ---- bucket samples with the CURRENT dynamic-per-k label API: one k per
+    # goal-sample (uniform in [k_lo..k_hi], fixed seed), label built at that k.
+    # goalA is all-negative by construction now (never a revisit) -> novel pool.
+    # Tuple: (traj_idx, goal_path, mem_end=k+1, pos_idx, neg_idx, cand_idx).
+    buckets = {"covis_revisit": [], "covis_novel": [], "goalA_novel": []}
     for si, s in enumerate(ds.samples):
-        if s["has_covis"]:
-            leg = int(s["leg_start"])
-            pos = np.where(s["pos_pre"][:leg])[0]
-            neg = np.where(s["neg_pre"][:leg])[0]
-            grp = "covis_novel" if s["null_pos"] else "covis_revisit"
-            mem_end = leg
-        else:
-            k = min(int(s["k_hi"]), int(s["T_A"]) - 1)
-            k = max(k, int(s["k_lo"]))
-            pmask, nmask, nullp = ds._build_label(s, k)
-            if nullp:                                   # goalA_novel: skip (no positive)
-                continue
-            pos = np.where(pmask)[0]
-            neg = np.where(nmask)[0]
-            grp = "goalA_revisit"
-            mem_end = k + 1
-        # revisit groups need >=1 pos AND >=1 neg to be separable; novel needs frames
-        if grp == "covis_novel":
-            if neg.size == 0:
-                continue
-        elif pos.size == 0 or neg.size == 0:
+        k = int(rng.integers(int(s["k_lo"]), int(s["k_hi"]) + 1))
+        pmask, nmask, cmask, nullp = ds._build_label(s, k)
+        pos, neg, cand = np.where(pmask)[0], np.where(nmask)[0], np.where(cmask)[0]
+        if cand.size == 0:
             continue
-        buckets[grp].append((s["traj_idx"], s["goal_img_path"], int(mem_end), pos, neg))
+        if not s["has_covis"]:
+            grp = "goalA_novel"
+        else:
+            grp = "covis_novel" if nullp else "covis_revisit"
+        # revisit needs >=1 pos AND >=1 neg to be separable
+        if grp == "covis_revisit" and (pos.size == 0 or neg.size == 0):
+            continue
+        buckets[grp].append((s["traj_idx"], s["goal_img_path"], k + 1, pos, neg, cand))
 
     for g in buckets:
         arr = buckets[g]
@@ -109,6 +105,25 @@ def main():
         lingbot_kwargs=dict(lingbot_repo=repo, weights=wts, window=W, num_scale=NS, max_frame_num=MFN),
         device=device,
     ).to(device).eval()
+
+    # ---- optional: trained RetrievalHead (proj + temp + gate) from a checkpoint ----
+    # Projection is applied to the RAW (un-normalized) CLS on both sides, then L2 —
+    # exactly RetrievalHead.forward. Gate here maxes over pos∪neg (the labeled subset
+    # of E), a close proxy for the training-time cand_mask max.
+    head = None
+    if args.retrieval_ckpt:
+        sd = torch.load(args.retrieval_ckpt, map_location="cpu", weights_only=False)
+        sd = sd.get("state_dict", sd)
+        pref = "core.retrieval."
+        head = {k[len(pref):]: sd[k].float().numpy() for k in sd if k.startswith(pref)}
+        gate_a, gate_b = float(head["gate_a"]), float(head["gate_b"])
+        print(f"[probe] RetrievalHead from {args.retrieval_ckpt}: "
+              f"temp={float(np.clip(np.exp(head['log_temp']), 0.01, 1.0)):.4f} "
+              f"gate_a={gate_a:.3f} gate_b={gate_b:.3f}")
+
+    def _proj(x, which):
+        y = x @ head[f"proj_{which}.weight"].T + head[f"proj_{which}.bias"]
+        return y / (np.linalg.norm(y, axis=-1, keepdims=True) + 1e-8)
 
     dino_cache = {}   # traj_idx -> dino_cls [T,1024]
 
@@ -132,27 +147,46 @@ def main():
         if not items:
             results[grp] = {}
             continue
-        gcls = goal_cls_of([it[1] for it in items])                    # [N,1024]
-        gcls = gcls / (np.linalg.norm(gcls, axis=1, keepdims=True) + 1e-8)
+        gcls_raw = goal_cls_of([it[1] for it in items])                # [N,1024]
+        gcls = gcls_raw / (np.linalg.norm(gcls_raw, axis=1, keepdims=True) + 1e-8)
         rows = []
-        for (ti, _p, mem_end, pos, neg), gc in zip(items, gcls):
-            mem = mem_of(ti)[:mem_end].astype(np.float32)
-            mem = mem / (np.linalg.norm(mem, axis=1, keepdims=True) + 1e-8)
+        for (ti, _p, mem_end, pos, neg, cand), gc, gcr in zip(items, gcls, gcls_raw):
+            mem_raw = mem_of(ti)[:mem_end].astype(np.float32)
+            mem = mem_raw / (np.linalg.norm(mem_raw, axis=1, keepdims=True) + 1e-8)
             cos = mem @ gc                                             # [mem_end]
             ps, ns = cos[pos], cos[neg]
-            if grp == "covis_novel":
+            if head is not None:
+                pcos = _proj(mem_raw, "mem") @ _proj(gcr[None], "goal")[0]
+                pps, pns = pcos[pos], pcos[neg]
+                p_gate = float(1 / (1 + np.exp(-(gate_a * pcos[cand].max() + gate_b))))
+            if grp != "covis_revisit":
                 # no positives: how high can a DISTRACTOR score? (should be low)
-                rows.append(dict(distractor_max=float(cos[neg].max()),
-                                 distractor_mean=float(cos[neg].mean())))
+                r = dict(distractor_max=float(cos[cand].max()),
+                         distractor_mean=float(cos[cand].mean()))
+                if head is not None:
+                    r.update(p_distractor_max=float(pcos[cand].max()),
+                             p_distractor_mean=float(pcos[cand].mean()),
+                             p_gate=p_gate)
+                rows.append(r)
             else:
-                rows.append(dict(
+                r = dict(
                     auc=_auc(ps, ns),
                     retr1=float(ps.max() > ns.max()),
                     margin=float(ps.max() - ns.max()),
                     pos_mean=float(ps.mean()), pos_max=float(ps.max()),
                     neg_mean=float(ns.mean()), neg_max=float(ns.max()),
                     n_pos=int(pos.size), n_neg=int(neg.size),
-                ))
+                )
+                if head is not None:
+                    r.update(
+                        p_auc=_auc(pps, pns),
+                        p_retr1=float(pps.max() > pns.max()),
+                        p_margin=float(pps.max() - pns.max()),
+                        p_pos_mean=float(pps.mean()), p_pos_max=float(pps.max()),
+                        p_neg_mean=float(pns.mean()), p_neg_max=float(pns.max()),
+                        p_gate=p_gate,
+                    )
+                rows.append(r)
         results[grp] = rows
 
     # ---- summary ----
@@ -161,7 +195,7 @@ def main():
         return v
 
     print("\n================ CLS-SEPARATION SUMMARY ================")
-    for grp in ("covis_revisit", "goalA_revisit"):
+    for grp in ("covis_revisit",):
         rows = results[grp]
         if not rows:
             print(f"\n[{grp}] (empty)")
@@ -174,11 +208,19 @@ def main():
         print(f"  retr@1   frac correct = {r1.mean():.3f}   (positive is the single top labeled frame)")
         print(f"  margin   mean={mg.mean():+.3f}  median={np.median(mg):+.3f}  frac>0={np.mean(mg>0):.2f}")
         print(f"  cos      pos_mean={pm.mean():.3f}  neg_mean={nm.mean():.3f}  gap={pm.mean()-nm.mean():+.3f}")
+        if head is not None:
+            pauc = col(rows, "p_auc"); pr1 = col(rows, "p_retr1"); pmg = col(rows, "p_margin")
+            ppm = col(rows, "p_pos_mean"); pnm = col(rows, "p_neg_mean"); pg = col(rows, "p_gate")
+            print(f"  [proj] AUC mean={pauc.mean():.3f}  retr@1={pr1.mean():.3f}  "
+                  f"margin mean={pmg.mean():+.3f}  cos gap={ppm.mean()-pnm.mean():+.3f}")
+            print(f"  [proj] gate P(revisit): mean={pg.mean():.3f}  frac>0.5={np.mean(pg > 0.5):.2f}")
 
-    nov = results.get("covis_novel", [])
-    if nov:
+    for grp in ("covis_novel", "goalA_novel"):
+        nov = results.get(grp, [])
+        if not nov:
+            continue
         dmax = col(nov, "distractor_max")
-        print(f"\n[covis_novel] N={len(nov)}  distractor_max: mean={dmax.mean():.3f} "
+        print(f"\n[{grp}] N={len(nov)}  distractor_max: mean={dmax.mean():.3f} "
               f"median={np.median(dmax):.3f} p90={np.percentile(dmax,90):.3f}")
         rev = results.get("covis_revisit", [])
         if rev:
@@ -186,6 +228,15 @@ def main():
             print(f"   compare covis_revisit pos_max mean={posmax.mean():.3f}  "
                   f"→ null is {'SEPARABLE' if posmax.mean() > dmax.mean() + 0.03 else 'CONFUSABLE'} "
                   f"(revisit pos vs novel distractor)")
+    if head is not None:
+        pg_nov = np.concatenate([col(results[g], "p_gate")
+                                 for g in ("covis_novel", "goalA_novel") if results[g]])
+        pg_rev = col(results["covis_revisit"], "p_gate")
+        if pg_nov.size and pg_rev.size:
+            print(f"\n[proj] gate: novel P(revisit) mean={pg_nov.mean():.3f} frac<0.5={np.mean(pg_nov <= 0.5):.2f}"
+                  f" | revisit frac>0.5={np.mean(pg_rev > 0.5):.2f}"
+                  f" | gate AUC={_auc(pg_rev, pg_nov):.3f}"
+                  f" | balanced acc@0.5={0.5 * (np.mean(pg_rev > 0.5) + np.mean(pg_nov <= 0.5)):.3f}")
 
     print("\nRead: AUC≈0.5 / retr@1≈chance / gap≈0  →  frozen CLS carries NO match signal "
           "(collapse is representational; drop CLS-only retrieval). AUC≳0.8 / retr@1≳0.7 "

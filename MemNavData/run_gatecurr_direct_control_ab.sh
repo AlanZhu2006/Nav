@@ -27,6 +27,7 @@ EXCLUDE_RECENT=${EXCLUDE_RECENT:-32}
 HAB_PY=${HAB_PY:-/home/asus/miniconda3/envs/habitat/bin/python}
 MEMNAV_PY=${MEMNAV_PY:-/home/asus/miniconda3/envs/memnav/bin/python}
 EVALUATOR=${ROOT}/MemNavData/eval_2leg_habitat.py
+VALIDATOR=${ROOT}/MemNavData/validate_unseen_eval.py
 MEMNAV_SERVER=${ROOT}/NavDP/baselines/memnav/memnav_server.py
 NAVDP_SERVER=${ROOT}/NavDP/baselines/navdp/navdp_server.py
 INTERNNAV_ROOT=${INTERNNAV_ROOT:-${ROOT}/InternNav}
@@ -37,13 +38,14 @@ MEMNAV_CKPT=${MEMNAV_CKPT:-${SOURCE_RUN}/checkpoints/gatecurr600.memnav.ckpt}
 MANIFEST=${SOURCE_RUN}/manifest.json
 EXPECTED_MEMNAV_SHA=9b7a5811ff0aea212503f58b45258ba4f66b06420f87c350946aead39db6fdb7
 EXPECTED_NAVDP_SHA=3bb3ad4ab241e857bb57a4021cc6aab76d5263e81fbf80298d579053ef011947
+EXPECTED_LINGBOT_SHA=832bc82cbae0bc9bbe946ef5ee1f7226abd8c0e183ccf8beddbb3d133576f409
 
 RESULT_ROOT=${RUN_ROOT}/results/${RESULT_SET}/gatecurr600_direct
 LOG_ROOT=${RUN_ROOT}/logs/${RESULT_SET}
 BUFFER_ROOT=${RUN_ROOT}/buffer/${RESULT_SET}
 mkdir -p "${RESULT_ROOT}" "${LOG_ROOT}" "${BUFFER_ROOT}"
 
-for required in "${HAB_PY}" "${MEMNAV_PY}" "${EVALUATOR}" \
+for required in "${HAB_PY}" "${MEMNAV_PY}" "${EVALUATOR}" "${VALIDATOR}" \
                 "${MEMNAV_SERVER}" "${NAVDP_SERVER}" "${MANIFEST}" \
                 "${LINGBOT_WEIGHTS}" "${NAVDP_CKPT}" "${MEMNAV_CKPT}"; do
   test -e "${required}" || { echo "ABORT: missing dependency ${required}" >&2; exit 1; }
@@ -51,11 +53,15 @@ done
 
 actual_memnav_sha=$(sha256sum "${MEMNAV_CKPT}" | awk '{print $1}')
 actual_navdp_sha=$(sha256sum "${NAVDP_CKPT}" | awk '{print $1}')
+actual_lingbot_sha=$(sha256sum "${LINGBOT_WEIGHTS}" | awk '{print $1}')
 [[ "${actual_memnav_sha}" == "${EXPECTED_MEMNAV_SHA}" ]] || {
   echo "ABORT: gatecurr600 SHA256 mismatch: ${actual_memnav_sha}" >&2; exit 1;
 }
 [[ "${actual_navdp_sha}" == "${EXPECTED_NAVDP_SHA}" ]] || {
   echo "ABORT: NavDP SHA256 mismatch: ${actual_navdp_sha}" >&2; exit 1;
+}
+[[ "${actual_lingbot_sha}" == "${EXPECTED_LINGBOT_SHA}" ]] || {
+  echo "ABORT: LingBot SHA256 mismatch: ${actual_lingbot_sha}" >&2; exit 1;
 }
 
 "${HAB_PY}" -m py_compile "${EVALUATOR}"
@@ -64,6 +70,9 @@ actual_navdp_sha=$(sha256sum "${NAVDP_CKPT}" | awk '{print $1}')
   'import habitat_sim,numpy,pandas,pyarrow,PIL,requests,scipy,quaternion; print("Habitat dependencies OK", habitat_sim.__version__)'
 "${MEMNAV_PY}" -c \
   'import torch,torchvision,transformers,diffusers,cv2,flask,imageio; assert torch.cuda.is_available(); print("Policy dependencies OK", torch.__version__)'
+"${HAB_PY}" "${VALIDATOR}" \
+  --manifest "${MANIFEST}" --run-root "${SOURCE_RUN}" --phase episodes \
+  > "${LOG_ROOT}/validation_inputs.json"
 
 mapfile -t SCENES < <("${HAB_PY}" -c \
   'import json,sys; print(*json.load(open(sys.argv[1]))["selection"]["selected_scenes"], sep="\n")' \
@@ -168,7 +177,7 @@ for spec in "memnav:${MEMNAV_PID}:${MEMNAV_PORT}:${MEMNAV_LOG}" \
   }
 done
 
-echo "[audit] gatecurr600=${actual_memnav_sha} navdp=${actual_navdp_sha} retrieval=${RETRIEVAL} exclude_recent=${EXCLUDE_RECENT}"
+echo "[audit] gatecurr600=${actual_memnav_sha} navdp=${actual_navdp_sha} lingbot=${actual_lingbot_sha} retrieval=${RETRIEVAL} exclude_recent=${EXCLUDE_RECENT}"
 for scene in "${SCENES[@]}"; do
   out=${RESULT_ROOT}/${scene}
   mkdir -p "${out}"

@@ -19,6 +19,15 @@ Endpoints (NavDP wire-contract style):
   POST /posegoal_step        files: image (jpg), goal (jpg)
                              -> retrieval/gate/metric-pose diagnostics only;
                              streams the frame but skips MemNav diffusion.
+  POST /posegoal_query       files: goal (jpg)
+                             -> metric pose for the already-streamed latest
+                             frame; does not append another observation.
+  POST /retrieval_probe_step files: image (jpg), goal (jpg)
+                             -> cheap retrieval diagnostics; streams the frame
+                             but skips goal-pose recovery and diffusion.
+  POST /retrieval_verify     files: goal (jpg), form: anchor
+                             -> CPU two-view geometric overlap diagnostics;
+                             does not mutate streaming model state.
   POST /imagegoal_similarity files: image (jpg), goal (jpg)
                              -> {"current_goal_cos": float}
                              stateless visual check; does not mutate memory.
@@ -60,6 +69,19 @@ parser.add_argument("--flow_gate", type=str, default="auto",
 parser.add_argument("--buffer_root", type=str, default="/tmp/memnav_server_buffer")
 args = parser.parse_args()
 
+# The server changes directory below because LingBot historically resolves a
+# few script-local resources from this module. Resolve every CLI filesystem
+# argument first: otherwise a perfectly valid relative checkpoint silently
+# becomes missing after chdir and ``from_pretrained`` leaves all trainable
+# MemNav heads randomly initialized.
+args.checkpoint = os.path.abspath(args.checkpoint)
+args.internnav_root = os.path.abspath(args.internnav_root)
+args.buffer_root = os.path.abspath(args.buffer_root)
+if not os.path.isfile(args.checkpoint):
+    raise FileNotFoundError(f"MemNav checkpoint not found: {args.checkpoint}")
+if not os.path.isdir(args.internnav_root):
+    raise FileNotFoundError(f"InternNav root not found: {args.internnav_root}")
+
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 from policy_agent import MemNavAgent  # noqa: E402  (after chdir so lingbot paths resolve)
 
@@ -85,15 +107,27 @@ def navigator_reset():
     cam_h = float(payload.get("camera_height", 0.5))
     seed = payload.get("seed")
     episode_len = payload.get("episode_len")
-    agent.reset(camera_height=cam_h, seed=seed, episode_len=episode_len)
-    return jsonify({"algo": "memnav", "flow_threshold": agent.flow_threshold})
+    agent.reset(
+        camera_height=cam_h,
+        seed=seed,
+        episode_len=episode_len,
+        camera_intrinsic=payload.get("camera_intrinsic"),
+    )
+    return jsonify({
+        "algo": "memnav",
+        "flow_threshold": agent.flow_threshold,
+        "retrieval": agent.retrieval_mode,
+        "checkpoint": args.checkpoint,
+        "exclude_recent": agent.exclude_recent,
+    })
 
 
 @app.route("/navigator_reset_env", methods=["POST"])
 def navigator_reset_env():
     # single-env server: same as a full reset (used by the cold/reset-memory arm)
     agent.reset(camera_height=agent.camera_height, seed=agent._last_seed,
-                episode_len=agent._last_episode_len)
+                episode_len=agent._last_episode_len,
+                camera_intrinsic=agent.camera_intrinsic)
     return jsonify({"algo": "memnav"})
 
 
@@ -131,6 +165,47 @@ def posegoal_step():
     return jsonify(out)
 
 
+@app.route("/posegoal_query", methods=["POST"])
+def posegoal_query():
+    """Recover metric pose after retrieval_probe_step, without double append."""
+    forced_anchor = request.form.get("forced_anchor")
+    forced_gate = request.form.get("forced_gate")
+    out = agent.plan(
+        request.files["goal"].read(),
+        forced_anchor=(int(forced_anchor) if forced_anchor is not None else None),
+        forced_gate=(float(forced_gate) if forced_gate is not None else None),
+        pose_only=True,
+    )
+    return jsonify(out)
+
+
+@app.route("/retrieval_probe_step", methods=["POST"])
+def retrieval_probe_step():
+    """Append a frame and return scores without allocating a goal-pose cache."""
+    agent.add_frame(request.files["image"].read())
+    forced_anchor = request.form.get("forced_anchor")
+    forced_gate = request.form.get("forced_gate")
+    out = agent.plan(
+        request.files["goal"].read(),
+        forced_anchor=(int(forced_anchor) if forced_anchor is not None else None),
+        forced_gate=(float(forced_gate) if forced_gate is not None else None),
+        retrieval_only=True,
+    )
+    return jsonify(out)
+
+
+@app.route("/retrieval_verify", methods=["POST"])
+def retrieval_verify():
+    """Verify one candidate without appending or mutating LingBot KV state."""
+    anchor = request.form.get("anchor")
+    if anchor is None:
+        return jsonify({"error": "anchor is required", "matches": 0,
+                        "inliers": 0, "inlier_ratio": 0.0}), 400
+    out = agent.verify_retrieval_overlap(
+        request.files["goal"].read(), int(anchor))
+    return jsonify(out)
+
+
 @app.route("/imagegoal_similarity", methods=["POST"])
 def imagegoal_similarity():
     score = agent.image_goal_similarity(
@@ -142,5 +217,6 @@ if __name__ == "__main__":
     print(f"[memnav_server] ready on :{args.port} "
           f"(W={agent.W}, S={agent.S}, amargin={agent.amargin}, "
           f"exclude_recent={agent.exclude_recent}, samples={agent.num_samples}, "
-          f"flow_gate={agent.flow_gate})")
+          f"retrieval={agent.retrieval_mode}, flow_gate={agent.flow_gate}, "
+          f"checkpoint={os.path.basename(args.checkpoint)})")
     app.run(host="0.0.0.0", port=args.port, threaded=False)

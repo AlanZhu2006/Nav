@@ -32,6 +32,7 @@ Run (habitat env):
 import argparse
 import csv
 import glob
+import hashlib
 import io
 import json
 import os
@@ -80,6 +81,59 @@ parser.add_argument(
           "--port remains the MemNav server port"),
 )
 parser.add_argument("--leg1_mode", choices=["replay", "policy"], default="replay")
+parser.add_argument(
+    "--probe_leg1_memory",
+    action="store_true",
+    help=("hybrid diagnostic only: query MemNav pose retrieval on each Novel "
+          "decision frame, while official NavDP still controls Goal A"),
+)
+parser.add_argument(
+    "--hybrid_route",
+    choices=["phase", "memory_advantage", "memory_geometry"],
+    default="phase",
+    help=("phase uses the known A->B boundary; memory_advantage instead routes "
+          "both legs from DINO history-over-current advantage plus geometry; "
+          "memory_geometry uses absolute DINO only as a prefilter and lets "
+          "two-view geometry make the final routing decision"),
+)
+parser.add_argument(
+    "--router_advantage_threshold",
+    type=float,
+    default=0.04,
+    help=("activate memory when best-history DINO cosine minus current-image "
+          "cosine reaches this value"),
+)
+parser.add_argument(
+    "--router_visual_floor",
+    type=float,
+    default=0.88,
+    help=("minimum absolute best-history DINO cosine before running the "
+          "CPU geometric verifier"),
+)
+parser.add_argument(
+    "--router_min_matches",
+    type=int,
+    default=20,
+    help="minimum SIFT ratio-test matches for a reliable revisit",
+)
+parser.add_argument(
+    "--router_min_inliers",
+    type=int,
+    default=12,
+    help="minimum essential-matrix inliers for a reliable revisit",
+)
+parser.add_argument(
+    "--router_min_inlier_ratio",
+    type=float,
+    default=0.50,
+    help="minimum geometric-inlier fraction for a reliable revisit",
+)
+parser.add_argument(
+    "--router_confirm_plans",
+    type=int,
+    default=2,
+    help="consecutive reliable plans required before memory routing is latched",
+)
 parser.add_argument(
     "--stop_after_leg1",
     action="store_true",
@@ -184,7 +238,19 @@ BASE = f"http://{args.host}:{args.port}"
 NOVEL_BASE = (f"http://{args.host}:{args.novel_port}"
               if args.novel_port is not None else None)
 HYBRID_BACKENDS = ("hybrid_oracle", "hybrid_pose")
+AUTO_HYBRID_ROUTES = ("memory_advantage", "memory_geometry")
 CAM_H = 0.5
+AUTO_ROUTER_STATE = {}
+MEMNAV_SERVER_INFO = {}
+MEMNAV_DIAGNOSTIC_KEYS = (
+    "gate", "predicted_gate", "forced_gate", "match_idx",
+    "retrieved_anchor", "forced_anchor", "forced_anchor_score",
+    "raw_score", "retrieval_second_score", "retrieval_margin",
+    "visual_score", "visual_anchor", "visual_second_score", "visual_margin",
+    "selected_anchor_score", "candidate_count", "anchor_gap",
+    "goal_start_frame", "candidate_ceiling",
+    "anchor", "aux_pose", "goal_rel_yaw", "current_goal_cos", "frame_idx",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -208,6 +274,9 @@ def depth_png_bytes(depth):
 
 def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
               camera_intrinsic=None):
+    AUTO_ROUTER_STATE.clear()
+    MEMNAV_SERVER_INFO.clear()
+
     def navdp_payload():
         if camera_intrinsic is None:
             raise ValueError("NavDP reset requires camera_intrinsic")
@@ -221,6 +290,9 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
         return payload
 
     memnav_payload = {"camera_height": camera_height}
+    if camera_intrinsic is not None:
+        memnav_payload["camera_intrinsic"] = np.asarray(
+            camera_intrinsic, dtype=float).tolist()
     if seed is not None:
         memnav_payload["seed"] = int(seed)
     if episode_len is not None:
@@ -236,13 +308,23 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
         memnav = requests.post(
             f"{BASE}/navigator_reset", json=memnav_payload)
         memnav.raise_for_status()
+        memnav_info = memnav.json()
+        MEMNAV_SERVER_INFO.update(memnav_info)
+        if (args.hybrid_route in AUTO_HYBRID_ROUTES
+                and memnav_info.get("retrieval") != "raw"):
+            raise RuntimeError(
+                "automatic memory routing requires MemNav server "
+                "--retrieval raw; "
+                f"server reported {memnav_info.get('retrieval')!r}")
         novel = requests.post(
             f"{NOVEL_BASE}/navigator_reset", json=navdp_payload())
         novel.raise_for_status()
-        return f"hybrid({novel.json()['algo']}+{memnav.json()['algo']})"
+        return f"hybrid({novel.json()['algo']}+{memnav_info['algo']})"
     r = requests.post(f"{BASE}/navigator_reset", json=memnav_payload)
     r.raise_for_status()
-    return r.json()["algo"]
+    memnav_info = r.json()
+    MEMNAV_SERVER_INFO.update(memnav_info)
+    return memnav_info["algo"]
 
 
 def srv_memory(image_jpg):
@@ -265,42 +347,126 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
     if forced_gate is not None:
         data["forced_gate"] = str(float(forced_gate))
 
-    if args.server_backend == "hybrid_pose" and policy_backend == "navdp_mix":
-        # First recover the metric relative goal from the actual MemNav stream.
-        # posegoal_step appends this decision frame exactly once to MemNav.
-        mem = requests.post(
-            f"{BASE}/posegoal_step",
-            files={
-                "image": ("image.jpg", image_jpg),
-                "goal": ("goal.jpg", goal_jpg),
-            },
-            data=data,
-        )
-        mem.raise_for_status()
-        mem_out = mem.json()
-        diagnostic_keys = (
-            "gate", "predicted_gate", "forced_gate", "match_idx",
-            "retrieved_anchor", "forced_anchor", "forced_anchor_score",
-            "raw_score", "anchor", "aux_pose", "goal_rel_yaw",
-            "current_goal_cos", "frame_idx",
-        )
+    if (args.server_backend == "hybrid_pose"
+            and policy_backend in ("navdp_mix", "navdp_auto")):
+        router_diag = {}
+        if policy_backend == "navdp_auto":
+            # Stage 1 is intentionally score-only. A Novel goal must not pay
+            # for (or retain) a LingBot goal-pose reconstruction merely to be
+            # rejected by the router.
+            probe = requests.post(
+                f"{BASE}/retrieval_probe_step",
+                files={
+                    "image": ("image.jpg", image_jpg),
+                    "goal": ("goal.jpg", goal_jpg),
+                },
+                data=data,
+            )
+            probe.raise_for_status()
+            mem_out = probe.json()
+            visual_score = mem_out.get("visual_score")
+            current_score = mem_out.get("current_goal_cos")
+            advantage = None
+            if visual_score is not None and current_score is not None:
+                advantage = float(visual_score) - float(current_score)
+                if not np.isfinite(advantage):
+                    advantage = None
 
-        def attach_memnav_diagnostics(out, controller, error=None):
-            for key in diagnostic_keys:
-                out[key] = mem_out.get(key)
-            out["memory_frame_idx"] = mem_out.get("frame_idx")
-            out["pose_controller"] = controller
-            out["pose_error"] = error
-            return normalize_navdp_response(out)
+            router_key = hashlib.md5(goal_jpg).hexdigest()
+            state = AUTO_ROUTER_STATE.setdefault(
+                router_key, {"streak": 0, "active": False})
+            anchor = mem_out.get("anchor")
+            prefilter_pass = bool(
+                visual_score is not None
+                and float(visual_score) >= args.router_visual_floor
+                and anchor is not None
+                and (args.hybrid_route == "memory_geometry"
+                     or (advantage is not None
+                         and advantage >= args.router_advantage_threshold)))
+            overlap = dict(
+                matches=None, inliers=None, inlier_ratio=None, error=None)
+            # Once latched, keep the route stable for this goal. Before then,
+            # DINO is only a cheap high-recall prefilter; metric-pose recovery
+            # is permitted only after two-view geometry confirms the candidate.
+            if not state["active"] and prefilter_pass:
+                verify = requests.post(
+                    f"{BASE}/retrieval_verify",
+                    files={"goal": ("goal.jpg", goal_jpg)},
+                    data={"anchor": str(int(anchor))},
+                )
+                verify.raise_for_status()
+                overlap.update(verify.json())
+            passed = bool(
+                state["active"]
+                or (prefilter_pass
+                    and overlap.get("matches") is not None
+                    and int(overlap["matches"]) >= args.router_min_matches
+                    and int(overlap["inliers"]) >= args.router_min_inliers
+                    and float(overlap["inlier_ratio"])
+                    >= args.router_min_inlier_ratio))
+            state["streak"] = state["streak"] + 1 if passed else 0
+            if state["streak"] >= args.router_confirm_plans:
+                state["active"] = True
+            router_active = bool(state["active"])
+            if router_active:
+                router_reason = "latched"
+            elif passed:
+                router_reason = "confirming"
+            elif advantage is None:
+                router_reason = "retrieval_unavailable"
+            elif not prefilter_pass:
+                router_reason = "prefilter_rejected"
+            else:
+                router_reason = "geometry_rejected"
+            router_diag = dict(
+                router_memory_advantage=advantage,
+                router_prefilter_mode=args.hybrid_route,
+                router_threshold=float(args.router_advantage_threshold),
+                router_visual_floor=float(args.router_visual_floor),
+                router_prefilter_pass=prefilter_pass,
+                router_overlap_matches=overlap.get("matches"),
+                router_overlap_inliers=overlap.get("inliers"),
+                router_overlap_inlier_ratio=overlap.get("inlier_ratio"),
+                router_overlap_error=overlap.get("error"),
+                router_pass=passed,
+                router_streak=int(state["streak"]),
+                router_active=router_active,
+                router_reason=router_reason,
+            )
+
+            if router_active:
+                # Stage 2 recovers pose for the latest frame already appended
+                # by retrieval_probe_step. This endpoint must not append again.
+                pose = requests.post(
+                    f"{BASE}/posegoal_query",
+                    files={"goal": ("goal.jpg", goal_jpg)},
+                    data=data,
+                )
+                pose.raise_for_status()
+                mem_out = pose.json()
+        else:
+            # Phase-oracle mode directly recovers metric pose and appends this
+            # decision frame exactly once.
+            pose = requests.post(
+                f"{BASE}/posegoal_step",
+                files={
+                    "image": ("image.jpg", image_jpg),
+                    "goal": ("goal.jpg", goal_jpg),
+                },
+                data=data,
+            )
+            pose.raise_for_status()
+            mem_out = pose.json()
+            router_active = True
 
         aux_pose = mem_out.get("aux_pose")
         aux_pose = (np.asarray(aux_pose, dtype=float)
                     if aux_pose is not None else None)
-        if (aux_pose is None or aux_pose.shape != (2,)
-                or not np.isfinite(aux_pose).all()):
-            # A short trajectory may not yet have an eligible long-term
-            # anchor. Keep NavDP's native ImageGoal behavior and advance its
-            # eight-frame state instead of freezing the controller.
+        pose_valid = bool(
+            aux_pose is not None and aux_pose.shape == (2,)
+            and np.isfinite(aux_pose).all())
+        if not router_active or not pose_valid:
+            # Fail closed to native ImageGoal and still advance NavDP's state.
             nav = requests.post(
                 f"{NOVEL_BASE}/imagegoal_step",
                 files={
@@ -310,13 +476,17 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 },
             )
             nav.raise_for_status()
-            return attach_memnav_diagnostics(
-                nav.json(), "navdp_image_fallback",
-                error=mem_out.get("error", "invalid MemNav aux_pose"),
+            controller = ("navdp_image_router" if not router_active
+                          else "navdp_image_fallback")
+            result = attach_memnav_diagnostics(
+                nav.json(), mem_out, controller,
+                error=mem_out.get("error") if not pose_valid else None,
             )
+            result.update(router_diag)
+            return result
 
-        # NavDP was trained with both image-goal and point-goal tokens.  Its
-        # mixed endpoint preserves visual turning cues while the metric pose
+        # NavDP was trained with both image-goal and point-goal tokens. Its
+        # mixed endpoint preserves visual turning cues while metric pose
         # supplies the missing long-range direction and distance.
         nav = requests.post(
             f"{NOVEL_BASE}/navdp_step_ip_mixgoal",
@@ -331,8 +501,10 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
             })},
         )
         nav.raise_for_status()
-        return attach_memnav_diagnostics(
-            nav.json(), "navdp_image_point_mix")
+        result = attach_memnav_diagnostics(
+            nav.json(), mem_out, "navdp_image_point_mix")
+        result.update(router_diag)
+        return result
 
     files = {
         "image": ("image.jpg", image_jpg),
@@ -340,11 +512,28 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
     }
     use_navdp = (args.server_backend == "navdp"
                  or (args.server_backend in HYBRID_BACKENDS
-                     and policy_backend == "navdp"))
+                     and policy_backend in ("navdp", "navdp_probe")))
     if use_navdp:
         files["depth"] = ("depth.png", depth_png_bytes(depth))
     memory_frame_idx = None
-    if args.server_backend in HYBRID_BACKENDS and policy_backend == "navdp":
+    probe_out = None
+    if (args.server_backend in HYBRID_BACKENDS
+            and policy_backend == "navdp_probe"):
+        # Append exactly once while measuring how a Novel goal looks to the
+        # memory system. The diagnostic must not affect Goal-A control.
+        probe = requests.post(
+            f"{BASE}/retrieval_probe_step",
+            files={
+                "image": ("image.jpg", image_jpg),
+                "goal": ("goal.jpg", goal_jpg),
+            },
+            data=data,
+        )
+        probe.raise_for_status()
+        probe_out = probe.json()
+        memory_frame_idx = probe_out.get("frame_idx")
+        plan_base = NOVEL_BASE
+    elif args.server_backend in HYBRID_BACKENDS and policy_backend == "navdp":
         # NavDP owns the decision, but MemNav must still receive this planning
         # frame exactly once so its long-term memory is complete at the A->B
         # switch.  NavDP itself advances only on decision observations.
@@ -360,11 +549,26 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
     r = requests.post(f"{plan_base}/imagegoal_step", files=files, data=data)
     r.raise_for_status()
     out = r.json()
+    if probe_out is not None:
+        return attach_memnav_diagnostics(
+            out, probe_out, "navdp_image_probe",
+            error=probe_out.get("error"),
+        )
     if memory_frame_idx is not None:
         out["memory_frame_idx"] = memory_frame_idx
     elif args.server_backend != "navdp":
         out.setdefault("memory_frame_idx", out.get("frame_idx"))
     return normalize_navdp_response(out) if use_navdp else out
+
+
+def attach_memnav_diagnostics(out, mem_out, controller, error=None):
+    """Attach memory diagnostics without changing the NavDP trajectory."""
+    for key in MEMNAV_DIAGNOSTIC_KEYS:
+        out[key] = mem_out.get(key)
+    out["memory_frame_idx"] = mem_out.get("frame_idx")
+    out["pose_controller"] = controller
+    out["pose_error"] = error
+    return normalize_navdp_response(out)
 
 
 def normalize_navdp_response(out):
@@ -814,10 +1018,50 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                   predicted_gate=response.get("predicted_gate"),
                                   forced_gate=response.get("forced_gate"),
                                   raw_score=response.get("raw_score"),
+                                  retrieval_second_score=response.get(
+                                      "retrieval_second_score"),
+                                  retrieval_margin=response.get(
+                                      "retrieval_margin"),
+                                  visual_score=response.get("visual_score"),
+                                  visual_anchor=response.get("visual_anchor"),
+                                  visual_second_score=response.get(
+                                      "visual_second_score"),
+                                  visual_margin=response.get("visual_margin"),
+                                  selected_anchor_score=response.get(
+                                      "selected_anchor_score"),
+                                  candidate_count=response.get(
+                                      "candidate_count"),
+                                  anchor_gap=response.get("anchor_gap"),
+                                  goal_start_frame=response.get(
+                                      "goal_start_frame"),
+                                  candidate_ceiling=response.get(
+                                      "candidate_ceiling"),
                                   aux_pose=response.get("aux_pose"),
                                   goal_rel_yaw=response.get("goal_rel_yaw"),
                                   pose_controller=response.get("pose_controller"),
                                   pose_error=response.get("pose_error"),
+                                  router_memory_advantage=response.get(
+                                      "router_memory_advantage"),
+                                  router_prefilter_mode=response.get(
+                                      "router_prefilter_mode"),
+                                  router_threshold=response.get(
+                                      "router_threshold"),
+                                  router_visual_floor=response.get(
+                                      "router_visual_floor"),
+                                  router_prefilter_pass=response.get(
+                                      "router_prefilter_pass"),
+                                  router_overlap_matches=response.get(
+                                      "router_overlap_matches"),
+                                  router_overlap_inliers=response.get(
+                                      "router_overlap_inliers"),
+                                  router_overlap_inlier_ratio=response.get(
+                                      "router_overlap_inlier_ratio"),
+                                  router_overlap_error=response.get(
+                                      "router_overlap_error"),
+                                  router_pass=response.get("router_pass"),
+                                  router_streak=response.get("router_streak"),
+                                  router_active=response.get("router_active"),
+                                  router_reason=response.get("router_reason"),
                                   current_goal_cos=response.get("current_goal_cos"),
                                   frame_idx=response.get("frame_idx"),
                                   **selector_info))
@@ -962,6 +1206,18 @@ def main():
     if args.server_backend in HYBRID_BACKENDS and args.novel_port is None:
         raise ValueError(
             f"--server_backend {args.server_backend} requires --novel_port")
+    if (args.hybrid_route in AUTO_HYBRID_ROUTES
+            and args.server_backend != "hybrid_pose"):
+        raise ValueError(
+            "automatic --hybrid_route requires --server_backend hybrid_pose")
+    if args.router_confirm_plans < 1:
+        raise ValueError("--router_confirm_plans must be >= 1")
+    if args.router_min_matches < 8:
+        raise ValueError("--router_min_matches must be >= 8")
+    if args.router_min_inliers < 0:
+        raise ValueError("--router_min_inliers must be >= 0")
+    if not 0.0 <= args.router_min_inlier_ratio <= 1.0:
+        raise ValueError("--router_min_inlier_ratio must be in [0, 1]")
     try:
         import imageio
     except ImportError:
@@ -1057,7 +1313,10 @@ def main():
             legA = run_policy_leg(
                 sim, pf, start_floor, start_psi, goalA_jpg, A_xz, geoA, writer,
                 terminal_mode="off", forced_gate=args.gate_override,
-                policy_backend=("navdp"
+                policy_backend=(("navdp_auto"
+                                 if args.hybrid_route in AUTO_HYBRID_ROUTES
+                                 else "navdp_probe"
+                                 if args.probe_leg1_memory else "navdp")
                                 if args.server_backend in HYBRID_BACKENDS
                                 else None),
                 success_dist=args.leg1_success_dist)
@@ -1104,7 +1363,10 @@ def main():
                 forced_gate=args.gate_override,
                 policy_backend=(
                     "memnav" if args.server_backend == "hybrid_oracle"
-                    else "navdp_mix" if args.server_backend == "hybrid_pose"
+                    else ("navdp_auto"
+                          if args.hybrid_route in AUTO_HYBRID_ROUTES
+                          else "navdp_mix")
+                    if args.server_backend == "hybrid_pose"
                     else None),
             )
 
@@ -1126,12 +1388,17 @@ def main():
             seed=episode_seed,
             server_backend=args.server_backend,
             novel_server_port=args.novel_port,
+            memnav_checkpoint=MEMNAV_SERVER_INFO.get("checkpoint"),
+            memnav_retrieval=MEMNAV_SERVER_INFO.get("retrieval"),
+            memnav_exclude_recent=MEMNAV_SERVER_INFO.get("exclude_recent"),
             leg1_policy_backend=("navdp"
                                  if args.server_backend in HYBRID_BACKENDS
                                  else args.server_backend),
             leg2_policy_backend=(
                 "memnav" if args.server_backend == "hybrid_oracle"
-                else "navdp_image_point_mix"
+                else ("navdp_auto_router"
+                      if args.hybrid_route in AUTO_HYBRID_ROUTES
+                      else "navdp_image_point_mix")
                 if args.server_backend == "hybrid_pose"
                 else args.server_backend),
             leg1_goal_source=args.leg1_goal_source,
@@ -1155,6 +1422,14 @@ def main():
             steps_B_at_reach=legB.get("step_at_reach"),
             covis=B.get("covis"), recall_gap=B.get("recall_gap"),
             retrieval_override=args.retrieval_override,
+            probe_leg1_memory=args.probe_leg1_memory,
+            hybrid_route=args.hybrid_route,
+            router_advantage_threshold=args.router_advantage_threshold,
+            router_visual_floor=args.router_visual_floor,
+            router_min_matches=args.router_min_matches,
+            router_min_inliers=args.router_min_inliers,
+            router_min_inlier_ratio=args.router_min_inlier_ratio,
+            router_confirm_plans=args.router_confirm_plans,
             gate_override=args.gate_override,
             gt_covis_anchor=B.get("covis_argmax"),
             path_nearest_anchor=path_nearest_anchor,
@@ -1252,12 +1527,18 @@ def main():
     summary = dict(
         episodes=n, server_backend=args.server_backend,
         novel_server_port=args.novel_port,
+        memnav_checkpoint=MEMNAV_SERVER_INFO.get("checkpoint"),
+        memnav_retrieval=MEMNAV_SERVER_INFO.get("retrieval"),
+        memnav_exclude_recent=MEMNAV_SERVER_INFO.get("exclude_recent"),
         leg1_policy_backend=("navdp"
                              if args.server_backend in HYBRID_BACKENDS
                              else args.server_backend),
         leg2_policy_backend=(
             "memnav" if args.server_backend == "hybrid_oracle"
-            else "navdp_image_point_mix" if args.server_backend == "hybrid_pose"
+            else ("navdp_auto_router"
+                  if args.hybrid_route in AUTO_HYBRID_ROUTES
+                  else "navdp_image_point_mix")
+            if args.server_backend == "hybrid_pose"
             else args.server_backend),
         leg1_mode=args.leg1_mode, stop_after_leg1=args.stop_after_leg1,
         leg1_goal_source=args.leg1_goal_source,
@@ -1274,6 +1555,14 @@ def main():
                                   or args.server_backend in HYBRID_BACKENDS)
                               else None),
         base_seed=args.seed, retrieval_override=args.retrieval_override,
+        probe_leg1_memory=args.probe_leg1_memory,
+        hybrid_route=args.hybrid_route,
+        router_advantage_threshold=args.router_advantage_threshold,
+        router_visual_floor=args.router_visual_floor,
+        router_min_matches=args.router_min_matches,
+        router_min_inliers=args.router_min_inliers,
+        router_min_inlier_ratio=args.router_min_inlier_ratio,
+        router_confirm_plans=args.router_confirm_plans,
         gate_override=args.gate_override,
         SR_A=(nA / n) if n and args.leg1_mode == "policy" else None,
         mean_spl_A=(float(np.nanmean([m["spl_A"] for m in metrics]))

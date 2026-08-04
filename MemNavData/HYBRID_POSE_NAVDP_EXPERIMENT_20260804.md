@@ -1,5 +1,13 @@
 # MemNav metric pose × frozen NavDP controller：真实两段闭环实验
 
+> **2026-08-04 复核说明：本报告中的 Hybrid 数值已被后续审计判定为不可作为
+> `gatecurr600` checkpoint 成绩。** 当时 `memnav_server.py` 在读取相对 checkpoint
+> 参数后执行了 `chdir`，导致 checkpoint 实际不存在于新工作目录；旧 loader 又会
+> 静默跳过加载，因此 Hybrid 的 trainable heads 是启动时随机权重。纯官方 NavDP
+> 对照使用绝对 checkpoint 路径，不受影响。修复、真实加载后的结果和自动几何路由
+> 见 `MemNavData/GEOMETRIC_RELIABILITY_ROUTER_20260804.md`。保留本文件仅作为原始
+> 实验记录，不再引用其中 9/9、SPL 0.830 作为模型结论。
+
 日期：2026-08-04
 工作目录：`/home/asus/Research/Nav-axis-uturn`（没有修改母目录 `/home/asus/Research/Nav`）
 基线提交：`edca2ddc05b8f0ef09bd7442c53d404b0dcb3a9c`

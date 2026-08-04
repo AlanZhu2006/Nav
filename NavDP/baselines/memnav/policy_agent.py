@@ -104,7 +104,8 @@ class MemNavAgent:
     # ------------------------------------------------------------------ #
     # episode lifecycle
     # ------------------------------------------------------------------ #
-    def reset(self, camera_height=0.5, seed=None, episode_len=None):
+    def reset(self, camera_height=0.5, seed=None, episode_len=None,
+              camera_intrinsic=None):
         # Reset diffusion randomness per episode so terminal-mode A/B runs have
         # an identical navigation prefix.  This does not force deterministic
         # CUDA kernels; it controls the explicit torch.randn DDPM start noise.
@@ -119,6 +120,12 @@ class MemNavAgent:
         shutil.rmtree(self.rgb_dir, ignore_errors=True)
         os.makedirs(self.rgb_dir, exist_ok=True)
         self.camera_height = float(camera_height)
+        self.camera_intrinsic = None
+        if camera_intrinsic is not None:
+            intrinsic = np.asarray(camera_intrinsic, dtype=np.float64)
+            if intrinsic.shape != (3, 3) or not np.isfinite(intrinsic).all():
+                raise ValueError("camera_intrinsic must be a finite 3x3 matrix")
+            self.camera_intrinsic = intrinsic
         if self.flow_gate == "off":
             self.flow_threshold = 0.0
         elif self.flow_gate == "auto":
@@ -149,6 +156,7 @@ class MemNavAgent:
         self._metric_scale = None        # lazy ground-anchored scale
         self._goal_cache = {}            # (goal_md5, anchor) -> goal_pose; goal_md5 -> goal_cls
         self._anchor_state = {}          # goal_md5 -> dict(m, score): sticky-anchor ratchet
+        self._goal_start_frame = {}      # goal_md5 -> first frame queried for this goal
         # tower-1 live capture: the current frame's post-GCT tokens + agg list from the
         # CONTINUOUS stream. Training used window_forward's cold-cache recompute only
         # because samples load from disk; at eval the live stream supersedes it.
@@ -186,6 +194,85 @@ class MemNavAgent:
 
         return float(torch.nn.functional.cosine_similarity(
             current_cls, goal_cls, dim=-1)[0].item())
+
+    def verify_retrieval_overlap(self, goal_jpg_bytes, anchor):
+        """CPU SIFT/epipolar verification for one retrieved history frame.
+
+        DINO supplies a high-recall candidate. This second stage rejects a
+        similar-looking but geometrically unrelated corridor before the
+        memory route is allowed to latch. Streaming model state is untouched.
+        """
+        anchor = int(anchor)
+        empty = dict(matches=0, inliers=0, inlier_ratio=0.0, anchor=anchor)
+        if anchor < 0 or anchor >= self.n:
+            return dict(empty, error=f"anchor {anchor} outside [0, {self.n - 1}]")
+        anchor_path = os.path.join(self.rgb_dir, f"{anchor}.jpg")
+        if not os.path.isfile(anchor_path):
+            return dict(empty, error=f"anchor image missing: {anchor_path}")
+        try:
+            import cv2
+            anchor_gray = cv2.imread(anchor_path, cv2.IMREAD_GRAYSCALE)
+            goal_gray = cv2.imdecode(
+                np.frombuffer(goal_jpg_bytes, dtype=np.uint8),
+                cv2.IMREAD_GRAYSCALE)
+            if anchor_gray is None or goal_gray is None:
+                return dict(empty, error="image decode failed")
+            sift = cv2.SIFT_create(nfeatures=4000)
+            anchor_kp, anchor_desc = sift.detectAndCompute(anchor_gray, None)
+            goal_kp, goal_desc = sift.detectAndCompute(goal_gray, None)
+            if anchor_desc is None or goal_desc is None:
+                return dict(empty, error="insufficient image features")
+            pairs = cv2.BFMatcher().knnMatch(anchor_desc, goal_desc, k=2)
+            good = [pair[0] for pair in pairs
+                    if len(pair) == 2
+                    and pair[0].distance < 0.75 * pair[1].distance]
+            matches = len(good)
+            base = dict(matches=matches, inliers=0, inlier_ratio=0.0,
+                        anchor=anchor)
+            if matches < 8:
+                return dict(base, error="too few ratio-test matches")
+            anchor_pts = np.float32([anchor_kp[m.queryIdx].pt for m in good])
+            goal_pts = np.float32([goal_kp[m.trainIdx].pt for m in good])
+            inliers = 0
+            if self.camera_intrinsic is not None:
+                essential, ransac_mask = cv2.findEssentialMat(
+                    anchor_pts, goal_pts, self.camera_intrinsic,
+                    cv2.RANSAC, 0.999, 1.5)
+                if essential is not None:
+                    essential = np.asarray(essential, dtype=np.float64)
+                    if essential.shape == (3, 3):
+                        candidates = [essential]
+                    elif (essential.ndim == 2 and essential.shape[1] == 3
+                          and essential.shape[0] % 3 == 0):
+                        candidates = [essential[i:i + 3]
+                                      for i in range(0, essential.shape[0], 3)]
+                    else:
+                        candidates = []
+                    for candidate in candidates:
+                        mask = (None if ransac_mask is None
+                                else ransac_mask.copy())
+                        try:
+                            recovered, _rotation, _translation, _pose_mask = (
+                                cv2.recoverPose(
+                                    candidate, anchor_pts, goal_pts,
+                                    self.camera_intrinsic, mask=mask))
+                            inliers = max(inliers, int(recovered))
+                        except cv2.error:
+                            continue
+            else:
+                _fundamental, mask = cv2.findFundamentalMat(
+                    anchor_pts, goal_pts, cv2.FM_RANSAC, 1.5, 0.999)
+                if mask is not None:
+                    inliers = int(np.asarray(mask).astype(bool).sum())
+            return dict(
+                error=None,
+                matches=matches,
+                inliers=inliers,
+                inlier_ratio=float(inliers / matches),
+                anchor=anchor,
+            )
+        except Exception as exc:
+            return dict(empty, error=f"overlap verification failed: {exc}")
 
     # ------------------------------------------------------------------ #
     # capture-stream internals (mirrors precompute extract_trajectory)
@@ -384,7 +471,7 @@ class MemNavAgent:
 
     @torch.no_grad()
     def plan(self, goal_jpg_bytes, forced_anchor=None, forced_gate=None,
-             pose_only=False):
+             pose_only=False, retrieval_only=False):
         """Plan toward a goal image. Returns dict with metre-space waypoints in the
         current camera planar frame (x forward, y left, theta CCW).
 
@@ -398,11 +485,31 @@ class MemNavAgent:
         It is used by the hybrid controller, where the frozen NavDP decoder
         consumes this metric point-goal; running MemNav's second diffusion
         decoder in that path would only waste compute.
+
+        ``retrieval_only`` stops before goal-pose recovery. It is the cheap
+        first stage of a reliability router: Novel goals can be rejected from
+        memory using DINO/retrieval scores without allocating goal-append pose
+        caches that will never control the robot.
         """
         k = self.n - 1
         lo = self.amargin
+        import hashlib
+        gkey = hashlib.md5(goal_jpg_bytes).hexdigest()
+        goal_start_frame = self._goal_start_frame.setdefault(gkey, k)
+        candidate_ceiling = goal_start_frame - 1
         if k < self.S + self.W:
-            return dict(error=f"need >= {self.S + self.W + 1} frames, have {self.n}")
+            out = dict(
+                error=f"need >= {self.S + self.W + 1} frames, have {self.n}")
+            if pose_only or retrieval_only:
+                # posegoal_step has already appended this observation. Return
+                # its index even before retrieval becomes legal so the caller's
+                # online frame-to-pose trace remains complete.
+                out.update(
+                    frame_idx=k, candidate_count=0,
+                    goal_start_frame=goal_start_frame,
+                    candidate_ceiling=candidate_ceiling,
+                )
+            return out
 
         gpath = os.path.join(self.rgb_dir, "_goal.jpg")
         with open(gpath, "wb") as f:
@@ -416,8 +523,6 @@ class MemNavAgent:
             goal_t = goal_img[None].to(dev)
 
             # retrieval over candidates E(k) = [amargin .. k - exclude_recent]
-            import hashlib
-            gkey = hashlib.md5(goal_jpg_bytes).hexdigest()
             if ("cls", gkey) not in self._goal_cache:
                 self._goal_cache[("cls", gkey)] = self.lb.dino(goal_t)["cls"]
             goal_cls = self._goal_cache[("cls", gkey)]                   # [1,1024]
@@ -425,9 +530,14 @@ class MemNavAgent:
             current_goal_cos = float(torch.nn.functional.cosine_similarity(
                 goal_cls, mem_cls[:, k], dim=-1)[0].item())
             cand = torch.zeros(1, k + 1, dtype=torch.bool, device=dev)
-            hi = k - self.exclude_recent
+            # Let frames near the goal-session boundary become eligible after
+            # exclude_recent time has elapsed, but never admit observations
+            # collected while pursuing this same goal. Without this ceiling a
+            # long revisit eventually retrieves its own recent return path.
+            hi = min(k - self.exclude_recent, candidate_ceiling)
             if hi >= lo:
                 cand[0, lo:hi + 1] = True
+            candidate_count = int(cand.sum().item())
             match_idx, gate_logit, _ = self.core.retrieval(goal_cls, mem_cls, cand)
             gate = torch.sigmoid(gate_logit)     # trained gate: decoder soft-bias, as in training
             predicted_gate = float(gate.item())
@@ -436,7 +546,7 @@ class MemNavAgent:
                 if not 0.0 <= forced_gate <= 1.0:
                     return dict(error=f"forced gate {forced_gate} outside [0, 1]")
                 gate = torch.full_like(gate, forced_gate)
-            if pose_only and not cand.any():
+            if (pose_only or retrieval_only) and not cand.any():
                 return dict(
                     error=(f"no eligible retrieval frame in [{lo}, {hi}] "
                            f"at current frame {k}"),
@@ -445,17 +555,26 @@ class MemNavAgent:
                     forced_gate=(float(forced_gate)
                                  if forced_gate is not None else None),
                     current_goal_cos=current_goal_cos,
+                    candidate_count=candidate_count,
+                    goal_start_frame=goal_start_frame,
+                    candidate_ceiling=candidate_ceiling,
                     frame_idx=k,
                 )
 
             raw_score = None
+            retrieval_second_score = None
+            retrieval_margin = None
+            visual_score = None
+            visual_second_score = None
+            visual_margin = None
+            visual_anchor = None
             raw_cos = None
             if cand.any():
                 import torch.nn.functional as Fnn
+                visual_cos = Fnn.cosine_similarity(
+                    goal_cls.unsqueeze(1), mem_cls, dim=-1)[0]
                 if self.retrieval_mode == "raw":
-                    raw_cos = Fnn.cosine_similarity(
-                        goal_cls.unsqueeze(1), mem_cls, dim=-1
-                    )[0]
+                    raw_cos = visual_cos
                 else:
                     goal_proj = Fnn.normalize(
                         self.core.retrieval.proj_goal(goal_cls), dim=-1
@@ -467,6 +586,23 @@ class MemNavAgent:
                 raw_cos = raw_cos.masked_fill(~cand[0], -1.0)
                 cand_best = int(raw_cos.argmax().item())
                 raw_score = float(raw_cos[cand_best].item())
+                raw_top = torch.topk(
+                    raw_cos[cand[0]], k=min(2, candidate_count)).values
+                if candidate_count > 1:
+                    retrieval_second_score = float(raw_top[1].item())
+                    retrieval_margin = raw_score - retrieval_second_score
+
+                visual_valid = visual_cos[cand[0]]
+                visual_indices = torch.nonzero(
+                    cand[0], as_tuple=False).flatten()
+                visual_anchor = int(
+                    visual_indices[visual_valid.argmax()].item())
+                visual_top = torch.topk(
+                    visual_valid, k=min(2, candidate_count)).values
+                visual_score = float(visual_top[0].item())
+                if candidate_count > 1:
+                    visual_second_score = float(visual_top[1].item())
+                    visual_margin = visual_score - visual_second_score
                 st = self._anchor_state.get(gkey)
                 # ratchet: keep the incumbent unless the new best clearly beats it
                 if st is not None and raw_score <= st["score"] + self.anchor_switch_margin:
@@ -482,7 +618,21 @@ class MemNavAgent:
                 if forced_anchor < lo or forced_anchor > hi:
                     return dict(
                         error=(f"forced anchor {forced_anchor} outside eligible "
-                               f"range [{lo}, {hi}]")
+                               f"range [{lo}, {hi}]"),
+                        gate=float(gate.item()),
+                        predicted_gate=predicted_gate,
+                        current_goal_cos=current_goal_cos,
+                        candidate_count=candidate_count,
+                        raw_score=raw_score,
+                        retrieval_second_score=retrieval_second_score,
+                        retrieval_margin=retrieval_margin,
+                        visual_score=visual_score,
+                        visual_anchor=visual_anchor,
+                        visual_second_score=visual_second_score,
+                        visual_margin=visual_margin,
+                        goal_start_frame=goal_start_frame,
+                        candidate_ceiling=candidate_ceiling,
+                        frame_idx=k,
                     )
                 match_idx = torch.tensor([forced_anchor], device=dev)
                 if raw_cos is None:
@@ -491,6 +641,39 @@ class MemNavAgent:
                         goal_cls.unsqueeze(1), mem_cls, dim=-1)[0]
                 forced_anchor_score = float(raw_cos[forced_anchor].item())
             anchor = int(match_idx.clamp(lo, k - 1).item())
+            selected_anchor_score = (float(raw_cos[anchor].item())
+                                     if raw_cos is not None else None)
+            anchor_gap = k - anchor
+
+            if retrieval_only:
+                return dict(
+                    gate=float(gate.item()),
+                    predicted_gate=predicted_gate,
+                    forced_gate=(float(forced_gate)
+                                 if forced_gate is not None else None),
+                    match_idx=int(match_idx.item()),
+                    raw_score=raw_score,
+                    retrieval_second_score=retrieval_second_score,
+                    retrieval_margin=retrieval_margin,
+                    visual_score=visual_score,
+                    visual_anchor=visual_anchor,
+                    visual_second_score=visual_second_score,
+                    visual_margin=visual_margin,
+                    selected_anchor_score=selected_anchor_score,
+                    candidate_count=candidate_count,
+                    anchor_gap=anchor_gap,
+                    goal_start_frame=goal_start_frame,
+                    candidate_ceiling=candidate_ceiling,
+                    retrieved_anchor=retrieved_anchor,
+                    forced_anchor=(int(forced_anchor)
+                                   if forced_anchor is not None else None),
+                    forced_anchor_score=forced_anchor_score,
+                    anchor=anchor,
+                    aux_pose=None,
+                    goal_rel_yaw=None,
+                    current_goal_cos=current_goal_cos,
+                    frame_idx=k,
+                )
 
             # poses: current from the continuous capture stream; goal via warm re-insert.
             # goal_pose depends only on (goal image, anchor, caches[<=anchor]) and the
@@ -538,6 +721,17 @@ class MemNavAgent:
                                  if forced_gate is not None else None),
                     match_idx=int(match_idx.item()),
                     raw_score=raw_score,
+                    retrieval_second_score=retrieval_second_score,
+                    retrieval_margin=retrieval_margin,
+                    visual_score=visual_score,
+                    visual_anchor=visual_anchor,
+                    visual_second_score=visual_second_score,
+                    visual_margin=visual_margin,
+                    selected_anchor_score=selected_anchor_score,
+                    candidate_count=candidate_count,
+                    anchor_gap=anchor_gap,
+                    goal_start_frame=goal_start_frame,
+                    candidate_ceiling=candidate_ceiling,
                     retrieved_anchor=retrieved_anchor,
                     forced_anchor=(int(forced_anchor)
                                    if forced_anchor is not None else None),
@@ -633,6 +827,17 @@ class MemNavAgent:
                              if forced_gate is not None else None),
                 match_idx=int(match_idx.item()),
                 raw_score=raw_score,
+                retrieval_second_score=retrieval_second_score,
+                retrieval_margin=retrieval_margin,
+                visual_score=visual_score,
+                visual_anchor=visual_anchor,
+                visual_second_score=visual_second_score,
+                visual_margin=visual_margin,
+                selected_anchor_score=selected_anchor_score,
+                candidate_count=candidate_count,
+                anchor_gap=anchor_gap,
+                goal_start_frame=goal_start_frame,
+                candidate_ceiling=candidate_ceiling,
                 retrieved_anchor=retrieved_anchor,
                 forced_anchor=(int(forced_anchor)
                                if forced_anchor is not None else None),

@@ -700,12 +700,23 @@ class MemNavPolicy(PreTrainedModel):
             config = cls.config_class.from_pretrained(pretrained_model_name_or_path, **kwargs)
         if hasattr(config, 'model_dump'):                  # pydantic ExpCfg -> wrap
             config = cls.config_class(model_cfg=config)
-        model = cls(config)
         path = pretrained_model_name_or_path
-        if path and len(str(path)) > 0 and os.path.exists(path):
+        if path and len(str(path)) > 0 and not os.path.isfile(path):
+            raise FileNotFoundError(f"MemNav checkpoint not found: {path}")
+        model = cls(config)
+        if path and len(str(path)) > 0:
             sd = torch.load(path, map_location='cpu')
             sd = sd.get('state_dict', sd) if isinstance(sd, dict) else sd
             inc = model.load_state_dict(sd, strict=False)
+            trainable = {name for name, param in model.named_parameters()
+                         if param.requires_grad}
+            missing_trainable = [name for name in inc.missing_keys
+                                 if name in trainable]
+            if missing_trainable:
+                preview = ', '.join(missing_trainable[:8])
+                raise RuntimeError(
+                    f"checkpoint {path} is missing {len(missing_trainable)} "
+                    f"trainable parameter(s): {preview}")
             print(f"[memnav] loaded {path}: missing={len(inc.missing_keys)} unexpected={len(inc.unexpected_keys)}")
         return model
 

@@ -265,7 +265,7 @@ class NavDP_Agent:
         
         if all_values.max() < self.stop_threshold:
             good_trajectory[:,:,:,0] = good_trajectory[:,:,:,0] * 0.0
-            good_trajectory[:,:,:,1] = torch.sign(good_trajectory[:,:,:,1].mean())
+            good_trajectory[:,:,:,1] = np.sign(good_trajectory[:,:,:,1].mean())
         
         trajectory_mask = self.project_trajectory(images,all_trajectory,all_values) 
         return good_trajectory[:,0], all_trajectory, all_values, trajectory_mask

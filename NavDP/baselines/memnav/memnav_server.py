@@ -16,6 +16,9 @@ Endpoints (NavDP wire-contract style):
                                  "goal_rel_yaw": float|null,
                                  "current_goal_cos": float}
                              streams the frame, then plans toward the goal.
+  POST /posegoal_step        files: image (jpg), goal (jpg)
+                             -> retrieval/gate/metric-pose diagnostics only;
+                             streams the frame but skips MemNav diffusion.
   POST /imagegoal_similarity files: image (jpg), goal (jpg)
                              -> {"current_goal_cos": float}
                              stateless visual check; does not mutate memory.
@@ -109,6 +112,21 @@ def imagegoal_step():
         request.files["goal"].read(),
         forced_anchor=(int(forced_anchor) if forced_anchor is not None else None),
         forced_gate=(float(forced_gate) if forced_gate is not None else None),
+    )
+    return jsonify(out)
+
+
+@app.route("/posegoal_step", methods=["POST"])
+def posegoal_step():
+    """Append a decision frame and recover the retrieved metric point-goal."""
+    agent.add_frame(request.files["image"].read())
+    forced_anchor = request.form.get("forced_anchor")
+    forced_gate = request.form.get("forced_gate")
+    out = agent.plan(
+        request.files["goal"].read(),
+        forced_anchor=(int(forced_anchor) if forced_anchor is not None else None),
+        forced_gate=(float(forced_gate) if forced_gate is not None else None),
+        pose_only=True,
     )
     return jsonify(out)
 

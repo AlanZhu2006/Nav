@@ -62,10 +62,22 @@ parser.add_argument("--host", type=str, default="localhost")
 parser.add_argument("--out", type=str, default="./eval2leg_out")
 parser.add_argument(
     "--server_backend",
-    choices=["memnav", "navdp"],
+    choices=["memnav", "navdp", "hybrid_oracle", "hybrid_pose"],
     default="memnav",
     help=("HTTP protocol exposed by the policy server.  The NavDP adapter "
-          "supplies metric depth and removes the singleton batch dimension."),
+          "supplies metric depth and removes the singleton batch dimension. "
+          "hybrid_oracle is a diagnostic upper bound: official NavDP controls "
+          "the Novel start->A leg while every observation is also streamed to "
+          "MemNav, which controls the revisit A->B leg. hybrid_pose keeps "
+          "NavDP as the A->B local controller and conditions its mixed "
+          "image/point-goal mode on MemNav's retrieved metric pose."),
+)
+parser.add_argument(
+    "--novel_port",
+    type=int,
+    default=None,
+    help=("official NavDP server port for either hybrid backend; "
+          "--port remains the MemNav server port"),
 )
 parser.add_argument("--leg1_mode", choices=["replay", "policy"], default="replay")
 parser.add_argument(
@@ -77,6 +89,13 @@ parser.add_argument("--reset_memory", action="store_true",
                     help="cold arm: wipe server memory at the A->B switch")
 parser.add_argument("--navdp_stop_threshold", type=float, default=-0.5)
 parser.add_argument("--success_dist", type=float, default=1.0)
+parser.add_argument(
+    "--leg1_success_dist",
+    type=float,
+    default=None,
+    help=("optional stricter Goal-A switch radius; Goal B continues to use "
+          "--success_dist"),
+)
 parser.add_argument("--max_steps", type=int, default=1200, help="frame budget per policy leg")
 parser.add_argument("--exec_horizon", type=int, default=8, help="frames between replans")
 parser.add_argument(
@@ -131,10 +150,11 @@ parser.add_argument("--visual_yaw_max_correction_deg", type=float, default=45.0,
                     help="fail closed when the accepted residual exceeds this bound")
 parser.add_argument(
     "--retrieval_override",
-    choices=["off", "gt_covis"],
+    choices=["off", "gt_covis", "gt_path_nearest"],
     default="off",
-    help=("evaluation-only intervention: force the revisit anchor to the "
-          "episode metadata's GT covisibility argmax"),
+    help=("evaluation-only intervention: gt_covis forces the generator "
+          "trajectory's metadata anchor; gt_path_nearest instead forces the "
+          "frame on the actually executed leg-1 path nearest to Goal B"),
 )
 parser.add_argument(
     "--gate_override",
@@ -161,6 +181,9 @@ parser.add_argument("--save_video", action="store_true")
 args = parser.parse_args()
 
 BASE = f"http://{args.host}:{args.port}"
+NOVEL_BASE = (f"http://{args.host}:{args.novel_port}"
+              if args.novel_port is not None else None)
+HYBRID_BACKENDS = ("hybrid_oracle", "hybrid_pose")
 CAM_H = 0.5
 
 
@@ -185,7 +208,7 @@ def depth_png_bytes(depth):
 
 def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
               camera_intrinsic=None):
-    if args.server_backend == "navdp":
+    def navdp_payload():
         if camera_intrinsic is None:
             raise ValueError("NavDP reset requires camera_intrinsic")
         payload = {
@@ -195,13 +218,29 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
         }
         if seed is not None:
             payload["seed"] = int(seed)
-    else:
-        payload = {"camera_height": camera_height}
-        if seed is not None:
-            payload["seed"] = int(seed)
-        if episode_len is not None:
-            payload["episode_len"] = int(episode_len)
-    r = requests.post(f"{BASE}/navigator_reset", json=payload)
+        return payload
+
+    memnav_payload = {"camera_height": camera_height}
+    if seed is not None:
+        memnav_payload["seed"] = int(seed)
+    if episode_len is not None:
+        memnav_payload["episode_len"] = int(episode_len)
+
+    if args.server_backend == "navdp":
+        r = requests.post(f"{BASE}/navigator_reset", json=navdp_payload())
+        r.raise_for_status()
+        return r.json()["algo"]
+    if args.server_backend in HYBRID_BACKENDS:
+        if NOVEL_BASE is None:
+            raise ValueError(f"{args.server_backend} requires --novel_port")
+        memnav = requests.post(
+            f"{BASE}/navigator_reset", json=memnav_payload)
+        memnav.raise_for_status()
+        novel = requests.post(
+            f"{NOVEL_BASE}/navigator_reset", json=navdp_payload())
+        novel.raise_for_status()
+        return f"hybrid({novel.json()['algo']}+{memnav.json()['algo']})"
+    r = requests.post(f"{BASE}/navigator_reset", json=memnav_payload)
     r.raise_for_status()
     return r.json()["algo"]
 
@@ -219,34 +258,130 @@ def srv_memory(image_jpg):
 
 
 def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
-             forced_gate=None):
+             forced_gate=None, policy_backend=None):
     data = {}
     if forced_anchor is not None:
         data["forced_anchor"] = str(int(forced_anchor))
     if forced_gate is not None:
         data["forced_gate"] = str(float(forced_gate))
+
+    if args.server_backend == "hybrid_pose" and policy_backend == "navdp_mix":
+        # First recover the metric relative goal from the actual MemNav stream.
+        # posegoal_step appends this decision frame exactly once to MemNav.
+        mem = requests.post(
+            f"{BASE}/posegoal_step",
+            files={
+                "image": ("image.jpg", image_jpg),
+                "goal": ("goal.jpg", goal_jpg),
+            },
+            data=data,
+        )
+        mem.raise_for_status()
+        mem_out = mem.json()
+        diagnostic_keys = (
+            "gate", "predicted_gate", "forced_gate", "match_idx",
+            "retrieved_anchor", "forced_anchor", "forced_anchor_score",
+            "raw_score", "anchor", "aux_pose", "goal_rel_yaw",
+            "current_goal_cos", "frame_idx",
+        )
+
+        def attach_memnav_diagnostics(out, controller, error=None):
+            for key in diagnostic_keys:
+                out[key] = mem_out.get(key)
+            out["memory_frame_idx"] = mem_out.get("frame_idx")
+            out["pose_controller"] = controller
+            out["pose_error"] = error
+            return normalize_navdp_response(out)
+
+        aux_pose = mem_out.get("aux_pose")
+        aux_pose = (np.asarray(aux_pose, dtype=float)
+                    if aux_pose is not None else None)
+        if (aux_pose is None or aux_pose.shape != (2,)
+                or not np.isfinite(aux_pose).all()):
+            # A short trajectory may not yet have an eligible long-term
+            # anchor. Keep NavDP's native ImageGoal behavior and advance its
+            # eight-frame state instead of freezing the controller.
+            nav = requests.post(
+                f"{NOVEL_BASE}/imagegoal_step",
+                files={
+                    "image": ("image.jpg", image_jpg),
+                    "goal": ("goal.jpg", goal_jpg),
+                    "depth": ("depth.png", depth_png_bytes(depth)),
+                },
+            )
+            nav.raise_for_status()
+            return attach_memnav_diagnostics(
+                nav.json(), "navdp_image_fallback",
+                error=mem_out.get("error", "invalid MemNav aux_pose"),
+            )
+
+        # NavDP was trained with both image-goal and point-goal tokens.  Its
+        # mixed endpoint preserves visual turning cues while the metric pose
+        # supplies the missing long-range direction and distance.
+        nav = requests.post(
+            f"{NOVEL_BASE}/navdp_step_ip_mixgoal",
+            files={
+                "image": ("image.jpg", image_jpg),
+                "image_goal": ("goal.jpg", goal_jpg),
+                "depth": ("depth.png", depth_png_bytes(depth)),
+            },
+            data={"goal_data": json.dumps({
+                "goal_x": [float(aux_pose[0])],
+                "goal_y": [float(aux_pose[1])],
+            })},
+        )
+        nav.raise_for_status()
+        return attach_memnav_diagnostics(
+            nav.json(), "navdp_image_point_mix")
+
     files = {
         "image": ("image.jpg", image_jpg),
         "goal": ("goal.jpg", goal_jpg),
     }
-    if args.server_backend == "navdp":
+    use_navdp = (args.server_backend == "navdp"
+                 or (args.server_backend in HYBRID_BACKENDS
+                     and policy_backend == "navdp"))
+    if use_navdp:
         files["depth"] = ("depth.png", depth_png_bytes(depth))
-    r = requests.post(f"{BASE}/imagegoal_step", files=files, data=data)
+    memory_frame_idx = None
+    if args.server_backend in HYBRID_BACKENDS and policy_backend == "navdp":
+        # NavDP owns the decision, but MemNav must still receive this planning
+        # frame exactly once so its long-term memory is complete at the A->B
+        # switch.  NavDP itself advances only on decision observations.
+        streamed = requests.post(
+            f"{BASE}/memory_step",
+            files={"image": ("image.jpg", image_jpg)},
+        )
+        streamed.raise_for_status()
+        memory_frame_idx = streamed.json().get("frame_idx")
+        plan_base = NOVEL_BASE
+    else:
+        plan_base = BASE
+    r = requests.post(f"{plan_base}/imagegoal_step", files=files, data=data)
     r.raise_for_status()
     out = r.json()
-    if args.server_backend == "navdp" and "trajectory" in out:
-        trajectory = np.asarray(out["trajectory"], dtype=float)
-        if trajectory.ndim == 3 and trajectory.shape[0] == 1:
-            trajectory = trajectory[0]
-        if trajectory.ndim != 2 or trajectory.shape[-1] != 3:
-            raise ValueError(
-                f"unexpected NavDP trajectory shape {trajectory.shape}")
-        out["trajectory"] = trajectory.tolist()
-        # These fields do not exist in original NavDP.  Keep them explicit so
-        # downstream logs distinguish "no gate" from a predicted zero gate.
-        out.setdefault("gate", None)
-        out.setdefault("predicted_gate", None)
-        out.setdefault("match_idx", None)
+    if memory_frame_idx is not None:
+        out["memory_frame_idx"] = memory_frame_idx
+    elif args.server_backend != "navdp":
+        out.setdefault("memory_frame_idx", out.get("frame_idx"))
+    return normalize_navdp_response(out) if use_navdp else out
+
+
+def normalize_navdp_response(out):
+    """Remove NavDP's singleton environment dimension and mark absent fields."""
+    if "trajectory" not in out:
+        return out
+    trajectory = np.asarray(out["trajectory"], dtype=float)
+    if trajectory.ndim == 3 and trajectory.shape[0] == 1:
+        trajectory = trajectory[0]
+    if trajectory.ndim != 2 or trajectory.shape[-1] != 3:
+        raise ValueError(f"unexpected NavDP trajectory shape {trajectory.shape}")
+    out["trajectory"] = trajectory.tolist()
+    # These fields do not exist in original NavDP.  Keep them explicit so
+    # downstream logs distinguish "no gate" from a predicted zero gate.
+    out.setdefault("gate", None)
+    out.setdefault("predicted_gate", None)
+    out.setdefault("match_idx", None)
     return out
 
 
@@ -403,7 +538,8 @@ def select_plan_trajectory(response, pos, psi, pf, goal_xz):
 # --------------------------------------------------------------------------- #
 def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                    terminal_mode="off", goal_yaw=None, camera_intrinsic=None,
-                   forced_anchor=None, forced_gate=None):
+                   forced_anchor=None, forced_gate=None,
+                   policy_backend=None, success_dist=None):
     """Policy-driven leg with optional forward-only terminal pose alignment.
 
     Navigation success remains the benchmark's distance-only event.  When a
@@ -411,7 +547,9 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
     separately measure whether the robot returns to the goal with the goal
     image's orientation and whether direct visual similarity improves.
     """
+    success_dist = args.success_dist if success_dist is None else float(success_dist)
     path_len, history, way_world, plans = 0.0, [], None, []
+    memory_trace = []
     reached_position = False
     path_len_at_reach = None
     step_at_reach = None
@@ -446,7 +584,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
         terminal_completed = bool(coarse_terminal_completed)
         pose_aligned = bool(
             terminal_attempted
-            and final_dist < args.success_dist
+            and final_dist < success_dist
             and final_yaw_err is not None
             and final_yaw_err <= np.deg2rad(args.terminal_yaw_tol_deg)
         )
@@ -464,6 +602,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             end_psi=psi,
             steps=steps,
             plans=plans,
+            memory_trace=memory_trace,
             terminal_mode=terminal_mode,
             terminal_attempted=terminal_attempted,
             terminal_completed=terminal_completed,
@@ -661,7 +800,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
         if step % args.exec_horizon == 0:
             response = srv_plan(
                 frame, goal_jpg, depth=depth, forced_anchor=forced_anchor,
-                forced_gate=forced_gate)
+                forced_gate=forced_gate, policy_backend=policy_backend)
             if "trajectory" in response:
                 way, selector_info = select_plan_trajectory(
                     response, pos, psi, pf, goal_xz)
@@ -675,7 +814,10 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                   predicted_gate=response.get("predicted_gate"),
                                   forced_gate=response.get("forced_gate"),
                                   raw_score=response.get("raw_score"),
+                                  aux_pose=response.get("aux_pose"),
                                   goal_rel_yaw=response.get("goal_rel_yaw"),
+                                  pose_controller=response.get("pose_controller"),
+                                  pose_error=response.get("pose_error"),
                                   current_goal_cos=response.get("current_goal_cos"),
                                   frame_idx=response.get("frame_idx"),
                                   **selector_info))
@@ -693,13 +835,23 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                             frame_idx=response.get("frame_idx"),
                             anchor=response.get("anchor"),
                         )
+            memory_frame_idx = response.get("memory_frame_idx")
         else:
-            srv_memory(frame)
+            memory_response = srv_memory(frame)
+            memory_frame_idx = memory_response.get("frame_idx")
+        if memory_frame_idx is not None:
+            memory_trace.append(dict(
+                frame_idx=int(memory_frame_idx),
+                step=int(step),
+                x=float(pos[0]),
+                z=float(pos[2]),
+                yaw=float(psi),
+            ))
         if way_world is not None:
             pos, psi, dl = pursuit_step(pos, psi, way_world, pf)
             path_len += dl
         history.append(np.array([pos[0], pos[2]]))
-        if np.linalg.norm(np.array([pos[0], pos[2]]) - goal_xz) < args.success_dist:
+        if np.linalg.norm(np.array([pos[0], pos[2]]) - goal_xz) < success_dist:
             if not reached_position:
                 reached_position = True
                 path_len_at_reach = path_len
@@ -807,6 +959,9 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     if args.stop_after_leg1 and args.leg1_mode != "policy":
         raise ValueError("--stop_after_leg1 requires --leg1_mode policy")
+    if args.server_backend in HYBRID_BACKENDS and args.novel_port is None:
+        raise ValueError(
+            f"--server_backend {args.server_backend} requires --novel_port")
     try:
         import imageio
     except ImportError:
@@ -824,7 +979,8 @@ def main():
     pf = sim.pathfinder
     # Original NavDP constructs its agent on the first reset and therefore
     # needs the episode camera intrinsic.  MemNav can be probed immediately.
-    algo = ("navdp" if args.server_backend == "navdp"
+    algo = (args.server_backend
+            if args.server_backend == "navdp" or args.server_backend in HYBRID_BACKENDS
             else srv_reset(seed=args.seed))
     print(f"[eval2leg] server algo={algo}, {len(ep_dirs)} episodes, "
           f"backend={args.server_backend}, leg1={args.leg1_mode}, "
@@ -882,15 +1038,50 @@ def main():
 
         # ---- leg 1 ----
         if args.leg1_mode == "replay":
+            memory_trace = []
             for i in range(switch):
-                srv_memory(open(os.path.join(rgb_dir, f"{i}.jpg"), "rb").read())
+                memory_response = srv_memory(
+                    open(os.path.join(rgb_dir, f"{i}.jpg"), "rb").read())
+                frame_idx = memory_response.get("frame_idx")
+                if frame_idx is not None:
+                    frame_pos, frame_yaw = parquet_pose_hab(rows.iloc[i]["action"])
+                    memory_trace.append(dict(
+                        frame_idx=int(frame_idx), step=int(i),
+                        x=float(frame_pos[0]), z=float(frame_pos[2]),
+                        yaw=float(frame_yaw),
+                    ))
             pos, psi = parquet_pose_hab(rows.iloc[switch - 1]["action"])
-            legA = dict(reached=True, path_len=geoA, steps=switch, plans=[])   # scripted: SPL_A undefined
+            legA = dict(reached=True, path_len=geoA, steps=switch, plans=[],
+                        memory_trace=memory_trace)   # scripted: SPL_A undefined
         else:
             legA = run_policy_leg(
                 sim, pf, start_floor, start_psi, goalA_jpg, A_xz, geoA, writer,
-                terminal_mode="off", forced_gate=args.gate_override)
+                terminal_mode="off", forced_gate=args.gate_override,
+                policy_backend=("navdp"
+                                if args.server_backend in HYBRID_BACKENDS
+                                else None),
+                success_dist=args.leg1_success_dist)
             pos, psi = legA["end_pos"], legA["end_psi"]
+
+        path_nearest_anchor = None
+        path_nearest_dist_m = None
+        path_nearest_yaw_err_deg = None
+        if legA.get("memory_trace"):
+            nearest = min(
+                legA["memory_trace"],
+                key=lambda item: np.linalg.norm(
+                    np.asarray([item["x"], item["z"]]) - B_xz),
+            )
+            path_nearest_anchor = int(nearest["frame_idx"])
+            path_nearest_dist_m = float(np.linalg.norm(
+                np.asarray([nearest["x"], nearest["z"]]) - B_xz))
+            path_nearest_yaw_err_deg = float(np.degrees(abs(wrap_angle(
+                float(nearest["yaw"]) - float(B["yaw_habitat"])))))
+        if args.retrieval_override == "gt_path_nearest":
+            if path_nearest_anchor is None:
+                raise RuntimeError(
+                    "gt_path_nearest requires an indexed leg-1 memory trace")
+            forced_anchor = path_nearest_anchor
 
         # ---- leg 2 ----
         legB = dict(
@@ -911,6 +1102,10 @@ def main():
                 camera_intrinsic=camera_intrinsic,
                 forced_anchor=forced_anchor,
                 forced_gate=args.gate_override,
+                policy_backend=(
+                    "memnav" if args.server_backend == "hybrid_oracle"
+                    else "navdp_mix" if args.server_backend == "hybrid_pose"
+                    else None),
             )
 
         if writer is not None:
@@ -930,6 +1125,15 @@ def main():
             episode=os.path.basename(ep_dir),
             seed=episode_seed,
             server_backend=args.server_backend,
+            novel_server_port=args.novel_port,
+            leg1_policy_backend=("navdp"
+                                 if args.server_backend in HYBRID_BACKENDS
+                                 else args.server_backend),
+            leg2_policy_backend=(
+                "memnav" if args.server_backend == "hybrid_oracle"
+                else "navdp_image_point_mix"
+                if args.server_backend == "hybrid_pose"
+                else args.server_backend),
             leg1_goal_source=args.leg1_goal_source,
             leg1_goal_source_episode=os.path.basename(goalA_source_ep),
             reached_A=float(legA["reached"]), reached_B=float(legB["reached"]),
@@ -953,6 +1157,9 @@ def main():
             retrieval_override=args.retrieval_override,
             gate_override=args.gate_override,
             gt_covis_anchor=B.get("covis_argmax"),
+            path_nearest_anchor=path_nearest_anchor,
+            path_nearest_dist_m=path_nearest_dist_m,
+            path_nearest_yaw_err_deg=path_nearest_yaw_err_deg,
             gate_A_mean=(float(np.mean(gate_A)) if gate_A else float("nan")),
             gate_A_max=(float(np.max(gate_A)) if gate_A else float("nan")),
             gate_A_false_revisit_rate=(float(np.mean(np.asarray(gate_A) >= 0.5))
@@ -1010,7 +1217,8 @@ def main():
             terminal_final_goal_dist_m=legB.get("final_goal_dist_m"),
             loop_closed=legB.get("loop_closed"),
         )
-        json.dump(dict(legA=legA["plans"], legB=legB["plans"]),
+        json.dump(dict(legA=legA["plans"], legB=legB["plans"],
+                       legA_memory_trace=legA.get("memory_trace", [])),
                   open(os.path.join(args.out, m["episode"] + "_plans.json"), "w"))
         metrics.append(m)
         print(f"[{m['episode']}] A={m['reached_A']:.0f} "
@@ -1043,15 +1251,28 @@ def main():
         m["predicted_gate_A_false_revisit_count"] for m in metrics)
     summary = dict(
         episodes=n, server_backend=args.server_backend,
+        novel_server_port=args.novel_port,
+        leg1_policy_backend=("navdp"
+                             if args.server_backend in HYBRID_BACKENDS
+                             else args.server_backend),
+        leg2_policy_backend=(
+            "memnav" if args.server_backend == "hybrid_oracle"
+            else "navdp_image_point_mix" if args.server_backend == "hybrid_pose"
+            else args.server_backend),
         leg1_mode=args.leg1_mode, stop_after_leg1=args.stop_after_leg1,
         leg1_goal_source=args.leg1_goal_source,
         cold=args.reset_memory,
         success_dist_m=args.success_dist,
+        leg1_success_dist_m=(args.leg1_success_dist
+                             if args.leg1_success_dist is not None
+                             else args.success_dist),
         max_steps=args.max_steps,
         exec_horizon=args.exec_horizon,
         trajectory_selector=args.trajectory_selector,
         navdp_stop_threshold=(args.navdp_stop_threshold
-                              if args.server_backend == "navdp" else None),
+                              if (args.server_backend == "navdp"
+                                  or args.server_backend in HYBRID_BACKENDS)
+                              else None),
         base_seed=args.seed, retrieval_override=args.retrieval_override,
         gate_override=args.gate_override,
         SR_A=(nA / n) if n and args.leg1_mode == "policy" else None,

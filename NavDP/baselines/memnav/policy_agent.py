@@ -383,7 +383,8 @@ class MemNavAgent:
         return self._metric_scale
 
     @torch.no_grad()
-    def plan(self, goal_jpg_bytes, forced_anchor=None, forced_gate=None):
+    def plan(self, goal_jpg_bytes, forced_anchor=None, forced_gate=None,
+             pose_only=False):
         """Plan toward a goal image. Returns dict with metre-space waypoints in the
         current camera planar frame (x forward, y left, theta CCW).
 
@@ -392,6 +393,11 @@ class MemNavAgent:
         only the history frame used by the revisit tower; retrieval logits,
         gate, current-state tower, novel tower, and diffusion decoding remain
         unchanged. The default ``None`` preserves deployment behavior.
+
+        ``pose_only`` stops after retrieval and LingBot relative-pose recovery.
+        It is used by the hybrid controller, where the frozen NavDP decoder
+        consumes this metric point-goal; running MemNav's second diffusion
+        decoder in that path would only waste compute.
         """
         k = self.n - 1
         lo = self.amargin
@@ -430,6 +436,17 @@ class MemNavAgent:
                 if not 0.0 <= forced_gate <= 1.0:
                     return dict(error=f"forced gate {forced_gate} outside [0, 1]")
                 gate = torch.full_like(gate, forced_gate)
+            if pose_only and not cand.any():
+                return dict(
+                    error=(f"no eligible retrieval frame in [{lo}, {hi}] "
+                           f"at current frame {k}"),
+                    gate=float(gate.item()),
+                    predicted_gate=predicted_gate,
+                    forced_gate=(float(forced_gate)
+                                 if forced_gate is not None else None),
+                    current_goal_cos=current_goal_cos,
+                    frame_idx=k,
+                )
 
             raw_score = None
             raw_cos = None
@@ -475,13 +492,6 @@ class MemNavAgent:
                 forced_anchor_score = float(raw_cos[forced_anchor].item())
             anchor = int(match_idx.clamp(lo, k - 1).item())
 
-            # current state (tower 1): LIVE stream tokens — no window recompute at eval.
-            # Training's window_forward cold-cache pass exists only because samples load
-            # from disk; the continuous stream's tokens carry full causal context.
-            cur_t = self._last_tokens                                    # [1,P,2C]
-            cur_img = self._window_imgs[-1]
-            dfeat = self.lb.depth_feature(self._last_agg, cur_img[None][None], self._psi)[None]
-
             # poses: current from the continuous capture stream; goal via warm re-insert.
             # goal_pose depends only on (goal image, anchor, caches[<=anchor]) and the
             # captured caches are write-once, so this cache is EXACT — recompute only
@@ -495,7 +505,8 @@ class MemNavAgent:
             # (log(gate) attention bias) mask them; zeroing changes what low-gate
             # steps condition on. Revisit if warm-arm results look off.
             goal_pose = self._goal_cache.get(pkey)
-            if goal_pose is None and float(gate.item()) >= self.gate_skip_below:
+            if goal_pose is None and (pose_only
+                                      or float(gate.item()) >= self.gate_skip_below):
                 # warm all the way back to the scale block (n_hist=0). Injected
                 # compressed-history frames poison the camera head's goal pose
                 # (measured: n_hist=34 -> 34° yaw err, 100 -> 169°; 0 -> ~0°
@@ -510,7 +521,6 @@ class MemNavAgent:
                 self._goal_cache[pkey] = goal_pose
 
             mscale = torch.tensor([self._get_metric_scale()], device=dev, dtype=torch.float32)
-            current_state = self.core.build_current_state(cur_t, dfeat)
             if goal_pose is not None:
                 revisit, aux_pose, relative_rotation = self.core.build_revisit(
                     cur_pose.to(dev), goal_pose.to(dev), mscale)
@@ -520,6 +530,34 @@ class MemNavAgent:
                 revisit = torch.zeros((1, self.core.n_rev, self.core.action_head.in_features), device=dev)
                 aux_pose = torch.zeros((1, 2), device=dev)
                 goal_rel_yaw = None
+            if pose_only:
+                return dict(
+                    gate=float(gate.item()),
+                    predicted_gate=predicted_gate,
+                    forced_gate=(float(forced_gate)
+                                 if forced_gate is not None else None),
+                    match_idx=int(match_idx.item()),
+                    raw_score=raw_score,
+                    retrieved_anchor=retrieved_anchor,
+                    forced_anchor=(int(forced_anchor)
+                                   if forced_anchor is not None else None),
+                    forced_anchor_score=forced_anchor_score,
+                    anchor=anchor,
+                    aux_pose=aux_pose[0].float().cpu().tolist(),
+                    goal_rel_yaw=goal_rel_yaw,
+                    current_goal_cos=current_goal_cos,
+                    frame_idx=k,
+                )
+
+            # Current-state depth features and both diffusion towers are not
+            # needed by the pose-only hybrid path. Keep their original order
+            # for the legacy MemNav planner, but pay this cost only when its
+            # waypoint decoder will actually consume them.
+            cur_t = self._last_tokens                                    # [1,P,2C]
+            cur_img = self._window_imgs[-1]
+            dfeat = self.lb.depth_feature(
+                self._last_agg, cur_img[None][None], self._psi)[None]
+            current_state = self.core.build_current_state(cur_t, dfeat)
             novel = self.core.novel(cur_img[None].to(dev), goal_t)
 
             # DDPM reverse loop (no critic in this model)

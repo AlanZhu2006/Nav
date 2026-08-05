@@ -11,6 +11,13 @@ from pathlib import Path
 from PIL import Image
 
 
+DEPENDENCY_ARGUMENTS = {
+    "gatecurr600": "gatecurr_checkpoint",
+    "navdp_checkpoint": "navdp_checkpoint",
+    "lingbot_map_long": "lingbot_weights",
+}
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -49,11 +56,31 @@ def validate_file(path: Path, record: dict, label: str) -> str:
     return actual
 
 
+def resolve_dependency_paths(
+    base_manifest: dict,
+    overrides: dict[str, Path | None],
+) -> dict[str, Path]:
+    """Resolve local mirrors without changing frozen dependency records."""
+    require(
+        set(base_manifest["dependencies"]) == set(DEPENDENCY_ARGUMENTS),
+        "benchmark dependency labels changed",
+    )
+    return {
+        label: overrides.get(label) or Path(record["path"])
+        for label, record in base_manifest["dependencies"].items()
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--expected-manifest-sha", required=True)
     parser.add_argument("--scene-index", type=int, required=True)
+    parser.add_argument("--asset-root", type=Path)
+    parser.add_argument("--episode-root", type=Path)
+    parser.add_argument("--gatecurr-checkpoint", type=Path)
+    parser.add_argument("--navdp-checkpoint", type=Path)
+    parser.add_argument("--lingbot-weights", type=Path)
     args = parser.parse_args()
 
     actual_manifest_sha = sha256(args.manifest)
@@ -84,8 +111,8 @@ def main() -> None:
     require(0 <= args.scene_index < len(scenes), "scene index is out of range")
     scene = scenes[args.scene_index]
 
-    asset_root = Path(manifest["paths"]["asset_root"])
-    episode_root = Path(manifest["paths"]["episode_root"])
+    asset_root = args.asset_root or Path(manifest["paths"]["asset_root"])
+    episode_root = args.episode_root or Path(manifest["paths"]["episode_root"])
     asset = asset_root / scene / f"{scene}.glb"
     asset_record = base_manifest["assets"][scene]
     asset_sha = validate_file(asset, asset_record, "scene asset")
@@ -137,9 +164,16 @@ def main() -> None:
             "files": file_shas,
         })
 
+    dependency_paths = resolve_dependency_paths(
+        base_manifest,
+        {
+            label: getattr(args, argument)
+            for label, argument in DEPENDENCY_ARGUMENTS.items()
+        },
+    )
     checked_dependencies = {}
     for label, dependency in base_manifest["dependencies"].items():
-        path = Path(dependency["path"])
+        path = dependency_paths[label]
         checked_dependencies[label] = validate_file(path, dependency, label)
 
     print(json.dumps({
@@ -148,8 +182,13 @@ def main() -> None:
         "base_manifest_sha256": actual_base_sha,
         "scene_index": args.scene_index,
         "scene": scene,
+        "asset_root": str(asset_root),
+        "episode_root": str(episode_root),
         "asset_sha256": asset_sha,
         "episodes": checked_episodes,
+        "dependency_paths": {
+            label: str(path) for label, path in dependency_paths.items()
+        },
         "dependencies": checked_dependencies,
         "policy_training_overlap": [],
     }, indent=2, sort_keys=True))

@@ -4,7 +4,10 @@ import unittest
 from pathlib import Path
 
 from MemNavData.summarize_expanded_3leg_router_eval import arm_summary
-from MemNavData.validate_expanded_3leg_router_eval import validate_selection
+from MemNavData.validate_expanded_3leg_router_eval import (
+    resolve_dependency_paths,
+    validate_selection,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -33,6 +36,23 @@ class ExpandedThreeLegBenchmarkTest(unittest.TestCase):
             broken["episodes"].pop("gTV8FGcVJC9")
         with self.assertRaisesRegex(RuntimeError, "frozen rule"):
             validate_selection(broken, self.base_manifest)
+
+    def test_local_dependency_overrides_preserve_frozen_labels(self):
+        local_gate = Path("/local/gatecurr600.memnav.ckpt")
+        resolved = resolve_dependency_paths(
+            self.base_manifest,
+            {
+                "gatecurr600": local_gate,
+                "navdp_checkpoint": None,
+                "lingbot_map_long": None,
+            },
+        )
+        self.assertEqual(resolved["gatecurr600"], local_gate)
+        self.assertEqual(
+            resolved["navdp_checkpoint"],
+            Path(self.base_manifest["dependencies"]["navdp_checkpoint"]["path"]),
+        )
+        self.assertEqual(set(resolved), set(self.base_manifest["dependencies"]))
 
     def test_summary_uses_sequential_eligibility(self):
         base = {

@@ -109,10 +109,19 @@ REQUESTS_INIT=${HAB_REQUESTS_VENDOR}/requests/__init__.py
 }
 
 mkdir -p "${RUN_ROOT}/preflight" "${RUN_ROOT}/scenes"
-hab_python "${VALIDATOR}" \
-  --manifest "${MANIFEST}" \
-  --expected-manifest-sha "${EXPECTED_MANIFEST_SHA}" \
-  --scene-index "${SCENE_INDEX}" \
+VALIDATOR_ARGS=(
+  --manifest "${MANIFEST}"
+  --expected-manifest-sha "${EXPECTED_MANIFEST_SHA}"
+  --scene-index "${SCENE_INDEX}"
+  --gatecurr-checkpoint "${MEMNAV_CKPT}"
+  --navdp-checkpoint "${NAVDP_CKPT}"
+  --lingbot-weights "${LINGBOT_WEIGHTS}"
+)
+[[ -z "${ASSET_ROOT_OVERRIDE}" ]] || \
+  VALIDATOR_ARGS+=(--asset-root "${ASSET_ROOT_OVERRIDE}")
+[[ -z "${EPISODE_ROOT_OVERRIDE}" ]] || \
+  VALIDATOR_ARGS+=(--episode-root "${EPISODE_ROOT_OVERRIDE}")
+hab_python "${VALIDATOR}" "${VALIDATOR_ARGS[@]}" \
   > "${RUN_ROOT}/preflight/scene_$(printf '%02d' "${SCENE_INDEX}").json"
 
 scene=$(hab_python - "${MANIFEST}" "${SCENE_INDEX}" <<'PY'

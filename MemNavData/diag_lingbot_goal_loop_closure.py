@@ -78,7 +78,11 @@ def sha256(path: Path, chunk_bytes: int = 8 << 20) -> str:
 def git_value(root: Path, *args: str) -> Optional[str]:
     try:
         return subprocess.check_output(
-            ["git", "-C", str(root), *args], text=True,
+            # The shared LingBot checkout is owned by another project member.
+            # Scope Git's ownership exception to this one read-only invocation;
+            # do not mutate the user's global safe.directory configuration.
+            ["git", "-c", f"safe.directory={root.resolve()}",
+             "-C", str(root), *args], text=True,
             stderr=subprocess.DEVNULL).strip()
     except (OSError, subprocess.CalledProcessError):
         return None

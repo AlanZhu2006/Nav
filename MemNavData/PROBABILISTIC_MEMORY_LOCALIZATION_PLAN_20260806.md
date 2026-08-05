@@ -15,6 +15,7 @@
 - **控制策略**：始终保留冻结 NavDP 的原始 image-goal 路径，memory 只提供经过置信度约束的定位/中间 point-goal/residual；
 - **时序策略**：用跨时刻 posterior/filter 约束 memory node 的连续性，而不是把少量 temporal summary 直接拼进浅层单 head；
 - **几何验证**：RANSAC+SIFT 暂时只作为不确定样本的 fallback 和对照，不作为最终创新主体。
+- **3-leg 优先级**：先修复/验证连续 goal swap 后第二个 Novel leg，再用 conditional-C 单独判断真正的 long-memory 上限。
 
 因此现在不应直接提交另一次旧 gate 的 8 小时训练。先把定位目标做对，比继续扩大 policy training 更有效。
 
@@ -94,6 +95,20 @@
 
 这是本轮最重要的正结果：使用 task-aligned continuous co-visibility 的 listwise objective，确实能学会“在同一个 session 的候选之间排序”，而不只是做 pair classification。提升是 `+7.41 percentage points`，但只有 27 个 positive session，而且这五个开发场景过去已被多次查看，所以它是结构性 Go 信号，不是最终 blind 结论。
 
+### 4.1 HPC 40-train/10-development 的更大规模复核
+
+随后只读核查了 HPC `job 15315411` 的冻结报告。它使用 40 个训练场景、10 个 development 场景、118 个 development session、temporal-NMS top-32、directional patch v3；其中 35 个 session 的候选池内存在 strict positive。结果进一步支持相同结论：
+
+| 排序方法 | Correct top-1 | Mean first-positive rank | MRR |
+|---|---:|---:|---:|
+| DINO cosine | 24/35 = 68.57% | 3.086 | 0.766 |
+| Pointwise patch+temporal | 29/35 = 82.86% | 2.800 | 0.868 |
+| Listwise patch+temporal | **30/35 = 85.71%** | **2.229** | **0.895** |
+
+完整候选池共 589 个 session、176,775 对图像。在 development 中，raw top-32 覆盖 33/35 positive session，而 temporal-NMS top-32 在 gap 4/8/16 下均覆盖 35/35；在 train 中 gap=4 为 201/206 = 97.57%，略好于 gap=8 的 97.09%。因此 broad 数据更支持 `gap=4` 作为下一轮默认，但仍应由 train OOF 选择，不能根据 development 固定。
+
+该报告仍标记 `deployment_approved=false`。原计划的四个 final-reserved scene 一次性 blind run 在模型推理前就被 preflight 拒绝，原因是 overlay 中 `2t7WUuJeko7` 少于 manifest 要求的两个 episode；没有产生可解释的 blind 指标。不能把 development 的 30/35 写成 final-test 成绩。
+
 ## 5. 实验 D：一个 K+1 head 能不能同时排序和拒绝
 
 新建了一个凸的线性 K+1 softmax 诊断模型：K 个 memory candidates 加一个显式 dustbin/no-match 状态。它直接学习：
@@ -118,6 +133,8 @@
 - 与实验 C 的 listwise 改善结合看，排序和拒绝存在真实的多任务冲突。
 
 所以最终网络应该共享 dense visual features，但使用不同 head 和 loss。时序连续性应在每步视觉 likelihood 之后作为 posterior transition/filter 使用，而不是直接要求一个浅层 head 同时理解视觉、排序、时序和拒绝。
+
+这里“temporal 伤害排序”只指本机 raw-top32 K+1 单 head 的线性对照。HPC 的 directional features、temporal-NMS 候选和更多训练场景中，pointwise/listwise patch+temporal 都明显超过 DINO。两者并不矛盾：候选时间多样性是稳定收益；temporal feature 是否应直接进入同一个 head，则依赖目标、特征方向性和训练规模。
 
 ## 6. 为什么 RANSAC+SIFT 之前有效，但不应成为最终主体
 
@@ -211,6 +228,25 @@ L = λ_rank * L_listwise
 
 必须同时报告 Novel SR、Revisit SR、joint SR、SPL、激活率、false activation、memory utilization、每步延迟和按场景方差。一次只报两个场景的平均 SR 不足以判断泛化。
 
+HPC 已完成的 frozen 20-scene 对照为这个优先级提供了直接证据：
+
+| 2-leg 指标 | Native NavDP | Geometry router |
+|---|---:|---:|
+| Novel A SR | 31/40 = 77.5% | 31/40 = 77.5% |
+| Revisit B SR given A | 4/31 = 12.9% | **19/31 = 61.3%** |
+| Joint SR | 4/40 = 10.0% | **19/40 = 47.5%** |
+
+配对结果是 geometry-only success 15、NavDP-only success 0、两者都成功 4，McNemar exact `p=6.10e-5`。这说明 memory route 的收益不是原先两个场景上的偶然波动。
+
+但同一任务的 10-scene 3-leg 结果是两者都 `0/10` joint。必须正确解释分母：
+
+- Novel A：6/10；
+- Novel B given A：1/6；
+- 因此真正进入 Revisit C 的只有 1 条；
+- 该条 C 失败且 geometry router 没有激活。
+
+所以当前 3-leg 数据不能证明“长程 C memory 失败”，主要故障发生在第二个 Novel goal。第一优先级应是验证连续 goal swap 的 NavDP observation queue/reset、B 段难度和实际起点朝向；同时用已经实现的 causal source-prefix replay 单独测 conditional-C，才能把 Novel-A/B 与 long-memory-C 分开。
+
 ### Go/No-Go 数值门槛
 
 - rank head 在 untouched scenes 上相对 DINO top-1 有稳定提升，且最差场景不明显退化；
@@ -259,5 +295,7 @@ L = λ_rank * L_listwise
 - 当前 dense cache 是 raw top-32，不是实验 A 中更好的 temporal-NMS top-32；
 - geometry graph route 是可行性 upper bound，不是导航 SR；
 - strict co-visibility threshold 是监督工具，不是导航 utility 的完整定义。
+- 20-scene 2-leg 是可靠闭环证据；10-scene 3-leg 只有 1 条进入 C，不能用于估计长程 revisit SR；
+- 四个 final-reserved router scenes 的 blind run 因 episode 数不足在 preflight 阶段失败，尚无 final blind 数字。
 
 这些限制意味着本轮可以批准“下一步离线 dense multi-head prototype”，但还不能宣称 router 已经解决，也不能据此宣称 3-leg SR 已提升。

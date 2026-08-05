@@ -11,6 +11,13 @@ from pathlib import Path
 from PIL import Image
 
 
+DEPENDENCY_ARGUMENTS = {
+    "gatecurr600": "gatecurr_checkpoint",
+    "navdp_checkpoint": "navdp_checkpoint",
+    "lingbot_map_long": "lingbot_weights",
+}
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -54,11 +61,31 @@ def validate_image(path: Path) -> None:
         image.verify()
 
 
+def resolve_dependency_paths(
+    manifest: dict,
+    overrides: dict[str, Path | None],
+) -> dict[str, Path]:
+    """Resolve local mirrors without weakening the frozen hash records."""
+    require(
+        set(manifest["dependencies"]) == set(DEPENDENCY_ARGUMENTS),
+        "benchmark dependency labels changed",
+    )
+    return {
+        label: overrides.get(label) or Path(record["path"])
+        for label, record in manifest["dependencies"].items()
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--expected-manifest-sha", required=True)
     parser.add_argument("--scene-index", type=int, required=True)
+    parser.add_argument("--asset-root", type=Path)
+    parser.add_argument("--episode-root", type=Path)
+    parser.add_argument("--gatecurr-checkpoint", type=Path)
+    parser.add_argument("--navdp-checkpoint", type=Path)
+    parser.add_argument("--lingbot-weights", type=Path)
     args = parser.parse_args()
 
     actual_manifest_sha = sha256(args.manifest)
@@ -71,8 +98,8 @@ def main() -> None:
     require(0 <= args.scene_index < len(scenes), "scene index is out of range")
     scene = scenes[args.scene_index]
 
-    asset_root = Path(manifest["paths"]["asset_root"])
-    episode_root = Path(
+    asset_root = args.asset_root or Path(manifest["paths"]["asset_root"])
+    episode_root = args.episode_root or Path(
         manifest["paths"][
             "legacy_anchor_episode_root"
             if scene in manifest["selection"]["anchor_scenes"]
@@ -121,9 +148,16 @@ def main() -> None:
         validate_image(files["goal"])
         checked_episodes.append(record["episode"])
 
+    dependency_paths = resolve_dependency_paths(
+        manifest,
+        {
+            label: getattr(args, argument)
+            for label, argument in DEPENDENCY_ARGUMENTS.items()
+        },
+    )
     checked_dependencies = {}
     for label, record in manifest["dependencies"].items():
-        path = Path(record["path"])
+        path = dependency_paths[label]
         require(path.is_file(), f"missing dependency {label}: {path}")
         require(path.stat().st_size == record["bytes"], f"{label} size mismatch")
         actual = sha256(path)
@@ -135,8 +169,13 @@ def main() -> None:
         "manifest_sha256": actual_manifest_sha,
         "scene_index": args.scene_index,
         "scene": scene,
+        "asset_root": str(asset_root),
+        "episode_root": str(episode_root),
         "asset_sha256": asset_record["sha256"],
         "episodes": checked_episodes,
+        "dependency_paths": {
+            label: str(path) for label, path in dependency_paths.items()
+        },
         "dependencies": checked_dependencies,
         "policy_training_overlap": [],
     }, indent=2, sort_keys=True))

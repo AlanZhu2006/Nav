@@ -9,7 +9,10 @@ from MemNavData.summarize_expanded_navdp_router_eval import (
     percentile,
     truth,
 )
-from MemNavData.validate_expanded_navdp_router_eval import validate_selection
+from MemNavData.validate_expanded_navdp_router_eval import (
+    resolve_dependency_paths,
+    validate_selection,
+)
 from MemNavData.validate_frozen_router_blind import compare_value
 
 
@@ -98,6 +101,23 @@ class ExpandedBenchmarkTest(unittest.TestCase):
         compare_value("weights", [1.0, 2.0], [1.0, 2.0 + 1e-13])
         with self.assertRaisesRegex(RuntimeError, "frozen numeric field changed"):
             compare_value("weights", [1.0, 2.0], [1.0, 2.0 + 1e-6])
+
+    def test_local_dependency_overrides_preserve_frozen_hash_records(self):
+        local_gate = Path("/scratch/local/gatecurr600.memnav.ckpt")
+        resolved = resolve_dependency_paths(
+            self.manifest,
+            {
+                "gatecurr600": local_gate,
+                "navdp_checkpoint": None,
+                "lingbot_map_long": None,
+            },
+        )
+        self.assertEqual(resolved["gatecurr600"], local_gate)
+        self.assertEqual(
+            resolved["navdp_checkpoint"],
+            Path(self.manifest["dependencies"]["navdp_checkpoint"]["path"]),
+        )
+        self.assertEqual(set(resolved), set(self.manifest["dependencies"]))
 
 
 if __name__ == "__main__":

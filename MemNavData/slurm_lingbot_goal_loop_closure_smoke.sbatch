@@ -24,8 +24,8 @@ umask 0022
 
 : "${EXPECTED_COMMIT:?submit with EXPECTED_COMMIT=<full git SHA>}"
 
-ROOT=/scratch/yz11502/Research/Nav-axis-uturn
-RESULT_BASE=/scratch/yz11502/Research/Nav-axis-uturn-results/lingbot_goal_loop_closure_20260805
+ROOT=${ROOT:-/scratch/yz11502/Research/Nav-axis-uturn}
+RESULT_BASE=${RESULT_BASE:-/scratch/yz11502/Research/Nav-axis-uturn-results/lingbot_goal_loop_closure_20260805}
 RUN_ROOT=${RESULT_BASE}/smoke_job_${SLURM_JOB_ID}
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 OVERLAY=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf

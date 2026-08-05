@@ -44,6 +44,8 @@ def selected_indices(frame, top_k: int):
     ordered = frame.sort_values(
         ["session_id", "dino_cosine", "candidate_frame"],
         ascending=[True, False, True], kind="mergesort")
+    if top_k == 0:
+        return ordered.index
     return ordered.groupby("session_id", sort=False).head(top_k).index
 
 
@@ -88,7 +90,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-csv", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--path-map", action="append", default=[])
-    parser.add_argument("--top-k", type=int, default=32)
+    parser.add_argument(
+        "--top-k", type=int, default=32,
+        help="DINO candidates to relabel per session; 0 labels the complete pool")
     parser.add_argument("--positive-threshold", type=float, default=0.5)
     parser.add_argument("--negative-threshold", type=float, default=0.1)
     parser.add_argument("--depth-stride", type=int, default=6)
@@ -103,8 +107,8 @@ def main() -> None:
     args = parse_args()
     if not args.input_csv.is_file():
         raise FileNotFoundError(args.input_csv)
-    if args.top_k < 1:
-        raise ValueError("top-k must be positive")
+    if args.top_k < 0:
+        raise ValueError("top-k must be non-negative")
     # Validate thresholds before doing any expensive I/O.
     covisibility_label(
         0.0, args.positive_threshold, args.negative_threshold)
@@ -165,6 +169,7 @@ def main() -> None:
         "output_csv": str(args.output_csv.resolve()),
         "output_sha256": sha256(args.output_csv),
         "top_k": args.top_k,
+        "candidate_pool_complete": bool(len(selected_frame) == len(frame)),
         "positive_threshold": args.positive_threshold,
         "negative_threshold": args.negative_threshold,
         "depth_stride": args.depth_stride,

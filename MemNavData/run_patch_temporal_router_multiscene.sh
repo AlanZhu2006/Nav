@@ -31,6 +31,8 @@ UNIT_TESTS=(
   MemNavData.test_reliability_router
   MemNavData.test_patch_temporal_router
   MemNavData.test_covisibility_teacher
+  MemNavData.test_listwise_router
+  MemNavData.test_router_candidate_recall
   MemNavData.test_router_cross_episode_pairs
   MemNavData.test_router_dataset_selection
 )
@@ -39,6 +41,8 @@ TASK_FILES=(
   MemNavData/build_router_cross_episode_pairs.py
   MemNavData/covisibility_teacher.py
   MemNavData/relabel_router_covisibility.py
+  MemNavData/audit_router_candidate_recall.py
+  MemNavData/listwise_router.py
   MemNavData/patch_temporal_router.py
   MemNavData/diag_patch_temporal_router.py
   MemNavData/run_patch_temporal_router_multiscene.sh
@@ -47,6 +51,8 @@ TASK_FILES=(
   MemNavData/test_reliability_router.py
   MemNavData/test_patch_temporal_router.py
   MemNavData/test_covisibility_teacher.py
+  MemNavData/test_listwise_router.py
+  MemNavData/test_router_candidate_recall.py
   MemNavData/test_router_cross_episode_pairs.py
   MemNavData/test_router_dataset_selection.py
 )
@@ -101,6 +107,8 @@ cd "${ROOT}"
   MemNavData/build_router_cross_episode_pairs.py \
   MemNavData/covisibility_teacher.py \
   MemNavData/relabel_router_covisibility.py \
+  MemNavData/audit_router_candidate_recall.py \
+  MemNavData/listwise_router.py \
   MemNavData/patch_temporal_router.py \
   MemNavData/diag_patch_temporal_router.py
 "${MEMNAV_PY}" -m unittest "${UNIT_TESTS[@]}" -v
@@ -109,6 +117,7 @@ import cv2
 import numpy
 import pandas
 import pyarrow
+import scipy
 import sklearn
 import torch
 import PIL
@@ -117,7 +126,7 @@ print("dependencies OK")
 print("torch", torch.__version__, "cuda", torch.version.cuda)
 print("opencv", cv2.__version__, "numpy", numpy.__version__)
 print("pandas", pandas.__version__, "pyarrow", pyarrow.__version__)
-print("sklearn", sklearn.__version__)
+print("scipy", scipy.__version__, "sklearn", sklearn.__version__)
 print("Pillow", PIL.__version__)
 PY
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
@@ -151,6 +160,7 @@ if [[ "${MODE}" == smoke ]]; then
   MAX_QUERIES=1
   CROSS_CANDIDATE_STRIDE=4
   TOP_K=4
+  COVIS_LABEL_TOP_K=4
   GRID_SIZE=4
   BATCH_SIZE=24
 else
@@ -160,6 +170,7 @@ else
   MAX_QUERIES=4
   CROSS_CANDIDATE_STRIDE=1
   TOP_K=32
+  COVIS_LABEL_TOP_K=0
   GRID_SIZE=8
   BATCH_SIZE=48
 fi
@@ -238,7 +249,7 @@ for scene in "${DEVELOPMENT_SCENES[@]}"; do
   BASE_ARGS+=(--heldout-scene "${scene}")
 done
 
-echo "[stage 1/4] exact CLS and base geometry teacher"
+echo "[stage 1/5] exact CLS and base geometry teacher"
 "${MEMNAV_PY}" -u "${BASE_DIAGNOSTIC}" "${BASE_ARGS[@]}"
 
 BASE_TEACHER=${BASE_DIR}/teacher_pairs.csv
@@ -265,7 +276,7 @@ for scene in "${DEVELOPMENT_SCENES[@]}"; do
   EXPAND_ARGS+=(--evaluation-scene "${scene}")
 done
 
-echo "[stage 2/4] sparse cross-episode candidate expansion"
+echo "[stage 2/5] sparse cross-episode candidate expansion"
 "${MEMNAV_PY}" -u "${EXPANDER}" "${EXPAND_ARGS[@]}"
 
 "${MEMNAV_PY}" - "${BASE_TEACHER}" "${EXPANDED}" \
@@ -305,12 +316,12 @@ PY
 
 COVIS_TEACHER=${RUN_ROOT}/covisibility_teacher_pairs.csv
 COVIS_REPORT=${RUN_ROOT}/covisibility_teacher_report.json
-echo "[stage 3/4] task-aligned goal-surface co-visibility teacher"
+echo "[stage 3/5] task-aligned goal-surface co-visibility teacher"
 "${MEMNAV_PY}" -u "${RELABELER}" \
   --input-csv "${EXPANDED}" \
   --output-csv "${COVIS_TEACHER}" \
   --report "${COVIS_REPORT}" \
-  --top-k "${TOP_K}"
+  --top-k "${COVIS_LABEL_TOP_K}"
 
 "${MEMNAV_PY}" - "${EXPANDED}" "${COVIS_TEACHER}" "${TOP_K}" <<'PY'
 import sys
@@ -341,6 +352,17 @@ if not (selected["teacher_pass"].eq(1).any()
 print("co-visibility audit OK:", len(selected), "selected rows")
 PY
 
+CANDIDATE_AUDIT=${RUN_ROOT}/candidate_recall_audit.json
+if [[ "${COVIS_LABEL_TOP_K}" == 0 ]]; then
+  echo "[stage 4/5] complete-pool candidate recall and temporal redundancy audit"
+  "${MEMNAV_PY}" -u "${ROOT}/MemNavData/audit_router_candidate_recall.py" \
+    --teacher-csv "${COVIS_TEACHER}" \
+    --report "${CANDIDATE_AUDIT}" \
+    --split-manifest "${SPLIT_MANIFEST}"
+else
+  echo "[stage 4/5] candidate audit skipped in smoke mode (partial labels)"
+fi
+
 PATCH_DIR=${RUN_ROOT}/patch_temporal
 PATCH_ARGS=(
   --teacher-csv "${COVIS_TEACHER}"
@@ -360,10 +382,11 @@ for scene in "${DEVELOPMENT_SCENES[@]}"; do
   PATCH_ARGS+=(--heldout-scene "${scene}")
 done
 
-echo "[stage 4/4] scene-disjoint directional patch/temporal audit"
+echo "[stage 5/5] scene-disjoint directional patch/temporal + listwise audit"
 "${MEMNAV_PY}" -u "${PATCH_DIAGNOSTIC}" "${PATCH_ARGS[@]}"
 
 echo "[complete] diagnostic only; deployment_approved remains false"
 echo "base_report=${BASE_DIR}/report.json"
 echo "covisibility_report=${COVIS_REPORT}"
+echo "candidate_recall_audit=${CANDIDATE_AUDIT}"
 echo "patch_report=${PATCH_DIR}/report.json"

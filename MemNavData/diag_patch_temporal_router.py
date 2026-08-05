@@ -47,6 +47,10 @@ try:
         calibrate_zero_error_thresholds,
         selective_decisions,
     )
+    from MemNavData.listwise_router import (
+        fit_listwise_linear,
+        scene_group_oof_scores,
+    )
 except ModuleNotFoundError:  # direct script invocation
     from patch_temporal_router import (  # type: ignore
         combine_patch_temporal,
@@ -63,6 +67,10 @@ except ModuleNotFoundError:  # direct script invocation
     from reliability_router import (  # type: ignore
         calibrate_zero_error_thresholds,
         selective_decisions,
+    )
+    from listwise_router import (  # type: ignore
+        fit_listwise_linear,
+        scene_group_oof_scores,
     )
 
 
@@ -612,11 +620,105 @@ def covisibility_ranking_metrics(groups: np.ndarray, ranks: np.ndarray,
     }
 
 
+def grouped_covisibility_ranking_metrics(
+        partitions: np.ndarray, groups: np.ndarray, ranks: np.ndarray,
+        covisibility: np.ndarray, scores: np.ndarray) -> dict:
+    partitions = np.asarray(partitions, dtype=str).reshape(-1)
+    groups = np.asarray(groups, dtype=str).reshape(-1)
+    ranks = np.asarray(ranks, dtype=np.int64).reshape(-1)
+    covisibility = np.asarray(covisibility, dtype=np.float64).reshape(-1)
+    scores = np.asarray(scores, dtype=np.float64).reshape(-1)
+    if not (partitions.shape == groups.shape == ranks.shape
+            == covisibility.shape == scores.shape):
+        raise ValueError("grouped ranking inputs must be aligned")
+    return {
+        partition: covisibility_ranking_metrics(
+            groups[partitions == partition], ranks[partitions == partition],
+            covisibility[partitions == partition],
+            scores[partitions == partition])
+        for partition in sorted(np.unique(partitions))
+    }
+
+
+def evaluate_listwise_ranking(
+        features: np.ndarray, groups: np.ndarray, ranks: np.ndarray,
+        covisibility: np.ndarray, scenes: np.ndarray, kinds: np.ndarray,
+        dino_scores: np.ndarray, pointwise_scores: np.ndarray,
+        train_mask: np.ndarray, test_mask: np.ndarray,
+        l2_values: Sequence[float], folds: int,
+        max_iterations: int) -> tuple[dict, dict, np.ndarray]:
+    """Select a scene-disjoint listwise model and compare ranking baselines."""
+    train_features = features[train_mask]
+    train_groups = groups[train_mask]
+    train_covis = covisibility[train_mask]
+    train_scenes = scenes[train_mask]
+    train_ranks = ranks[train_mask]
+
+    candidates = []
+    for l2 in l2_values:
+        oof_scores = scene_group_oof_scores(
+            train_features, train_groups, train_scenes, train_covis,
+            l2=float(l2), folds=folds, max_iterations=max_iterations)
+        metrics = covisibility_ranking_metrics(
+            train_groups, train_ranks, train_covis, oof_scores)
+        candidates.append((
+            (metric_value(metrics, "conditional_recall_at_1"),
+             metric_value(metrics, "selected_overlap_mean"),
+             metric_value(metrics, "mean_reciprocal_positive_rank"),
+             -float(l2)),
+            float(l2), metrics, oof_scores,
+        ))
+    _key, selected_l2, train_oof_metrics, _train_oof_scores = max(
+        candidates, key=lambda item: item[0])
+
+    model = fit_listwise_linear(
+        train_features, train_groups, train_covis, l2=selected_l2,
+        max_iterations=max_iterations)
+    listwise_scores = model.score(features)
+
+    heldout_groups = groups[test_mask]
+    heldout_ranks = ranks[test_mask]
+    heldout_covis = covisibility[test_mask]
+    heldout_scenes = scenes[test_mask]
+    heldout_kinds = kinds[test_mask]
+    heldout_listwise = listwise_scores[test_mask]
+    heldout_dino = dino_scores[test_mask]
+    heldout_pointwise = pointwise_scores[test_mask]
+
+    result = {
+        "objective": "rank candidates within positive-memory sessions; not a Novel/Revisit gate",
+        "selected_l2_from_train_scene_oof": selected_l2,
+        "candidate_l2": [float(value) for value in l2_values],
+        "train_scene_oof": train_oof_metrics,
+        "heldout": {
+            "dino_cosine": covisibility_ranking_metrics(
+                heldout_groups, heldout_ranks, heldout_covis,
+                heldout_dino),
+            "pointwise_patch_temporal": covisibility_ranking_metrics(
+                heldout_groups, heldout_ranks, heldout_covis,
+                heldout_pointwise),
+            "listwise_patch_temporal": covisibility_ranking_metrics(
+                heldout_groups, heldout_ranks, heldout_covis,
+                heldout_listwise),
+            "listwise_by_scene": grouped_covisibility_ranking_metrics(
+                heldout_scenes, heldout_groups, heldout_ranks,
+                heldout_covis, heldout_listwise),
+            "listwise_by_kind": grouped_covisibility_ranking_metrics(
+                heldout_kinds, heldout_groups, heldout_ranks,
+                heldout_covis, heldout_listwise),
+        },
+    }
+    return result, model.portable(), listwise_scores
+
+
 def write_selected_csv(path: Path, frame, probabilities: Dict[str, np.ndarray],
-                       test_mask: np.ndarray) -> None:
+                       test_mask: np.ndarray,
+                       scores: Dict[str, np.ndarray] | None = None) -> None:
     rows = frame.loc[test_mask].copy()
     for name, values in probabilities.items():
         rows[f"{name}_probability"] = values
+    for name, values in (scores or {}).items():
+        rows[name] = values
     rows.to_csv(path, index=False, quoting=csv.QUOTE_MINIMAL)
 
 
@@ -642,6 +744,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-top1-calibration", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20260805)
     parser.add_argument("--c-value", type=float, action="append", default=[])
+    parser.add_argument("--listwise-l2", type=float, action="append", default=[])
+    parser.add_argument("--listwise-folds", type=int, default=5)
+    parser.add_argument("--listwise-max-iterations", type=int, default=250)
     parser.add_argument("--expected-weight-sha", default=DEFAULT_WEIGHT_SHA)
     parser.add_argument("--expected-lingbot-commit", default=DEFAULT_LINGBOT_COMMIT)
     return parser.parse_args()
@@ -658,6 +763,12 @@ def main() -> None:
     c_values = tuple(args.c_value or (0.001, 0.01, 0.1, 1.0))
     if any(not np.isfinite(value) or value <= 0.0 for value in c_values):
         raise ValueError("all C values must be finite and positive")
+    listwise_l2_values = tuple(args.listwise_l2 or (0.001, 0.01, 0.1))
+    if any(not np.isfinite(value) or value <= 0.0
+           for value in listwise_l2_values):
+        raise ValueError("all listwise L2 values must be finite and positive")
+    if args.listwise_folds < 2 or args.listwise_max_iterations < 1:
+        raise ValueError("listwise folds/iterations are invalid")
     for required in (
             args.teacher_csv, args.cls_cache, args.lingbot_repo, args.weights):
         if not required.exists():
@@ -776,6 +887,7 @@ def main() -> None:
     evaluations = {}
     portable = {}
     heldout_probabilities = {}
+    all_family_scores = {}
     for name, features in feature_families.items():
         result, model_payload, all_probability = evaluate_family(
             name, features, labels, scenes, kinds, train_mask, test_mask,
@@ -791,10 +903,32 @@ def main() -> None:
                         heldout_covis, all_probability[all_test_mask]))
         evaluations[name] = result
         portable[name] = dict(model_payload, feature_names=family_names[name])
+        all_family_scores[name] = all_probability
         heldout_probabilities[name] = all_probability[all_test_mask]
         print(json.dumps({name: result}, indent=2), flush=True)
 
     primary = "patch_temporal"
+    listwise_evaluation = None
+    listwise_portable = None
+    listwise_scores = None
+    if "teacher_covis" in selected.columns:
+        selected_covis = selected["teacher_covis"].to_numpy(dtype=np.float64)
+        if np.isfinite(selected_covis).all():
+            listwise_evaluation, listwise_portable, listwise_scores = (
+                evaluate_listwise_ranking(
+                    combined,
+                    selected["session_id"].to_numpy(dtype=str),
+                    selected["candidate_rank"].to_numpy(dtype=np.int64),
+                    selected_covis,
+                    scenes, kinds,
+                    selected["dino_cosine"].to_numpy(dtype=np.float64),
+                    all_family_scores[primary],
+                    all_train_mask, all_test_mask,
+                    listwise_l2_values, args.listwise_folds,
+                    args.listwise_max_iterations))
+            print(json.dumps(
+                {"listwise_ranking": listwise_evaluation}, indent=2),
+                flush=True)
     teacher_kind = (
         "task_aligned_covisibility"
         if "teacher_covis" in selected.columns else "legacy_binary")
@@ -816,13 +950,17 @@ def main() -> None:
         "top_k": args.top_k,
         "grid_size": args.grid_size,
     }
+    if listwise_portable is not None:
+        export["listwise_ranker"] = listwise_portable
     with open(args.out_dir / "diagnostic_patch_temporal_router_not_for_deployment.json",
               "w", encoding="utf-8") as handle:
         json.dump(export, handle, indent=2, sort_keys=True)
         handle.write("\n")
     write_selected_csv(
         args.out_dir / "heldout_selected_pairs.csv", selected,
-        heldout_probabilities, all_test_mask)
+        heldout_probabilities, all_test_mask,
+        ({"listwise_patch_temporal_score": listwise_scores[all_test_mask]}
+         if listwise_scores is not None else None))
 
     report = {
         "deployment_approved": False,
@@ -860,8 +998,12 @@ def main() -> None:
             frame["teacher_pass"].eq(-1).sum()),
         "feature_timing": feature_timing,
         "candidate_C": list(c_values),
+        "candidate_listwise_l2": list(listwise_l2_values),
+        "listwise_folds": args.listwise_folds,
+        "listwise_max_iterations": args.listwise_max_iterations,
         "primary_family": primary,
         "evaluations": evaluations,
+        "listwise_ranking": listwise_evaluation,
     }
     with open(args.out_dir / "report.json", "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2, sort_keys=True)

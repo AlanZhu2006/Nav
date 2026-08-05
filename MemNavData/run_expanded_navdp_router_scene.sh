@@ -12,9 +12,25 @@ EXPECTED_COMMIT=${EXPECTED_COMMIT:?set EXPECTED_COMMIT}
 SCENE_INDEX=${SCENE_INDEX:?set SCENE_INDEX}
 HAB_PY=${HAB_PY:?set HAB_PY}
 MEMNAV_PY=${MEMNAV_PY:?set MEMNAV_PY}
+MAX_STEPS=${MAX_STEPS:-500}
+UNIT_TEST_MODULE=${UNIT_TEST_MODULE:-MemNavData.test_expanded_navdp_router_eval}
+EXPECTED_HAB_REQUESTS_VERSION=2.32.4
+EXPECTED_HAB_REQUESTS_INIT_BYTES=5057
+EXPECTED_HAB_REQUESTS_INIT_SHA=1e507f1f386bcc6b5f0ff69a614c14875cd65cb67be7f6022f28adef9774573f
 
-EVALUATOR=${ROOT}/MemNavData/eval_2leg_habitat.py
-VALIDATOR=${ROOT}/MemNavData/validate_expanded_navdp_router_eval.py
+# The frozen Habitat Python has requests only in pip's pure-Python vendor
+# directory.  Scope that path to Habitat subprocesses so it cannot pollute the
+# Python 3.10 policy environment.
+HAB_SITE_PACKAGES=$("${HAB_PY}" -c \
+  'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+HAB_REQUESTS_VENDOR=${HAB_REQUESTS_VENDOR:-${HAB_SITE_PACKAGES}/pip/_vendor}
+HAB_PYTHONPATH=${HAB_REQUESTS_VENDOR}${PYTHONPATH:+:${PYTHONPATH}}
+hab_python() {
+  env PYTHONPATH="${HAB_PYTHONPATH}" "${HAB_PY}" "$@"
+}
+
+EVALUATOR=${EVALUATOR:-${ROOT}/MemNavData/eval_2leg_habitat.py}
+VALIDATOR=${VALIDATOR:-${ROOT}/MemNavData/validate_expanded_navdp_router_eval.py}
 MEMNAV_SERVER=${ROOT}/NavDP/baselines/memnav/memnav_server.py
 NAVDP_SERVER=${ROOT}/NavDP/baselines/navdp/navdp_server.py
 INTERNNAV_ROOT=${ROOT}/InternNav
@@ -36,6 +52,24 @@ TASK_FILES=(
   NavDP/baselines/navdp/policy_agent.py
   NavDP/baselines/navdp/policy_network.py
 )
+[[ "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ABORT: MAX_STEPS must be a positive integer" >&2
+  exit 1
+}
+[[ "${UNIT_TEST_MODULE}" =~ ^[A-Za-z_][A-Za-z0-9_.]*$ ]] || {
+  echo "ABORT: invalid UNIT_TEST_MODULE=${UNIT_TEST_MODULE}" >&2
+  exit 1
+}
+UNIT_TEST_PATH=${ROOT}/${UNIT_TEST_MODULE//./\/}.py
+for dynamic_path in "${EVALUATOR}" "${VALIDATOR}" "${MANIFEST}" \
+                    "${UNIT_TEST_PATH}"; do
+  dynamic_relative=$(realpath --relative-to="${ROOT}" "${dynamic_path}")
+  [[ "${dynamic_relative}" != ../* && "${dynamic_relative}" != ".." ]] || {
+    echo "ABORT: benchmark source must live inside ${ROOT}: ${dynamic_path}" >&2
+    exit 1
+  }
+  TASK_FILES+=("${dynamic_relative}")
+done
 
 actual_commit=$(git -C "${ROOT}" rev-parse HEAD)
 [[ "${actual_commit}" == "${EXPECTED_COMMIT}" ]] || {
@@ -53,23 +87,35 @@ git -C "${ROOT}" diff --cached --quiet -- "${TASK_FILES[@]}" || {
 
 for required in "${HAB_PY}" "${MEMNAV_PY}" "${EVALUATOR}" "${VALIDATOR}" \
                 "${MEMNAV_SERVER}" "${NAVDP_SERVER}" "${LINGBOT_WEIGHTS}" \
-                "${MEMNAV_CKPT}" "${NAVDP_CKPT}" "${MANIFEST}"; do
+                "${MEMNAV_CKPT}" "${NAVDP_CKPT}" "${MANIFEST}" \
+                "${UNIT_TEST_PATH}" \
+                "${HAB_REQUESTS_VENDOR}/requests/__init__.py"; do
   test -r "${required}" || { echo "ABORT: missing dependency ${required}" >&2; exit 1; }
 done
+REQUESTS_INIT=${HAB_REQUESTS_VENDOR}/requests/__init__.py
+[[ "$(stat -c '%s' "${REQUESTS_INIT}")" == "${EXPECTED_HAB_REQUESTS_INIT_BYTES}" ]] || {
+  echo "ABORT: vendored requests size mismatch" >&2
+  exit 1
+}
+[[ "$(sha256sum "${REQUESTS_INIT}" | awk '{print $1}')" == \
+    "${EXPECTED_HAB_REQUESTS_INIT_SHA}" ]] || {
+  echo "ABORT: vendored requests SHA256 mismatch" >&2
+  exit 1
+}
 
 mkdir -p "${RUN_ROOT}/preflight" "${RUN_ROOT}/scenes"
-"${HAB_PY}" "${VALIDATOR}" \
+hab_python "${VALIDATOR}" \
   --manifest "${MANIFEST}" \
   --expected-manifest-sha "${EXPECTED_MANIFEST_SHA}" \
   --scene-index "${SCENE_INDEX}" \
   > "${RUN_ROOT}/preflight/scene_$(printf '%02d' "${SCENE_INDEX}").json"
 
-scene=$("${HAB_PY}" - "${MANIFEST}" "${SCENE_INDEX}" <<'PY'
+scene=$(hab_python - "${MANIFEST}" "${SCENE_INDEX}" <<'PY'
 import json, sys
 print(json.load(open(sys.argv[1]))["selection"]["selected_scenes"][int(sys.argv[2])])
 PY
 )
-mapfile -t EPISODE_IDS < <("${HAB_PY}" - "${MANIFEST}" "${scene}" <<'PY'
+mapfile -t EPISODE_IDS < <(hab_python - "${MANIFEST}" "${scene}" <<'PY'
 import json, sys
 manifest = json.load(open(sys.argv[1]))
 print(*(row["episode"] for row in manifest["episodes"][sys.argv[2]]), sep="\n")
@@ -85,14 +131,15 @@ fi
 mkdir -p "${SCENE_ROOT}/logs" "${SCENE_ROOT}/buffer"
 exec > >(tee "${SCENE_ROOT}/run.log") 2>&1
 
-"${HAB_PY}" -m py_compile "${EVALUATOR}" "${VALIDATOR}"
+hab_python -m py_compile "${EVALUATOR}" "${VALIDATOR}"
 "${MEMNAV_PY}" -m py_compile "${MEMNAV_SERVER}" "${NAVDP_SERVER}"
 (
   cd "${ROOT}"
-  "${HAB_PY}" -m unittest MemNavData.test_expanded_navdp_router_eval -v
+  hab_python -m unittest "${UNIT_TEST_MODULE}" -v
 )
-"${HAB_PY}" -c \
-  'import habitat_sim,numpy,pandas,pyarrow,PIL,requests,scipy,quaternion; print("Habitat dependencies OK", habitat_sim.__version__)'
+hab_python -c \
+  'import habitat_sim,numpy,pandas,pyarrow,PIL,requests,scipy,quaternion,sys; assert requests.__version__ == sys.argv[1]; print("Habitat dependencies OK", habitat_sim.__version__, "requests", requests.__version__)' \
+  "${EXPECTED_HAB_REQUESTS_VERSION}"
 "${MEMNAV_PY}" -c \
   'import torch,torchvision,transformers,diffusers,cv2,flask,imageio; assert torch.cuda.is_available(); print("Policy dependencies OK", torch.__version__)'
 
@@ -180,17 +227,20 @@ for spec in \
   }
 done
 
-ASSET_ROOT=$("${HAB_PY}" - "${MANIFEST}" <<'PY'
+ASSET_ROOT=$(hab_python - "${MANIFEST}" <<'PY'
 import json, sys
 print(json.load(open(sys.argv[1]))["paths"]["asset_root"])
 PY
 )
-EPISODE_ROOT=$("${HAB_PY}" - "${MANIFEST}" "${scene}" <<'PY'
+EPISODE_ROOT=$(hab_python - "${MANIFEST}" "${scene}" <<'PY'
 import json, sys
 manifest = json.load(open(sys.argv[1]))
-key = ("legacy_anchor_episode_root"
-       if sys.argv[2] in manifest["selection"]["anchor_scenes"]
-       else "expanded_episode_root")
+if "episode_root" in manifest["paths"]:
+    key = "episode_root"
+else:
+    key = ("legacy_anchor_episode_root"
+           if sys.argv[2] in manifest["selection"]["anchor_scenes"]
+           else "expanded_episode_root")
 print(manifest["paths"][key])
 PY
 )
@@ -200,7 +250,7 @@ COMMON_ARGS=(
   --host 127.0.0.1
   --leg1_mode policy
   --success_dist 1.0
-  --max_steps 500
+  --max_steps "${MAX_STEPS}"
   --exec_horizon 8
   --trajectory_selector server
   --leg1_goal_source own
@@ -214,7 +264,7 @@ echo "[eval] scene=${scene} arm=navdp_native episodes=${episode_csv}"
 mkdir -p "${SCENE_ROOT}/navdp_native"
 (
   cd "${RUNTIME_ROOT}"
-  "${HAB_PY}" -u "${EVALUATOR}" \
+  hab_python -u "${EVALUATOR}" \
     "${COMMON_ARGS[@]}" \
     --port "${NAVDP_PORT}" \
     --out "${SCENE_ROOT}/navdp_native" \
@@ -225,7 +275,7 @@ echo "[eval] scene=${scene} arm=geometry_router episodes=${episode_csv}"
 mkdir -p "${SCENE_ROOT}/geometry_router"
 (
   cd "${RUNTIME_ROOT}"
-  "${HAB_PY}" -u "${EVALUATOR}" \
+  hab_python -u "${EVALUATOR}" \
     "${COMMON_ARGS[@]}" \
     --port "${MEMNAV_PORT}" \
     --novel_port "${NAVDP_PORT}" \

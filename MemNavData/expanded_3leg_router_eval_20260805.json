@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-08-05T23:30:00+08:00",
+  "purpose": "Ten-scene scene-disjoint start-A-B-C benchmark; A and B are Novel and C revisits leg A",
+  "base_manifest": {
+    "file": "expanded_navdp_router_eval_20260805.json",
+    "sha256": "ba8f72cb504768c801e6c9c386436ccdc66dea07a5e5fac2d7b4248738946a61"
+  },
+  "selection": {
+    "method": "the five original audit scenes plus the first five added scenes in the frozen 20-scene evaluation order",
+    "selected_scenes": [
+      "s8pcmisQ38h",
+      "e9zR4mvMWw7",
+      "rqfALeAoiTq",
+      "zsNo4HB9uLZ",
+      "yqstnuAEVhm",
+      "gxdoqLR6rwA",
+      "pLe4wQe7qrG",
+      "cV4RVeZvu5T",
+      "mJXqzFtmKg4",
+      "gTV8FGcVJC9"
+    ]
+  },
+  "paths": {
+    "asset_root": "/scratch/lg154/Research/datasets/mp3d/mp3d",
+    "episode_root": "/scratch/lg154/Research/datasets/mp3d_revisit_v0/vln_n1/traj_data/mp3d_3leg"
+  },
+  "episodes": {
+    "s8pcmisQ38h": [{"episode": "episode_0000", "n_frames": 429, "switches": [96, 243], "c_recall_gap": 156, "files": {"metadata": {"bytes": 6125, "sha256": "9a086e8537c7846724c206f0f4767303099815fcaaca0847115456714518e8ed"}, "parquet": {"bytes": 25834, "sha256": "79d9e84dbab0783ccdce90d916e0e485a02acbef00ffc3990aaea0a9c12ac5df"}, "goal_b": {"bytes": 47211, "sha256": "9135210d8770c33df9ae1fe5eb8c27b044c87abf2cce6f2da614b9ac24a356f7"}, "goal_c": {"bytes": 59417, "sha256": "8cf5b88531a8115001e5199d52de4f94f17e131252f8da8db9961edf7cfb2c1d"}}}],
+    "e9zR4mvMWw7": [{"episode": "episode_0000", "n_frames": 351, "switches": [113, 225], "c_recall_gap": 185, "files": {"metadata": {"bytes": 5897, "sha256": "c8d440e1b0024be347fef938b006e78bd41d7faa8c2ed121fecd0f6faf633b3a"}, "parquet": {"bytes": 20944, "sha256": "6f649bfd4fe6e7da84257533a7ef7bc0a14b922e8bd101507ff70d97507e82f1"}, "goal_b": {"bytes": 16586, "sha256": "1e4f7e95a3d950bd80a853bf5ea78a023f650d545e841c84f856119cb72163b6"}, "goal_c": {"bytes": 36926, "sha256": "ea4422aaa32557a1e523378c35b240e3a5bc86c7ae2aa759b4b43bfc473e16a2"}}}],
+    "rqfALeAoiTq": [{"episode": "episode_0000", "n_frames": 456, "switches": [144, 303], "c_recall_gap": 256, "files": {"metadata": {"bytes": 7594, "sha256": "66444fbf34b10aa01b7b4bb5cfcad40b6c60af005ab621ad854ec275edb0d536"}, "parquet": {"bytes": 27256, "sha256": "3d460e1bcfc3fe9795f083a31fc967490c39b180f6e840818744a6fd42faa2f8"}, "goal_b": {"bytes": 38190, "sha256": "9e6a1282bcc53dc9ad2d5729cd54aa048844f4490ccf26c7daebe126c77830d6"}, "goal_c": {"bytes": 69127, "sha256": "d865c6ea09580dae4f0b40170983611112470c287bf2c81e19ec1d233f24e286"}}}],
+    "zsNo4HB9uLZ": [{"episode": "episode_0000", "n_frames": 585, "switches": [186, 355], "c_recall_gap": 183, "files": {"metadata": {"bytes": 9082, "sha256": "3eddce4e3b5753181e675479cc455426ca78a629808602843b3b52bddb2b613c"}, "parquet": {"bytes": 33625, "sha256": "32b2e4e28ee8eb950141a5b61e1480985775924d9593a2e5a184f3ea81b2efc9"}, "goal_b": {"bytes": 54700, "sha256": "f98317f096b4f05c225d2f5b332173dd4b7fb6c8d239482f69fcc6d1d123efb9"}, "goal_c": {"bytes": 30984, "sha256": "b3a7ed5ed228716c6c9d6a223722d6b2853c2ec6bd357da20cd230029d1909a5"}}}],
+    "yqstnuAEVhm": [{"episode": "episode_0000", "n_frames": 474, "switches": [89, 257], "c_recall_gap": 217, "files": {"metadata": {"bytes": 6149, "sha256": "c48820ab5fb438839c047c5382874bd8a7dc1eac4cefc7141e404109ed2f3c1f"}, "parquet": {"bytes": 28189, "sha256": "7dbaa1a78da10a6f45fcb6d3c5cec7ee0fef328ca7bbeb1d3012ba9249fb6643"}, "goal_b": {"bytes": 50908, "sha256": "8940679e9612f59b98c6ba45ff1deb76c34277270523d27e9ab46b6c2ece757b"}, "goal_c": {"bytes": 60969, "sha256": "36e1e1ef091e719832fb0b93f36dc5a1c79294289ce2d6be4a79e04c4fe1c619"}}}],
+    "gxdoqLR6rwA": [{"episode": "episode_0000", "n_frames": 1831, "switches": [82, 953], "c_recall_gap": 913, "files": {"metadata": {"bytes": 15744, "sha256": "b3e46750b08f176078c176af81f81fd4b36d7f2a355f0ede8f807bd663abb40f"}, "parquet": {"bytes": 97334, "sha256": "066877ca6699dad84cd1b53b54691ee184528b6b527e87c5dd51581144a68dbd"}, "goal_b": {"bytes": 35877, "sha256": "227c51c5f5fcb4b62cfd393f760fe0706303ab07c47f3411f928a8634bed2a94"}, "goal_c": {"bytes": 48989, "sha256": "f348e308fd5c82f32bcf2b6d30ad42ebfaef63f6e7bff8380c67bf7b99224465"}}}],
+    "pLe4wQe7qrG": [{"episode": "episode_0000", "n_frames": 617, "switches": [199, 489], "c_recall_gap": 423, "files": {"metadata": {"bytes": 11241, "sha256": "c22207b40bfad32e0477d4cf93c8b22883096a588fcc2beba6fba31f811326fb"}, "parquet": {"bytes": 35414, "sha256": "1cff6d17560329354b7224a7c991f894fc24e18c5ef86bed1c111430ac2aad9d"}, "goal_b": {"bytes": 37066, "sha256": "fff4dd4a4a1c647d9ee96e62d195f48d3511874a4db7bd1f194e0a6519bdf039"}, "goal_c": {"bytes": 52472, "sha256": "c869eaba3b35a7ee88c3a705630fc4b28ca8841a8d63733a385e7aa194f10e35"}}}],
+    "cV4RVeZvu5T": [{"episode": "episode_0000", "n_frames": 575, "switches": [184, 417], "c_recall_gap": 353, "files": {"metadata": {"bytes": 9480, "sha256": "850507ec22885a648ebd7ee3746685de979462e771144f2fdc3ca5317ed2584a"}, "parquet": {"bytes": 33104, "sha256": "f94c61b9ca63d97e455459f6a1633baeb2352d16c217535e67a23348bace647f"}, "goal_b": {"bytes": 48874, "sha256": "326d1bb48b4ebf6450f610a14345dfb1d75f8dd815f13ded9790454ca8e7fdbe"}, "goal_c": {"bytes": 31959, "sha256": "35cd065cf3de6052822e74997c358c926737147c6ccd837bd3aa4f58b6f116be"}}}],
+    "mJXqzFtmKg4": [{"episode": "episode_0000", "n_frames": 781, "switches": [207, 488], "c_recall_gap": 351, "files": {"metadata": {"bytes": 10712, "sha256": "c1faa584f4a81eeea599d9ef5aee70f186db421ebad91d82a3ced2aeb4bf25d2"}, "parquet": {"bytes": 43712, "sha256": "ed74747e4645eea2d17613b3afc441f8771ba179c17a5ced636047c4013294e4"}, "goal_b": {"bytes": 62596, "sha256": "f473d2575ebc3fd18884e6397c07448db08d136951caa0b0d5f00618d118a555"}, "goal_c": {"bytes": 56555, "sha256": "49e9db6c5d61c023f341d8490653e0289a86afd17245a43b585afff0ceb98203"}}}],
+    "gTV8FGcVJC9": [{"episode": "episode_0000", "n_frames": 704, "switches": [116, 435], "c_recall_gap": 364, "files": {"metadata": {"bytes": 8917, "sha256": "ad59b68dd9b8708c0cb87cbea9a19f12d48d44ac75d0ac4de134e0b355f9c157"}, "parquet": {"bytes": 41452, "sha256": "7af4d4579d6d026c65f1db2b6e4a6a704ddbc8d7a81228f7c50b25c2bfe571ad"}, "goal_b": {"bytes": 28086, "sha256": "bc22f830b4a8c5f84d670c52955e34271217814434af26634c2de2944a474e76"}, "goal_c": {"bytes": 52452, "sha256": "738c9becaeeae1cd8157846c7bc58789df043598bcd295ef0fecf7399a261755"}}}]
+  },
+  "evaluation": {
+    "episodes_per_scene": 1,
+    "base_seed": 20260803,
+    "success_distance_m": 1.0,
+    "max_steps_per_leg": 1200,
+    "execution_horizon": 8,
+    "goal_roles": {"A": "novel", "B": "novel", "C": "revisit"}
+  }
+}

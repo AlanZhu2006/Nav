@@ -1,11 +1,11 @@
 #!/bin/bash
 # Single-allocation version requested for simpler H200 scheduling.
-# It runs all 20 closed-loop scenes sequentially, summarizes them, then runs
-# the four-scene learned-router blind audit.
+# It runs 20-scene 2-leg and 10-scene 3-leg paired evaluations sequentially,
+# summarizes each protocol, then runs the four-scene learned-router blind audit.
 #SBATCH --job-name=router_all1
 #SBATCH --output=/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_router_all1_%j.out
 #SBATCH --error=/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_router_all1_%j.err
-#SBATCH --time=08:00:00
+#SBATCH --time=10:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16

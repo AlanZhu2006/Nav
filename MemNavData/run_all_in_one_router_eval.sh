@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Execute the expanded closed-loop benchmark, summary, and learned-router blind
+# Execute 2-leg and 3-leg closed-loop benchmarks plus the learned-router blind
 # audit sequentially inside one H200 allocation.
 
 set -euo pipefail
@@ -17,6 +17,11 @@ EXPANDED_MANIFEST=${ROOT}/MemNavData/expanded_navdp_router_eval_20260805.json
 EXPANDED_MANIFEST_SHA=ba8f72cb504768c801e6c9c386436ccdc66dea07a5e5fac2d7b4248738946a61
 EXPANDED_RUNNER=${ROOT}/MemNavData/run_expanded_navdp_router_scene.sh
 EXPANDED_SUMMARIZER=${ROOT}/MemNavData/summarize_expanded_navdp_router_eval.py
+THREE_LEG_MANIFEST=${ROOT}/MemNavData/expanded_3leg_router_eval_20260805.json
+THREE_LEG_MANIFEST_SHA=55096038d0493723d2280fe9abbcb2ea9ea7f2059c50b6eb08d02f560cdb281b
+THREE_LEG_EVALUATOR=${ROOT}/MemNavData/eval_3leg_habitat.py
+THREE_LEG_VALIDATOR=${ROOT}/MemNavData/validate_expanded_3leg_router_eval.py
+THREE_LEG_SUMMARIZER=${ROOT}/MemNavData/summarize_expanded_3leg_router_eval.py
 FINAL_SPLIT=${ROOT}/MemNavData/router_multiscene_final_blind_20260805.json
 FINAL_SPLIT_SHA=8683e37787afdfa0399351cafcc699a9ab57f0565c921465902049134780f419
 ROUTER_RUNNER=${ROOT}/MemNavData/run_patch_temporal_router_multiscene.sh
@@ -31,6 +36,11 @@ TASK_FILES=(
   MemNavData/summarize_expanded_navdp_router_eval.py
   MemNavData/validate_expanded_navdp_router_eval.py
   MemNavData/expanded_navdp_router_eval_20260805.json
+  MemNavData/eval_3leg_habitat.py
+  MemNavData/validate_expanded_3leg_router_eval.py
+  MemNavData/summarize_expanded_3leg_router_eval.py
+  MemNavData/test_expanded_3leg_router_eval.py
+  MemNavData/expanded_3leg_router_eval_20260805.json
   MemNavData/run_patch_temporal_router_multiscene.sh
   MemNavData/slurm_patch_temporal_router_multiscene.sbatch
   MemNavData/validate_frozen_router_blind.py
@@ -51,7 +61,9 @@ git -C "${ROOT}" diff --cached --quiet -- "${TASK_FILES[@]}" || {
   exit 1
 }
 for required in "${EXPANDED_MANIFEST}" "${EXPANDED_RUNNER}" \
-                "${EXPANDED_SUMMARIZER}" "${FINAL_SPLIT}" \
+                "${EXPANDED_SUMMARIZER}" "${THREE_LEG_MANIFEST}" \
+                "${THREE_LEG_EVALUATOR}" "${THREE_LEG_VALIDATOR}" \
+                "${THREE_LEG_SUMMARIZER}" "${FINAL_SPLIT}" \
                 "${ROUTER_RUNNER}" "${REFERENCE_ROUTER_MODEL}"; do
   test -r "${required}" || { echo "ABORT: missing ${required}" >&2; exit 1; }
 done
@@ -64,7 +76,7 @@ mkdir -p "${RUN_ROOT}"
 exec > >(tee "${RUN_ROOT}/run.log") 2>&1
 
 echo "[all-in-one] commit=${actual_commit} job=${SLURM_JOB_ID:-local}"
-echo "[stage 1/3] 20 scene-disjoint paired closed-loop evaluations"
+echo "[stage 1/5] 20-scene, 40-episode paired 2-leg closed-loop evaluation"
 EXPANDED_ROOT=${RUN_ROOT}/expanded_navdp_router
 for scene_index in $(seq 0 19); do
   echo "[scene $((scene_index + 1))/20] index=${scene_index}"
@@ -80,14 +92,41 @@ for scene_index in $(seq 0 19); do
     "${EXPANDED_RUNNER}"
 done
 
-echo "[stage 2/3] aggregate Novel, Revisit, joint SR and router activation"
+echo "[stage 2/5] aggregate 2-leg Novel, Revisit, joint SR and router activation"
 "${HAB_PY}" "${EXPANDED_SUMMARIZER}" \
   --manifest "${EXPANDED_MANIFEST}" \
   --run-root "${EXPANDED_ROOT}" \
   > "${EXPANDED_ROOT}/summary.json"
 cat "${EXPANDED_ROOT}/summary.json"
 
-echo "[stage 3/3] frozen learned-router audit on four final-reserved scenes"
+echo "[stage 3/5] 10-scene paired true 3-leg A/B/C closed-loop evaluation"
+THREE_LEG_ROOT=${RUN_ROOT}/expanded_3leg_router
+for scene_index in $(seq 0 9); do
+  echo "[3-leg scene $((scene_index + 1))/10] index=${scene_index}"
+  env \
+    ROOT="${ROOT}" \
+    RUN_ROOT="${THREE_LEG_ROOT}" \
+    MANIFEST="${THREE_LEG_MANIFEST}" \
+    EXPECTED_MANIFEST_SHA="${THREE_LEG_MANIFEST_SHA}" \
+    EXPECTED_COMMIT="${EXPECTED_COMMIT}" \
+    SCENE_INDEX="${scene_index}" \
+    HAB_PY="${HAB_PY}" \
+    MEMNAV_PY="${MEMNAV_PY}" \
+    EVALUATOR="${THREE_LEG_EVALUATOR}" \
+    VALIDATOR="${THREE_LEG_VALIDATOR}" \
+    UNIT_TEST_MODULE=MemNavData.test_expanded_3leg_router_eval \
+    MAX_STEPS=1200 \
+    "${EXPANDED_RUNNER}"
+done
+
+echo "[stage 4/5] aggregate Novel-A, Novel-B, Revisit-C and joint 3-leg SR"
+"${HAB_PY}" "${THREE_LEG_SUMMARIZER}" \
+  --manifest "${THREE_LEG_MANIFEST}" \
+  --run-root "${THREE_LEG_ROOT}" \
+  > "${THREE_LEG_ROOT}/summary.json"
+cat "${THREE_LEG_ROOT}/summary.json"
+
+echo "[stage 5/5] frozen learned-router audit on four final-reserved scenes"
 env \
   MODE=full \
   ROOT="${ROOT}" \
@@ -102,6 +141,7 @@ env \
   EXPECTED_COMMIT="${EXPECTED_COMMIT}" \
   "${ROUTER_RUNNER}" full
 
-echo "[complete] one allocation produced both closed-loop and blind results"
-echo "expanded_summary=${EXPANDED_ROOT}/summary.json"
+echo "[complete] one allocation produced 2-leg, 3-leg, and blind results"
+echo "two_leg_summary=${EXPANDED_ROOT}/summary.json"
+echo "three_leg_summary=${THREE_LEG_ROOT}/summary.json"
 echo "blind_report=${RUN_ROOT}/learned_router_final_blind/patch_temporal/report.json"

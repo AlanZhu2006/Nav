@@ -29,9 +29,14 @@ import torch
 
 try:  # package import in tests; script-local import in memnav_server.py
     from .pose_alignment import lingbot_relative_yaw
+    from .reverse_memory_graph import (
+        ReverseRouteProgress,
+        reverse_metric_nodes,
+    )
     from .router_candidates import temporal_nms_candidates
 except ImportError:  # pragma: no cover - exercised by the live script entrypoint
     from pose_alignment import lingbot_relative_yaw
+    from reverse_memory_graph import ReverseRouteProgress, reverse_metric_nodes
     from router_candidates import temporal_nms_candidates
 
 
@@ -55,7 +60,9 @@ class MemNavAgent:
                  exclude_recent=83, num_samples=16, buffer_root=None,
                  gate_skip_below=0.0, retrieval_mode="raw", anchor_switch_margin=0.01,
                  flow_gate="auto", retrieval_candidate_top_k=32,
-                 retrieval_candidate_min_gap=16):
+                 retrieval_candidate_min_gap=16,
+                 graph_subgoal_spacing_m=0.0,
+                 graph_subgoal_arrival_m=0.60):
         # auto: training's per-episode tier; off: legacy dense capture; otherwise
         # parse a fixed pixel-flow threshold.
         self.flow_gate = flow_gate
@@ -92,6 +99,14 @@ class MemNavAgent:
         if (self.retrieval_candidate_top_k < 1
                 or self.retrieval_candidate_min_gap < 1):
             raise ValueError("retrieval candidate top-k and gap must be positive")
+        self.graph_subgoal_spacing_m = float(graph_subgoal_spacing_m)
+        self.graph_subgoal_arrival_m = float(graph_subgoal_arrival_m)
+        if (not np.isfinite(self.graph_subgoal_spacing_m)
+                or self.graph_subgoal_spacing_m < 0.0):
+            raise ValueError("graph subgoal spacing must be finite and non-negative")
+        if (not np.isfinite(self.graph_subgoal_arrival_m)
+                or self.graph_subgoal_arrival_m <= 0.0):
+            raise ValueError("graph subgoal arrival radius must be finite and positive")
         self.L_depth = self.lb.depth                    # aggregator layers
         self.psi = self.lb.num_special                  # 6 special tokens
 
@@ -165,6 +180,7 @@ class MemNavAgent:
         self._goal_cache = {}            # (goal_md5, anchor) -> goal_pose; goal_md5 -> goal_cls
         self._anchor_state = {}          # goal_md5 -> dict(m, score): sticky-anchor ratchet
         self._goal_start_frame = {}      # goal_md5 -> first frame queried for this goal
+        self._graph_routes = {}          # goal_md5 -> frozen reverse-memory route + cursor
         # SIFT/essential verification is a deterministic function of the goal,
         # immutable history image, and per-episode intrinsic.  Cache both
         # positive and negative results so temporal confirmation checks anchor
@@ -517,6 +533,72 @@ class MemNavAgent:
             self._metric_scale = s if s is not None else RevisitMerge._SCALE
         return self._metric_scale
 
+    def _graph_conditioned_pose(
+            self, *, goal_key, cache, current_pose,
+            goal_aux_pose, anchor, goal_start_frame, metric_scale):
+        """Replace a long direct point-goal with the next memory-graph node.
+
+        The route is built once from the pre-goal pose chain and its cursor can
+        only move toward the localized anchor.  Once every recorded node is
+        reached, control returns to the image-conditioned goal pose for final
+        alignment.  A zero spacing is an exact backward-compatible disable.
+        """
+        disabled = self.graph_subgoal_spacing_m <= 0.0
+        diagnostics = dict(
+            graph_subgoal_enabled=not disabled,
+            graph_subgoal_node=None,
+            graph_subgoal_cursor=None,
+            graph_subgoal_count=0,
+            graph_subgoal_complete=disabled,
+            goal_aux_pose=goal_aux_pose[0].float().cpu().tolist(),
+        )
+        if disabled:
+            return goal_aux_pose, diagnostics
+
+        start_index = int(goal_start_frame) - 1
+        anchor = int(anchor)
+        route = self._graph_routes.get(goal_key)
+        if (route is None or route.anchor_index != anchor
+                or route.start_index != start_index):
+            translations = (
+                cache["cam_pose_enc"][:goal_start_frame, :3]
+                .detach().float().cpu().numpy()
+            )
+            nodes = reverse_metric_nodes(
+                translations,
+                start_index=start_index,
+                anchor_index=anchor,
+                metric_scale=float(metric_scale.item()),
+                spacing_m=self.graph_subgoal_spacing_m,
+            )
+            route = ReverseRouteProgress(
+                anchor_index=anchor, start_index=start_index, nodes=nodes)
+            self._graph_routes[goal_key] = route
+
+        # A single replan can legitimately cross a very short residual node,
+        # so consume all already-reached nodes before returning one target.
+        selected = goal_aux_pose
+        while not route.complete:
+            node = int(route.current_node)
+            node_pose = cache["cam_pose_enc"][node][None]
+            _, node_aux, _ = self.core.build_revisit(
+                current_pose.to(self.device), node_pose.to(self.device),
+                metric_scale)
+            distance_m = float(torch.linalg.vector_norm(node_aux[0]).item())
+            if route.accept_distance(
+                    distance_m, self.graph_subgoal_arrival_m):
+                continue
+            selected = node_aux
+            break
+
+        diagnostics.update(
+            graph_subgoal_node=route.current_node,
+            graph_subgoal_cursor=int(route.cursor),
+            graph_subgoal_count=len(route.nodes),
+            graph_subgoal_complete=route.complete,
+        )
+        return selected, diagnostics
+
     @torch.no_grad()
     def plan(self, goal_jpg_bytes, forced_anchor=None, forced_gate=None,
              pose_only=False, retrieval_only=False):
@@ -766,10 +848,27 @@ class MemNavAgent:
                     cur_pose.to(dev), goal_pose.to(dev), mscale)
                 goal_rel_yaw = lingbot_relative_yaw(
                     relative_rotation[0].float().cpu().numpy())
+                aux_pose, graph_diagnostics = self._graph_conditioned_pose(
+                    goal_key=gkey,
+                    cache=cache,
+                    current_pose=cur_pose,
+                    goal_aux_pose=aux_pose,
+                    anchor=anchor,
+                    goal_start_frame=goal_start_frame,
+                    metric_scale=mscale,
+                )
             else:
                 revisit = torch.zeros((1, self.core.n_rev, self.core.action_head.in_features), device=dev)
                 aux_pose = torch.zeros((1, 2), device=dev)
                 goal_rel_yaw = None
+                graph_diagnostics = dict(
+                    graph_subgoal_enabled=(self.graph_subgoal_spacing_m > 0.0),
+                    graph_subgoal_node=None,
+                    graph_subgoal_cursor=None,
+                    graph_subgoal_count=0,
+                    graph_subgoal_complete=False,
+                    goal_aux_pose=None,
+                )
             if pose_only:
                 return dict(
                     gate=float(gate.item()),
@@ -798,6 +897,7 @@ class MemNavAgent:
                     goal_rel_yaw=goal_rel_yaw,
                     current_goal_cos=current_goal_cos,
                     frame_idx=k,
+                    **graph_diagnostics,
                 )
 
             # Current-state depth features and both diffusion towers are not
@@ -904,6 +1004,7 @@ class MemNavAgent:
                 goal_rel_yaw=goal_rel_yaw,
                 current_goal_cos=current_goal_cos,
                 frame_idx=k,
+                **graph_diagnostics,
             )
         finally:
             self._restore(snap)

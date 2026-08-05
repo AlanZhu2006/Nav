@@ -14,6 +14,12 @@ SCENE_INDEX=${SCENE_INDEX:?set SCENE_INDEX}
 HAB_PY=${HAB_PY:?set HAB_PY}
 MEMNAV_PY=${MEMNAV_PY:?set MEMNAV_PY}
 MAX_STEPS=${MAX_STEPS:-500}
+RUN_NAVDP_NATIVE=${RUN_NAVDP_NATIVE:-1}
+RUN_GEOMETRY_TOP1=${RUN_GEOMETRY_TOP1:-1}
+RUN_GEOMETRY_ROUTER=${RUN_GEOMETRY_ROUTER:-1}
+RETRIEVAL_CANDIDATE_MIN_GAP=${RETRIEVAL_CANDIDATE_MIN_GAP:-16}
+GRAPH_SUBGOAL_SPACING_M=${GRAPH_SUBGOAL_SPACING_M:-0.0}
+GRAPH_SUBGOAL_ARRIVAL_M=${GRAPH_SUBGOAL_ARRIVAL_M:-0.60}
 UNIT_TEST_MODULE=${UNIT_TEST_MODULE:-MemNavData.test_expanded_navdp_router_eval}
 EXPECTED_HAB_REQUESTS_VERSION=${EXPECTED_HAB_REQUESTS_VERSION:-2.32.4}
 EXPECTED_HAB_REQUESTS_INIT_BYTES=5057
@@ -51,6 +57,8 @@ TASK_FILES=(
   MemNavData/summarize_expanded_navdp_router_eval.py
   MemNavData/test_expanded_navdp_router_eval.py
   MemNavData/test_router_candidates.py
+  MemNavData/test_reverse_memory_graph.py
+  MemNavData/test_policy_agent_graph.py
   MemNavData/conditional_c_protocol.py
   MemNavData/test_conditional_c_protocol.py
   MemNavData/summarize_conditional_c_eval.py
@@ -61,6 +69,7 @@ TASK_FILES=(
   NavDP/baselines/memnav/memnav_server.py
   NavDP/baselines/memnav/policy_agent.py
   NavDP/baselines/memnav/router_candidates.py
+  NavDP/baselines/memnav/reverse_memory_graph.py
   NavDP/baselines/navdp/navdp_server.py
   NavDP/baselines/navdp/policy_agent.py
   NavDP/baselines/navdp/policy_network.py
@@ -77,6 +86,23 @@ TASK_FILES=(
   echo "ABORT: RUN_CONDITIONAL_ORACLES must be 0 or 1" >&2
   exit 1
 }
+for flag in RUN_NAVDP_NATIVE RUN_GEOMETRY_TOP1 RUN_GEOMETRY_ROUTER; do
+  [[ "${!flag}" =~ ^[01]$ ]] || {
+    echo "ABORT: ${flag} must be 0 or 1" >&2; exit 1; }
+done
+(( RUN_NAVDP_NATIVE + RUN_GEOMETRY_TOP1 + RUN_GEOMETRY_ROUTER > 0 )) || {
+  echo "ABORT: at least one evaluation arm must be enabled" >&2; exit 1; }
+[[ "${RETRIEVAL_CANDIDATE_MIN_GAP}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ABORT: RETRIEVAL_CANDIDATE_MIN_GAP must be positive" >&2; exit 1; }
+"${HAB_PY}" - "${GRAPH_SUBGOAL_SPACING_M}" \
+  "${GRAPH_SUBGOAL_ARRIVAL_M}" <<'PY'
+import math, sys
+spacing, arrival = map(float, sys.argv[1:])
+if not math.isfinite(spacing) or spacing < 0:
+    raise SystemExit("GRAPH_SUBGOAL_SPACING_M must be finite and non-negative")
+if not math.isfinite(arrival) or arrival <= 0:
+    raise SystemExit("GRAPH_SUBGOAL_ARRIVAL_M must be finite and positive")
+PY
 if [[ "${RUN_CONDITIONAL_ORACLES}" -eq 1 ]]; then
   [[ "$(basename "${EVALUATOR}")" == "eval_conditional_c_habitat.py" ]] || {
     echo "ABORT: conditional oracle arms require eval_conditional_c_habitat.py" >&2
@@ -180,14 +206,20 @@ hab_python -m py_compile "${EVALUATOR}" "${VALIDATOR}"
   "${MEMNAV_SERVER}" \
   "${ROOT}/NavDP/baselines/memnav/policy_agent.py" \
   "${ROOT}/NavDP/baselines/memnav/router_candidates.py" \
+  "${ROOT}/NavDP/baselines/memnav/reverse_memory_graph.py" \
   "${NAVDP_SERVER}"
 (
   cd "${ROOT}"
   hab_python -m unittest \
     "${UNIT_TEST_MODULE}" \
     MemNavData.test_router_candidates \
+    MemNavData.test_reverse_memory_graph \
     MemNavData.test_conditional_c_protocol \
     MemNavData.test_summarize_conditional_c_eval -v
+)
+(
+  cd "${ROOT}"
+  "${MEMNAV_PY}" -m unittest MemNavData.test_policy_agent_graph -v
 )
 hab_python -c \
   'import habitat_sim,numpy,pandas,pyarrow,PIL,requests,scipy,quaternion,sys; assert requests.__version__ == sys.argv[1]; print("Habitat dependencies OK", habitat_sim.__version__, "requests", requests.__version__)' \
@@ -243,7 +275,9 @@ trap cleanup EXIT INT TERM
       --exclude_recent 32 \
       --retrieval raw \
       --retrieval_candidate_top_k 32 \
-      --retrieval_candidate_min_gap 16 \
+      --retrieval_candidate_min_gap "${RETRIEVAL_CANDIDATE_MIN_GAP}" \
+      --graph_subgoal_spacing_m "${GRAPH_SUBGOAL_SPACING_M}" \
+      --graph_subgoal_arrival_m "${GRAPH_SUBGOAL_ARRIVAL_M}" \
       --flow_gate auto \
       --buffer_root "${SCENE_ROOT}/buffer"
 ) > "${SCENE_ROOT}/logs/server_memnav.log" 2>&1 &
@@ -322,16 +356,20 @@ COMMON_ARGS=(
   --episode_ids "${episode_csv}"
 )
 
-echo "[eval] scene=${scene} arm=navdp_native episodes=${episode_csv}"
-mkdir -p "${SCENE_ROOT}/navdp_native"
-(
-  cd "${RUNTIME_ROOT}"
-  hab_python -u "${EVALUATOR}" \
-    "${COMMON_ARGS[@]}" \
-    --port "${NAVDP_PORT}" \
-    --out "${SCENE_ROOT}/navdp_native" \
-    --server_backend navdp
-) > "${SCENE_ROOT}/logs/eval_navdp_native.log" 2>&1
+ARMS=()
+if [[ "${RUN_NAVDP_NATIVE}" -eq 1 ]]; then
+  echo "[eval] scene=${scene} arm=navdp_native episodes=${episode_csv}"
+  mkdir -p "${SCENE_ROOT}/navdp_native"
+  (
+    cd "${RUNTIME_ROOT}"
+    hab_python -u "${EVALUATOR}" \
+      "${COMMON_ARGS[@]}" \
+      --port "${NAVDP_PORT}" \
+      --out "${SCENE_ROOT}/navdp_native" \
+      --server_backend navdp
+  ) > "${SCENE_ROOT}/logs/eval_navdp_native.log" 2>&1
+  ARMS+=(navdp_native)
+fi
 
 run_geometry_arm() {
   local arm=$1
@@ -359,10 +397,14 @@ run_geometry_arm() {
 # Run top-1 first so its state cannot inherit the top-K accepted anchor.  Each
 # evaluator calls the audited reset endpoint for every episode, resetting the
 # policy RNG, streaming memory, and router latch to the same episode seed.
-run_geometry_arm geometry_top1 1
-run_geometry_arm geometry_router 8
-
-ARMS=(navdp_native geometry_top1 geometry_router)
+if [[ "${RUN_GEOMETRY_TOP1}" -eq 1 ]]; then
+  run_geometry_arm geometry_top1 1
+  ARMS+=(geometry_top1)
+fi
+if [[ "${RUN_GEOMETRY_ROUTER}" -eq 1 ]]; then
+  run_geometry_arm geometry_router 8
+  ARMS+=(geometry_router)
+fi
 run_conditional_oracle_arm() {
   local arm=$1
   local mode=$2

@@ -68,6 +68,15 @@ parser.add_argument("--retrieval_candidate_top_k", type=int, default=32,
                     help="number of temporally diverse raw-DINO candidates to expose")
 parser.add_argument("--retrieval_candidate_min_gap", type=int, default=16,
                     help="minimum frame gap between exposed retrieval candidates")
+parser.add_argument(
+    "--graph_subgoal_spacing_m", type=float, default=0.0,
+    help=("metre spacing for reverse-memory graph subgoals; zero preserves "
+          "the direct image-conditioned point goal"),
+)
+parser.add_argument(
+    "--graph_subgoal_arrival_m", type=float, default=0.60,
+    help="advance to the next reverse-memory node inside this radius",
+)
 parser.add_argument("--flow_gate", type=str, default="auto",
                     help="auto = training length tier; off = dense; or fixed px threshold")
 parser.add_argument("--buffer_root", type=str, default="/tmp/memnav_server_buffer")
@@ -101,6 +110,8 @@ agent = MemNavAgent(
     anchor_switch_margin=args.anchor_switch_margin,
     retrieval_candidate_top_k=args.retrieval_candidate_top_k,
     retrieval_candidate_min_gap=args.retrieval_candidate_min_gap,
+    graph_subgoal_spacing_m=args.graph_subgoal_spacing_m,
+    graph_subgoal_arrival_m=args.graph_subgoal_arrival_m,
     flow_gate=args.flow_gate,
 )
 
@@ -226,5 +237,7 @@ if __name__ == "__main__":
           f"retrieval={agent.retrieval_mode}, flow_gate={agent.flow_gate}, "
           f"candidate_top_k={agent.retrieval_candidate_top_k}, "
           f"candidate_gap={agent.retrieval_candidate_min_gap}, "
+          f"graph_spacing_m={agent.graph_subgoal_spacing_m}, "
+          f"graph_arrival_m={agent.graph_subgoal_arrival_m}, "
           f"checkpoint={os.path.basename(args.checkpoint)})")
     app.run(host="0.0.0.0", port=args.port, threaded=False)

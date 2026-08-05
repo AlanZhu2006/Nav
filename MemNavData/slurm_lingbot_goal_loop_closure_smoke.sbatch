@@ -39,6 +39,10 @@ PER_CLASS=${PER_CLASS:-2}
   echo "ABORT: MAX_SESSIONS must be a non-negative integer" >&2; exit 1; }
 [[ "${PER_CLASS}" =~ ^[1-9][0-9]*$ ]] || {
   echo "ABORT: PER_CLASS must be a positive integer" >&2; exit 1; }
+if [[ "${LOOP_SESSIONS}" != "all" ]]; then
+  [[ "${LOOP_SESSIONS}" =~ ^[A-Za-z0-9_./|-]+$ ]] || {
+    echo "ABORT: invalid LOOP_SESSIONS=${LOOP_SESSIONS}" >&2; exit 1; }
+fi
 
 ROOT=${ROOT:-/scratch/yz11502/Research/Nav-axis-uturn}
 RESULT_BASE=${RESULT_BASE:-/scratch/yz11502/Research/Nav-axis-uturn-results/lingbot_goal_loop_closure_20260805}
@@ -129,10 +133,12 @@ COMMON_ARGS=(
 )
 # Use ``|`` rather than comma because Slurm's --export syntax reserves comma
 # as its own variable delimiter.
-IFS='|' read -r -a SELECTED_SESSIONS <<< "${LOOP_SESSIONS}"
-for session in "${SELECTED_SESSIONS[@]}"; do
-  [[ -n "${session}" ]] && COMMON_ARGS+=(--session "${session}")
-done
+if [[ "${LOOP_SESSIONS}" != "all" ]]; then
+  IFS='|' read -r -a SELECTED_SESSIONS <<< "${LOOP_SESSIONS}"
+  for session in "${SELECTED_SESSIONS[@]}"; do
+    [[ -n "${session}" ]] && COMMON_ARGS+=(--session "${session}")
+  done
+fi
 
 # The Python preflight checks imports, teacher columns, selected images, paired
 # cache schema, LingBot commit, and the complete 4.4-GB weight SHA before the

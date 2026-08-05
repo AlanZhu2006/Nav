@@ -16,7 +16,10 @@ LingBot-native loop-closure feasibility smoke。所有诊断只读取已有数�
 4. temporal diversification 能把正确簇从 raw rank 20 提前到候选 3；
 5. 冻结的 Patch+temporal pointwise 模型在这个未见过的在线轨迹上把正确候选排到
    第 1，而 listwise 模型只到第 7；
-6. LingBot 点云重叠在极小 smoke 上能区分正负候选，但仅比较 pose consistency 不能。
+6. cV4 的同卡闭环复测确认 temporal top-K 能找到并锁存正确 anchor，使 C 从失败变为
+   成功；
+7. 六场景扩展表明 LingBot 几何与 DINO 有互补信息，但单一特征尚不足以替代
+   RANSAC。
 
 因此近期最有效、风险最低的路径是：
 
@@ -219,9 +222,9 @@ Job：`15387026`，commit：`57c4dcc714d2b517e37abb681eea2e8319937f32`。
 - positive pose translation dispersion：0.00861 normalized；
 - negative pose translation dispersion：0.00953 normalized。
 
-因此 cloud overlap 值得扩大验证，pose dispersion 暂时没有区分力。由于只有 4 个
-候选，这不是部署结论；而且完整 LingBot replay 显著慢于约 50 ms 的 uncached
-RANSAC，所以合理角色是 hard-case fallback 或离线 teacher。
+因此 4-candidate smoke 只能证明实现可行，不能据此选部署阈值。六场景扩展结果见
+第 8.2 节。完整 LingBot replay 仍显著慢于约 50 ms 的 uncached RANSAC，所以合理
+角色是 hard-case fallback、session-level reranker 特征或离线 teacher。
 
 ## 7. 已实现修复
 
@@ -239,14 +242,39 @@ RANSAC，所以合理角色是 hard-case fallback 或离线 teacher。
 提交前在只包含本次改动的临时 commit snapshot 上通过 62 个相关测试，且
 `py_compile`、`bash -n`、`git diff --check` 全部通过。
 
-## 8. 正在排队的验证
+## 8. 已完成的后续验证
 
 ### 8.1 cV4 3-leg 闭环因果复测
 
 - Job：`15389371`；
 - commit：`1db37fdd23bf3dcdbcb0eae3c14b507bd1e6eb94`；
 - 对照：相同 episode / seed 的 native NavDP 与 temporal-NMS + top-8 geometry；
-- 首要检查：C 段是否选择 frame 69 附近、router 是否在第二次确认后 latch、C 是否成功。
+- 状态：`COMPLETED`，exit code `0:0`，H200 wall time `00:03:59`。
+
+结果：
+
+| 指标 | NavDP native | temporal top-K geometry |
+|---|---:|---:|
+| A | success | success |
+| B | success | success |
+| C | fail | success |
+| C final distance | 4.4185 m | 0.9923 m |
+| C steps | 244 | 100 |
+| Joint SR | 0/1 | 1/1 |
+| Joint SPL | 0.0 | 0.9984 |
+
+raw DINO top-1 仍是错误的 frame 209。temporal-NMS 后 verifier 依次检查：
+
+1. frame 209：13 matches / 5 inliers / ratio 0.385，拒绝；
+2. frame 125：7 matches / 0 inliers，拒绝；
+3. frame 69：22 matches / 14 inliers / ratio 0.636，接受。
+
+第一次三候选验证总计 `127.3 ms`；下一次规划从 cache 复验只需 `0.62 ms`，同一
+frame 69 连续两次通过后 latch。之后 pose query 始终使用 frame 69，而不是退回
+raw top-1。A、B 两个 Novel leg 都没有 false activation。
+
+这是严格的单-episode因果证据，不是可泛化的 `100% SR`。下一步必须在冻结参数后
+做多场景 paired evaluation。
 
 ### 8.2 六场景 LingBot overlap 扩展
 
@@ -254,9 +282,20 @@ RANSAC，所以合理角色是 hard-case fallback 或离线 teacher。
 - dependency：afterany `15389371`；
 - commit：`f3ad8c1eded1e4d38dcb23f8a0b93f3202d70fe0`；
 - 6 个场景，正负候选平衡，完整 replay。
+- 状态：`COMPLETED`，exit code `0:0`，H200 wall time `00:10:28`；
+- 样本：6 sessions，12 positive + 12 hard negative。
 
-两项任务当前因同一项目账户下 3 个共享 `memnav_mp3d` 长训占满 GPU quota 而排队，
-不是代码 preflight 失败。共享任务最晚计划于 2026-08-06 约 07:20 结束。
+| 特征 | ROC-AUC | AP |
+|---|---:|---:|
+| DINO cosine | 0.549 | 0.663 |
+| LingBot cloud overlap | 0.694 | 0.721 |
+| LingBot pose consistency | 0.736 | 0.684 |
+| LingBot pose refinement | 0.708 | 0.734 |
+
+扩展结果修正了 4-candidate smoke 的过强印象：cloud overlap 有信号，但不是稳定的
+独立 verifier；pose translation consistency 在更多场景反而比 cloud overlap 更有
+区分力。各场景绝对尺度明显变化，因此后续应优先学习同一 session 内的候选相对
+排序，并保留 RANSAC 作为最终确认，而不是为任一 LingBot 特征选择全局固定阈值。
 
 ## 9. Final-blind 数据完整性问题
 
@@ -277,11 +316,12 @@ RPmz2sHmrrY
 
 ## 10. 下一步判定规则
 
-1. 如果 `15389371` 的 C 成功：扩展 20-scene/3-leg 闭环，重点报告 Novel false
-   activation、Revisit activation、joint SR 和总 verification latency；
-2. 如果 router 选中正确 anchor 但 C 仍失败：问题下移到 LingBot metric pose 或
-   point-goal controller，应做 correct-anchor pose 与 oracle-point-goal 对照；
-3. 如果多场景 cloud overlap 仍稳定：将其作为 texture-poor fallback/teacher；
-4. learned pointwise rerank 在更多 online buffer 稳定后，再接入 live pooled patch
-   cache；在此之前保留 RANSAC final verification；
-5. 单独解决 Novel B exploration，再扩大 true 3-leg 的 C eligible denominator。
+1. 冻结当前 top-K、gap、RANSAC 和两次确认参数，在同卡上运行 native、top-1 和
+   top-K 三 arm 的 20-scene/40-episode paired evaluation；
+2. 增加 conditional-C 协议：因果重放 A/B prefix 后只评 C，并加入 oracle anchor
+   与 oracle point-goal 上限，避免完整 3-leg 只有一个 eligible C；
+3. 将 learned router 的主指标从二分类 accuracy 改为 session-level Recall@K、MRR、
+   最差场景和 abstention；在更多完整 online candidate pool 稳定前保留 RANSAC；
+4. LingBot consistency/overlap 暂时只作为组合 reranker 特征、hard-case fallback 或
+   离线 teacher，不直接替代快速几何验证；
+5. 单独解决 Novel B exploration；它仍是完整 true 3-leg joint SR 的首要瓶颈。

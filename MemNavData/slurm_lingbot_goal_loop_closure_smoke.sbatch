@@ -127,7 +127,9 @@ COMMON_ARGS=(
   --pixel-stride 10
   --max-points 768
 )
-IFS=',' read -r -a SELECTED_SESSIONS <<< "${LOOP_SESSIONS}"
+# Use ``|`` rather than comma because Slurm's --export syntax reserves comma
+# as its own variable delimiter.
+IFS='|' read -r -a SELECTED_SESSIONS <<< "${LOOP_SESSIONS}"
 for session in "${SELECTED_SESSIONS[@]}"; do
   [[ -n "${session}" ]] && COMMON_ARGS+=(--session "${session}")
 done

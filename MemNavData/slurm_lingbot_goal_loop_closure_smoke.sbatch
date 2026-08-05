@@ -26,9 +26,23 @@ umask 0022
 
 : "${EXPECTED_COMMIT:?submit with EXPECTED_COMMIT=<full git SHA>}"
 
+# Defaults reproduce the original 2-positive/2-negative single-session smoke.
+# Overrides permit a larger development-only audit without maintaining a
+# second Slurm script.
+RUN_PREFIX=${RUN_PREFIX:-smoke}
+LOOP_SESSIONS=${LOOP_SESSIONS:-17DRP5sb8fy/episode_0000/revisit_b}
+MAX_SESSIONS=${MAX_SESSIONS:-1}
+PER_CLASS=${PER_CLASS:-2}
+[[ "${RUN_PREFIX}" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+  echo "ABORT: invalid RUN_PREFIX=${RUN_PREFIX}" >&2; exit 1; }
+[[ "${MAX_SESSIONS}" =~ ^[0-9]+$ ]] || {
+  echo "ABORT: MAX_SESSIONS must be a non-negative integer" >&2; exit 1; }
+[[ "${PER_CLASS}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ABORT: PER_CLASS must be a positive integer" >&2; exit 1; }
+
 ROOT=${ROOT:-/scratch/yz11502/Research/Nav-axis-uturn}
 RESULT_BASE=${RESULT_BASE:-/scratch/yz11502/Research/Nav-axis-uturn-results/lingbot_goal_loop_closure_20260805}
-RUN_ROOT=${RESULT_BASE}/smoke_job_${SLURM_JOB_ID}
+RUN_ROOT=${RESULT_BASE}/${RUN_PREFIX}_job_${SLURM_JOB_ID}
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 OVERLAY=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
 MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python
@@ -101,9 +115,8 @@ COMMON_ARGS=(
   --expected-weight-sha "${EXPECTED_WEIGHT_SHA}"
   --expected-lingbot-commit "${EXPECTED_LINGBOT_COMMIT}"
   --out-dir "${RUN_ROOT}"
-  --session 17DRP5sb8fy/episode_0000/revisit_b
-  --max-sessions 1
-  --per-class 2
+  --max-sessions "${MAX_SESSIONS}"
+  --per-class "${PER_CLASS}"
   --candidate-min-gap 4
   --neighbor-offset=-4
   --neighbor-offset=0
@@ -114,6 +127,10 @@ COMMON_ARGS=(
   --pixel-stride 10
   --max-points 768
 )
+IFS=',' read -r -a SELECTED_SESSIONS <<< "${LOOP_SESSIONS}"
+for session in "${SELECTED_SESSIONS[@]}"; do
+  [[ -n "${session}" ]] && COMMON_ARGS+=(--session "${session}")
+done
 
 # The Python preflight checks imports, teacher columns, selected images, paired
 # cache schema, LingBot commit, and the complete 4.4-GB weight SHA before the

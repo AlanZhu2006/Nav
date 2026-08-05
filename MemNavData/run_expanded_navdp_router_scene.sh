@@ -44,10 +44,13 @@ TASK_FILES=(
   MemNavData/validate_expanded_navdp_router_eval.py
   MemNavData/summarize_expanded_navdp_router_eval.py
   MemNavData/test_expanded_navdp_router_eval.py
+  MemNavData/test_router_candidates.py
   MemNavData/run_expanded_navdp_router_scene.sh
   MemNavData/slurm_expanded_navdp_router_eval.sbatch
   MemNavData/expanded_navdp_router_eval_20260805.json
   NavDP/baselines/memnav/memnav_server.py
+  NavDP/baselines/memnav/policy_agent.py
+  NavDP/baselines/memnav/router_candidates.py
   NavDP/baselines/navdp/navdp_server.py
   NavDP/baselines/navdp/policy_agent.py
   NavDP/baselines/navdp/policy_network.py
@@ -132,10 +135,16 @@ mkdir -p "${SCENE_ROOT}/logs" "${SCENE_ROOT}/buffer"
 exec > >(tee "${SCENE_ROOT}/run.log") 2>&1
 
 hab_python -m py_compile "${EVALUATOR}" "${VALIDATOR}"
-"${MEMNAV_PY}" -m py_compile "${MEMNAV_SERVER}" "${NAVDP_SERVER}"
+"${MEMNAV_PY}" -m py_compile \
+  "${MEMNAV_SERVER}" \
+  "${ROOT}/NavDP/baselines/memnav/policy_agent.py" \
+  "${ROOT}/NavDP/baselines/memnav/router_candidates.py" \
+  "${NAVDP_SERVER}"
 (
   cd "${ROOT}"
-  hab_python -m unittest "${UNIT_TEST_MODULE}" -v
+  hab_python -m unittest \
+    "${UNIT_TEST_MODULE}" \
+    MemNavData.test_router_candidates -v
 )
 hab_python -c \
   'import habitat_sim,numpy,pandas,pyarrow,PIL,requests,scipy,quaternion,sys; assert requests.__version__ == sys.argv[1]; print("Habitat dependencies OK", habitat_sim.__version__, "requests", requests.__version__)' \
@@ -190,6 +199,8 @@ trap cleanup EXIT INT TERM
       --num_samples 16 \
       --exclude_recent 32 \
       --retrieval raw \
+      --retrieval_candidate_top_k 32 \
+      --retrieval_candidate_min_gap 16 \
       --flow_gate auto \
       --buffer_root "${SCENE_ROOT}/buffer"
 ) > "${SCENE_ROOT}/logs/server_memnav.log" 2>&1 &
@@ -286,7 +297,8 @@ mkdir -p "${SCENE_ROOT}/geometry_router"
     --router_min_matches 20 \
     --router_min_inliers 12 \
     --router_min_inlier_ratio 0.50 \
-    --router_confirm_plans 2
+    --router_confirm_plans 2 \
+    --router_verify_top_k 8
 ) > "${SCENE_ROOT}/logs/eval_geometry_router.log" 2>&1
 
 for arm in navdp_native geometry_router; do

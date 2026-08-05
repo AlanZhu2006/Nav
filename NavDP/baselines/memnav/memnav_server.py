@@ -64,6 +64,10 @@ parser.add_argument("--gate_skip_below", type=float, default=0.0,
                           "decoder gate"))
 parser.add_argument("--anchor_switch_margin", type=float, default=0.01,
                     help="sticky-anchor ratchet: switch match only on a clear score win")
+parser.add_argument("--retrieval_candidate_top_k", type=int, default=32,
+                    help="number of temporally diverse raw-DINO candidates to expose")
+parser.add_argument("--retrieval_candidate_min_gap", type=int, default=16,
+                    help="minimum frame gap between exposed retrieval candidates")
 parser.add_argument("--flow_gate", type=str, default="auto",
                     help="auto = training length tier; off = dense; or fixed px threshold")
 parser.add_argument("--buffer_root", type=str, default="/tmp/memnav_server_buffer")
@@ -95,6 +99,8 @@ agent = MemNavAgent(
     gate_skip_below=args.gate_skip_below,
     retrieval_mode=args.retrieval,
     anchor_switch_margin=args.anchor_switch_margin,
+    retrieval_candidate_top_k=args.retrieval_candidate_top_k,
+    retrieval_candidate_min_gap=args.retrieval_candidate_min_gap,
     flow_gate=args.flow_gate,
 )
 
@@ -218,5 +224,7 @@ if __name__ == "__main__":
           f"(W={agent.W}, S={agent.S}, amargin={agent.amargin}, "
           f"exclude_recent={agent.exclude_recent}, samples={agent.num_samples}, "
           f"retrieval={agent.retrieval_mode}, flow_gate={agent.flow_gate}, "
+          f"candidate_top_k={agent.retrieval_candidate_top_k}, "
+          f"candidate_gap={agent.retrieval_candidate_min_gap}, "
           f"checkpoint={os.path.basename(args.checkpoint)})")
     app.run(host="0.0.0.0", port=args.port, threaded=False)

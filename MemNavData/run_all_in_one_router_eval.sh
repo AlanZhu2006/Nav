@@ -40,11 +40,15 @@ TASK_FILES=(
   MemNavData/validate_expanded_3leg_router_eval.py
   MemNavData/summarize_expanded_3leg_router_eval.py
   MemNavData/test_expanded_3leg_router_eval.py
+  MemNavData/test_router_candidates.py
   MemNavData/expanded_3leg_router_eval_20260805.json
   MemNavData/run_patch_temporal_router_multiscene.sh
   MemNavData/slurm_patch_temporal_router_multiscene.sbatch
   MemNavData/validate_frozen_router_blind.py
   MemNavData/router_multiscene_final_blind_20260805.json
+  NavDP/baselines/memnav/memnav_server.py
+  NavDP/baselines/memnav/policy_agent.py
+  NavDP/baselines/memnav/router_candidates.py
 )
 
 actual_commit=$(git -C "${ROOT}" rev-parse HEAD)
@@ -67,6 +71,29 @@ for required in "${EXPANDED_MANIFEST}" "${EXPANDED_RUNNER}" \
                 "${ROUTER_RUNNER}" "${REFERENCE_ROUTER_MODEL}"; do
   test -r "${required}" || { echo "ABORT: missing ${required}" >&2; exit 1; }
 done
+
+# The final-blind source scenes are intentionally absent from training, but
+# they still need two raw episodes each.  Check this before spending hours on
+# the preceding Habitat stages.
+"${MEMNAV_PY}" - "${FINAL_SPLIT}" "${EPISODE_OVERLAY_ROOT}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+episode_root = Path(sys.argv[2])
+missing = {}
+for scene in manifest["development"]:
+    scene_root = episode_root / scene
+    episodes = ([path for path in scene_root.iterdir() if path.is_dir()]
+                if scene_root.is_dir() else [])
+    if len(episodes) < 2:
+        missing[scene] = len(episodes)
+if missing:
+    raise RuntimeError(
+        f"final-blind scenes need two episodes before evaluation: {missing}")
+print("final-blind episode preflight OK")
+PY
 
 if [[ -e "${RUN_ROOT}" ]]; then
   echo "ABORT: all-in-one output already exists: ${RUN_ROOT}" >&2

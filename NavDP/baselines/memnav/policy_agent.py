@@ -29,8 +29,10 @@ import torch
 
 try:  # package import in tests; script-local import in memnav_server.py
     from .pose_alignment import lingbot_relative_yaw
+    from .router_candidates import temporal_nms_candidates
 except ImportError:  # pragma: no cover - exercised by the live script entrypoint
     from pose_alignment import lingbot_relative_yaw
+    from router_candidates import temporal_nms_candidates
 
 
 FLOW_TIERS = [(702, 20.0), (877, 25.0), (1075, 30.0), (1506, 40.0), (2048, 50.0)]
@@ -52,7 +54,8 @@ class MemNavAgent:
     def __init__(self, checkpoint, internnav_root, device="cuda:0",
                  exclude_recent=83, num_samples=16, buffer_root=None,
                  gate_skip_below=0.0, retrieval_mode="raw", anchor_switch_margin=0.01,
-                 flow_gate="auto"):
+                 flow_gate="auto", retrieval_candidate_top_k=32,
+                 retrieval_candidate_min_gap=16):
         # auto: training's per-episode tier; off: legacy dense capture; otherwise
         # parse a fixed pixel-flow threshold.
         self.flow_gate = flow_gate
@@ -84,6 +87,11 @@ class MemNavAgent:
         # so the argmax moves only when a NEW candidate beats the incumbent. Switch
         # only on a clear win to keep novel-goal anchors sticky (no wasted warms).
         self.anchor_switch_margin = float(anchor_switch_margin)
+        self.retrieval_candidate_top_k = int(retrieval_candidate_top_k)
+        self.retrieval_candidate_min_gap = int(retrieval_candidate_min_gap)
+        if (self.retrieval_candidate_top_k < 1
+                or self.retrieval_candidate_min_gap < 1):
+            raise ValueError("retrieval candidate top-k and gap must be positive")
         self.L_depth = self.lb.depth                    # aggregator layers
         self.psi = self.lb.num_special                  # 6 special tokens
 
@@ -608,6 +616,7 @@ class MemNavAgent:
             visual_second_score = None
             visual_margin = None
             visual_anchor = None
+            visual_candidates = []
             raw_cos = None
             if cand.any():
                 import torch.nn.functional as Fnn
@@ -643,6 +652,12 @@ class MemNavAgent:
                 if candidate_count > 1:
                     visual_second_score = float(visual_top[1].item())
                     visual_margin = visual_score - visual_second_score
+                visual_candidates = temporal_nms_candidates(
+                    visual_cos.detach().float().cpu().tolist(),
+                    cand[0].detach().cpu().tolist(),
+                    top_k=self.retrieval_candidate_top_k,
+                    min_frame_gap=self.retrieval_candidate_min_gap,
+                )
                 st = self._anchor_state.get(gkey)
                 # ratchet: keep the incumbent unless the new best clearly beats it
                 if st is not None and raw_score <= st["score"] + self.anchor_switch_margin:
@@ -699,6 +714,8 @@ class MemNavAgent:
                     visual_anchor=visual_anchor,
                     visual_second_score=visual_second_score,
                     visual_margin=visual_margin,
+                    visual_candidates=visual_candidates,
+                    visual_candidate_min_gap=self.retrieval_candidate_min_gap,
                     selected_anchor_score=selected_anchor_score,
                     candidate_count=candidate_count,
                     anchor_gap=anchor_gap,

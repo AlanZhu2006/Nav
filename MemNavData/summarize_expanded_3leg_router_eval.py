@@ -74,11 +74,12 @@ def load_arm(scene_root: Path, arm: str, scene: str) -> dict[tuple[str, str], di
                 for plan in leg_plans
                 if plan.get("router_active") is not None
             ]
-            verification_ms.extend(
-                float(plan["router_overlap_verification_ms"])
-                for plan in leg_plans
-                if plan.get("router_overlap_verification_ms") not in (None, "")
-            )
+            for plan in leg_plans:
+                value = plan.get("router_verification_total_ms")
+                if value in (None, ""):
+                    value = plan.get("router_overlap_verification_ms")
+                if value not in (None, "") and float(value) > 0.0:
+                    verification_ms.append(float(value))
         key = (scene, episode)
         require(key not in output, f"duplicate metric row: {arm} {key}")
         output[key] = {

@@ -135,6 +135,13 @@ parser.add_argument(
     help="consecutive reliable plans required before memory routing is latched",
 )
 parser.add_argument(
+    "--router_verify_top_k",
+    type=int,
+    default=8,
+    help=("maximum temporally diverse DINO candidates checked by the "
+          "geometric verifier before failing closed to ImageGoal"),
+)
+parser.add_argument(
     "--stop_after_leg1",
     action="store_true",
     help="evaluate only the start->A image-goal leg (the controlled novel-only arm)",
@@ -374,12 +381,39 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
 
             router_key = hashlib.md5(goal_jpg).hexdigest()
             state = AUTO_ROUTER_STATE.setdefault(
-                router_key, {"streak": 0, "active": False})
+                router_key,
+                {"streak": 0, "active": False, "anchor": None})
             anchor = mem_out.get("anchor")
+            raw_candidates = mem_out.get("visual_candidates") or []
+            candidate_pool = []
+            for item in raw_candidates:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    candidate_anchor = int(item["anchor"])
+                    candidate_score = float(item["score"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if not np.isfinite(candidate_score):
+                    continue
+                candidate_pool.append(dict(
+                    anchor=candidate_anchor, score=candidate_score))
+                if len(candidate_pool) >= args.router_verify_top_k:
+                    break
+            # Backward compatibility with a server that only exposes top-1.
+            if not candidate_pool and anchor is not None:
+                candidate_pool = [dict(
+                    anchor=int(anchor),
+                    score=(float(visual_score)
+                           if visual_score is not None else None))]
+            if forced_anchor is not None:
+                candidate_pool = [dict(
+                    anchor=int(forced_anchor),
+                    score=mem_out.get("forced_anchor_score"))]
             prefilter_pass = bool(
                 visual_score is not None
                 and float(visual_score) >= args.router_visual_floor
-                and anchor is not None
+                and candidate_pool
                 and (args.hybrid_route == "memory_geometry"
                      or (advantage is not None
                          and advantage >= args.router_advantage_threshold)))
@@ -387,26 +421,62 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 matches=None, inliers=None, inlier_ratio=None, error=None,
                 cached=None, verification_ms=None,
                 uncached_verification_ms=None)
+            candidate_trials = []
+            selected_candidate_rank = None
+            selected_anchor = (int(state["anchor"])
+                               if state.get("active")
+                               and state.get("anchor") is not None else None)
             # Once latched, keep the route stable for this goal. Before then,
             # DINO is only a cheap high-recall prefilter; metric-pose recovery
             # is permitted only after two-view geometry confirms the candidate.
             if not state["active"] and prefilter_pass:
-                verify = requests.post(
-                    f"{BASE}/retrieval_verify",
-                    files={"goal": ("goal.jpg", goal_jpg)},
-                    data={"anchor": str(int(anchor))},
-                )
-                verify.raise_for_status()
-                overlap.update(verify.json())
-            passed = bool(
-                state["active"]
-                or (prefilter_pass
-                    and overlap.get("matches") is not None
-                    and int(overlap["matches"]) >= args.router_min_matches
-                    and int(overlap["inliers"]) >= args.router_min_inliers
-                    and float(overlap["inlier_ratio"])
-                    >= args.router_min_inlier_ratio))
-            state["streak"] = state["streak"] + 1 if passed else 0
+                for rank, candidate in enumerate(candidate_pool, start=1):
+                    score = candidate.get("score")
+                    if (score is not None
+                            and float(score) < args.router_visual_floor):
+                        continue
+                    verify = requests.post(
+                        f"{BASE}/retrieval_verify",
+                        files={"goal": ("goal.jpg", goal_jpg)},
+                        data={"anchor": str(int(candidate["anchor"]))},
+                    )
+                    verify.raise_for_status()
+                    trial = verify.json()
+                    trial_pass = bool(
+                        trial.get("matches") is not None
+                        and int(trial["matches"]) >= args.router_min_matches
+                        and int(trial["inliers"]) >= args.router_min_inliers
+                        and float(trial["inlier_ratio"])
+                        >= args.router_min_inlier_ratio)
+                    candidate_trials.append(dict(
+                        rank=rank,
+                        anchor=int(candidate["anchor"]),
+                        score=score,
+                        passed=trial_pass,
+                        matches=trial.get("matches"),
+                        inliers=trial.get("inliers"),
+                        inlier_ratio=trial.get("inlier_ratio"),
+                        cached=trial.get("cached"),
+                        verification_ms=trial.get("verification_ms"),
+                    ))
+                    if len(candidate_trials) == 1 or trial_pass:
+                        overlap.update(trial)
+                    if trial_pass:
+                        selected_anchor = int(candidate["anchor"])
+                        selected_candidate_rank = rank
+                        break
+            passed = bool(state["active"] or selected_anchor is not None)
+            if state["active"]:
+                pass
+            elif passed:
+                if state.get("anchor") == selected_anchor:
+                    state["streak"] += 1
+                else:
+                    state["streak"] = 1
+                    state["anchor"] = selected_anchor
+            else:
+                state["streak"] = 0
+                state["anchor"] = None
             if state["streak"] >= args.router_confirm_plans:
                 state["active"] = True
             router_active = bool(state["active"])
@@ -435,6 +505,16 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                     "verification_ms"),
                 router_overlap_uncached_verification_ms=overlap.get(
                     "uncached_verification_ms"),
+                router_candidate_pool_size=len(candidate_pool),
+                router_candidates_considered=len(candidate_trials),
+                router_selected_candidate_rank=selected_candidate_rank,
+                router_selected_anchor=state.get("anchor"),
+                router_candidate_min_gap=mem_out.get(
+                    "visual_candidate_min_gap"),
+                router_candidate_trials=candidate_trials,
+                router_verification_total_ms=float(sum(
+                    float(item.get("verification_ms") or 0.0)
+                    for item in candidate_trials)),
                 router_pass=passed,
                 router_streak=int(state["streak"]),
                 router_active=router_active,
@@ -444,10 +524,13 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
             if router_active:
                 # Stage 2 recovers pose for the latest frame already appended
                 # by retrieval_probe_step. This endpoint must not append again.
+                pose_data = dict(data)
+                if state.get("anchor") is not None:
+                    pose_data["forced_anchor"] = str(int(state["anchor"]))
                 pose = requests.post(
                     f"{BASE}/posegoal_query",
                     files={"goal": ("goal.jpg", goal_jpg)},
-                    data=data,
+                    data=pose_data,
                 )
                 pose.raise_for_status()
                 mem_out = pose.json()
@@ -1072,6 +1155,20 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                   router_overlap_uncached_verification_ms=(
                                       response.get(
                                           "router_overlap_uncached_verification_ms")),
+                                  router_candidate_pool_size=response.get(
+                                      "router_candidate_pool_size"),
+                                  router_candidates_considered=response.get(
+                                      "router_candidates_considered"),
+                                  router_selected_candidate_rank=response.get(
+                                      "router_selected_candidate_rank"),
+                                  router_selected_anchor=response.get(
+                                      "router_selected_anchor"),
+                                  router_candidate_min_gap=response.get(
+                                      "router_candidate_min_gap"),
+                                  router_candidate_trials=response.get(
+                                      "router_candidate_trials"),
+                                  router_verification_total_ms=response.get(
+                                      "router_verification_total_ms"),
                                   router_pass=response.get("router_pass"),
                                   router_streak=response.get("router_streak"),
                                   router_active=response.get("router_active"),
@@ -1226,6 +1323,8 @@ def main():
             "automatic --hybrid_route requires --server_backend hybrid_pose")
     if args.router_confirm_plans < 1:
         raise ValueError("--router_confirm_plans must be >= 1")
+    if args.router_verify_top_k < 1:
+        raise ValueError("--router_verify_top_k must be >= 1")
     if args.router_min_matches < 8:
         raise ValueError("--router_min_matches must be >= 8")
     if args.router_min_inliers < 0:
@@ -1444,6 +1543,7 @@ def main():
             router_min_inliers=args.router_min_inliers,
             router_min_inlier_ratio=args.router_min_inlier_ratio,
             router_confirm_plans=args.router_confirm_plans,
+            router_verify_top_k=args.router_verify_top_k,
             gate_override=args.gate_override,
             gt_covis_anchor=B.get("covis_argmax"),
             path_nearest_anchor=path_nearest_anchor,
@@ -1577,6 +1677,7 @@ def main():
         router_min_inliers=args.router_min_inliers,
         router_min_inlier_ratio=args.router_min_inlier_ratio,
         router_confirm_plans=args.router_confirm_plans,
+        router_verify_top_k=args.router_verify_top_k,
         gate_override=args.gate_override,
         SR_A=(nA / n) if n and args.leg1_mode == "policy" else None,
         mean_spl_A=(float(np.nanmean([m["spl_A"] for m in metrics]))

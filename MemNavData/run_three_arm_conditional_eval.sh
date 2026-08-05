@@ -10,8 +10,11 @@ EXPECTED_COMMIT=${EXPECTED_COMMIT:?set EXPECTED_COMMIT}
 HAB_PY=${HAB_PY:?set HAB_PY}
 MEMNAV_PY=${MEMNAV_PY:?set MEMNAV_PY}
 MODE=${MODE:?set MODE=smoke or full}
+RUN_TWO_LEG=${RUN_TWO_LEG:-1}
 [[ "${MODE}" =~ ^(smoke|full)$ ]] || {
   echo "ABORT: MODE must be smoke or full" >&2; exit 1; }
+[[ "${RUN_TWO_LEG}" =~ ^[01]$ ]] || {
+  echo "ABORT: RUN_TWO_LEG must be 0 or 1" >&2; exit 1; }
 
 TWO_MANIFEST=${ROOT}/MemNavData/expanded_navdp_router_eval_20260805.json
 TWO_MANIFEST_SHA=ba8f72cb504768c801e6c9c386436ccdc66dea07a5e5fac2d7b4248738946a61
@@ -66,25 +69,29 @@ else
 fi
 
 TWO_ROOT=${RUN_ROOT}/two_leg_three_arm
-echo "[stage 1] two-leg native/top-1/top-K scenes=${#TWO_INDICES[@]}"
-for scene_index in "${TWO_INDICES[@]}"; do
-  env \
-    ROOT="${ROOT}" \
-    RUN_ROOT="${TWO_ROOT}" \
-    MANIFEST="${TWO_MANIFEST}" \
-    EXPECTED_MANIFEST_SHA="${TWO_MANIFEST_SHA}" \
-    EXPECTED_COMMIT="${EXPECTED_COMMIT}" \
-    SCENE_INDEX="${scene_index}" \
-    HAB_PY="${HAB_PY}" \
-    MEMNAV_PY="${MEMNAV_PY}" \
-    MAX_STEPS=500 \
-    "${SCENE_RUNNER}"
-done
-if [[ "${MODE}" == full ]]; then
-  "${HAB_PY}" "${TWO_SUMMARIZER}" \
-    --manifest "${TWO_MANIFEST}" --run-root "${TWO_ROOT}" \
-    > "${TWO_ROOT}/summary.json"
-  cat "${TWO_ROOT}/summary.json"
+if [[ "${RUN_TWO_LEG}" -eq 1 ]]; then
+  echo "[stage 1] two-leg native/top-1/top-K scenes=${#TWO_INDICES[@]}"
+  for scene_index in "${TWO_INDICES[@]}"; do
+    env \
+      ROOT="${ROOT}" \
+      RUN_ROOT="${TWO_ROOT}" \
+      MANIFEST="${TWO_MANIFEST}" \
+      EXPECTED_MANIFEST_SHA="${TWO_MANIFEST_SHA}" \
+      EXPECTED_COMMIT="${EXPECTED_COMMIT}" \
+      SCENE_INDEX="${scene_index}" \
+      HAB_PY="${HAB_PY}" \
+      MEMNAV_PY="${MEMNAV_PY}" \
+      MAX_STEPS=500 \
+      "${SCENE_RUNNER}"
+  done
+  if [[ "${MODE}" == full ]]; then
+    "${HAB_PY}" "${TWO_SUMMARIZER}" \
+      --manifest "${TWO_MANIFEST}" --run-root "${TWO_ROOT}" \
+      > "${TWO_ROOT}/summary.json"
+    cat "${TWO_ROOT}/summary.json"
+  fi
+else
+  echo "[stage 1] skipped: frozen 20-scene two-leg result already exists"
 fi
 
 CONDITIONAL_ROOT=${RUN_ROOT}/conditional_c_five_arm

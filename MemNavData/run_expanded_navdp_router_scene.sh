@@ -14,9 +14,11 @@ HAB_PY=${HAB_PY:?set HAB_PY}
 MEMNAV_PY=${MEMNAV_PY:?set MEMNAV_PY}
 MAX_STEPS=${MAX_STEPS:-500}
 UNIT_TEST_MODULE=${UNIT_TEST_MODULE:-MemNavData.test_expanded_navdp_router_eval}
-EXPECTED_HAB_REQUESTS_VERSION=2.32.4
+EXPECTED_HAB_REQUESTS_VERSION=${EXPECTED_HAB_REQUESTS_VERSION:-2.32.4}
 EXPECTED_HAB_REQUESTS_INIT_BYTES=5057
 EXPECTED_HAB_REQUESTS_INIT_SHA=1e507f1f386bcc6b5f0ff69a614c14875cd65cb67be7f6022f28adef9774573f
+EXPECTED_HAB_REQUESTS_VERSION_BYTES=435
+EXPECTED_HAB_REQUESTS_VERSION_SHA=${EXPECTED_HAB_REQUESTS_VERSION_SHA:-143abaf3563712f063743a7952aa65319dbcb934d894cfc989bd2c015f8da577}
 
 # The frozen Habitat Python has requests only in pip's pure-Python vendor
 # directory.  Scope that path to Habitat subprocesses so it cannot pollute the
@@ -94,10 +96,12 @@ for required in "${HAB_PY}" "${MEMNAV_PY}" "${EVALUATOR}" "${VALIDATOR}" \
                 "${MEMNAV_SERVER}" "${NAVDP_SERVER}" "${LINGBOT_WEIGHTS}" \
                 "${MEMNAV_CKPT}" "${NAVDP_CKPT}" "${MANIFEST}" \
                 "${UNIT_TEST_PATH}" \
-                "${HAB_REQUESTS_VENDOR}/requests/__init__.py"; do
+                "${HAB_REQUESTS_VENDOR}/requests/__init__.py" \
+                "${HAB_REQUESTS_VENDOR}/requests/__version__.py"; do
   test -r "${required}" || { echo "ABORT: missing dependency ${required}" >&2; exit 1; }
 done
 REQUESTS_INIT=${HAB_REQUESTS_VENDOR}/requests/__init__.py
+REQUESTS_VERSION=${HAB_REQUESTS_VENDOR}/requests/__version__.py
 [[ "$(stat -c '%s' "${REQUESTS_INIT}")" == "${EXPECTED_HAB_REQUESTS_INIT_BYTES}" ]] || {
   echo "ABORT: vendored requests size mismatch" >&2
   exit 1
@@ -105,6 +109,16 @@ REQUESTS_INIT=${HAB_REQUESTS_VENDOR}/requests/__init__.py
 [[ "$(sha256sum "${REQUESTS_INIT}" | awk '{print $1}')" == \
     "${EXPECTED_HAB_REQUESTS_INIT_SHA}" ]] || {
   echo "ABORT: vendored requests SHA256 mismatch" >&2
+  exit 1
+}
+[[ "$(stat -c '%s' "${REQUESTS_VERSION}")" == \
+    "${EXPECTED_HAB_REQUESTS_VERSION_BYTES}" ]] || {
+  echo "ABORT: vendored requests version-file size mismatch" >&2
+  exit 1
+}
+[[ "$(sha256sum "${REQUESTS_VERSION}" | awk '{print $1}')" == \
+    "${EXPECTED_HAB_REQUESTS_VERSION_SHA}" ]] || {
+  echo "ABORT: vendored requests version-file SHA256 mismatch" >&2
   exit 1
 }
 

@@ -2,7 +2,10 @@ import unittest
 
 import numpy as np
 
-from MemNavData.diag_patch_temporal_router import selection_digest
+from MemNavData.diag_patch_temporal_router import (
+    select_hard_candidates,
+    selection_digest,
+)
 from MemNavData.patch_temporal_router import (
     combine_patch_temporal,
     combined_feature_names,
@@ -123,6 +126,22 @@ class PatchTemporalRouterTest(unittest.TestCase):
             baseline,
             selection_digest(
                 selected, changed_curve, 1, 8, "weight", "directional"))
+
+    def test_temporal_nms_candidate_selection_removes_adjacent_duplicates(self):
+        import pandas as pd
+
+        frame = pd.DataFrame([
+            dict(session_id="s", query_path="q.jpg", candidate_path="a.jpg",
+                 candidate_frame=0, dino_cosine=0.99, teacher_pass=0),
+            dict(session_id="s", query_path="q.jpg", candidate_path="b.jpg",
+                 candidate_frame=1, dino_cosine=0.98, teacher_pass=0),
+            dict(session_id="s", query_path="q.jpg", candidate_path="c.jpg",
+                 candidate_frame=8, dino_cosine=0.90, teacher_pass=1),
+        ])
+        raw = select_hard_candidates(frame, 2)
+        diverse = select_hard_candidates(frame, 2, "temporal_nms", 4)
+        self.assertEqual(raw["candidate_frame"].tolist(), [0, 1])
+        self.assertEqual(diverse["candidate_frame"].tolist(), [0, 8])
 
 
 if __name__ == "__main__":

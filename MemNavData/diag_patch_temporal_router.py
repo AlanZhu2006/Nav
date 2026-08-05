@@ -51,6 +51,7 @@ try:
         fit_listwise_linear,
         scene_group_oof_scores,
     )
+    from MemNavData.audit_router_candidate_recall import select_temporal_nms
 except ModuleNotFoundError:  # direct script invocation
     from patch_temporal_router import (  # type: ignore
         combine_patch_temporal,
@@ -72,6 +73,7 @@ except ModuleNotFoundError:  # direct script invocation
         fit_listwise_linear,
         scene_group_oof_scores,
     )
+    from audit_router_candidate_recall import select_temporal_nms  # type: ignore
 
 
 DEFAULT_WEIGHT_SHA = (
@@ -226,11 +228,24 @@ def load_cls_cache(path: Path) -> Tuple[Dict[str, np.ndarray], str]:
     return dict(zip(paths.tolist(), embeddings)), weight_sha
 
 
-def select_hard_candidates(frame, top_k: int):
+def select_hard_candidates(frame, top_k: int, strategy: str = "raw",
+                           min_frame_gap: int = 4):
+    if top_k < 1 or min_frame_gap < 1:
+        raise ValueError("candidate top-k/frame gap must be positive")
+    if strategy not in {"raw", "temporal_nms"}:
+        raise ValueError(f"unknown candidate selection strategy: {strategy}")
     ordered = frame.sort_values(
-        ["session_id", "dino_cosine", "candidate_frame"],
-        ascending=[True, False, True], kind="mergesort")
-    selected = ordered.groupby("session_id", sort=False).head(top_k).copy()
+        ["session_id", "dino_cosine", "candidate_frame", "candidate_path"],
+        ascending=[True, False, True, True], kind="mergesort")
+    if strategy == "raw":
+        selected = ordered.groupby(
+            "session_id", sort=False).head(top_k).copy()
+    else:
+        indices = []
+        for _session_id, group in ordered.groupby("session_id", sort=False):
+            indices.extend(select_temporal_nms(
+                group, top_k, min_frame_gap).index.tolist())
+        selected = frame.loc[indices].copy()
     selected["candidate_rank"] = (
         selected.groupby("session_id", sort=False).cumcount() + 1)
     selected.reset_index(drop=True, inplace=True)
@@ -238,14 +253,17 @@ def select_hard_candidates(frame, top_k: int):
 
 
 def selection_digest(selected_frame, full_frame, top_k: int, grid_size: int,
-                     weight_sha: str, patch_relation: str) -> str:
+                     weight_sha: str, patch_relation: str,
+                     candidate_selection: str = "raw",
+                     candidate_min_frame_gap: int = 4) -> str:
     digest = hashlib.sha256()
     # Feature extraction depends on selected image pairs, not their labels.
     # Keeping teacher SHA out allows a corrected offline teacher to reuse the
     # exact same expensive frozen-DINO features.
     digest.update(
         (f"features_v3|top_k={top_k}|grid={grid_size}|weight={weight_sha}"
-         f"|relation={patch_relation}").encode())
+         f"|relation={patch_relation}|selection={candidate_selection}"
+         f"|frame_gap={candidate_min_frame_gap}").encode())
     for row in selected_frame.itertuples():
         digest.update(
             (f"\nselected\t{row.session_id}\t{row.query_path}"
@@ -736,6 +754,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--top-k", type=int, default=32)
+    parser.add_argument(
+        "--candidate-selection", choices=("raw", "temporal_nms"),
+        default="raw")
+    parser.add_argument("--candidate-min-frame-gap", type=int, default=4)
     parser.add_argument("--grid-size", type=int, default=8)
     parser.add_argument(
         "--patch-relation", choices=("symmetric", "directional"),
@@ -756,7 +778,8 @@ def main() -> None:
     import pandas as pd
 
     args = parse_args()
-    if args.batch_size < 1 or args.top_k < 1 or args.grid_size < 2:
+    if (args.batch_size < 1 or args.top_k < 1 or args.grid_size < 2
+            or args.candidate_min_frame_gap < 1):
         raise ValueError("batch size/top-k must be positive and grid size >= 2")
     if args.min_top1_calibration < 1:
         raise ValueError("min top1 calibration must be positive")
@@ -822,7 +845,9 @@ def main() -> None:
     train_scenes = sorted(all_scenes - heldout_set)
     if len(train_scenes) < 3:
         raise ValueError("at least three non-heldout training scenes are required")
-    selected = select_hard_candidates(frame, args.top_k)
+    selected = select_hard_candidates(
+        frame, args.top_k, args.candidate_selection,
+        args.candidate_min_frame_gap)
     if not selected["teacher_pass"].isin([-1, 0, 1]).all():
         raise ValueError("selected teacher labels must be -1, 0, or 1")
     supervised = selected["teacher_pass"].isin([0, 1]).to_numpy()
@@ -845,7 +870,8 @@ def main() -> None:
         raw: remap_path(raw, mappings) for raw in selected_raw_paths}
     identity = selection_digest(
         selected, frame, args.top_k, args.grid_size, weight_sha,
-        args.patch_relation)
+        args.patch_relation, args.candidate_selection,
+        args.candidate_min_frame_gap)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     feature_cache_path = args.out_dir / "patch_temporal_features.npz"
     patch, temporal, feature_timing = build_or_load_features(
@@ -948,6 +974,8 @@ def main() -> None:
         "train_scenes": train_scenes,
         "heldout_scenes": sorted(heldout_set),
         "top_k": args.top_k,
+        "candidate_selection": args.candidate_selection,
+        "candidate_min_frame_gap": args.candidate_min_frame_gap,
         "grid_size": args.grid_size,
     }
     if listwise_portable is not None:
@@ -981,6 +1009,8 @@ def main() -> None:
         "maximum_reconstructed_cosine_error": maximum_cosine_error,
         "selection_identity": identity,
         "top_k": args.top_k,
+        "candidate_selection": args.candidate_selection,
+        "candidate_min_frame_gap": args.candidate_min_frame_gap,
         "grid_size": args.grid_size,
         "train_scenes": train_scenes,
         "heldout_scenes": sorted(heldout_set),

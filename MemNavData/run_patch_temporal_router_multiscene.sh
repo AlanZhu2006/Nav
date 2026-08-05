@@ -160,7 +160,7 @@ if [[ "${MODE}" == smoke ]]; then
   MAX_QUERIES=1
   CROSS_CANDIDATE_STRIDE=4
   TOP_K=4
-  COVIS_LABEL_TOP_K=4
+  COVIS_LABEL_TOP_K=0
   GRID_SIZE=4
   BATCH_SIZE=24
 else
@@ -373,6 +373,8 @@ PATCH_ARGS=(
   --device cuda:0
   --batch-size "${BATCH_SIZE}"
   --top-k "${TOP_K}"
+  --candidate-selection temporal_nms
+  --candidate-min-frame-gap 4
   --grid-size "${GRID_SIZE}"
   --patch-relation directional
   --expected-weight-sha "${EXPECTED_WEIGHT_SHA}"

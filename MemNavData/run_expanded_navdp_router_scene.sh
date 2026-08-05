@@ -34,10 +34,12 @@ VALIDATOR=${VALIDATOR:-${ROOT}/MemNavData/validate_expanded_navdp_router_eval.py
 MEMNAV_SERVER=${ROOT}/NavDP/baselines/memnav/memnav_server.py
 NAVDP_SERVER=${ROOT}/NavDP/baselines/navdp/navdp_server.py
 INTERNNAV_ROOT=${ROOT}/InternNav
-LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
-LINGBOT_WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
-MEMNAV_CKPT=/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/gatecurr600.memnav.ckpt
-NAVDP_CKPT=/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/navdp_checkpoint.ckpt
+LINGBOT_REPO=${LINGBOT_REPO:-/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map}
+LINGBOT_WEIGHTS=${LINGBOT_WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
+MEMNAV_CKPT=${MEMNAV_CKPT:-/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/gatecurr600.memnav.ckpt}
+NAVDP_CKPT=${NAVDP_CKPT:-/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/navdp_checkpoint.ckpt}
+ASSET_ROOT_OVERRIDE=${ASSET_ROOT_OVERRIDE:-}
+EPISODE_ROOT_OVERRIDE=${EPISODE_ROOT_OVERRIDE:-}
 
 TASK_FILES=(
   MemNavData/eval_2leg_habitat.py
@@ -238,12 +240,12 @@ for spec in \
   }
 done
 
-ASSET_ROOT=$(hab_python - "${MANIFEST}" <<'PY'
+MANIFEST_ASSET_ROOT=$(hab_python - "${MANIFEST}" <<'PY'
 import json, sys
 print(json.load(open(sys.argv[1]))["paths"]["asset_root"])
 PY
 )
-EPISODE_ROOT=$(hab_python - "${MANIFEST}" "${scene}" <<'PY'
+MANIFEST_EPISODE_ROOT=$(hab_python - "${MANIFEST}" "${scene}" <<'PY'
 import json, sys
 manifest = json.load(open(sys.argv[1]))
 if "episode_root" in manifest["paths"]:
@@ -255,9 +257,17 @@ else:
 print(manifest["paths"][key])
 PY
 )
+ASSET_ROOT=${ASSET_ROOT_OVERRIDE:-${MANIFEST_ASSET_ROOT}}
+EPISODE_ROOT=${EPISODE_ROOT_OVERRIDE:-${MANIFEST_EPISODE_ROOT}}
+SCENE_FILE=${ASSET_ROOT}/${scene}/${scene}.glb
+EPISODE_SCENE_ROOT=${EPISODE_ROOT}/${scene}
+test -r "${SCENE_FILE}" || {
+  echo "ABORT: missing scene asset ${SCENE_FILE}" >&2; exit 1; }
+test -d "${EPISODE_SCENE_ROOT}" || {
+  echo "ABORT: missing episode scene root ${EPISODE_SCENE_ROOT}" >&2; exit 1; }
 COMMON_ARGS=(
-  --episode_root "${EPISODE_ROOT}/${scene}"
-  --scene "${ASSET_ROOT}/${scene}/${scene}.glb"
+  --episode_root "${EPISODE_SCENE_ROOT}"
+  --scene "${SCENE_FILE}"
   --host 127.0.0.1
   --leg1_mode policy
   --success_dist 1.0

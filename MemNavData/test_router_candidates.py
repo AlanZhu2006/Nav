@@ -1,5 +1,6 @@
 import unittest
 
+from MemNavData.audit_online_router_topk import score_ranks
 from NavDP.baselines.memnav.router_candidates import temporal_nms_candidates
 
 
@@ -24,6 +25,9 @@ class TemporalCandidateTest(unittest.TestCase):
             temporal_nms_candidates([0.1], [], top_k=1, min_frame_gap=1)
         with self.assertRaises(ValueError):
             temporal_nms_candidates([0.1], [True], top_k=0, min_frame_gap=1)
+
+    def test_learned_score_ranks_use_frame_index_for_ties(self):
+        self.assertEqual(score_ranks([0.5, 0.9, 0.9], [20, 8, 4]), [3, 2, 1])
 
 
 if __name__ == "__main__":

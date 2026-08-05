@@ -25,6 +25,14 @@ from MemNavData.diag_distill_geometry_router import (
     load_exact_dino_embeddings,
     sift_description,
 )
+from MemNavData.patch_temporal_router import (
+    combine_patch_temporal,
+    combined_feature_names,
+    directional_combined_feature_names,
+    directional_patch_relation_features,
+    symmetric_patch_relation_features,
+    temporal_score_features,
+)
 
 
 def file_sha256(path: Path) -> str:
@@ -87,6 +95,146 @@ def first_selected_positive(selected_frames: list[int], positives: set[int]):
     return None
 
 
+def score_ranks(scores: np.ndarray, frames: list[int]) -> list[int]:
+    scores = np.asarray(scores, dtype=np.float64).reshape(-1)
+    if len(scores) != len(frames) or not np.isfinite(scores).all():
+        raise ValueError("ranking scores must be finite and aligned")
+    order = sorted(
+        range(len(frames)), key=lambda index: (-scores[index], frames[index]))
+    ranks = [0] * len(frames)
+    for rank, index in enumerate(order, start=1):
+        ranks[index] = rank
+    return ranks
+
+
+def learned_router_audit(
+    model_path: Path,
+    patch_cache_path: Path | None,
+    frame_table,
+    positives: set[int],
+    goal: Path,
+    lingbot_repo: Path,
+    weights: Path,
+    device: str,
+    batch_size: int,
+) -> dict:
+    from MemNavData.diag_patch_temporal_router import load_exact_patch_tokens
+
+    with open(model_path, encoding="utf-8") as handle:
+        model = json.load(handle)
+    if file_sha256(weights) != model["lingbot_weight_sha256"]:
+        raise RuntimeError("learned router and LingBot weight identities differ")
+    relation_name = str(model["patch_relation"])
+    if relation_name == "directional":
+        relation = directional_patch_relation_features
+        expected_names = directional_combined_feature_names()
+    elif relation_name == "symmetric":
+        relation = symmetric_patch_relation_features
+        expected_names = combined_feature_names()
+    else:
+        raise ValueError(f"unsupported learned patch relation {relation_name}")
+    if tuple(model["feature_names"]) != expected_names:
+        raise RuntimeError("learned router feature schema mismatch")
+
+    selected = select_temporal_nms(
+        frame_table,
+        int(model["top_k"]),
+        int(model["candidate_min_frame_gap"]),
+    )
+    selected_frames = selected["candidate_frame"].astype(int).tolist()
+    candidate_paths = [Path(path) for path in selected["candidate_path"]]
+    token_paths = [goal] + candidate_paths
+    weight_sha = file_sha256(weights)
+    grid_size = int(model["grid_size"])
+    patch_seconds = 0.0
+    cache_hit = False
+    tokens = None
+    if patch_cache_path is not None and patch_cache_path.is_file():
+        cached = np.load(patch_cache_path, allow_pickle=False)
+        expected_paths = np.asarray([str(path.resolve()) for path in token_paths])
+        if not np.array_equal(cached["paths"].astype(str), expected_paths):
+            raise RuntimeError("patch cache path identity mismatch")
+        if str(cached["weight_sha"].item()) != weight_sha:
+            raise RuntimeError("patch cache weight identity mismatch")
+        if int(cached["grid_size"].item()) != grid_size:
+            raise RuntimeError("patch cache grid identity mismatch")
+        tokens = cached["tokens"].astype(np.float32)
+        cache_hit = True
+    if tokens is None:
+        tokens, patch_seconds = load_exact_patch_tokens(
+            token_paths, lingbot_repo, weights, device, batch_size, grid_size)
+        if patch_cache_path is not None:
+            patch_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                patch_cache_path,
+                paths=np.asarray([str(path.resolve()) for path in token_paths]),
+                tokens=tokens.astype(np.float16),
+                weight_sha=np.asarray(weight_sha),
+                grid_size=np.asarray(grid_size),
+            )
+
+    patch = np.asarray([
+        relation(tokens[0], tokens[index + 1], float(row.dino_cosine))
+        for index, row in enumerate(selected.itertuples())
+    ], dtype=np.float64)
+    full_frames = frame_table["candidate_frame"].to_numpy(dtype=np.int64)
+    full_scores = frame_table["dino_cosine"].to_numpy(dtype=np.float64)
+    temporal = np.asarray([
+        temporal_score_features(frame, full_frames, full_scores)
+        for frame in selected_frames
+    ], dtype=np.float64)
+    features = combine_patch_temporal(patch, temporal)
+
+    mean = np.asarray(model["mean"], dtype=np.float64)
+    scale = np.asarray(model["scale"], dtype=np.float64)
+    coefficient = np.asarray(model["coefficient"], dtype=np.float64)
+    logits = ((features - mean) / scale) @ coefficient + float(
+        model["intercept"])
+    pointwise = 1.0 / (1.0 + np.exp(-np.clip(logits, -60.0, 60.0)))
+    listwise_model = model["listwise_ranker"]
+    listwise = (
+        (features - np.asarray(listwise_model["mean"], dtype=np.float64))
+        / np.asarray(listwise_model["scale"], dtype=np.float64)
+    ) @ np.asarray(listwise_model["coefficient"], dtype=np.float64)
+    dino = selected["dino_cosine"].to_numpy(dtype=np.float64)
+    ranks = {
+        "dino_temporal_nms": score_ranks(dino, selected_frames),
+        "pointwise_patch_temporal": score_ranks(pointwise, selected_frames),
+        "listwise_patch_temporal": score_ranks(listwise, selected_frames),
+    }
+    rows = []
+    for index, frame in enumerate(selected_frames):
+        rows.append({
+            "candidate_frame": frame,
+            "geometry_pass": frame in positives,
+            "dino_cosine": float(dino[index]),
+            "pointwise_probability": float(pointwise[index]),
+            "listwise_score": float(listwise[index]),
+            **{f"{name}_rank": values[index]
+               for name, values in ranks.items()},
+        })
+    first_positive_rank = {
+        name: min(values[index] for index, frame in enumerate(selected_frames)
+                  if frame in positives)
+        for name, values in ranks.items()
+    }
+    return {
+        "deployment_approved": False,
+        "model": str(model_path.resolve()),
+        "model_sha256": file_sha256(model_path),
+        "candidate_selection": model["candidate_selection"],
+        "candidate_min_frame_gap": model["candidate_min_frame_gap"],
+        "top_k": model["top_k"],
+        "selected_frames": selected_frames,
+        "first_geometry_positive_rank": first_positive_rank,
+        "rows": rows,
+        "timing": {
+            "patch_seconds": patch_seconds,
+            "patch_cache_hit": cache_hit,
+        },
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--buffer-dir", type=Path, required=True)
@@ -100,6 +248,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--embedding-cache", type=Path)
+    parser.add_argument("--learned-router-model", type=Path)
+    parser.add_argument("--patch-cache", type=Path)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--min-matches", type=int, default=20)
     parser.add_argument("--min-inliers", type=int, default=12)
@@ -194,6 +344,22 @@ def main() -> None:
                 selected_frames, positives),
         }
 
+    learned_router = None
+    if args.learned_router_model is not None:
+        if not args.learned_router_model.is_file():
+            raise FileNotFoundError(args.learned_router_model)
+        learned_router = learned_router_audit(
+            args.learned_router_model,
+            args.patch_cache,
+            frame_table,
+            positives,
+            args.goal,
+            args.lingbot_repo,
+            args.weights,
+            args.device,
+            args.batch_size,
+        )
+
     report = {
         "purpose": "offline exact online-router top-k recall audit",
         "deployment_approved": False,
@@ -223,6 +389,7 @@ def main() -> None:
             str(k): bool(positive_ranks[0] <= k) for k in top_ks
         },
         "temporal_nms_top32": nms,
+        "learned_router": learned_router,
         "online_anchor": None,
         "top_32": ordered[:32],
         "timing": {
@@ -257,6 +424,9 @@ def main() -> None:
         },
         "online_anchor": report["online_anchor"],
         "timing": report["timing"],
+        "learned_router_first_positive_rank": (
+            learned_router["first_geometry_positive_rank"]
+            if learned_router is not None else None),
     }, indent=2, sort_keys=True), flush=True)
 
 

@@ -2,10 +2,12 @@
 """Train and audit a selective DINO patch/temporal reliability router.
 
 This experiment starts from the exact pair table produced by
-``diag_distill_geometry_router.py``.  It uses SIFT/essential-matrix decisions
-only as offline teacher labels, chooses hard candidates by frozen DINO cosine,
-and keeps the requested held-out scenes completely outside model selection and
-threshold calibration.
+``diag_distill_geometry_router.py``.  It chooses hard candidates by frozen
+DINO cosine and keeps the requested held-out scenes completely outside model
+selection and threshold calibration.  The preferred label source is the
+task-aligned goal-surface co-visibility produced by
+``relabel_router_covisibility.py``; legacy teacher CSVs remain readable for
+controlled comparisons.
 
 The exported head is deliberately marked not-for-deployment.  A learned score
 may replace geometry only after its confidence tails survive scene-disjoint
@@ -32,7 +34,11 @@ try:
     from MemNavData.patch_temporal_router import (
         combine_patch_temporal,
         combined_feature_names,
+        directional_combined_feature_names,
+        directional_patch_feature_names,
+        directional_patch_relation_features,
         patch_feature_names,
+        symmetric_from_directional_patch_features,
         symmetric_patch_relation_features,
         temporal_feature_names,
         temporal_score_features,
@@ -45,7 +51,11 @@ except ModuleNotFoundError:  # direct script invocation
     from patch_temporal_router import (  # type: ignore
         combine_patch_temporal,
         combined_feature_names,
+        directional_combined_feature_names,
+        directional_patch_feature_names,
+        directional_patch_relation_features,
         patch_feature_names,
+        symmetric_from_directional_patch_features,
         symmetric_patch_relation_features,
         temporal_feature_names,
         temporal_score_features,
@@ -59,7 +69,7 @@ except ModuleNotFoundError:  # direct script invocation
 DEFAULT_WEIGHT_SHA = (
     "832bc82cbae0bc9bbe946ef5ee1f7226abd8c0e183ccf8beddbb3d133576f409")
 DEFAULT_LINGBOT_COMMIT = "7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2"
-FEATURE_VERSION = "exact_lingbot_dinov2l_patch8_temporal_v1"
+FEATURE_VERSION = "exact_lingbot_dinov2l_patch_temporal_v3"
 REQUIRED_COLUMNS = {
     "session_id", "scene", "episode", "kind", "query_path",
     "candidate_path", "candidate_frame", "teacher_pass", "dino_cosine",
@@ -219,14 +229,32 @@ def select_hard_candidates(frame, top_k: int):
     return selected
 
 
-def selection_digest(frame, teacher_sha: str, top_k: int,
-                     grid_size: int, weight_sha: str) -> str:
+def selection_digest(selected_frame, full_frame, top_k: int, grid_size: int,
+                     weight_sha: str, patch_relation: str) -> str:
     digest = hashlib.sha256()
-    digest.update(teacher_sha.encode())
-    digest.update(f"|top_k={top_k}|grid={grid_size}|weight={weight_sha}".encode())
-    for row in frame.itertuples():
+    # Feature extraction depends on selected image pairs, not their labels.
+    # Keeping teacher SHA out allows a corrected offline teacher to reuse the
+    # exact same expensive frozen-DINO features.
+    digest.update(
+        (f"features_v3|top_k={top_k}|grid={grid_size}|weight={weight_sha}"
+         f"|relation={patch_relation}").encode())
+    for row in selected_frame.itertuples():
         digest.update(
-            (f"\n{row.session_id}\t{row.query_path}\t{row.candidate_path}"
+            (f"\nselected\t{row.session_id}\t{row.query_path}"
+             f"\t{row.candidate_path}"
+             f"\t{row.candidate_frame}\t{row.dino_cosine:.12g}").encode())
+    # Temporal features use every score/frame in each selected session, not
+    # only its top-K candidates. Include that complete curve while excluding
+    # labels, so corrected teachers can share features but changed retrieval
+    # inputs cannot silently hit a stale cache.
+    sessions = set(selected_frame["session_id"].astype(str))
+    temporal_rows = full_frame[
+        full_frame["session_id"].astype(str).isin(sessions)].sort_values(
+            ["session_id", "candidate_frame", "candidate_path"],
+            kind="mergesort")
+    for row in temporal_rows.itertuples():
+        digest.update(
+            (f"\ntemporal\t{row.session_id}\t{row.candidate_path}"
              f"\t{row.candidate_frame}\t{row.dino_cosine:.12g}").encode())
     return digest.hexdigest()
 
@@ -336,7 +364,16 @@ def build_or_load_features(selected_frame, full_frame, cls_by_path,
                            readable_path_by_raw: Dict[str, Path],
                            lingbot_repo: Path, weights: Path, device: str,
                            batch_size: int, grid_size: int,
-                           cache_path: Path, identity: str):
+                           cache_path: Path, identity: str,
+                           patch_relation: str):
+    if patch_relation == "directional":
+        relation_function = directional_patch_relation_features
+        relation_names = directional_patch_feature_names()
+    elif patch_relation == "symmetric":
+        relation_function = symmetric_patch_relation_features
+        relation_names = patch_feature_names()
+    else:
+        raise ValueError(f"unsupported patch relation {patch_relation!r}")
     if cache_path.is_file():
         cache = np.load(cache_path, allow_pickle=False)
         cached_identity = str(cache["identity"].item())
@@ -345,9 +382,11 @@ def build_or_load_features(selected_frame, full_frame, cls_by_path,
                 f"feature cache identity mismatch: remove {cache_path} explicitly")
         patch = cache["patch"].astype(np.float32)
         temporal = cache["temporal"].astype(np.float32)
-        if (patch.shape != (len(selected_frame), len(patch_feature_names()))
+        cached_names = tuple(cache["patch_names"].astype(str).tolist())
+        if (patch.shape != (len(selected_frame), len(relation_names))
                 or temporal.shape != (
-                    len(selected_frame), len(temporal_feature_names()))):
+                    len(selected_frame), len(temporal_feature_names()))
+                or cached_names != relation_names):
             raise RuntimeError("feature cache has an unexpected shape")
         return patch, temporal, {"cache_hit": True, "seconds": 0.0}
 
@@ -364,7 +403,7 @@ def build_or_load_features(selected_frame, full_frame, cls_by_path,
     patch_rows = []
     started = time.perf_counter()
     for row_index, row in enumerate(selected_frame.itertuples()):
-        patch_rows.append(symmetric_patch_relation_features(
+        patch_rows.append(relation_function(
             tokens[index[row.query_path]],
             tokens[index[row.candidate_path]],
             row.dino_cosine))
@@ -379,7 +418,7 @@ def build_or_load_features(selected_frame, full_frame, cls_by_path,
         identity=np.asarray(identity),
         patch=patch.astype(np.float32),
         temporal=temporal.astype(np.float32),
-        patch_names=np.asarray(patch_feature_names()),
+        patch_names=np.asarray(relation_names),
         temporal_names=np.asarray(temporal_feature_names()),
     )
     del tokens
@@ -460,7 +499,8 @@ def evaluate_family(name: str, features: np.ndarray, labels: np.ndarray,
 
     model = logistic_pipeline(selected_c, seed)
     model.fit(train_features, train_labels)
-    heldout_probability = model.predict_proba(features[test_mask])[:, 1]
+    all_probability = model.predict_proba(features)[:, 1]
+    heldout_probability = all_probability[test_mask]
     heldout_top1 = top1_mask[test_mask]
     heldout_labels = labels[test_mask]
 
@@ -517,7 +557,59 @@ def evaluate_family(name: str, features: np.ndarray, labels: np.ndarray,
         "intercept": float(logistic.intercept_[0]),
         "thresholds": threshold_dict(thresholds),
     }
-    return result, portable, heldout_probability
+    return result, portable, all_probability
+
+
+def covisibility_ranking_metrics(groups: np.ndarray, ranks: np.ndarray,
+                                 covisibility: np.ndarray,
+                                 scores: np.ndarray,
+                                 positive_threshold: float = 0.5) -> dict:
+    """Evaluate top-K reranking against continuous task overlap."""
+    groups = np.asarray(groups, dtype=str).reshape(-1)
+    ranks = np.asarray(ranks, dtype=np.int64).reshape(-1)
+    covisibility = np.asarray(covisibility, dtype=np.float64).reshape(-1)
+    scores = np.asarray(scores, dtype=np.float64).reshape(-1)
+    if not (groups.shape == ranks.shape == covisibility.shape == scores.shape):
+        raise ValueError("ranking inputs must be aligned")
+    if (not len(groups) or not np.isfinite(covisibility).all()
+            or not np.isfinite(scores).all()):
+        raise ValueError("ranking inputs must be non-empty and finite")
+
+    selected_overlap = []
+    positive_ranks = []
+    sessions_with_positive = 0
+    selected_positive = 0
+    for group in np.unique(groups):
+        index = np.flatnonzero(groups == group)
+        chosen = index[np.argmax(scores[index])]
+        overlap = float(covisibility[chosen])
+        selected_overlap.append(overlap)
+        positive = index[covisibility[index] >= positive_threshold]
+        if positive.size:
+            sessions_with_positive += 1
+            order = index[np.argsort(-scores[index], kind="stable")]
+            first = next(
+                position for position, item in enumerate(order, 1)
+                if covisibility[item] >= positive_threshold)
+            positive_ranks.append(first)
+            selected_positive += int(overlap >= positive_threshold)
+    return {
+        "sessions": int(len(selected_overlap)),
+        "sessions_with_positive": sessions_with_positive,
+        "selected_positive": selected_positive,
+        "conditional_recall_at_1": (
+            selected_positive / sessions_with_positive
+            if sessions_with_positive else None),
+        "selected_overlap_mean": float(np.mean(selected_overlap)),
+        "selected_overlap_median": float(np.median(selected_overlap)),
+        "first_positive_rank_mean": (
+            float(np.mean(positive_ranks)) if positive_ranks else None),
+        "first_positive_rank_median": (
+            float(np.median(positive_ranks)) if positive_ranks else None),
+        "mean_reciprocal_positive_rank": (
+            float(np.mean(1.0 / np.asarray(positive_ranks)))
+            if positive_ranks else None),
+    }
 
 
 def write_selected_csv(path: Path, frame, probabilities: Dict[str, np.ndarray],
@@ -543,6 +635,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--top-k", type=int, default=32)
     parser.add_argument("--grid-size", type=int, default=8)
+    parser.add_argument(
+        "--patch-relation", choices=("symmetric", "directional"),
+        default="symmetric",
+        help="preserve query/memory direction for directional overlap labels")
     parser.add_argument("--min-top1-calibration", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20260805)
     parser.add_argument("--c-value", type=float, action="append", default=[])
@@ -616,16 +712,15 @@ def main() -> None:
     if len(train_scenes) < 3:
         raise ValueError("at least three non-heldout training scenes are required")
     selected = select_hard_candidates(frame, args.top_k)
-    if not selected["teacher_pass"].isin([0, 1]).all():
-        missing = selected.loc[
-            ~selected["teacher_pass"].isin([0, 1]),
-            ["session_id", "candidate_rank"]].iloc[0]
-        raise ValueError(
-            "hard top-K contains an unevaluated teacher label: "
-            f"{missing.session_id} rank={missing.candidate_rank}")
-    train_mask = selected["scene"].isin(train_scenes).to_numpy()
-    test_mask = selected["scene"].isin(sorted(heldout_set)).to_numpy()
-    if np.any(train_mask & test_mask) or not train_mask.any() or not test_mask.any():
+    if not selected["teacher_pass"].isin([-1, 0, 1]).all():
+        raise ValueError("selected teacher labels must be -1, 0, or 1")
+    supervised = selected["teacher_pass"].isin([0, 1]).to_numpy()
+    all_train_mask = selected["scene"].isin(train_scenes).to_numpy()
+    all_test_mask = selected["scene"].isin(sorted(heldout_set)).to_numpy()
+    train_mask = all_train_mask & supervised
+    test_mask = all_test_mask & supervised
+    if (np.any(all_train_mask & all_test_mask) or not train_mask.any()
+            or not test_mask.any()):
         raise RuntimeError("train/test scene split is invalid")
     top1_mask = selected["candidate_rank"].eq(1).to_numpy()
     labels = selected["teacher_pass"].to_numpy(dtype=np.int64)
@@ -638,13 +733,15 @@ def main() -> None:
     readable_path_by_raw = {
         raw: remap_path(raw, mappings) for raw in selected_raw_paths}
     identity = selection_digest(
-        selected, teacher_sha, args.top_k, args.grid_size, weight_sha)
+        selected, frame, args.top_k, args.grid_size, weight_sha,
+        args.patch_relation)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     feature_cache_path = args.out_dir / "patch_temporal_features.npz"
     patch, temporal, feature_timing = build_or_load_features(
         selected, frame, cls_by_path, readable_path_by_raw,
         args.lingbot_repo.resolve(), args.weights.resolve(), args.device,
-        args.batch_size, args.grid_size, feature_cache_path, identity)
+        args.batch_size, args.grid_size, feature_cache_path, identity,
+        args.patch_relation)
     combined = combine_patch_temporal(patch, temporal).astype(np.float32)
     feature_families = {
         "cosine": patch[:, :1],
@@ -652,32 +749,63 @@ def main() -> None:
         "patch": patch,
         "patch_temporal": combined,
     }
+    patch_names = (directional_patch_feature_names()
+                   if args.patch_relation == "directional"
+                   else patch_feature_names())
+    combined_names = (directional_combined_feature_names()
+                      if args.patch_relation == "directional"
+                      else combined_feature_names())
     family_names = {
         "cosine": ("dino_global_cosine",),
         "temporal": temporal_feature_names(),
-        "patch": patch_feature_names(),
-        "patch_temporal": combined_feature_names(),
+        "patch": patch_names,
+        "patch_temporal": combined_names,
     }
+    if args.patch_relation == "directional":
+        # Directional features are a strict superset of the old symmetric
+        # summaries, so derive the control without another DINO forward pass.
+        symmetric_patch = symmetric_from_directional_patch_features(
+            patch).astype(np.float32)
+        feature_families["patch_symmetric_control"] = symmetric_patch
+        feature_families["patch_temporal_symmetric_control"] = (
+            combine_patch_temporal(symmetric_patch, temporal).astype(np.float32))
+        family_names["patch_symmetric_control"] = patch_feature_names()
+        family_names["patch_temporal_symmetric_control"] = (
+            combined_feature_names())
 
     evaluations = {}
     portable = {}
     heldout_probabilities = {}
     for name, features in feature_families.items():
-        result, model_payload, heldout_probability = evaluate_family(
+        result, model_payload, all_probability = evaluate_family(
             name, features, labels, scenes, kinds, train_mask, test_mask,
             top1_mask, c_values, args.seed, args.min_top1_calibration)
+        if "teacher_covis" in selected.columns:
+            heldout_covis = selected.loc[
+                all_test_mask, "teacher_covis"].to_numpy(dtype=np.float64)
+            if np.isfinite(heldout_covis).all():
+                result["heldout"]["covisibility_ranking"] = (
+                    covisibility_ranking_metrics(
+                        selected.loc[all_test_mask, "session_id"],
+                        selected.loc[all_test_mask, "candidate_rank"],
+                        heldout_covis, all_probability[all_test_mask]))
         evaluations[name] = result
         portable[name] = dict(model_payload, feature_names=family_names[name])
-        heldout_probabilities[name] = heldout_probability
+        heldout_probabilities[name] = all_probability[all_test_mask]
         print(json.dumps({name: result}, indent=2), flush=True)
 
     primary = "patch_temporal"
+    teacher_kind = (
+        "task_aligned_covisibility"
+        if "teacher_covis" in selected.columns else "legacy_binary")
     export = {
         "deployment_approved": False,
         "reason": (
-            "scene-disjoint offline geometry-teacher diagnostic; requires "
+            "scene-disjoint offline teacher diagnostic; requires "
             "zero-error heldout confidence tails and closed-loop A/B"),
         "feature_version": FEATURE_VERSION,
+        "patch_relation": args.patch_relation,
+        "teacher_kind": teacher_kind,
         "feature_names": list(family_names[primary]),
         **portable[primary],
         "teacher_csv_sha256": teacher_sha,
@@ -694,11 +822,13 @@ def main() -> None:
         handle.write("\n")
     write_selected_csv(
         args.out_dir / "heldout_selected_pairs.csv", selected,
-        heldout_probabilities, test_mask)
+        heldout_probabilities, all_test_mask)
 
     report = {
         "deployment_approved": False,
         "feature_version": FEATURE_VERSION,
+        "patch_relation": args.patch_relation,
+        "teacher_kind": teacher_kind,
         "created_at_unix": time.time(),
         "repo_root": str(Path(__file__).resolve().parents[1]),
         "repo_commit": git_value(
@@ -718,8 +848,14 @@ def main() -> None:
         "heldout_scenes": sorted(heldout_set),
         "train_pairs": int(train_mask.sum()),
         "heldout_pairs": int(test_mask.sum()),
+        "train_selected_pairs": int(all_train_mask.sum()),
+        "heldout_selected_pairs": int(all_test_mask.sum()),
+        "train_ignored_pairs": int(np.sum(all_train_mask & ~supervised)),
+        "heldout_ignored_pairs": int(np.sum(all_test_mask & ~supervised)),
         "train_top1_sessions": int(np.sum(train_mask & top1_mask)),
         "heldout_top1_sessions": int(np.sum(test_mask & top1_mask)),
+        "heldout_selected_sessions": int(
+            selected.loc[all_test_mask, "session_id"].nunique()),
         "unevaluated_teacher_pairs": int(
             frame["teacher_pass"].eq(-1).sum()),
         "feature_timing": feature_timing,

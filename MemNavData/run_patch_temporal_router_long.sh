@@ -37,15 +37,30 @@ EXPECTED_WEIGHT_SHA=832bc82cbae0bc9bbe946ef5ee1f7226abd8c0e183ccf8beddbb3d133576
 EXPECTED_LINGBOT_COMMIT=7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2
 
 BUILDER=${ROOT}/MemNavData/build_router_cross_episode_pairs.py
+RELABELER=${ROOT}/MemNavData/relabel_router_covisibility.py
 DIAGNOSTIC=${ROOT}/MemNavData/diag_patch_temporal_router.py
 UNIT_TESTS=(
   MemNavData.test_reliability_router
   MemNavData.test_patch_temporal_router
+  MemNavData.test_covisibility_teacher
   MemNavData.test_router_cross_episode_pairs
   MemNavData.test_router_dataset_selection
 )
 TRAIN_SCENES=(17DRP5sb8fy 1LXtFkjw3qL 1pXnuDYAj8r Uxmj2M2itWa)
 HELDOUT_SCENES=(e9zR4mvMWw7 rqfALeAoiTq s8pcmisQ38h yqstnuAEVhm zsNo4HB9uLZ)
+TASK_FILES=(
+  MemNavData/patch_temporal_router.py
+  MemNavData/diag_patch_temporal_router.py
+  MemNavData/covisibility_teacher.py
+  MemNavData/relabel_router_covisibility.py
+  MemNavData/build_router_cross_episode_pairs.py
+  MemNavData/run_patch_temporal_router_long.sh
+  MemNavData/test_reliability_router.py
+  MemNavData/test_patch_temporal_router.py
+  MemNavData/test_covisibility_teacher.py
+  MemNavData/test_router_cross_episode_pairs.py
+  MemNavData/test_router_dataset_selection.py
+)
 
 if [[ -e "${RUN_ROOT}" ]]; then
   echo "ABORT: output already exists: ${RUN_ROOT}" >&2
@@ -57,7 +72,7 @@ exec > >(tee "${RUN_ROOT}/run.log") 2>&1
 echo "[preflight] mode=${MODE} root=${ROOT} output=${RUN_ROOT}"
 for required in "${MEMNAV_PY}" "${LINGBOT_REPO}" "${WEIGHTS}" \
                 "${BASE_TEACHER}" "${CLS_CACHE}" "${BUILDER}" \
-                "${DIAGNOSTIC}"; do
+                "${RELABELER}" "${DIAGNOSTIC}"; do
   test -r "${required}" || {
     echo "ABORT: missing dependency ${required}" >&2
     exit 1
@@ -85,12 +100,12 @@ if [[ -n "${EXPECTED_COMMIT:-}" ]]; then
   }
 fi
 if [[ "${ALLOW_DIRTY_TASK_FILES}" != 1 ]]; then
-  git -C "${ROOT}" diff --quiet -- \
-    MemNavData/patch_temporal_router.py \
-    MemNavData/diag_patch_temporal_router.py \
-    MemNavData/build_router_cross_episode_pairs.py \
-    MemNavData/run_patch_temporal_router_long.sh || {
+  git -C "${ROOT}" diff --quiet -- "${TASK_FILES[@]}" || {
       echo "ABORT: router task files differ from the checked-out commit" >&2
+      exit 1
+    }
+  git -C "${ROOT}" diff --cached --quiet -- "${TASK_FILES[@]}" || {
+      echo "ABORT: staged router task files differ from the checked-out commit" >&2
       exit 1
     }
 else
@@ -101,12 +116,15 @@ cd "${ROOT}"
 "${MEMNAV_PY}" -m py_compile \
   MemNavData/patch_temporal_router.py \
   MemNavData/diag_patch_temporal_router.py \
+  MemNavData/covisibility_teacher.py \
+  MemNavData/relabel_router_covisibility.py \
   MemNavData/build_router_cross_episode_pairs.py
 "${MEMNAV_PY}" -m unittest "${UNIT_TESTS[@]}" -v
 "${MEMNAV_PY}" - <<'PY'
 import cv2
 import numpy
 import pandas
+import pyarrow
 import sklearn
 import torch
 import PIL
@@ -114,7 +132,8 @@ assert torch.cuda.is_available(), "CUDA is unavailable"
 print("dependencies OK")
 print("torch", torch.__version__, "cuda", torch.version.cuda)
 print("opencv", cv2.__version__, "numpy", numpy.__version__)
-print("pandas", pandas.__version__, "sklearn", sklearn.__version__)
+print("pandas", pandas.__version__, "pyarrow", pyarrow.__version__)
+print("sklearn", sklearn.__version__)
 print("Pillow", PIL.__version__)
 PY
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
@@ -167,7 +186,7 @@ else
 fi
 EXPAND_ARGS+=(--teacher-top-k "${TOP_K}")
 
-echo "[stage 1/2] training-only geometry-teacher expansion"
+echo "[stage 1/3] candidate expansion"
 "${MEMNAV_PY}" -u "${BUILDER}" "${EXPAND_ARGS[@]}"
 "${MEMNAV_PY}" - "${BASE_TEACHER}" "${EXPANDED}" \
   "${INCLUDE_RETURN}" <<'PY'
@@ -213,8 +232,22 @@ print(
     len(evaluation_added), "evaluation-only pairs")
 PY
 
+COVIS_TEACHER=${RUN_ROOT}/covisibility_teacher_pairs.csv
+COVIS_REPORT=${RUN_ROOT}/covisibility_teacher_report.json
+RELABEL_ARGS=(
+  --input-csv "${EXPANDED}"
+  --output-csv "${COVIS_TEACHER}"
+  --report "${COVIS_REPORT}"
+  --top-k "${TOP_K}"
+)
+for mapping in ${PATH_MAPS:-}; do
+  RELABEL_ARGS+=(--path-map "${mapping}")
+done
+echo "[stage 2/3] task-aligned goal-surface co-visibility teacher"
+"${MEMNAV_PY}" -u "${RELABELER}" "${RELABEL_ARGS[@]}"
+
 DIAG_ARGS=(
-  --teacher-csv "${EXPANDED}"
+  --teacher-csv "${COVIS_TEACHER}"
   --cls-cache "${CLS_CACHE}"
   --lingbot-repo "${LINGBOT_REPO}"
   --weights "${WEIGHTS}"
@@ -223,6 +256,7 @@ DIAG_ARGS=(
   --batch-size "${BATCH_SIZE}"
   --top-k "${TOP_K}"
   --grid-size "${GRID_SIZE}"
+  --patch-relation directional
   --expected-weight-sha "${EXPECTED_WEIGHT_SHA}"
   --expected-lingbot-commit "${EXPECTED_LINGBOT_COMMIT}"
 )
@@ -233,8 +267,9 @@ for mapping in ${PATH_MAPS:-}; do
   DIAG_ARGS+=(--path-map "${mapping}")
 done
 
-echo "[stage 2/2] scene-disjoint patch/temporal router ablation"
+echo "[stage 3/3] scene-disjoint directional patch/temporal router ablation"
 "${MEMNAV_PY}" -u "${DIAGNOSTIC}" "${DIAG_ARGS[@]}"
 
 echo "[complete] diagnostic only; deployment_approved remains false"
+echo "covisibility_report=${COVIS_REPORT}"
 echo "report=${RUN_ROOT}/patch_temporal/report.json"

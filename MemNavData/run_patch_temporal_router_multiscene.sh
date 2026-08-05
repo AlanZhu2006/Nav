@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Scene-balanced geometry-teacher distillation from the read-only MP3D overlay.
+# Scene-balanced task-aligned router distillation from the read-only MP3D overlay.
 # This is an offline diagnostic.  It never changes the live navigation policy.
 
 set -euo pipefail
@@ -25,16 +25,20 @@ EXPECTED_LINGBOT_COMMIT=7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2
 
 BASE_DIAGNOSTIC=${ROOT}/MemNavData/diag_distill_geometry_router.py
 EXPANDER=${ROOT}/MemNavData/build_router_cross_episode_pairs.py
+RELABELER=${ROOT}/MemNavData/relabel_router_covisibility.py
 PATCH_DIAGNOSTIC=${ROOT}/MemNavData/diag_patch_temporal_router.py
 UNIT_TESTS=(
   MemNavData.test_reliability_router
   MemNavData.test_patch_temporal_router
+  MemNavData.test_covisibility_teacher
   MemNavData.test_router_cross_episode_pairs
   MemNavData.test_router_dataset_selection
 )
 TASK_FILES=(
   MemNavData/diag_distill_geometry_router.py
   MemNavData/build_router_cross_episode_pairs.py
+  MemNavData/covisibility_teacher.py
+  MemNavData/relabel_router_covisibility.py
   MemNavData/patch_temporal_router.py
   MemNavData/diag_patch_temporal_router.py
   MemNavData/run_patch_temporal_router_multiscene.sh
@@ -42,6 +46,7 @@ TASK_FILES=(
   MemNavData/router_multiscene_split_20260805.json
   MemNavData/test_reliability_router.py
   MemNavData/test_patch_temporal_router.py
+  MemNavData/test_covisibility_teacher.py
   MemNavData/test_router_cross_episode_pairs.py
   MemNavData/test_router_dataset_selection.py
 )
@@ -56,7 +61,7 @@ exec > >(tee "${RUN_ROOT}/run.log") 2>&1
 echo "[preflight] mode=${MODE} root=${ROOT} output=${RUN_ROOT}"
 for required in "${MEMNAV_PY}" "${LINGBOT_REPO}" "${WEIGHTS}" \
                 "${SPLIT_MANIFEST}" "${EPISODE_ROOT}" \
-                "${BASE_DIAGNOSTIC}" "${EXPANDER}" \
+                "${BASE_DIAGNOSTIC}" "${EXPANDER}" "${RELABELER}" \
                 "${PATCH_DIAGNOSTIC}"; do
   test -r "${required}" || {
     echo "ABORT: missing dependency ${required}" >&2
@@ -94,6 +99,8 @@ cd "${ROOT}"
 "${MEMNAV_PY}" -m py_compile \
   MemNavData/diag_distill_geometry_router.py \
   MemNavData/build_router_cross_episode_pairs.py \
+  MemNavData/covisibility_teacher.py \
+  MemNavData/relabel_router_covisibility.py \
   MemNavData/patch_temporal_router.py \
   MemNavData/diag_patch_temporal_router.py
 "${MEMNAV_PY}" -m unittest "${UNIT_TESTS[@]}" -v
@@ -101,6 +108,7 @@ cd "${ROOT}"
 import cv2
 import numpy
 import pandas
+import pyarrow
 import sklearn
 import torch
 import PIL
@@ -108,7 +116,8 @@ assert torch.cuda.is_available(), "CUDA is unavailable"
 print("dependencies OK")
 print("torch", torch.__version__, "cuda", torch.version.cuda)
 print("opencv", cv2.__version__, "numpy", numpy.__version__)
-print("pandas", pandas.__version__, "sklearn", sklearn.__version__)
+print("pandas", pandas.__version__, "pyarrow", pyarrow.__version__)
+print("sklearn", sklearn.__version__)
 print("Pillow", PIL.__version__)
 PY
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
@@ -229,7 +238,7 @@ for scene in "${DEVELOPMENT_SCENES[@]}"; do
   BASE_ARGS+=(--heldout-scene "${scene}")
 done
 
-echo "[stage 1/3] exact CLS and base geometry teacher"
+echo "[stage 1/4] exact CLS and base geometry teacher"
 "${MEMNAV_PY}" -u "${BASE_DIAGNOSTIC}" "${BASE_ARGS[@]}"
 
 BASE_TEACHER=${BASE_DIR}/teacher_pairs.csv
@@ -256,7 +265,7 @@ for scene in "${DEVELOPMENT_SCENES[@]}"; do
   EXPAND_ARGS+=(--evaluation-scene "${scene}")
 done
 
-echo "[stage 2/3] sparse cross-episode geometry teacher"
+echo "[stage 2/4] sparse cross-episode candidate expansion"
 "${MEMNAV_PY}" -u "${EXPANDER}" "${EXPAND_ARGS[@]}"
 
 "${MEMNAV_PY}" - "${BASE_TEACHER}" "${EXPANDED}" \
@@ -294,9 +303,47 @@ print(
     len(dev_added), "development rows")
 PY
 
+COVIS_TEACHER=${RUN_ROOT}/covisibility_teacher_pairs.csv
+COVIS_REPORT=${RUN_ROOT}/covisibility_teacher_report.json
+echo "[stage 3/4] task-aligned goal-surface co-visibility teacher"
+"${MEMNAV_PY}" -u "${RELABELER}" \
+  --input-csv "${EXPANDED}" \
+  --output-csv "${COVIS_TEACHER}" \
+  --report "${COVIS_REPORT}" \
+  --top-k "${TOP_K}"
+
+"${MEMNAV_PY}" - "${EXPANDED}" "${COVIS_TEACHER}" "${TOP_K}" <<'PY'
+import sys
+import pandas as pd
+
+source = pd.read_csv(sys.argv[1])
+target = pd.read_csv(sys.argv[2])
+top_k = int(sys.argv[3])
+if len(source) != len(target):
+    raise RuntimeError("co-visibility relabel changed row count")
+stable = [column for column in source.columns if column != "teacher_pass"]
+if not source[stable].equals(target[stable]):
+    raise RuntimeError("co-visibility relabel changed candidate identity")
+selected = (target.sort_values(
+    ["session_id", "dino_cosine", "candidate_frame"],
+    ascending=[True, False, True], kind="mergesort")
+    .groupby("session_id", sort=False).head(top_k))
+if not selected["teacher_pass"].isin([-1, 0, 1]).all():
+    raise RuntimeError("co-visibility teacher produced invalid labels")
+if selected["teacher_covis"].isna().any():
+    raise RuntimeError("selected co-visibility labels are incomplete")
+if not selected["teacher_source"].isin(
+        ["metadata_covis_curve", "depth_reprojection"]).all():
+    raise RuntimeError("unexpected co-visibility provenance")
+if not (selected["teacher_pass"].eq(1).any()
+        and selected["teacher_pass"].eq(0).any()):
+    raise RuntimeError("co-visibility teacher lacks a supervised class")
+print("co-visibility audit OK:", len(selected), "selected rows")
+PY
+
 PATCH_DIR=${RUN_ROOT}/patch_temporal
 PATCH_ARGS=(
-  --teacher-csv "${EXPANDED}"
+  --teacher-csv "${COVIS_TEACHER}"
   --cls-cache "${CLS_CACHE}"
   --lingbot-repo "${LINGBOT_REPO}"
   --weights "${WEIGHTS}"
@@ -305,6 +352,7 @@ PATCH_ARGS=(
   --batch-size "${BATCH_SIZE}"
   --top-k "${TOP_K}"
   --grid-size "${GRID_SIZE}"
+  --patch-relation directional
   --expected-weight-sha "${EXPECTED_WEIGHT_SHA}"
   --expected-lingbot-commit "${EXPECTED_LINGBOT_COMMIT}"
 )
@@ -312,9 +360,10 @@ for scene in "${DEVELOPMENT_SCENES[@]}"; do
   PATCH_ARGS+=(--heldout-scene "${scene}")
 done
 
-echo "[stage 3/3] scene-disjoint patch/temporal audit"
+echo "[stage 4/4] scene-disjoint directional patch/temporal audit"
 "${MEMNAV_PY}" -u "${PATCH_DIAGNOSTIC}" "${PATCH_ARGS[@]}"
 
 echo "[complete] diagnostic only; deployment_approved remains false"
 echo "base_report=${BASE_DIR}/report.json"
+echo "covisibility_report=${COVIS_REPORT}"
 echo "patch_report=${PATCH_DIR}/report.json"

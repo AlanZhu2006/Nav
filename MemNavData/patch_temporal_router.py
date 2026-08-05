@@ -74,6 +74,42 @@ def patch_feature_names() -> Tuple[str, ...]:
     return tuple(names)
 
 
+def directional_patch_feature_names() -> Tuple[str, ...]:
+    """Patch features that preserve which image is the navigation query.
+
+    Direction matters for the task-aligned target: the label is the fraction
+    of query/goal surface visible in the memory candidate.  The feature count
+    intentionally matches :func:`patch_feature_names` so downstream linear
+    heads can share the same implementation without silently sharing names.
+    """
+    names = ["dino_global_cosine"]
+    for statistic in ("mean", "median", "q75", "q90", "q95"):
+        names.extend([
+            f"best_match_{statistic}_query",
+            f"best_match_{statistic}_memory",
+        ])
+    names.extend([
+        "mutual_match_fraction",
+        "mutual_similarity_mean",
+        "mutual_similarity_q25",
+    ])
+    for threshold in PATCH_THRESHOLDS:
+        suffix = str(threshold).replace(".", "p")
+        names.extend([
+            f"match_fraction_gt_{suffix}_query",
+            f"match_fraction_gt_{suffix}_memory",
+        ])
+    names.extend([
+        "affine_residual_median_query_to_memory",
+        "affine_residual_median_memory_to_query",
+        "affine_residual_q90_query_to_memory",
+        "affine_residual_q90_memory_to_query",
+        "mutual_displacement_x_std",
+        "mutual_displacement_y_std",
+    ])
+    return tuple(names)
+
+
 def temporal_feature_names() -> Tuple[str, ...]:
     names = [
         "temporal_candidate_cosine",
@@ -204,6 +240,126 @@ def symmetric_patch_relation_features(query_tokens: np.ndarray,
     return result
 
 
+def directional_patch_relation_features(query_tokens: np.ndarray,
+                                        memory_tokens: np.ndarray,
+                                        global_cosine: float) -> np.ndarray:
+    """Summarize patch correspondences without discarding query direction."""
+    query = _unit_rows(query_tokens, "query_tokens")
+    memory = _unit_rows(memory_tokens, "memory_tokens")
+    if query.shape != memory.shape:
+        raise ValueError(
+            f"query/memory tokens must have equal shape, got "
+            f"{query.shape} and {memory.shape}")
+    patch_count = query.shape[0]
+    grid_size = int(round(math.sqrt(patch_count)))
+    if grid_size * grid_size != patch_count:
+        raise ValueError("patch count must form a square spatial grid")
+    global_cosine = float(global_cosine)
+    if not math.isfinite(global_cosine):
+        raise ValueError("global_cosine must be finite")
+
+    similarity = query @ memory.T
+    query_best_index = np.argmax(similarity, axis=1)
+    memory_best_index = np.argmax(similarity, axis=0)
+    query_best = similarity[np.arange(patch_count), query_best_index]
+    memory_best = similarity[memory_best_index, np.arange(patch_count)]
+
+    output = [global_cosine]
+    for query_value, memory_value in zip(
+            _side_statistics(query_best), _side_statistics(memory_best)):
+        output.extend([query_value, memory_value])
+
+    mutual = memory_best_index[query_best_index] == np.arange(patch_count)
+    mutual_similarity = query_best[mutual]
+    output.extend([
+        float(np.mean(mutual)),
+        float(np.mean(mutual_similarity)) if mutual_similarity.size else 0.0,
+        (float(np.quantile(mutual_similarity, 0.25))
+         if mutual_similarity.size else 0.0),
+    ])
+    for threshold in PATCH_THRESHOLDS:
+        output.extend([
+            float(np.mean(query_best > threshold)),
+            float(np.mean(memory_best > threshold)),
+        ])
+
+    axis = np.linspace(-1.0, 1.0, grid_size, dtype=np.float64)
+    yy, xx = np.meshgrid(axis, axis, indexing="ij")
+    coordinates = np.stack([xx, yy], axis=-1).reshape(patch_count, 2)
+    query_points = coordinates[mutual]
+    memory_points = coordinates[query_best_index[mutual]]
+    forward_median, forward_q90 = _affine_residual(
+        query_points, memory_points)
+    reverse_median, reverse_q90 = _affine_residual(
+        memory_points, query_points)
+    output.extend([
+        forward_median,
+        reverse_median,
+        forward_q90,
+        reverse_q90,
+    ])
+    if mutual_similarity.size:
+        displacement = memory_points - query_points
+        output.extend([
+            float(np.std(displacement[:, 0])),
+            float(np.std(displacement[:, 1])),
+        ])
+    else:
+        output.extend([3.0, 3.0])
+
+    result = np.asarray(output, dtype=np.float64)
+    expected = len(directional_patch_feature_names())
+    if result.shape != (expected,) or not np.isfinite(result).all():
+        raise RuntimeError(
+            f"invalid directional patch vector {result.shape}, "
+            f"expected {expected}")
+    return result
+
+
+def symmetric_from_directional_patch_features(
+        directional: np.ndarray) -> np.ndarray:
+    """Recover the exact swap-invariant summary from directional features.
+
+    This makes a directional-vs-symmetric ablation use identical frozen-DINO
+    forwards and identical candidate rows.  The final dimension is unchanged;
+    pairs of query/memory values become their mean and absolute difference.
+    """
+    directional = np.asarray(directional, dtype=np.float64)
+    expected = len(directional_patch_feature_names())
+    if directional.ndim < 1 or directional.shape[-1] != expected:
+        raise ValueError(
+            f"directional features must end in {expected}, got "
+            f"{directional.shape}")
+    if not np.isfinite(directional).all():
+        raise ValueError("directional features must be finite")
+
+    result = np.empty_like(directional)
+    result[..., 0] = directional[..., 0]
+    # Five best-match statistics, each represented as query/memory.
+    for start in range(1, 11, 2):
+        query = directional[..., start]
+        memory = directional[..., start + 1]
+        result[..., start] = 0.5 * (query + memory)
+        result[..., start + 1] = np.abs(query - memory)
+    # Mutual-match summaries are already symmetric.
+    result[..., 11:14] = directional[..., 11:14]
+    # Five thresholded match fractions, each represented as query/memory.
+    for start in range(14, 24, 2):
+        query = directional[..., start]
+        memory = directional[..., start + 1]
+        result[..., start] = 0.5 * (query + memory)
+        result[..., start + 1] = np.abs(query - memory)
+    # Directional affine residuals are ordered median q->m, median m->q,
+    # q90 q->m, q90 m->q.
+    for start in (24, 26):
+        forward = directional[..., start]
+        reverse = directional[..., start + 1]
+        result[..., start] = 0.5 * (forward + reverse)
+        result[..., start + 1] = np.abs(forward - reverse)
+    result[..., 28:30] = directional[..., 28:30]
+    return result
+
+
 def temporal_score_features(candidate_frame: int,
                             frames: Iterable[int],
                             scores: Iterable[float]) -> np.ndarray:
@@ -253,6 +409,10 @@ def combined_feature_names() -> Tuple[str, ...]:
     # The candidate cosine appears in both families.  Keep the patch copy and
     # drop the first temporal column to avoid an exact duplicate feature.
     return patch_feature_names() + temporal_feature_names()[1:]
+
+
+def directional_combined_feature_names() -> Tuple[str, ...]:
+    return directional_patch_feature_names() + temporal_feature_names()[1:]
 
 
 def combine_patch_temporal(patch: np.ndarray,

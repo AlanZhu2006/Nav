@@ -3,7 +3,12 @@ import json
 import unittest
 from pathlib import Path
 
-from MemNavData.summarize_expanded_navdp_router_eval import arm_summary, truth
+from MemNavData.summarize_expanded_navdp_router_eval import (
+    arm_summary,
+    paired_summary,
+    percentile,
+    truth,
+)
 from MemNavData.validate_expanded_navdp_router_eval import validate_selection
 from MemNavData.validate_frozen_router_blind import compare_value
 
@@ -58,6 +63,36 @@ class ExpandedBenchmarkTest(unittest.TestCase):
         self.assertFalse(truth(False))
         self.assertFalse(truth("0.0"))
         self.assertFalse(truth(None))
+
+    def test_three_arm_pairing_attributes_topk_gain(self):
+        def row(joint, *, seed=7, rank=None):
+            return {
+                "seed": seed,
+                "recall_gap": 320,
+                "geo_a": 2.0,
+                "geo_b": 3.0,
+                "joint": joint,
+                "reached_a": True,
+                "reached_b": joint,
+                "router_active_episode_b": joint,
+                "selected_candidate_ranks": ([] if rank is None else [rank]),
+            }
+
+        key_a = ("scene", "episode_0000")
+        key_b = ("scene", "episode_0001")
+        top1 = {key_a: row(False), key_b: row(True, rank=1)}
+        topk = {key_a: row(True, rank=3), key_b: row(True, rank=1)}
+        summary = paired_summary(
+            "geometry_top1", "geometry_router", top1, topk, {key_a, key_b}
+        )
+        self.assertEqual(summary["outcomes"]["right_only_joint_success"], 1)
+        self.assertEqual(summary["outcomes"]["left_only_joint_success"], 0)
+        self.assertEqual(summary["joint_sr_delta_right_minus_left"], 0.5)
+
+    def test_percentile_uses_linear_interpolation(self):
+        self.assertIsNone(percentile([], 0.5))
+        self.assertEqual(percentile([4.0], 0.95), 4.0)
+        self.assertAlmostEqual(percentile([0.0, 10.0], 0.5), 5.0)
 
     def test_frozen_router_numeric_comparison_is_strict(self):
         compare_value("weights", [1.0, 2.0], [1.0, 2.0 + 1e-13])

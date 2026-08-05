@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize paired official-NavDP and automatic-memory Habitat results."""
+"""Summarize paired native, top-1, and temporal top-K Habitat results."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 
-ARMS = ("navdp_native", "geometry_router")
+ARMS = ("navdp_native", "geometry_top1", "geometry_router")
 
 
 def require(condition: bool, message: str) -> None:
@@ -22,6 +22,19 @@ def require(condition: bool, message: str) -> None:
 
 def mean(values: list[float]) -> float | None:
     return float(statistics.fmean(values)) if values else None
+
+
+def percentile(values: list[float], quantile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = quantile * (len(ordered) - 1)
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return float(ordered[lower])
+    weight = position - lower
+    return float(ordered[lower] * (1.0 - weight) + ordered[upper] * weight)
 
 
 def wilson(successes: int, total: int, z: float = 1.959963984540054) -> list[float | None]:
@@ -70,12 +83,16 @@ def load_arm(scene_root: Path, arm: str, scene: str) -> dict[tuple[str, str], di
         active_a = [truth(plan.get("router_active")) for plan in leg_a]
         active_b = [truth(plan.get("router_active")) for plan in leg_b]
         verify_ms = []
+        selected_ranks = []
         for plan in leg_a + leg_b:
             value = plan.get("router_verification_total_ms")
             if value in (None, ""):
                 value = plan.get("router_overlap_verification_ms")
             if value not in (None, "") and float(value) > 0.0:
                 verify_ms.append(float(value))
+            rank = plan.get("router_selected_candidate_rank")
+            if rank not in (None, ""):
+                selected_ranks.append(int(rank))
         key = (scene, episode)
         require(key not in output, f"duplicate metric row: {arm} {key}")
         output[key] = {
@@ -103,6 +120,7 @@ def load_arm(scene_root: Path, arm: str, scene: str) -> dict[tuple[str, str], di
             "router_active_episode_a": any(active_a),
             "router_active_episode_b": any(active_b),
             "geometry_verification_ms": verify_ms,
+            "selected_candidate_ranks": selected_ranks,
         }
     return output
 
@@ -113,6 +131,9 @@ def arm_summary(rows: list[dict]) -> dict:
     revisit_success = sum(row["reached_b"] for row in conditional)
     joint_success = sum(row["joint"] for row in rows)
     verification = [value for row in rows for value in row["geometry_verification_ms"]]
+    selected_ranks = [
+        value for row in rows for value in row.get("selected_candidate_ranks", [])
+    ]
     return {
         "episodes": len(rows),
         "novel": {
@@ -147,7 +168,75 @@ def arm_summary(rows: list[dict]) -> dict:
                 float(row["router_active_episode_b"]) for row in conditional
             ]),
             "mean_geometry_verification_ms": mean(verification),
+            "p50_geometry_verification_ms": percentile(verification, 0.50),
+            "p95_geometry_verification_ms": percentile(verification, 0.95),
+            "selected_candidate_rank_p50": percentile(selected_ranks, 0.50),
+            "selected_candidate_rank_p95": percentile(selected_ranks, 0.95),
+            "selected_candidate_rank_max": max(selected_ranks, default=None),
         },
+    }
+
+
+def paired_summary(left_name: str, right_name: str,
+                   left: dict[tuple[str, str], dict],
+                   right: dict[tuple[str, str], dict],
+                   expected: set[tuple[str, str]]) -> dict:
+    outcomes = {
+        "both_joint_success": 0,
+        "left_only_joint_success": 0,
+        "right_only_joint_success": 0,
+        "neither_joint_success": 0,
+    }
+    episodes = []
+    for key in sorted(expected):
+        left_row = left[key]
+        right_row = right[key]
+        require(left_row["seed"] == right_row["seed"],
+                f"paired seed mismatch: {left_name} {right_name} {key}")
+        require(left_row["recall_gap"] == right_row["recall_gap"],
+                f"gap mismatch: {left_name} {right_name} {key}")
+        require(math.isclose(left_row["geo_a"], right_row["geo_a"], abs_tol=1e-9),
+                f"Goal-A geodesic mismatch: {left_name} {right_name} {key}")
+        require(math.isclose(left_row["geo_b"], right_row["geo_b"], abs_tol=1e-9),
+                f"Goal-B geodesic mismatch: {left_name} {right_name} {key}")
+        if left_row["joint"] and right_row["joint"]:
+            outcome = "both_joint_success"
+        elif left_row["joint"]:
+            outcome = "left_only_joint_success"
+        elif right_row["joint"]:
+            outcome = "right_only_joint_success"
+        else:
+            outcome = "neither_joint_success"
+        outcomes[outcome] += 1
+        episodes.append({
+            "scene": key[0],
+            "episode": key[1],
+            "recall_gap": left_row["recall_gap"],
+            "outcome": outcome,
+            "left_reached_a": left_row["reached_a"],
+            "right_reached_a": right_row["reached_a"],
+            "left_reached_b": left_row["reached_b"],
+            "right_reached_b": right_row["reached_b"],
+            "left_router_active_b": left_row["router_active_episode_b"],
+            "right_router_active_b": right_row["router_active_episode_b"],
+        })
+    discordant = (
+        outcomes["left_only_joint_success"]
+        + outcomes["right_only_joint_success"]
+    )
+    return {
+        "left": left_name,
+        "right": right_name,
+        "outcomes": outcomes,
+        "joint_sr_delta_right_minus_left": (
+            outcomes["right_only_joint_success"]
+            - outcomes["left_only_joint_success"]
+        ) / len(expected),
+        "mcnemar_exact_two_sided_p": exact_sign_p(
+            outcomes["right_only_joint_success"], discordant
+        ),
+        "episodes_by_recall_gap": sorted(
+            episodes, key=lambda row: row["recall_gap"]),
     }
 
 
@@ -174,48 +263,17 @@ def main() -> None:
     for arm in ARMS:
         require(set(rows[arm]) == expected, f"{arm} result keys differ from manifest")
 
-    paired = []
-    outcomes = {
-        "both_joint_success": 0,
-        "navdp_only_joint_success": 0,
-        "geometry_only_joint_success": 0,
-        "neither_joint_success": 0,
+    comparisons = {
+        "top1_vs_native": paired_summary(
+            "navdp_native", "geometry_top1",
+            rows["navdp_native"], rows["geometry_top1"], expected),
+        "topk_vs_native": paired_summary(
+            "navdp_native", "geometry_router",
+            rows["navdp_native"], rows["geometry_router"], expected),
+        "topk_vs_top1": paired_summary(
+            "geometry_top1", "geometry_router",
+            rows["geometry_top1"], rows["geometry_router"], expected),
     }
-    for key in sorted(expected):
-        native = rows["navdp_native"][key]
-        geometry = rows["geometry_router"][key]
-        require(native["seed"] == geometry["seed"], f"paired seed mismatch: {key}")
-        require(native["recall_gap"] == geometry["recall_gap"], f"gap mismatch: {key}")
-        require(math.isclose(native["geo_a"], geometry["geo_a"], abs_tol=1e-9),
-                f"Goal-A geodesic mismatch: {key}")
-        require(math.isclose(native["geo_b"], geometry["geo_b"], abs_tol=1e-9),
-                f"Goal-B geodesic mismatch: {key}")
-        if native["joint"] and geometry["joint"]:
-            outcome = "both_joint_success"
-        elif native["joint"]:
-            outcome = "navdp_only_joint_success"
-        elif geometry["joint"]:
-            outcome = "geometry_only_joint_success"
-        else:
-            outcome = "neither_joint_success"
-        outcomes[outcome] += 1
-        paired.append({
-            "scene": key[0],
-            "episode": key[1],
-            "recall_gap": native["recall_gap"],
-            "outcome": outcome,
-            "navdp_reached_a": native["reached_a"],
-            "geometry_reached_a": geometry["reached_a"],
-            "navdp_reached_b": native["reached_b"],
-            "geometry_reached_b": geometry["reached_b"],
-            "geometry_router_active_a": geometry["router_active_episode_a"],
-            "geometry_router_active_b": geometry["router_active_episode_b"],
-        })
-
-    discordant = (
-        outcomes["navdp_only_joint_success"]
-        + outcomes["geometry_only_joint_success"]
-    )
     per_scene = {}
     for scene in scenes:
         scene_keys = [(scene, episode) for episode in episode_ids[scene]]
@@ -240,18 +298,8 @@ def main() -> None:
             arm: arm_summary([rows[arm][key] for key in sorted(expected)])
             for arm in ARMS
         },
-        "paired": {
-            "outcomes": outcomes,
-            "joint_sr_delta_geometry_minus_navdp": (
-                outcomes["geometry_only_joint_success"]
-                - outcomes["navdp_only_joint_success"]
-            ) / len(expected),
-            "mcnemar_exact_two_sided_p": exact_sign_p(
-                outcomes["geometry_only_joint_success"], discordant
-            ),
-        },
+        "pairwise": comparisons,
         "per_scene": per_scene,
-        "episodes_by_recall_gap": sorted(paired, key=lambda row: row["recall_gap"]),
     }, indent=2, sort_keys=True))
 
 

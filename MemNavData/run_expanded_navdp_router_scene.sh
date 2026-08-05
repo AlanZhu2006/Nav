@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run both paired arms for one scene from the frozen expanded benchmark.
+# Run three paired arms for one scene from the frozen expanded benchmark:
+# native NavDP, the original top-1 geometry router, and temporal top-K geometry.
 
 set -euo pipefail
 umask 0022
@@ -42,6 +43,7 @@ MEMNAV_CKPT=${MEMNAV_CKPT:-/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics
 NAVDP_CKPT=${NAVDP_CKPT:-/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/navdp_checkpoint.ckpt}
 ASSET_ROOT_OVERRIDE=${ASSET_ROOT_OVERRIDE:-}
 EPISODE_ROOT_OVERRIDE=${EPISODE_ROOT_OVERRIDE:-}
+RUN_CONDITIONAL_ORACLES=${RUN_CONDITIONAL_ORACLES:-0}
 
 TASK_FILES=(
   MemNavData/eval_2leg_habitat.py
@@ -49,6 +51,10 @@ TASK_FILES=(
   MemNavData/summarize_expanded_navdp_router_eval.py
   MemNavData/test_expanded_navdp_router_eval.py
   MemNavData/test_router_candidates.py
+  MemNavData/conditional_c_protocol.py
+  MemNavData/test_conditional_c_protocol.py
+  MemNavData/summarize_conditional_c_eval.py
+  MemNavData/test_summarize_conditional_c_eval.py
   MemNavData/run_expanded_navdp_router_scene.sh
   MemNavData/slurm_expanded_navdp_router_eval.sbatch
   MemNavData/expanded_navdp_router_eval_20260805.json
@@ -67,6 +73,16 @@ TASK_FILES=(
   echo "ABORT: invalid UNIT_TEST_MODULE=${UNIT_TEST_MODULE}" >&2
   exit 1
 }
+[[ "${RUN_CONDITIONAL_ORACLES}" =~ ^[01]$ ]] || {
+  echo "ABORT: RUN_CONDITIONAL_ORACLES must be 0 or 1" >&2
+  exit 1
+}
+if [[ "${RUN_CONDITIONAL_ORACLES}" -eq 1 ]]; then
+  [[ "$(basename "${EVALUATOR}")" == "eval_conditional_c_habitat.py" ]] || {
+    echo "ABORT: conditional oracle arms require eval_conditional_c_habitat.py" >&2
+    exit 1
+  }
+fi
 UNIT_TEST_PATH=${ROOT}/${UNIT_TEST_MODULE//./\/}.py
 for dynamic_path in "${EVALUATOR}" "${VALIDATOR}" "${MANIFEST}" \
                     "${UNIT_TEST_PATH}"; do
@@ -169,7 +185,9 @@ hab_python -m py_compile "${EVALUATOR}" "${VALIDATOR}"
   cd "${ROOT}"
   hab_python -m unittest \
     "${UNIT_TEST_MODULE}" \
-    MemNavData.test_router_candidates -v
+    MemNavData.test_router_candidates \
+    MemNavData.test_conditional_c_protocol \
+    MemNavData.test_summarize_conditional_c_eval -v
 )
 hab_python -c \
   'import habitat_sim,numpy,pandas,pyarrow,PIL,requests,scipy,quaternion,sys; assert requests.__version__ == sys.argv[1]; print("Habitat dependencies OK", habitat_sim.__version__, "requests", requests.__version__)' \
@@ -315,26 +333,67 @@ mkdir -p "${SCENE_ROOT}/navdp_native"
     --server_backend navdp
 ) > "${SCENE_ROOT}/logs/eval_navdp_native.log" 2>&1
 
-echo "[eval] scene=${scene} arm=geometry_router episodes=${episode_csv}"
-mkdir -p "${SCENE_ROOT}/geometry_router"
-(
-  cd "${RUNTIME_ROOT}"
-  hab_python -u "${EVALUATOR}" \
-    "${COMMON_ARGS[@]}" \
-    --port "${MEMNAV_PORT}" \
-    --novel_port "${NAVDP_PORT}" \
-    --out "${SCENE_ROOT}/geometry_router" \
-    --server_backend hybrid_pose \
-    --hybrid_route memory_geometry \
-    --router_visual_floor 0.88 \
-    --router_min_matches 20 \
-    --router_min_inliers 12 \
-    --router_min_inlier_ratio 0.50 \
-    --router_confirm_plans 2 \
-    --router_verify_top_k 8
-) > "${SCENE_ROOT}/logs/eval_geometry_router.log" 2>&1
+run_geometry_arm() {
+  local arm=$1
+  local verify_top_k=$2
+  echo "[eval] scene=${scene} arm=${arm} verify_top_k=${verify_top_k} episodes=${episode_csv}"
+  mkdir -p "${SCENE_ROOT}/${arm}"
+  (
+    cd "${RUNTIME_ROOT}"
+    hab_python -u "${EVALUATOR}" \
+      "${COMMON_ARGS[@]}" \
+      --port "${MEMNAV_PORT}" \
+      --novel_port "${NAVDP_PORT}" \
+      --out "${SCENE_ROOT}/${arm}" \
+      --server_backend hybrid_pose \
+      --hybrid_route memory_geometry \
+      --router_visual_floor 0.88 \
+      --router_min_matches 20 \
+      --router_min_inliers 12 \
+      --router_min_inlier_ratio 0.50 \
+      --router_confirm_plans 2 \
+      --router_verify_top_k "${verify_top_k}"
+  ) > "${SCENE_ROOT}/logs/eval_${arm}.log" 2>&1
+}
 
-for arm in navdp_native geometry_router; do
+# Run top-1 first so its state cannot inherit the top-K accepted anchor.  Each
+# evaluator calls the audited reset endpoint for every episode, resetting the
+# policy RNG, streaming memory, and router latch to the same episode seed.
+run_geometry_arm geometry_top1 1
+run_geometry_arm geometry_router 8
+
+ARMS=(navdp_native geometry_top1 geometry_router)
+run_conditional_oracle_arm() {
+  local arm=$1
+  local mode=$2
+  echo "[eval] scene=${scene} arm=${arm} conditional_mode=${mode} episodes=${episode_csv}"
+  mkdir -p "${SCENE_ROOT}/${arm}"
+  (
+    cd "${RUNTIME_ROOT}"
+    hab_python -u "${EVALUATOR}" \
+      --conditional_c_mode "${mode}" \
+      "${COMMON_ARGS[@]}" \
+      --port "${MEMNAV_PORT}" \
+      --novel_port "${NAVDP_PORT}" \
+      --out "${SCENE_ROOT}/${arm}" \
+      --server_backend hybrid_pose \
+      --hybrid_route memory_geometry \
+      --router_visual_floor 0.88 \
+      --router_min_matches 20 \
+      --router_min_inliers 12 \
+      --router_min_inlier_ratio 0.50 \
+      --router_confirm_plans 2 \
+      --router_verify_top_k 8
+  ) > "${SCENE_ROOT}/logs/eval_${arm}.log" 2>&1
+}
+
+if [[ "${RUN_CONDITIONAL_ORACLES}" -eq 1 ]]; then
+  run_conditional_oracle_arm oracle_anchor oracle_anchor
+  run_conditional_oracle_arm oracle_point oracle_point
+  ARMS+=(oracle_anchor oracle_point)
+fi
+
+for arm in "${ARMS[@]}"; do
   test -s "${SCENE_ROOT}/${arm}/metric.csv" || {
     echo "ABORT: ${arm} did not produce metric.csv" >&2; exit 1; }
   test -s "${SCENE_ROOT}/${arm}/summary.json" || {

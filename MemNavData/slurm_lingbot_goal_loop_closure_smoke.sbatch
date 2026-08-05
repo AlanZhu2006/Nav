@@ -1,6 +1,8 @@
 #!/bin/bash
 # Zero-training LingBot-native loop-closure feasibility smoke.
 # Four candidate seeds (2 positive, 2 hard negative) x three nearby anchors.
+# Every hypothesis replays continuously from the scale block through its anchor,
+# matching the online pose-only controller instead of using a fixed warm prefix.
 # Source data, caches, weights, and the MP3D overlay are mounted read-only.
 #
 # Submit with:
@@ -107,6 +109,7 @@ COMMON_ARGS=(
   --neighbor-offset=0
   --neighbor-offset=4
   --warm 64
+  --full-replay
   --window 32
   --pixel-stride 10
   --max-points 768

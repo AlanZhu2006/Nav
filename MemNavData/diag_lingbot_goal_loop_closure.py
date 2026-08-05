@@ -448,6 +448,10 @@ def parse_args() -> argparse.Namespace:
                         default=None,
                         help="repeatable; default: -4, 0, +4")
     parser.add_argument("--warm", type=int, default=64)
+    parser.add_argument(
+        "--full-replay", action="store_true",
+        help=("replay every real frame from the scale block through each "
+              "candidate, matching the online pose-only controller"))
     parser.add_argument("--num-scale", type=int, default=8)
     parser.add_argument("--window", type=int, default=32)
     parser.add_argument("--max-frame-num", type=int, default=4096)
@@ -466,7 +470,7 @@ def main() -> None:
     if 0 not in offsets:
         raise ValueError("neighbor offsets must include 0")
     if (args.per_class < 1 or args.max_sessions < 0
-            or args.candidate_min_gap < 1 or args.warm < 0
+            or args.candidate_min_gap < 1 or args.warm < 1
             or args.num_scale < 1 or args.pixel_stride < 1
             or args.max_points < 16 or args.overlap_ratio <= 0.0):
         raise ValueError("invalid diagnostic configuration")
@@ -577,13 +581,18 @@ def main() -> None:
             anchor = seed.candidate_frame + offset
             if not args.num_scale <= anchor <= maximum_anchor:
                 continue
+            replay_warm = (
+                anchor - args.num_scale + 1
+                if args.full_replay else args.warm
+            )
             measurement = append_goal_at_anchor(
-                lb, cache, rgb_dir, goal, anchor, args.warm,
+                lb, cache, rgb_dir, goal, anchor, replay_warm,
                 pixel_stride=args.pixel_stride,
                 confidence_quantile=args.confidence_quantile,
                 max_points=args.max_points,
                 overlap_ratio=args.overlap_ratio)
             measurement["offset"] = offset
+            measurement["replay_frames"] = replay_warm
             hypotheses.append(measurement)
         if not hypotheses:
             continue
@@ -677,6 +686,7 @@ def main() -> None:
             "negative_threshold": args.negative_threshold,
             "neighbor_offsets": offsets,
             "warm": args.warm,
+            "full_replay": args.full_replay,
             "num_scale": args.num_scale,
             "window": args.window,
             "camera_num_iterations": args.camera_num_iterations,

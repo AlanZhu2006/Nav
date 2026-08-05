@@ -27,12 +27,12 @@ case "${MODE}" in
 esac
 
 ROOT=/scratch/yz11502/Research/Nav-axis-uturn
-RESULT_BASE=/scratch/yz11502/Research/Nav-axis-uturn-results/patch_router_multiscene_20260805
+RESULT_BASE=${RESULT_BASE:-/scratch/yz11502/Research/Nav-axis-uturn-results/patch_router_multiscene_20260805}
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 OVERLAY=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
 MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python
 LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
-SPLIT_MANIFEST=${ROOT}/MemNavData/router_multiscene_split_20260805.json
+SPLIT_MANIFEST=${SPLIT_MANIFEST:-${ROOT}/MemNavData/router_multiscene_split_20260805.json}
 RUNNER=${ROOT}/MemNavData/run_patch_temporal_router_multiscene.sh
 EXPECTED_OVERLAY_BYTES=128854888448
 EXPECTED_OVERLAY_HEAD_SHA=43d803c2b39735e764f0c6df8f7c40a7035a1c23789e22fcc9831d29928c801b
@@ -79,5 +79,8 @@ exec singularity exec --nv \
     MEMNAV_PY="${MEMNAV_PY}" \
     LINGBOT_REPO="${LINGBOT_REPO}" \
     SPLIT_MANIFEST="${SPLIT_MANIFEST}" \
+    EXPECTED_SPLIT_SHA="${EXPECTED_SPLIT_SHA:-}" \
+    REFERENCE_ROUTER_MODEL="${REFERENCE_ROUTER_MODEL:-}" \
+    EXPECTED_REFERENCE_ROUTER_SHA="${EXPECTED_REFERENCE_ROUTER_SHA:-}" \
     EXPECTED_COMMIT="${EXPECTED_COMMIT}" \
     "${RUNNER}" "${MODE}"

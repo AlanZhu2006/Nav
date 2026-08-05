@@ -1,0 +1,273 @@
+{
+  "schema_version": 2,
+  "created_at": "2026-08-05T22:00:00+08:00",
+  "purpose": "Paired 20-scene, 40-episode scene-disjoint Habitat comparison of frozen official NavDP and the automatic geometric Revisit router",
+  "selection": {
+    "method": "retain the original five audit scenes, then ascending sha256(salt + ':' + scene) over the remaining eligible unseen scenes",
+    "salt": "memnav-expanded-habitat-v1-20260805",
+    "selected_scene_count": 20,
+    "additional_scene_count": 15,
+    "anchor_scenes": [
+      "s8pcmisQ38h",
+      "e9zR4mvMWw7",
+      "rqfALeAoiTq",
+      "zsNo4HB9uLZ",
+      "yqstnuAEVhm"
+    ],
+    "selected_scenes": [
+      "s8pcmisQ38h",
+      "e9zR4mvMWw7",
+      "rqfALeAoiTq",
+      "zsNo4HB9uLZ",
+      "yqstnuAEVhm",
+      "gxdoqLR6rwA",
+      "pLe4wQe7qrG",
+      "cV4RVeZvu5T",
+      "mJXqzFtmKg4",
+      "gTV8FGcVJC9",
+      "oLBMNvg9in8",
+      "uNb9QFRL6hY",
+      "rPc6DW4iMge",
+      "ac26ZMwG7aT",
+      "dhjEzFoUFzH",
+      "qoiz87JEwZ2",
+      "b8cTxDM8gDG",
+      "i5noydFURQK",
+      "wc2JMjhGNzB",
+      "gZ6f7yhEvPG"
+    ],
+    "eligible_unseen_scenes": [
+      "ac26ZMwG7aT",
+      "b8cTxDM8gDG",
+      "cV4RVeZvu5T",
+      "dhjEzFoUFzH",
+      "e9zR4mvMWw7",
+      "fzynW3qQPVF",
+      "gTV8FGcVJC9",
+      "gYvKGZ5eRqb",
+      "gZ6f7yhEvPG",
+      "gxdoqLR6rwA",
+      "i5noydFURQK",
+      "jh4fc5c5qoQ",
+      "jtcxE69GiFV",
+      "kEZ7cmS4wCh",
+      "mJXqzFtmKg4",
+      "oLBMNvg9in8",
+      "p5wJjkQkbXX",
+      "pLe4wQe7qrG",
+      "pRbA3pwrgk9",
+      "pa4otMbVnkk",
+      "q9vSo1VnCiC",
+      "qoiz87JEwZ2",
+      "r1Q1Z4BcV1o",
+      "r47D5H71a5s",
+      "rPc6DW4iMge",
+      "rqfALeAoiTq",
+      "s8pcmisQ38h",
+      "sKLMLpTHeUy",
+      "sT4fr6TAbpF",
+      "uNb9QFRL6hY",
+      "ur6pFq6Qu1A",
+      "vyrNrziPKCB",
+      "wc2JMjhGNzB",
+      "x8F5xyUWy9e",
+      "yqstnuAEVhm",
+      "zsNo4HB9uLZ"
+    ]
+  },
+  "training_scenes": [
+    "17DRP5sb8fy",
+    "1LXtFkjw3qL",
+    "1pXnuDYAj8r",
+    "29hnd4uzFmX",
+    "2azQ1b91cZZ",
+    "2n8kARJN3HM",
+    "5LpN3gDmAk7",
+    "5ZKStnWn8Zo",
+    "5q7pvUzZiYa",
+    "759xd9YjKW5",
+    "7y3sRwLe3Va",
+    "8194nk5LbLH",
+    "82sE5b5pLXE",
+    "8WUmhLawc2A",
+    "ARNzJeq3xxb",
+    "B6ByNegPMKs",
+    "D7N2EKCX4Sj",
+    "E9uDoFAP3SH",
+    "EDJbREhghzL",
+    "EU6Fwq7SyZv",
+    "GdvgFV5R1Z5",
+    "JF19kD82Mey",
+    "JeFG25nYj2p",
+    "JmbYfDe2QKZ",
+    "PX4nDJXEHrG",
+    "Pm6F8kyY3z2",
+    "PuKPg4mmafe",
+    "QUCTc6BB5sX",
+    "S9hNv5qa7GM",
+    "SN83YJsR3w2",
+    "TbHJrupSAjP",
+    "ULsKaCPVFJR",
+    "UwV83HsGsw3",
+    "Uxmj2M2itWa",
+    "V2XKFyX4ASd",
+    "VFuaQ6m2Qom",
+    "VLzqgDo317F",
+    "VVfe2KiqLaN",
+    "Vt2qJdWjCF2",
+    "Vvot9Ly1tCj",
+    "VzqfbhrpDEA",
+    "WYY7iVyf5p8",
+    "X7HyMhZNoso",
+    "XcA2TqTSSAj",
+    "YFuZgdQ5vWj",
+    "YVUC4YcDtcY",
+    "YmJkqBEsHnH",
+    "Z6MFQCViBuw",
+    "ZMojNkEp431",
+    "aayBHfsNo7d"
+  ],
+  "paths": {
+    "asset_root": "/scratch/lg154/Research/datasets/mp3d/mp3d",
+    "legacy_anchor_episode_root": "/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/episodes",
+    "expanded_episode_root": "/scratch/lg154/Research/datasets/mp3d_revisit_v0/vln_n1/traj_data/mp3d_2leg"
+  },
+  "dependencies": {
+    "gatecurr600": {
+      "path": "/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/gatecurr600.memnav.ckpt",
+      "bytes": 229172390,
+      "sha256": "9b7a5811ff0aea212503f58b45258ba4f66b06420f87c350946aead39db6fdb7"
+    },
+    "navdp_checkpoint": {
+      "path": "/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/navdp_checkpoint.ckpt",
+      "bytes": 543257151,
+      "sha256": "3bb3ad4ab241e857bb57a4021cc6aab76d5263e81fbf80298d579053ef011947"
+    },
+    "lingbot_map_long": {
+      "path": "/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map/weights/lingbot-map-long.pt",
+      "bytes": 4632303465,
+      "sha256": "832bc82cbae0bc9bbe946ef5ee1f7226abd8c0e183ccf8beddbb3d133576f409"
+    }
+  },
+  "assets": {
+    "s8pcmisQ38h": {"bytes": 50373892, "sha256": "eac4392afe2bbaee1c95be02e383122695e40a98511e3289bbb5df73b578d5bf"},
+    "e9zR4mvMWw7": {"bytes": 42736380, "sha256": "1da06a8f7362c2ccf6f5c4d01661995ca01107b63f147bfa3df24c7387a7f46e"},
+    "rqfALeAoiTq": {"bytes": 51015796, "sha256": "c183aae18cff9cfa171570a938eac0b5e6e875e4b265ff78a32e38d6755bc05a"},
+    "zsNo4HB9uLZ": {"bytes": 34182336, "sha256": "3611ac3b2a2b76bb15ab2623054929a932aa40c03786b3890cb17a73eccc5689"},
+    "yqstnuAEVhm": {"bytes": 59715456, "sha256": "1ea615034e5edfb33e63f7841fd6d2b855292af29f1becd1064bfc96515bca4d"},
+    "gxdoqLR6rwA": {"bytes": 182831984, "sha256": "0c892cee4b46933c01fcde9f26e16241300a75d8167c2a100ccb0ae7fd8639ad"},
+    "pLe4wQe7qrG": {"bytes": 32319416, "sha256": "7faa385a31779ad1c0ef4594507f739840371de75a38b599945521dd26eea3f8"},
+    "cV4RVeZvu5T": {"bytes": 48850000, "sha256": "21029b47efca46272c0fc295395d23eba18293bf6bba68d14b00f1791ed3f9a8"},
+    "mJXqzFtmKg4": {"bytes": 75974400, "sha256": "8b2103d750640b5b7417bd363441b2935f8f2ff2f6357abe31b9d9630a43273e"},
+    "gTV8FGcVJC9": {"bytes": 174602772, "sha256": "5a4a1eec5bf36b85bde796a60ac8e34f62eccd39d42950abdbe284c16c2f1372"},
+    "oLBMNvg9in8": {"bytes": 86352436, "sha256": "aa1ff80501ad47ca9505616de05f7d383956154fe2b0b523bae1260cdfca2f23"},
+    "uNb9QFRL6hY": {"bytes": 86681348, "sha256": "b01f53c7ec20c2c44caec0a312f5701d7090a9c2e65a9912c710cff7c2765d1a"},
+    "rPc6DW4iMge": {"bytes": 47916564, "sha256": "040e37c7e60294270099415fc03bef7ed384b821c9cd56a5073f0b5c399c7573"},
+    "ac26ZMwG7aT": {"bytes": 80345592, "sha256": "c559db98909210d5e337618cb1d90abae5268558e7d31d14d4df59eff56bf0e4"},
+    "dhjEzFoUFzH": {"bytes": 201847412, "sha256": "e8dd5f296d0e9433a9585cddaf19925979f9b7787ee313a4a78e46afaf3910e3"},
+    "qoiz87JEwZ2": {"bytes": 64138252, "sha256": "ebfb8e4371b0223360f77a8c9a9b3f1f632e80713e7ee78c050a4058cf8731e3"},
+    "b8cTxDM8gDG": {"bytes": 50695372, "sha256": "e5162c5cc8ab8ddec0b9cd2ac778bd32fad04b95562415a829a7a2df7b21ae55"},
+    "i5noydFURQK": {"bytes": 34955016, "sha256": "b57da2d266450f0be7b49695021af13fffbbb2c72cb717d319e08c346d523ba0"},
+    "wc2JMjhGNzB": {"bytes": 107704692, "sha256": "cdf3cd4a935bc6bb47d91e8f9424703561f5ffca6581956b674ef54f410d4d70"},
+    "gZ6f7yhEvPG": {"bytes": 23314648, "sha256": "e638ab5342c0a968b9f224017f54c1ceca4f9c341c6e06b434325abdd4d0f5ce"}
+  },
+  "episodes": {
+    "s8pcmisQ38h": [
+      {"episode": "episode_0000", "n_frames": 320, "recall_gap": 48, "files": {"metadata": {"bytes": 3126, "sha256": "f5d5d12583eda375d08f614b8c57081c5f78c1a07714843e293f7dd641fe7acf"}, "parquet": {"bytes": 20019, "sha256": "49fbdc3b9ba87f6f432a0250c3eb1782afc70bb59627b3e472ef7e1d44e670ec"}, "goal": {"bytes": 66289, "sha256": "9a649011f8d916b3a2da9d768add3d1f5cbcdaee19a20f86a5882ff368940bf6"}}},
+      {"episode": "episode_0001", "n_frames": 358, "recall_gap": 100, "files": {"metadata": {"bytes": 4694, "sha256": "5e65d070bf1d8ac574df96f19871187b69f85b91912e356c7deb0fa10e8a75ca"}, "parquet": {"bytes": 21825, "sha256": "bb7e2d09d22135c872101c5e3565f9ab21c79f932f7e330f82e09657807e8712"}, "goal": {"bytes": 56098, "sha256": "bb32c1564316cb6f202deecbb6d9591b43794ad4d163d92a78b0f42b52819a7e"}}}
+    ],
+    "e9zR4mvMWw7": [
+      {"episode": "episode_0000", "n_frames": 397, "recall_gap": 118, "files": {"metadata": {"bytes": 4121, "sha256": "35af3b4082319bbf2ce8db28361d62d7160eee783a1ab4ccad18aa24bbe9d8e1"}, "parquet": {"bytes": 23736, "sha256": "6257ae075ba05e3e69343c129a9beb09648b06eb827d11d6a49696f717a9d050"}, "goal": {"bytes": 37290, "sha256": "1ee3d2a4b7dc622ee49565092ce369405049e319fecc6f420039c0685ff90a91"}}},
+      {"episode": "episode_0001", "n_frames": 241, "recall_gap": 62, "files": {"metadata": {"bytes": 2569, "sha256": "e432229c25efe6065f2eceecf3d397efc0b30291467adb9e4bb1cf6d340924bb"}, "parquet": {"bytes": 14001, "sha256": "e081036cabcfb3281b4e530ead2c344c1b23dd6154cf30ae4b2c00ad423fb6a9"}, "goal": {"bytes": 34763, "sha256": "bba8dfe04884ee321127a702c287f26afe2710ddc0c3188268b521af72ee4aff"}}}
+    ],
+    "rqfALeAoiTq": [
+      {"episode": "episode_0000", "n_frames": 326, "recall_gap": 138, "files": {"metadata": {"bytes": 3797, "sha256": "7b5377afeac48ad6d7367bf9cb66854e8c00ca8ce0d8d0998d0467b5560187ce"}, "parquet": {"bytes": 23053, "sha256": "2863f4396d01fb756269764312385c69ce6130f956f9dbcca4fe0f11dcb34aec"}, "goal": {"bytes": 39303, "sha256": "1c6427638d0339a7c749949817a232b4a07a5de781e76143aae8a116a901fbab"}}},
+      {"episode": "episode_0001", "n_frames": 213, "recall_gap": 59, "files": {"metadata": {"bytes": 2542, "sha256": "ce02d3b2c1a3f3c33de922e849e1f577caeb0f6dece0964cbb31d532de740f45"}, "parquet": {"bytes": 12780, "sha256": "943b2ff7bea0ec2476ee9a7d7e2928126559c85a326126a4efcc29cd551a4143"}, "goal": {"bytes": 47562, "sha256": "8014c67eb7a88dd6aa0087b05e69fe403db8ecad44bc28abdb3029816bcba73d"}}}
+    ],
+    "zsNo4HB9uLZ": [
+      {"episode": "episode_0000", "n_frames": 289, "recall_gap": 48, "files": {"metadata": {"bytes": 2467, "sha256": "952aca8aa0f50db437cd42678676aa237be2577e6f8f412f0894d65861c78fee"}, "parquet": {"bytes": 18458, "sha256": "fa71cb73d13bc3ab8851d3818b7ce1510d6aa5ecc12b9b6bbfdc0d55a613a4c7"}, "goal": {"bytes": 47731, "sha256": "8f8a6244e926361e2c1631336309c1dd5b84cda271da3140f3ed52c0f6b860ae"}}},
+      {"episode": "episode_0001", "n_frames": 470, "recall_gap": 172, "files": {"metadata": {"bytes": 4304, "sha256": "5c4d8dc60952bfcdb0d02052eb9268675c0f8e9a458feaf51b7184cb969dda65"}, "parquet": {"bytes": 27787, "sha256": "7032369b145033de88224687ee76ce87301f527c81891de33e701f40de36900b"}, "goal": {"bytes": 38794, "sha256": "31527642bbe11aee7ce8833a25ed0893435c1010f63d9e2c2d176c45bf513365"}}}
+    ],
+    "yqstnuAEVhm": [
+      {"episode": "episode_0000", "n_frames": 312, "recall_gap": 103, "files": {"metadata": {"bytes": 3248, "sha256": "76bef41862fd2766e41a57c10a83631e501ffe4ca855b8e28a8a06a2ee6bf416"}, "parquet": {"bytes": 19668, "sha256": "4e5cef71d968f9831fb9634e214c1a1630ce748e8a434ec5a6c405000bd8dac8"}, "goal": {"bytes": 55855, "sha256": "4eeb90f4f6999ec163e34de334fa628fe94c8e3884509f13a171e511f0238f9e"}}},
+      {"episode": "episode_0001", "n_frames": 275, "recall_gap": 82, "files": {"metadata": {"bytes": 2848, "sha256": "1886dc8ed574813022c616375e91dcf02418d43aee6d71fdc09779f078f2e66d"}, "parquet": {"bytes": 17863, "sha256": "3ff8407fae22b47c5a09f80c3b1b10d4d1fd98d4efc754916ba381ce742270e0"}, "goal": {"bytes": 50940, "sha256": "7ec2fe17be8bb8c1087c74bedc8523bd519d8d556df292dae57545d6b36371e9"}}}
+    ],
+    "gxdoqLR6rwA": [
+      {"episode": "episode_0000", "n_frames": 354, "recall_gap": 119, "files": {"metadata": {"bytes": 4527, "sha256": "92cc6f8048dffab0169f562c4f6a14a79b10568e388e2e4cca5ca712d9efab98"}, "parquet": {"bytes": 22088, "sha256": "2ae4d7d76c8cd5a01df571738affa07cc03e3c0ea82ef03ef81073246e26c743"}, "goal": {"bytes": 51919, "sha256": "32eb0e80406324f14f8bf9f12ddc8d9002ff8809ca2e4c2a783c96608bdcc703"}}},
+      {"episode": "episode_0001", "n_frames": 196, "recall_gap": 74, "files": {"metadata": {"bytes": 2796, "sha256": "f3c14f1a453afbf4ab553e234194aa0c2ed1db52643126329717fd57229826a2"}, "parquet": {"bytes": 11667, "sha256": "fd56ff289248351f22b351d145530da2c64ace7945ac1b24d0a3c66e5c6129db"}, "goal": {"bytes": 51852, "sha256": "ac07607aa03f8934b16f2559370c0cdc9036656cfd797e94058a7a88f297300e"}}}
+    ],
+    "pLe4wQe7qrG": [
+      {"episode": "episode_0000", "n_frames": 253, "recall_gap": 76, "files": {"metadata": {"bytes": 3050, "sha256": "2f239c834fd77c152b8574d59aec2d5e97c1287055116c13c04eace203feab36"}, "parquet": {"bytes": 16863, "sha256": "edb8c6f924ec32a3621871a296bb79e88e5aac3ef1787cf0ddbfeaee9f75645d"}, "goal": {"bytes": 46099, "sha256": "e6bfa9b7ee253d67877ab6d9afc849298f179f5f6d859f404e0fdaf06c51bfaa"}}},
+      {"episode": "episode_0001", "n_frames": 307, "recall_gap": 84, "files": {"metadata": {"bytes": 3248, "sha256": "05706e2f344a5e60ddf8e816178e35e5e2cac1a7d3ef9282734e91be657204af"}, "parquet": {"bytes": 19538, "sha256": "77669cff48f8fb756da2f54bd51ef2b5c6c2309d5e0ac0bf9ba9173ff95c9349"}, "goal": {"bytes": 44617, "sha256": "389f3810bca5a9ec9d99f85d45668541bf05cea6c44b079132a2f12dd9e42b88"}}}
+    ],
+    "cV4RVeZvu5T": [
+      {"episode": "episode_0000", "n_frames": 254, "recall_gap": 54, "files": {"metadata": {"bytes": 2465, "sha256": "36b6514921700433bd7f0e5054cac0ead7b4fb818ebdc3484f01b33a38dfe697"}, "parquet": {"bytes": 16714, "sha256": "d73814a716132f17d1001b1d66efe9e8bc31961ee5b7e53e0a9dde9b96a05f6c"}, "goal": {"bytes": 43873, "sha256": "eb89d4d5663772b981e2999c7f5328b6c56c9bc70c07af9baa1b91fe0d08be81"}}},
+      {"episode": "episode_0001", "n_frames": 315, "recall_gap": 62, "files": {"metadata": {"bytes": 2591, "sha256": "8439871b66623c1c27279a08757260203fbacb85ac4cab4b16575b11f4c5db5c"}, "parquet": {"bytes": 17559, "sha256": "cac6d5307ccb57fb1f6c38ba879fcc32dba81f1ee0a3796ec6f2b9faf461d8fe"}, "goal": {"bytes": 39218, "sha256": "1d46a34cb78c41eff8d5f6842689a3019dc8961e173701a5fc5e7bc7922cd4d8"}}}
+    ],
+    "mJXqzFtmKg4": [
+      {"episode": "episode_0000", "n_frames": 390, "recall_gap": 76, "files": {"metadata": {"bytes": 4501, "sha256": "2615bffad833470573b17fb31c80dafebebc51fca80d6fc6911de37097509583"}, "parquet": {"bytes": 24153, "sha256": "61e1d1168073d1d4b99697faa5616743f757050ca1c7ad7cf1febd112652b4f8"}, "goal": {"bytes": 57377, "sha256": "bc2e3b984ef78ec035d8d427f13d5b2370f6d4d735b342f0c876db44a0510d09"}}},
+      {"episode": "episode_0001", "n_frames": 350, "recall_gap": 164, "files": {"metadata": {"bytes": 4554, "sha256": "81bef5eb93249e6684c70b28426b294a653dccab25c75121273b67eb62e06d2f"}, "parquet": {"bytes": 21420, "sha256": "f2773a507f2c3157e6e6885ac21e6b10da1f9e5cf784b702e208445009a79a93"}, "goal": {"bytes": 58611, "sha256": "0a816ffee21e83183bf4c911a49b67268d13b2698660327a0fc3fab27cfe8618"}}}
+    ],
+    "gTV8FGcVJC9": [
+      {"episode": "episode_0000", "n_frames": 322, "recall_gap": 120, "files": {"metadata": {"bytes": 3391, "sha256": "dab2e5ae1c16d5b8ac2e1066706c15d864d86163d1aa2c2bf6caa617bfa9addb"}, "parquet": {"bytes": 21047, "sha256": "2fb01bdfdf1522757d4226db02de4afd7ff1560a482eaea659a1ea69e35608ba"}, "goal": {"bytes": 68152, "sha256": "93b73f9a87666e32bc13bb94a219b851f5b31dd7164368fbfce5026a6c3101c8"}}},
+      {"episode": "episode_0001", "n_frames": 616, "recall_gap": 214, "files": {"metadata": {"bytes": 5025, "sha256": "7f641b5e229e22e652ab3fd47ebc6f3e5b07df9ee5e70cb2c1ee2942c0525cbe"}, "parquet": {"bytes": 35060, "sha256": "2ab1bbb876c106df28a93907fd6e625d30abfc490292ac1e7ca74c0afad87c84"}, "goal": {"bytes": 27264, "sha256": "207e35c797ee2135fe6da9b701ca23c1785ae522d8e8392e262638897a22d556"}}}
+    ],
+    "oLBMNvg9in8": [
+      {"episode": "episode_0000", "n_frames": 301, "recall_gap": 111, "files": {"metadata": {"bytes": 3368, "sha256": "849144bdc85e8ea26a746de1a10912b6e292abe154eafb63447c2ff714f69714"}, "parquet": {"bytes": 19154, "sha256": "1f9fcfe486cbf02a226d697d3b8d736ecfab1477b6769c7451439d72b72951cf"}, "goal": {"bytes": 58256, "sha256": "8751a2659a3b436674b51b5f22acaf67d15fa7d82e820d910112522fe2d6ed88"}}},
+      {"episode": "episode_0001", "n_frames": 327, "recall_gap": 112, "files": {"metadata": {"bytes": 3481, "sha256": "1f96820ddca058f8e1026bf01cee03f2c4c124c5c352dc6ceceec17034c71514"}, "parquet": {"bytes": 20601, "sha256": "cbc87f7ebdae98cee4c3fc74e7890ff4c1b45ef113aad91578cdf80146b6745e"}, "goal": {"bytes": 76759, "sha256": "0a941b508ac9fa5c612ed8586b12b964f74853c3787955424e916fd250e8a2e6"}}}
+    ],
+    "uNb9QFRL6hY": [
+      {"episode": "episode_0000", "n_frames": 250, "recall_gap": 72, "files": {"metadata": {"bytes": 3568, "sha256": "0af535a97fd3bdd0054e321934a24694ba0d0dec8b7dd708971c8b4bd1737751"}, "parquet": {"bytes": 16540, "sha256": "e93222fa4c7e50c4f61f7ca272564864d9c5cf3847d7d398f09b3f37c33d082c"}, "goal": {"bytes": 39678, "sha256": "9802f5697d058bfc9f807e41cc0d0171a1e1fcd6834deeca64ed4391c91d7f5f"}}},
+      {"episode": "episode_0001", "n_frames": 245, "recall_gap": 48, "files": {"metadata": {"bytes": 2258, "sha256": "643accc215cd629ecaaef1de51c957d9cf65d72c51679edc090099dafd01c7b1"}, "parquet": {"bytes": 18131, "sha256": "a13f4359fb519c97e7a23c9aac61d904971a38a977c83742c62018839582d760"}, "goal": {"bytes": 32468, "sha256": "ae89452ae8da581785c5172018999daec44baaca0683653ff9a796870064f264"}}}
+    ],
+    "rPc6DW4iMge": [
+      {"episode": "episode_0000", "n_frames": 330, "recall_gap": 76, "files": {"metadata": {"bytes": 2826, "sha256": "f2291c8455b59d65784319ebd9cb9c6d3f8b1c54a43937ee7c992863fd538305"}, "parquet": {"bytes": 21557, "sha256": "971ad7f5890ba03cc12dde596644dfb2ea6f3944ddcbf9a21ebf1b6ef7632db4"}, "goal": {"bytes": 39867, "sha256": "4cae28130e04c4afea05611a1f316ffe74dc2b8d24ae56b9d6c96a545f1b34a4"}}},
+      {"episode": "episode_0001", "n_frames": 436, "recall_gap": 164, "files": {"metadata": {"bytes": 4212, "sha256": "648db89303828b8f2505351e045d1c0fb11e19ed3d57f70062afd6679f0ae3e7"}, "parquet": {"bytes": 26057, "sha256": "a8225eac20cf653feea95e37c435d642610a42ad901140afc8a08e7ec574da7e"}, "goal": {"bytes": 29208, "sha256": "1704db01711ac499e43a93e9e7d4ed545ad6ca5fe9453b64ac0590ac78740653"}}}
+    ],
+    "ac26ZMwG7aT": [
+      {"episode": "episode_0000", "n_frames": 346, "recall_gap": 105, "files": {"metadata": {"bytes": 3153, "sha256": "8439d78868226d1943be2228d0eb3c1829e9a3b9c2f1716b978d07c4726475a1"}, "parquet": {"bytes": 22961, "sha256": "2bf12903823f69c5748e624e9340824126bcba95fb10a6f4d67277929b1e496c"}, "goal": {"bytes": 54480, "sha256": "270885e1c934e6bc0898d99896927527846262bd87dc3098ecdefe8d85e3aae8"}}},
+      {"episode": "episode_0001", "n_frames": 340, "recall_gap": 99, "files": {"metadata": {"bytes": 4065, "sha256": "b9235060302743f1f9f2ac4a16510a44b9485c415fe05e0ac6ce719efcf6cb01"}, "parquet": {"bytes": 20355, "sha256": "bb0977f36e5c160fcfcfd896f903dd8a5b19c3ebbeae8e6c4ba6298b28a5e93f"}, "goal": {"bytes": 40653, "sha256": "3eafadfb7ed2c642275c5840765c9840e90ddc260ee97c7a6ac995db60514666"}}}
+    ],
+    "dhjEzFoUFzH": [
+      {"episode": "episode_0000", "n_frames": 336, "recall_gap": 114, "files": {"metadata": {"bytes": 3422, "sha256": "a082d6ec380863317c9d371f4f4da7949e6e9b2524c796527b044eb7d5bc0901"}, "parquet": {"bytes": 20920, "sha256": "29843b56abe299d97d33ab83a12b833b6d89f1c4ddf551e1a09e3561fae48d1e"}, "goal": {"bytes": 69790, "sha256": "9d46b8647c590b7b5bf68a19469c4f12d260c322830d32988fe8905c4e74915c"}}},
+      {"episode": "episode_0001", "n_frames": 310, "recall_gap": 63, "files": {"metadata": {"bytes": 3540, "sha256": "6419db5a4ce80c21625214caefbcd04ac70962d5b66663d21cc853c7d0cc5b8a"}, "parquet": {"bytes": 20330, "sha256": "09f11b9d22d608437ff9ef4783cbd6d96ada094cf83e32bb2ad704dab4a0ed34"}, "goal": {"bytes": 75963, "sha256": "f02c219ef347223bbda816f6308555e12ed93325df1dd065548c3931fdb2d301"}}}
+    ],
+    "qoiz87JEwZ2": [
+      {"episode": "episode_0000", "n_frames": 348, "recall_gap": 69, "files": {"metadata": {"bytes": 4314, "sha256": "9631f0555ecbef961d9f82b13639d846c395836e77206f14521f9a268881dd2a"}, "parquet": {"bytes": 23301, "sha256": "30660d7b5ce91f3b9521284a7ec927b74ea0f1d0c567b497ee4d5074c9ab3801"}, "goal": {"bytes": 18254, "sha256": "3338f11d70e486285ef251fe1e862caceebb4db9ed07e96db5a091b88c29f117"}}},
+      {"episode": "episode_0001", "n_frames": 368, "recall_gap": 150, "files": {"metadata": {"bytes": 4058, "sha256": "fc59678fcd832af16a1f90fbd83b75c3c61db9f0593028f3ce63ce3fbc089c0b"}, "parquet": {"bytes": 24080, "sha256": "a772f69fbc3347646e633ecf2c182200bf4c4e466d3f01bf89d8102f21379974"}, "goal": {"bytes": 18358, "sha256": "d7314168fe2861cea58d16111b307787186189b50b3bb0471e769ec844d5d26e"}}}
+    ],
+    "b8cTxDM8gDG": [
+      {"episode": "episode_0000", "n_frames": 505, "recall_gap": 187, "files": {"metadata": {"bytes": 4589, "sha256": "ec8cdf499fcc546182bcfa344cde9dde38e7bbcfb84cacc7b4d3345ffee0c19f"}, "parquet": {"bytes": 31184, "sha256": "15ec7424a3ccc240fc4cae1be08e624e355b4623035ee5c23e741925c32ac9a9"}, "goal": {"bytes": 53527, "sha256": "8a176a33fe8ab1c9996d655eb148fd0dca4b6e76970ec6cdac8587b0d6f46441"}}},
+      {"episode": "episode_0001", "n_frames": 312, "recall_gap": 92, "files": {"metadata": {"bytes": 3725, "sha256": "fc5b9e00fadd28b0dd6da749e51c36cf60bd490cbcc659100a0bd33b28b77a08"}, "parquet": {"bytes": 20057, "sha256": "7a42aa917e73fbfd995ec882b617ca619a31b9ca667dd117a2b6c9ffa93da7a7"}, "goal": {"bytes": 38332, "sha256": "2732f83b2132aefba5fa60801dfb82c697616654f700c8562fc691dbfba95801"}}}
+    ],
+    "i5noydFURQK": [
+      {"episode": "episode_0000", "n_frames": 304, "recall_gap": 47, "files": {"metadata": {"bytes": 2363, "sha256": "146b758700accc48be6714336cca914ebe9aeec2f8a66b23e7f305ea8873eea9"}, "parquet": {"bytes": 19154, "sha256": "1b2a5368244782ab4f1f6a0a90b6b0152bb7a5f95634b1e78cade0698d28abac"}, "goal": {"bytes": 39336, "sha256": "2bda23508f97906b0fb42b50ae5a948c0d9a8ccc6398e90567d1f471b47c67f7"}}},
+      {"episode": "episode_0001", "n_frames": 341, "recall_gap": 103, "files": {"metadata": {"bytes": 3260, "sha256": "e4acbef7d840834b40ba497e9b0cafe3738cefdfa0e8c5e8039fad0ebc486729"}, "parquet": {"bytes": 21061, "sha256": "d18c37bc83e4806bfba2ef10804827844a6c80f20879f43f96d6bb4f952330b5"}, "goal": {"bytes": 46782, "sha256": "c19aec1640cbf2c7dc49ade62282a8d826a5d44c60cdd447bbe780c0c10c4436"}}}
+    ],
+    "wc2JMjhGNzB": [
+      {"episode": "episode_0000", "n_frames": 278, "recall_gap": 81, "files": {"metadata": {"bytes": 4008, "sha256": "5209e5a3aee05e61eacdd2e69721ff3dd30754c477e22b354b91d68fe4bcd48a"}, "parquet": {"bytes": 17927, "sha256": "153bfd7753e4824d4739d652b617c7a8c4fdf8a52d4fd17629f70bb3815d0c9d"}, "goal": {"bytes": 37925, "sha256": "6d65be30595aba3d403a7a1c3315cd252035b45bacc6f33d49d9f8944938d769"}}},
+      {"episode": "episode_0001", "n_frames": 389, "recall_gap": 145, "files": {"metadata": {"bytes": 4204, "sha256": "303c09a86a3bda1e7de45d1030ee24da79eafcba63c261e454fdb2687c9258b0"}, "parquet": {"bytes": 23233, "sha256": "8cdd3fe5a6af59be382e4e8e48604b5091af615c1ba44c91d81220f021acc856"}, "goal": {"bytes": 37809, "sha256": "fa7f0c2d863b61f4a0c24af0e4d26f4d2a15af6d7b4e019b3bd9fb140d65fb67"}}}
+    ],
+    "gZ6f7yhEvPG": [
+      {"episode": "episode_0000", "n_frames": 214, "recall_gap": 40, "files": {"metadata": {"bytes": 2250, "sha256": "517267759a8e79990b7fd140993e7c0bc4bf36aa510e90f72685ddfa1c84b805"}, "parquet": {"bytes": 16112, "sha256": "ea050358b8137488f31b418abcd6bcc0e2500409839de810872c1ee7b5722927"}, "goal": {"bytes": 35865, "sha256": "90b0c1ed41003cf5292a2a081cc5eaa1ea5e88459a4e1268b4cc1f775d9b82ab"}}},
+      {"episode": "episode_0001", "n_frames": 214, "recall_gap": 46, "files": {"metadata": {"bytes": 2349, "sha256": "e92eb08dc6849c572c80c677b61ad3862a28a50bdb606e4c2bbcbe05e68525b8"}, "parquet": {"bytes": 16042, "sha256": "47e2b4d9447450d277d78467d200260c6c128748b95a5939fc0f7de2c2268ef7"}, "goal": {"bytes": 53770, "sha256": "f83195673f14a3cf799c6a7eadcffcfa49aff3f54a0b3551ec9ac149f966dbe3"}}}
+    ]
+  },
+  "evaluation": {
+    "episodes_per_scene": 2,
+    "base_seed": 20260803,
+    "success_distance_m": 1.0,
+    "max_steps_per_leg": 500,
+    "execution_horizon": 8,
+    "terminal_uturn": "off",
+    "terminal_visual_refine": "off",
+    "navdp_arm": "frozen official NavDP ImageGoal for both legs",
+    "geometry_arm": "DINO floor 0.88 then SIFT/essential-RANSAC 20 matches, 12 inliers, ratio 0.50, two-plan confirmation; accepted Revisit uses LingBot metric pose with frozen NavDP image+point controller",
+    "memnav_window": 32,
+    "memnav_num_scale": 8,
+    "memnav_max_frames": 2048,
+    "memnav_retrieval": "raw",
+    "exclude_recent": 32,
+    "ddpm_samples": 16
+  }
+}

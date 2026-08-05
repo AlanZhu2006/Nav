@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+# Run both paired arms for one scene from the frozen expanded benchmark.
+
+set -euo pipefail
+umask 0022
+
+ROOT=${ROOT:?set ROOT}
+RUN_ROOT=${RUN_ROOT:?set RUN_ROOT}
+MANIFEST=${MANIFEST:?set MANIFEST}
+EXPECTED_MANIFEST_SHA=${EXPECTED_MANIFEST_SHA:?set EXPECTED_MANIFEST_SHA}
+EXPECTED_COMMIT=${EXPECTED_COMMIT:?set EXPECTED_COMMIT}
+SCENE_INDEX=${SCENE_INDEX:?set SCENE_INDEX}
+HAB_PY=${HAB_PY:?set HAB_PY}
+MEMNAV_PY=${MEMNAV_PY:?set MEMNAV_PY}
+
+EVALUATOR=${ROOT}/MemNavData/eval_2leg_habitat.py
+VALIDATOR=${ROOT}/MemNavData/validate_expanded_navdp_router_eval.py
+MEMNAV_SERVER=${ROOT}/NavDP/baselines/memnav/memnav_server.py
+NAVDP_SERVER=${ROOT}/NavDP/baselines/navdp/navdp_server.py
+INTERNNAV_ROOT=${ROOT}/InternNav
+LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
+LINGBOT_WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
+MEMNAV_CKPT=/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/gatecurr600.memnav.ckpt
+NAVDP_CKPT=/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/navdp_checkpoint.ckpt
+
+TASK_FILES=(
+  MemNavData/eval_2leg_habitat.py
+  MemNavData/validate_expanded_navdp_router_eval.py
+  MemNavData/summarize_expanded_navdp_router_eval.py
+  MemNavData/test_expanded_navdp_router_eval.py
+  MemNavData/run_expanded_navdp_router_scene.sh
+  MemNavData/slurm_expanded_navdp_router_eval.sbatch
+  MemNavData/expanded_navdp_router_eval_20260805.json
+  NavDP/baselines/memnav/memnav_server.py
+  NavDP/baselines/navdp/navdp_server.py
+  NavDP/baselines/navdp/policy_agent.py
+  NavDP/baselines/navdp/policy_network.py
+)
+
+actual_commit=$(git -C "${ROOT}" rev-parse HEAD)
+[[ "${actual_commit}" == "${EXPECTED_COMMIT}" ]] || {
+  echo "ABORT: code commit ${actual_commit} != ${EXPECTED_COMMIT}" >&2
+  exit 1
+}
+git -C "${ROOT}" diff --quiet -- "${TASK_FILES[@]}" || {
+  echo "ABORT: benchmark task files differ from the checked-out commit" >&2
+  exit 1
+}
+git -C "${ROOT}" diff --cached --quiet -- "${TASK_FILES[@]}" || {
+  echo "ABORT: staged benchmark task files differ from the checked-out commit" >&2
+  exit 1
+}
+
+for required in "${HAB_PY}" "${MEMNAV_PY}" "${EVALUATOR}" "${VALIDATOR}" \
+                "${MEMNAV_SERVER}" "${NAVDP_SERVER}" "${LINGBOT_WEIGHTS}" \
+                "${MEMNAV_CKPT}" "${NAVDP_CKPT}" "${MANIFEST}"; do
+  test -r "${required}" || { echo "ABORT: missing dependency ${required}" >&2; exit 1; }
+done
+
+mkdir -p "${RUN_ROOT}/preflight" "${RUN_ROOT}/scenes"
+"${HAB_PY}" "${VALIDATOR}" \
+  --manifest "${MANIFEST}" \
+  --expected-manifest-sha "${EXPECTED_MANIFEST_SHA}" \
+  --scene-index "${SCENE_INDEX}" \
+  > "${RUN_ROOT}/preflight/scene_$(printf '%02d' "${SCENE_INDEX}").json"
+
+scene=$("${HAB_PY}" - "${MANIFEST}" "${SCENE_INDEX}" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["selection"]["selected_scenes"][int(sys.argv[2])])
+PY
+)
+mapfile -t EPISODE_IDS < <("${HAB_PY}" - "${MANIFEST}" "${scene}" <<'PY'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+print(*(row["episode"] for row in manifest["episodes"][sys.argv[2]]), sep="\n")
+PY
+)
+episode_csv=$(IFS=,; echo "${EPISODE_IDS[*]}")
+
+SCENE_ROOT=${RUN_ROOT}/scenes/$(printf '%02d' "${SCENE_INDEX}")_${scene}
+if [[ -e "${SCENE_ROOT}" ]]; then
+  echo "ABORT: scene output already exists: ${SCENE_ROOT}" >&2
+  exit 1
+fi
+mkdir -p "${SCENE_ROOT}/logs" "${SCENE_ROOT}/buffer"
+exec > >(tee "${SCENE_ROOT}/run.log") 2>&1
+
+"${HAB_PY}" -m py_compile "${EVALUATOR}" "${VALIDATOR}"
+"${MEMNAV_PY}" -m py_compile "${MEMNAV_SERVER}" "${NAVDP_SERVER}"
+(
+  cd "${ROOT}"
+  "${HAB_PY}" -m unittest MemNavData.test_expanded_navdp_router_eval -v
+)
+"${HAB_PY}" -c \
+  'import habitat_sim,numpy,pandas,pyarrow,PIL,requests,scipy,quaternion; print("Habitat dependencies OK", habitat_sim.__version__)'
+"${MEMNAV_PY}" -c \
+  'import torch,torchvision,transformers,diffusers,cv2,flask,imageio; assert torch.cuda.is_available(); print("Policy dependencies OK", torch.__version__)'
+
+port_key=$(( (${SLURM_JOB_ID:-1000} + SCENE_INDEX * 37) % 15000 ))
+MEMNAV_PORT=${MEMNAV_PORT:-$((20000 + port_key * 2))}
+NAVDP_PORT=${NAVDP_PORT:-$((MEMNAV_PORT + 1))}
+for port in "${MEMNAV_PORT}" "${NAVDP_PORT}"; do
+  if ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${port}$"; then
+    echo "ABORT: port ${port} is already in use" >&2
+    exit 1
+  fi
+done
+
+RUNTIME_ROOT=${SLURM_TMPDIR:-/tmp}/memnav_expanded_${SLURM_JOB_ID:-local}_${SCENE_INDEX}
+mkdir -p "${RUNTIME_ROOT}/memnav" "${RUNTIME_ROOT}/navdp"
+MEMNAV_PID=
+NAVDP_PID=
+cleanup() {
+  for pid in "${NAVDP_PID}" "${MEMNAV_PID}"; do
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      kill "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+    fi
+  done
+}
+trap cleanup EXIT INT TERM
+
+(
+  cd "${RUNTIME_ROOT}/memnav"
+  exec env \
+    PYTHONUNBUFFERED=1 \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    PYTHONPATH="${INTERNNAV_ROOT}/src/diffusion-policy:${PYTHONPATH:-}" \
+    LINGBOT_REPO="${LINGBOT_REPO}" \
+    LINGBOT_WEIGHTS="${LINGBOT_WEIGHTS}" \
+    MEMNAV_WINDOW=32 \
+    MEMNAV_NUM_SCALE=8 \
+    MEMNAV_MAX_FRAME_NUM=2048 \
+    MEMNAV_GROUND_SCALE_MAX=6.0 \
+    MEMNAV_GATE_FUSION=complementary \
+    MEMNAV_AUX_POSE_CALIBRATION=empirical \
+    MEMNAV_COLLISION_SELECT=1 \
+    MEMNAV_REPORT_TO=none \
+    "${MEMNAV_PY}" -u "${MEMNAV_SERVER}" \
+      --port "${MEMNAV_PORT}" \
+      --checkpoint "${MEMNAV_CKPT}" \
+      --internnav_root "${INTERNNAV_ROOT}" \
+      --num_samples 16 \
+      --exclude_recent 32 \
+      --retrieval raw \
+      --flow_gate auto \
+      --buffer_root "${SCENE_ROOT}/buffer"
+) > "${SCENE_ROOT}/logs/server_memnav.log" 2>&1 &
+MEMNAV_PID=$!
+
+(
+  cd "${RUNTIME_ROOT}/navdp"
+  exec env NAVDP_DISABLE_VIDEO=1 PYTHONUNBUFFERED=1 \
+    "${MEMNAV_PY}" -u "${NAVDP_SERVER}" \
+      --port "${NAVDP_PORT}" --checkpoint "${NAVDP_CKPT}"
+) > "${SCENE_ROOT}/logs/server_navdp.log" 2>&1 &
+NAVDP_PID=$!
+
+for spec in \
+    "memnav:${MEMNAV_PID}:${MEMNAV_PORT}:${SCENE_ROOT}/logs/server_memnav.log" \
+    "navdp:${NAVDP_PID}:${NAVDP_PORT}:${SCENE_ROOT}/logs/server_navdp.log"; do
+  IFS=: read -r label pid port log <<<"${spec}"
+  ready=0
+  for _ in $(seq 1 240); do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      echo "ABORT: ${label} server exited during startup" >&2
+      tail -n 120 "${log}" >&2
+      exit 1
+    fi
+    if ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${port}$"; then
+      ready=1
+      break
+    fi
+    sleep 2
+  done
+  [[ "${ready}" -eq 1 ]] || {
+    echo "ABORT: ${label} server did not bind port ${port}" >&2
+    tail -n 120 "${log}" >&2
+    exit 1
+  }
+done
+
+ASSET_ROOT=$("${HAB_PY}" - "${MANIFEST}" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["paths"]["asset_root"])
+PY
+)
+EPISODE_ROOT=$("${HAB_PY}" - "${MANIFEST}" "${scene}" <<'PY'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+key = ("legacy_anchor_episode_root"
+       if sys.argv[2] in manifest["selection"]["anchor_scenes"]
+       else "expanded_episode_root")
+print(manifest["paths"][key])
+PY
+)
+COMMON_ARGS=(
+  --episode_root "${EPISODE_ROOT}/${scene}"
+  --scene "${ASSET_ROOT}/${scene}/${scene}.glb"
+  --host 127.0.0.1
+  --leg1_mode policy
+  --success_dist 1.0
+  --max_steps 500
+  --exec_horizon 8
+  --trajectory_selector server
+  --leg1_goal_source own
+  --seed 20260803
+  --terminal_uturn off
+  --terminal_visual_refine off
+  --episode_ids "${episode_csv}"
+)
+
+echo "[eval] scene=${scene} arm=navdp_native episodes=${episode_csv}"
+mkdir -p "${SCENE_ROOT}/navdp_native"
+(
+  cd "${RUNTIME_ROOT}"
+  "${HAB_PY}" -u "${EVALUATOR}" \
+    "${COMMON_ARGS[@]}" \
+    --port "${NAVDP_PORT}" \
+    --out "${SCENE_ROOT}/navdp_native" \
+    --server_backend navdp
+) > "${SCENE_ROOT}/logs/eval_navdp_native.log" 2>&1
+
+echo "[eval] scene=${scene} arm=geometry_router episodes=${episode_csv}"
+mkdir -p "${SCENE_ROOT}/geometry_router"
+(
+  cd "${RUNTIME_ROOT}"
+  "${HAB_PY}" -u "${EVALUATOR}" \
+    "${COMMON_ARGS[@]}" \
+    --port "${MEMNAV_PORT}" \
+    --novel_port "${NAVDP_PORT}" \
+    --out "${SCENE_ROOT}/geometry_router" \
+    --server_backend hybrid_pose \
+    --hybrid_route memory_geometry \
+    --router_visual_floor 0.88 \
+    --router_min_matches 20 \
+    --router_min_inliers 12 \
+    --router_min_inlier_ratio 0.50 \
+    --router_confirm_plans 2
+) > "${SCENE_ROOT}/logs/eval_geometry_router.log" 2>&1
+
+for arm in navdp_native geometry_router; do
+  test -s "${SCENE_ROOT}/${arm}/metric.csv" || {
+    echo "ABORT: ${arm} did not produce metric.csv" >&2; exit 1; }
+  test -s "${SCENE_ROOT}/${arm}/summary.json" || {
+    echo "ABORT: ${arm} did not produce summary.json" >&2; exit 1; }
+  count=$(($(wc -l < "${SCENE_ROOT}/${arm}/metric.csv") - 1))
+  [[ "${count}" -eq "${#EPISODE_IDS[@]}" ]] || {
+    echo "ABORT: ${arm} produced ${count} rows, expected ${#EPISODE_IDS[@]}" >&2
+    exit 1
+  }
+done
+
+echo "[complete] scene=${scene} output=${SCENE_ROOT}"

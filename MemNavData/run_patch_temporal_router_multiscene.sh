@@ -19,7 +19,7 @@ LINGBOT_REPO=${LINGBOT_REPO:?set LINGBOT_REPO to the pinned LingBot checkout}
 WEIGHTS=${WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
 SPLIT_MANIFEST=${SPLIT_MANIFEST:-${ROOT}/MemNavData/router_multiscene_split_20260805.json}
 
-EXPECTED_SPLIT_SHA=97309c183e25cb3dd65472908748d55a94798a636db6157ab6fe120fca05cf7a
+EXPECTED_SPLIT_SHA=${EXPECTED_SPLIT_SHA:-97309c183e25cb3dd65472908748d55a94798a636db6157ab6fe120fca05cf7a}
 EXPECTED_WEIGHT_SHA=832bc82cbae0bc9bbe946ef5ee1f7226abd8c0e183ccf8beddbb3d133576f409
 EXPECTED_LINGBOT_COMMIT=7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2
 
@@ -27,6 +27,7 @@ BASE_DIAGNOSTIC=${ROOT}/MemNavData/diag_distill_geometry_router.py
 EXPANDER=${ROOT}/MemNavData/build_router_cross_episode_pairs.py
 RELABELER=${ROOT}/MemNavData/relabel_router_covisibility.py
 PATCH_DIAGNOSTIC=${ROOT}/MemNavData/diag_patch_temporal_router.py
+BLIND_VALIDATOR=${ROOT}/MemNavData/validate_frozen_router_blind.py
 UNIT_TESTS=(
   MemNavData.test_reliability_router
   MemNavData.test_patch_temporal_router
@@ -45,6 +46,7 @@ TASK_FILES=(
   MemNavData/listwise_router.py
   MemNavData/patch_temporal_router.py
   MemNavData/diag_patch_temporal_router.py
+  MemNavData/validate_frozen_router_blind.py
   MemNavData/run_patch_temporal_router_multiscene.sh
   MemNavData/slurm_patch_temporal_router_multiscene.sbatch
   MemNavData/router_multiscene_split_20260805.json
@@ -57,6 +59,13 @@ TASK_FILES=(
   MemNavData/test_router_dataset_selection.py
 )
 
+split_relative=$(realpath --relative-to="${ROOT}" "${SPLIT_MANIFEST}")
+[[ "${split_relative}" != ../* && "${split_relative}" != ".." ]] || {
+  echo "ABORT: split manifest must live inside ${ROOT}" >&2
+  exit 1
+}
+TASK_FILES+=("${split_relative}")
+
 if [[ -e "${RUN_ROOT}" ]]; then
   echo "ABORT: output already exists: ${RUN_ROOT}" >&2
   exit 1
@@ -68,7 +77,7 @@ echo "[preflight] mode=${MODE} root=${ROOT} output=${RUN_ROOT}"
 for required in "${MEMNAV_PY}" "${LINGBOT_REPO}" "${WEIGHTS}" \
                 "${SPLIT_MANIFEST}" "${EPISODE_ROOT}" \
                 "${BASE_DIAGNOSTIC}" "${EXPANDER}" "${RELABELER}" \
-                "${PATCH_DIAGNOSTIC}"; do
+                "${PATCH_DIAGNOSTIC}" "${BLIND_VALIDATOR}"; do
   test -r "${required}" || {
     echo "ABORT: missing dependency ${required}" >&2
     exit 1
@@ -190,21 +199,36 @@ with open(manifest, encoding="utf-8") as handle:
 train = split["train"]
 development = split["development"]
 reserved = split["final_reserved"]
-if not (len(train) == 40 and len(development) == 10 and len(reserved) == 4):
-    raise RuntimeError("split cardinality changed")
+expected = split.get("expected_counts", {
+    "train": 40,
+    "development": 10,
+    "final_reserved": 4,
+})
+for role, scenes in (
+        ("train", train),
+        ("development", development),
+        ("final_reserved", reserved)):
+    if role in expected and len(scenes) != int(expected[role]):
+        raise RuntimeError(
+            f"{role} cardinality {len(scenes)} != {expected[role]}")
+if len(train) < 3 or not development:
+    raise RuntimeError("split needs at least three train scenes and one evaluation scene")
 if set(train) & set(development) or set(train + development) & set(reserved):
     raise RuntimeError("scene roles overlap")
-forced = set(split["selection_rule"]["forced_train"])
+selection = split.get("selection_rule", {})
+forced = set(selection.get("forced_train", []))
 if not forced.issubset(train):
     raise RuntimeError("forced baseline scenes left training split")
-salt = split["selection_rule"]["salt"]
-remaining = sorted(
-    set(train + development) - forced,
-    key=lambda scene: hashlib.sha256(
-        f"{salt}:{scene}".encode()).hexdigest())
-expected_development = set(remaining[:10])
-if set(development) != expected_development:
-    raise RuntimeError("development split does not match the frozen hash rule")
+if selection.get("enforce_hash_rule", True):
+    salt = selection["salt"]
+    remaining = sorted(
+        set(train + development) - forced,
+        key=lambda scene: hashlib.sha256(
+            f"{salt}:{scene}".encode()).hexdigest())
+    expected_development = set(
+        remaining[:int(selection["development_count"])])
+    if set(development) != expected_development:
+        raise RuntimeError("development split does not match the frozen hash rule")
 available = {path.name for path in episode_root.iterdir() if path.is_dir()}
 required = set(train + development + reserved)
 if not required.issubset(available):
@@ -386,6 +410,22 @@ done
 
 echo "[stage 5/5] scene-disjoint directional patch/temporal + listwise audit"
 "${MEMNAV_PY}" -u "${PATCH_DIAGNOSTIC}" "${PATCH_ARGS[@]}"
+
+if [[ -n "${REFERENCE_ROUTER_MODEL:-}" ]]; then
+  echo "[postflight] verify that the frozen train-only router did not change"
+  BLIND_ARGS=(
+    --reference "${REFERENCE_ROUTER_MODEL}"
+    --candidate "${PATCH_DIR}/diagnostic_patch_temporal_router_not_for_deployment.json"
+    --report "${PATCH_DIR}/report.json"
+    --expected-reference-sha "${EXPECTED_REFERENCE_ROUTER_SHA:?set EXPECTED_REFERENCE_ROUTER_SHA}"
+  )
+  for scene in "${DEVELOPMENT_SCENES[@]}"; do
+    BLIND_ARGS+=(--expected-heldout-scene "${scene}")
+  done
+  "${MEMNAV_PY}" -u "${BLIND_VALIDATOR}" "${BLIND_ARGS[@]}" \
+    > "${RUN_ROOT}/frozen_router_blind_validation.json"
+  cat "${RUN_ROOT}/frozen_router_blind_validation.json"
+fi
 
 echo "[complete] diagnostic only; deployment_approved remains false"
 echo "base_report=${BASE_DIR}/report.json"

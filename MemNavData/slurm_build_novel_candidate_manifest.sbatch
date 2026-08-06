@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=nlsr_manifest
+#SBATCH --account=torch_pr_769_tandon_advanced
+#SBATCH --partition=cpu_short
+#SBATCH --qos=cpu48
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

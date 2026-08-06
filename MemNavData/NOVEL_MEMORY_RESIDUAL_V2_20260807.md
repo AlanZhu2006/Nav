@@ -924,10 +924,15 @@ build_novel_candidate_manifest.py
   -> missing flow-cache inventory + atomic canonical JSON/SHA sidecar
 ```
 
-本机真实 2-scene / 4-episode / 16-sample smoke 通过，flow cache 缺失为 0，canonical
-manifest SHA 为 `e700304d1b7c14a3b5de6f00c9dae6c8d5076cdac4c1fd188140d9e2eaee0c5e`。
+本机真实 2-scene / 4-episode / 16-sample smoke 通过，flow cache 缺失为 0。冻结 local
+split 是 `nlsr_local_smoke_split_20260807.json`（SHA
+`8d99f67c331812eac406b5057f403e842a69b752aec6379ae35684321818ba6e`），加入显式
+NavDP FIFO 后的 canonical manifest SHA 为
+`33cc55f1d8c441a06ab1fa97382368b861c9a25d5ce32da85bbe9328cdf9e412`。
 它 lazy-import `pyarrow` 并在缺依赖、列/shape/行数异常或非有限 pose/action 时 fail closed。
 future parquet row 不改变较早 prefix hash，prefix pose/depth 改动必须改变 hash。
+每个 expert state 还冻结 8-frame FIFO：前 7 个 replay RGB、当前 RGB、左侧 zero-padding
+数量和内容 SHA；factual/counterfactual 必须共享完全相同的 FIFO record。
 
 以下 candidate/label builder 与 trainer 仍未实现，不能把名称当成现有可运行脚本：
 

@@ -1,0 +1,16 @@
+{
+  "version": "nlsr_local_two_scene_smoke_v1",
+  "created_date": "2026-08-07",
+  "selection_rule": "Local logic/proposal smoke only; subset of train scenes; never calibration or final evidence.",
+  "train": [
+    "17DRP5sb8fy",
+    "1LXtFkjw3qL"
+  ],
+  "development": [],
+  "final_reserved": [
+    "2t7WUuJeko7",
+    "D7G3Y4RVNrH",
+    "HxpKQynjfin",
+    "RPmz2sHmrrY"
+  ]
+}

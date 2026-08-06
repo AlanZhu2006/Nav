@@ -11,6 +11,7 @@ from MemNavData.build_novel_candidate_manifest import (
     aligned_midpoint,
     build_manifest,
     canonical_json_bytes,
+    navdp_fifo_frame_indices,
     sha256_bytes,
     write_artifact,
 )
@@ -221,6 +222,35 @@ class NovelCandidateManifestBuilderTest(unittest.TestCase):
         self.assertEqual(aligned_midpoint(7, 31), 15)
         with self.assertRaises(ManifestError):
             aligned_midpoint(7, 15)
+
+    def test_expert_navdp_fifo_is_explicit_and_goal_invariant(self):
+        self.assertEqual(
+            navdp_fifo_frame_indices(25), (0, 8, 16, 24))
+        self.assertEqual(
+            navdp_fifo_frame_indices(81),
+            (24, 32, 40, 48, 56, 64, 72, 80),
+        )
+        manifest = self._build(roles=("train",))
+        by_state = {}
+        for sample in manifest["samples"]:
+            key = (sample["source_episode_id"], sample["state_name"])
+            by_state.setdefault(key, []).append(sample)
+        for rows in by_state.values():
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["navdp_fifo"], rows[1]["navdp_fifo"])
+            fifo = rows[0]["navdp_fifo"]
+            self.assertEqual(
+                fifo["current_frame_index"], rows[0]["decision_frame"] - 1)
+            self.assertEqual(
+                len(fifo["after_append_frame_indices"])
+                + fifo["left_zero_pad_count"],
+                8,
+            )
+            self.assertEqual(
+                fifo["replay_frame_indices"],
+                fifo["after_append_frame_indices"][:-1],
+            )
+            self.assertEqual(len(fifo["fifo_sha256"]), 64)
 
     def test_missing_flow_caches_are_explicit_not_silently_dropped(self):
         manifest = self._build(roles=("train",))

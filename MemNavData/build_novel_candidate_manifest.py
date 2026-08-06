@@ -29,6 +29,8 @@ from typing import Iterable, Mapping, Sequence
 SCHEMA_VERSION = "nlsr_v2_expert_candidate_manifest_v1"
 ALLOWED_ROLES = ("train", "development")
 REQUIRED_FLOW_FILES = ("lingbot_cache.npz", "lingbot_cam_cache.npz")
+NAVDP_MEMORY_SIZE = 8
+NAVDP_EXEC_HORIZON = 8
 RGB_RELATIVE = Path("videos/chunk-000/observation.images.rgb")
 DEPTH_RELATIVE = Path("videos/chunk-000/observation.images.depth")
 PARQUET_RELATIVE = Path("data/chunk-000/episode_000000.parquet")
@@ -164,6 +166,35 @@ def aligned_midpoint(switch_a: int, switch_b: int,
         candidates,
         key=lambda frame: (abs(2 * frame - switch_a - switch_b), frame),
     )
+
+
+def navdp_fifo_frame_indices(
+    decision_frame: int,
+    *,
+    memory_size: int = NAVDP_MEMORY_SIZE,
+    exec_horizon: int = NAVDP_EXEC_HORIZON,
+) -> tuple[int, ...]:
+    """Return the expert-prefix RGB frames present after the current append.
+
+    ``decision_frame`` is the causal exclusive end, hence the current image is
+    ``decision_frame - 1``.  Expert states do not come from a live NavDP FIFO,
+    so v1 freezes an explicit decision cadence backwards from that image.  The
+    same cadence is then replayed for every factual/counterfactual/candidate
+    arm; on-policy rows will instead record their observed live FIFO.
+    """
+    if (isinstance(decision_frame, bool)
+            or not isinstance(decision_frame, int)
+            or decision_frame < 1):
+        raise ManifestError("decision_frame must be a positive integer")
+    if (isinstance(memory_size, bool) or not isinstance(memory_size, int)
+            or memory_size < 1):
+        raise ManifestError("NavDP memory_size must be a positive integer")
+    if (isinstance(exec_horizon, bool) or not isinstance(exec_horizon, int)
+            or exec_horizon < 1):
+        raise ManifestError("NavDP exec_horizon must be a positive integer")
+    current = decision_frame - 1
+    reverse = range(current, -1, -exec_horizon)
+    return tuple(reversed(tuple(reverse)[:memory_size]))
 
 
 def _scene_name(value: object) -> str:
@@ -401,6 +432,46 @@ def prefix_record(episode: Mapping[str, object], episode_root: Path,
     }
 
 
+def navdp_fifo_record(
+    episode: Mapping[str, object],
+    episode_root: Path,
+    decision_frame: int,
+    file_hashes: dict[Path, dict],
+) -> dict:
+    """Freeze the exact raw RGB queue reconstructed for an expert state."""
+    rgb_root = episode["rgb_root"]
+    if not isinstance(rgb_root, Path):
+        raise ManifestError("internal RGB root contract is invalid")
+    indices = navdp_fifo_frame_indices(decision_frame)
+    records = []
+    for frame in indices:
+        path = rgb_root / f"{frame}.jpg"
+        record = file_hashes.get(path)
+        if record is None:
+            record = relative_file_record(path, episode_root)
+            file_hashes[path] = record
+        records.append(record)
+    payload = {
+        "memory_size": NAVDP_MEMORY_SIZE,
+        "exec_horizon": NAVDP_EXEC_HORIZON,
+        "left_zero_pad_count": NAVDP_MEMORY_SIZE - len(records),
+        "replay_frame_indices": list(indices[:-1]),
+        "current_frame_index": indices[-1],
+        "after_append_frame_indices": list(indices),
+        "path_sequence_sha256": _hash_sequence(
+            record["path"] for record in records),
+        "content_sequence_sha256": _hash_sequence({
+            "path": record["path"],
+            "bytes": record["bytes"],
+            "content_sha256": record["content_sha256"],
+        } for record in records),
+    }
+    return {
+        **payload,
+        "fifo_sha256": sha256_bytes(canonical_json_bytes(payload)),
+    }
+
+
 def _flow_record(flow_root: Path, scene: str, episode: str) -> tuple[dict, list[dict]]:
     chunk = flow_root / scene / episode / "videos/chunk-000"
     files = []
@@ -512,6 +583,8 @@ def build_manifest(*, split_path: Path, episode_root: Path,
                 for state_name, decision_frame in state_specs:
                     prefix = prefix_record(
                         source, episode_root, decision_frame, file_hashes)
+                    navdp_fifo = navdp_fifo_record(
+                        source, episode_root, decision_frame, file_hashes)
                     state_frame = source["rgb_root"] / f"{decision_frame - 1}.jpg"  # type: ignore[operator]
                     state_frame_record = file_hashes.get(state_frame)
                     if state_frame_record is None:
@@ -552,6 +625,7 @@ def build_manifest(*, split_path: Path, episode_root: Path,
                             "decision_frame": decision_frame,
                             "state_frame": state_frame_record,
                             "causal_prefix": prefix,
+                            "navdp_fifo": navdp_fifo,
                             "goal": goal_record,
                         })
 
@@ -582,6 +656,11 @@ def build_manifest(*, split_path: Path, episode_root: Path,
             ),
             "prefix_semantics": (
                 "decision_frame is exclusive; state_frame is decision_frame-1"
+            ),
+            "expert_navdp_fifo": (
+                "memory_size=8; current=decision_frame-1; preceding replay "
+                "frames step backward by 8 from current; left-pad is native "
+                "NavDP zero padding"
             ),
         },
         "split": {

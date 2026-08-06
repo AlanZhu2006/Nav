@@ -19,6 +19,7 @@ entry point intentionally does not instantiate Habitat.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
@@ -62,8 +63,11 @@ except ModuleNotFoundError:  # Direct execution from MemNavData/.
 
 
 ARTIFACT_SCHEMA_VERSION = "nlsr_v2_frontier_proposal_artifact_v1"
+EXTERNAL_SCALE_ARTIFACT_SCHEMA_VERSION = (
+    "nlsr_v2_frontier_proposal_artifact_v2")
 INPUT_MANIFEST_SCHEMA_VERSION = "nlsr_v2_expert_candidate_manifest_v1"
 PATCH_SCORE_SCHEMA_VERSION = "nlsr_v2_goal_patch_frame_scores_v1"
+CAUSAL_GROUND_SCALE_SCHEMA_VERSION = "nlsr_v2_causal_ground_scale_v1"
 TEACHER_ARM = "teacher_pose"
 DEPLOYMENT_ARM = "lingbot_deployment_pose"
 ARMS = (TEACHER_ARM, DEPLOYMENT_ARM)
@@ -91,6 +95,22 @@ class DeploymentPoseError(CandidateBuildError):
     """A deployment-pose arm is invalid but the teacher arm remains auditable."""
 
 
+@dataclass(frozen=True)
+class ExternalGroundScaleBinding:
+    """Immutable, globally-audited scale record for one manifest episode."""
+
+    artifact_path: str
+    artifact_sha256: str
+    producer_sha256: str
+    configuration_sha256: str
+    estimator_kind: str
+    lingbot_commit: str
+    weights_sha256: str
+    stream_source_sha256: str
+    configuration: Mapping[str, object]
+    record: Mapping[str, object]
+
+
 def sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
@@ -100,6 +120,33 @@ def sha256_file(path: Path) -> str:
     with Path(path).open("rb") as handle:
         for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
             digest.update(block)
+    return digest.hexdigest()
+
+
+def _valid_hex_digest(value: object, lengths: tuple[int, ...] = (64,)) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) in lengths
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _ndarray_prefix_sha256(value: object) -> str:
+    """Match build_causal_ground_scale.ndarray_sha256 without importing it."""
+    array = np.asarray(value)
+    if (not np.issubdtype(array.dtype, np.number)
+            or not np.isfinite(array).all()):
+        raise DeploymentPoseError(
+            "external-scale camera-pose prefix must be finite numeric")
+    contiguous = np.ascontiguousarray(array)
+    header = json.dumps({
+        "dtype": contiguous.dtype.str,
+        "shape": list(contiguous.shape),
+    }, sort_keys=True, separators=(",", ":")).encode("ascii")
+    digest = hashlib.sha256()
+    digest.update(len(header).to_bytes(8, "big"))
+    digest.update(header)
+    digest.update(memoryview(contiguous).cast("B"))
     return digest.hexdigest()
 
 
@@ -136,6 +183,27 @@ def _record_for_path(path: Path, root: Path) -> dict:
 
 def _sequence_sha(values: Sequence[object]) -> str:
     return sha256_bytes(canonical_json_bytes(list(values)))
+
+
+def _external_rgb_prefix_record(
+    episode_dir: Path,
+    episode_root: Path,
+    frame_count: int,
+) -> dict[str, object]:
+    if (isinstance(frame_count, bool) or not isinstance(frame_count, int)
+            or frame_count < 1):
+        raise DeploymentPoseError("external-scale RGB prefix length is invalid")
+    records = [
+        _record_for_path(
+            episode_dir / RGB_RELATIVE / f"{frame}.jpg", episode_root)
+        for frame in range(frame_count)
+    ]
+    return {
+        "frame_count": frame_count,
+        "path_sequence_sha256": _sequence_sha(
+            [record["path"] for record in records]),
+        "content_sequence_sha256": _sequence_sha(records),
+    }
 
 
 def _matrix(value: object, shape: tuple[int, int], label: str) -> np.ndarray:
@@ -397,6 +465,9 @@ def lingbot_deployment_se2_rows(
     expected_causal_prefix_sha256: str,
     expected_prefix_builder_sha256: str,
     expected_prefix_configuration_sha256: str,
+    external_ground_scale: ExternalGroundScaleBinding | None = None,
+    episode_dir: Path | None = None,
+    episode_root: Path | None = None,
     validation_memo: dict[tuple[Path, Path, int], tuple[
         tuple[int, int], tuple[int, int], object]] | None = None,
     content_sha_memo: dict[Path, tuple[tuple[int, int], str]] | None = None,
@@ -407,8 +478,10 @@ def lingbot_deployment_se2_rows(
     row-aligned with raw frames, while ``cam_frame_indices`` maps only sparse
     camera-K/V rows.  The repository's paired-cache validator establishes both
     facts.  A whole-episode ``ground_h_est`` is explicitly *not* causal at a
-    midpoint; this deployment arm therefore requires a dense prefix estimate
-    and its exact semantics marker.  Old whole-episode-only caches fail closed.
+    midpoint.  The preferred path consumes an immutable external first-prefix
+    sidecar; the old dense prefix remains available only when no external
+    artifact was explicitly supplied.  Neither path falls back to the
+    whole-episode scalar.
     """
     if not aggregator_cache_path.is_file():
         raise DeploymentPoseError(
@@ -435,21 +508,28 @@ def lingbot_deployment_se2_rows(
         if validation_memo is not None:
             validation_memo[pair_key] = (
                 aggregator_signature, camera_signature, layout)
-    aggregator_sha = _memoized_content_sha256(
-        aggregator_cache_path, content_sha_memo)
-    cache_sha = _memoized_content_sha256(cache_path, content_sha_memo)
+    # Legacy artifacts recorded full-cache hashes.  In external causal-scale
+    # mode those files contain future rows, so hashing their complete payload
+    # would make a causal decision artifact depend on unseen frames.
+    if external_ground_scale is None:
+        aggregator_sha = _memoized_content_sha256(
+            aggregator_cache_path, content_sha_memo)
+        cache_sha = _memoized_content_sha256(cache_path, content_sha_memo)
+    else:
+        aggregator_sha = None
+        cache_sha = None
     try:
         with np.load(cache_path, allow_pickle=False) as cache:
-            required = {
-                "cam_pose_enc",
-                "cam_frame_indices",
-                "ground_h_est_prefix",
-                "ground_h_est_prefix_frame_indices",
-                "ground_h_est_prefix_causal_prefix_sha256",
-                "ground_h_est_prefix_semantics",
-                "ground_h_est_prefix_builder_sha256",
-                "ground_h_est_prefix_configuration_sha256",
-            }
+            required = {"cam_pose_enc", "cam_frame_indices"}
+            if external_ground_scale is None:
+                required |= {
+                    "ground_h_est_prefix",
+                    "ground_h_est_prefix_frame_indices",
+                    "ground_h_est_prefix_causal_prefix_sha256",
+                    "ground_h_est_prefix_semantics",
+                    "ground_h_est_prefix_builder_sha256",
+                    "ground_h_est_prefix_configuration_sha256",
+                }
             missing = sorted(required - set(cache.files))
             if missing:
                 if ("ground_h_est" in cache.files
@@ -461,24 +541,31 @@ def lingbot_deployment_se2_rows(
                 raise DeploymentPoseError(
                     "LingBot deployment cache lacks strict scale/frame mapping: "
                     f"{missing}")
-            pose = np.asarray(cache["cam_pose_enc"], dtype=np.float64)
+            pose_raw = np.asarray(cache["cam_pose_enc"])
             frame_raw = np.asarray(cache["cam_frame_indices"])
-            prefix_ground = np.asarray(
-                cache["ground_h_est_prefix"], dtype=np.float64)
-            prefix_ground_frames = np.asarray(
-                cache["ground_h_est_prefix_frame_indices"])
-            prefix_input_hashes = np.asarray(
-                cache["ground_h_est_prefix_causal_prefix_sha256"])
-            prefix_semantics = str(np.asarray(
-                cache["ground_h_est_prefix_semantics"]).reshape(-1)[0])
-            prefix_builder_sha = str(np.asarray(
-                cache["ground_h_est_prefix_builder_sha256"]).reshape(-1)[0])
-            prefix_configuration_sha = str(np.asarray(
-                cache["ground_h_est_prefix_configuration_sha256"]
-            ).reshape(-1)[0])
+            if external_ground_scale is None:
+                prefix_ground = np.asarray(
+                    cache["ground_h_est_prefix"], dtype=np.float64)
+                prefix_ground_frames = np.asarray(
+                    cache["ground_h_est_prefix_frame_indices"])
+                prefix_input_hashes = np.asarray(
+                    cache["ground_h_est_prefix_causal_prefix_sha256"])
+                prefix_semantics = str(np.asarray(
+                    cache["ground_h_est_prefix_semantics"]).reshape(-1)[0])
+                prefix_builder_sha = str(np.asarray(
+                    cache["ground_h_est_prefix_builder_sha256"]).reshape(-1)[0])
+                prefix_configuration_sha = str(np.asarray(
+                    cache["ground_h_est_prefix_configuration_sha256"]
+                ).reshape(-1)[0])
+            else:
+                prefix_ground = prefix_ground_frames = prefix_input_hashes = None
+                prefix_semantics = None
+                prefix_builder_sha = prefix_configuration_sha = None
+            whole_episode_ground_present = "ground_h_est" in cache.files
             whole_episode_ground = (
                 float(np.asarray(cache["ground_h_est"]).reshape(-1)[0])
-                if "ground_h_est" in cache.files
+                if external_ground_scale is None
+                and whole_episode_ground_present
                 and np.asarray(cache["ground_h_est"]).size == 1 else None)
             signature = (
                 str(np.asarray(cache["precompute_signature"]).reshape(-1)[0])
@@ -490,10 +577,12 @@ def lingbot_deployment_se2_rows(
         raise
     except Exception as exc:
         raise DeploymentPoseError(f"cannot read LingBot cache: {exc}") from exc
-    if (pose.shape != (int(episode_frame_count), 9)
-            or not np.isfinite(pose).all()):
+    if (pose_raw.shape != (int(episode_frame_count), 9)
+            or not np.issubdtype(pose_raw.dtype, np.number)
+            or not np.isfinite(pose_raw[:int(decision_frame)]).all()):
         raise DeploymentPoseError(
-            "cam_pose_enc must be dense, finite, and raw-frame aligned [num_frames,9]")
+            "causal cam_pose_enc must be dense, finite, and raw-frame aligned")
+    pose = np.asarray(pose_raw, dtype=np.float64)
     # cam_frame_indices maps sparse K/V rows, not cam_pose_enc.  Its complete
     # policy validation was performed by validate_cache_files above.
     if frame_raw.ndim != 1:
@@ -507,63 +596,161 @@ def lingbot_deployment_se2_rows(
     if not np.array_equal(frames, np.asarray(layout.cam_frame_indices)):
         raise DeploymentPoseError(
             "cam_frame_indices changed after paired-cache validation")
-    if prefix_ground.shape != (int(episode_frame_count),):
-        raise DeploymentPoseError(
-            "ground_h_est_prefix must have one dense causal value per raw frame")
-    if prefix_ground_frames.shape != (int(episode_frame_count),):
-        raise DeploymentPoseError(
-            "ground_h_est_prefix_frame_indices must be dense [num_frames]")
-    if prefix_input_hashes.shape != (int(episode_frame_count),):
-        raise DeploymentPoseError(
-            "ground_h_est_prefix_causal_prefix_sha256 must be dense [num_frames]")
-    try:
-        prefix_frames = prefix_ground_frames.astype(np.int64)
-    except (TypeError, ValueError) as exc:
-        raise DeploymentPoseError(
-            "ground_h_est_prefix_frame_indices is not integer-valued") from exc
-    expected_frames = np.arange(int(episode_frame_count), dtype=np.int64)
-    if (not np.array_equal(prefix_ground_frames, prefix_frames)
-            or not np.array_equal(prefix_frames, expected_frames)):
-        raise DeploymentPoseError(
-            "ground_h_est_prefix_frame_indices must equal raw frame indices")
-    if prefix_semantics != CAUSAL_GROUND_PREFIX_SEMANTICS:
-        raise DeploymentPoseError(
-            "ground_h_est_prefix semantics is missing or unsupported")
-    for label, digest in (
-            ("builder", prefix_builder_sha),
-            ("configuration", prefix_configuration_sha)):
-        if (len(digest) != 64
-                or any(char not in "0123456789abcdef" for char in digest)):
+    if external_ground_scale is not None:
+        if episode_dir is None or episode_root is None:
             raise DeploymentPoseError(
-                f"ground_h_est_prefix {label} SHA256 is invalid")
-    expected_pins = {
-        "builder": expected_prefix_builder_sha256,
-        "configuration": expected_prefix_configuration_sha256,
-    }
-    actual_pins = {
-        "builder": prefix_builder_sha,
-        "configuration": prefix_configuration_sha,
-    }
-    for label, expected in expected_pins.items():
-        if (not isinstance(expected, str) or len(expected) != 64
-                or any(char not in "0123456789abcdef" for char in expected)):
+                "external ground scale requires the episode/root binding")
+        record = external_ground_scale.record
+        if record.get("valid") is not True:
             raise DeploymentPoseError(
-                f"expected ground_h_est_prefix {label} SHA256 is not pinned")
-        if actual_pins[label] != expected:
+                "external causal ground scale is unavailable for this episode")
+        prefix_end = record.get("prefix_end_frame_exclusive")
+        if (isinstance(prefix_end, bool) or not isinstance(prefix_end, int)
+                or prefix_end < 1 or prefix_end > int(decision_frame)):
             raise DeploymentPoseError(
-                f"ground_h_est_prefix {label} differs from its expected pin")
-    causal_hash = str(prefix_input_hashes[int(decision_frame) - 1])
-    if causal_hash != expected_causal_prefix_sha256:
-        raise DeploymentPoseError(
-            "ground_h_est_prefix was not built from this exact causal prefix")
-    ground_h = float(prefix_ground[int(decision_frame) - 1])
-    if not math.isfinite(ground_h) or ground_h <= 0.0:
-        raise DeploymentPoseError(
-            "causal ground_h_est_prefix is unavailable at the decision frame")
-    if not math.isfinite(float(camera_height_m)) or float(camera_height_m) <= 0.0:
-        raise DeploymentPoseError("camera_height_m must be finite and positive")
-    raw_scale = GROUND_BIAS_CORRECTION * float(camera_height_m) / ground_h
-    metric_scale = min(max(raw_scale, GROUND_SCALE_RANGE[0]), GROUND_SCALE_RANGE[1])
+                "external ground-scale prefix crosses the decision frame")
+        actual_rgb = _external_rgb_prefix_record(
+            episode_dir, episode_root, prefix_end)
+        if actual_rgb != record.get("rgb_prefix"):
+            raise DeploymentPoseError(
+                "external ground-scale RGB prefix content changed")
+        pose_prefix = pose_raw[:prefix_end]
+        if pose_prefix.dtype.str != record.get("cam_pose_prefix_dtype"):
+            raise DeploymentPoseError(
+                "external ground-scale camera-pose prefix dtype changed")
+        pose_prefix_sha = _ndarray_prefix_sha256(pose_prefix)
+        if pose_prefix_sha != record.get("cam_pose_prefix_sha256"):
+            raise DeploymentPoseError(
+                "external ground-scale camera-pose prefix changed")
+        if (record.get("cache_schema_version") != schema_version
+                or record.get("precompute_signature") != signature):
+            raise DeploymentPoseError(
+                "external ground scale was built from a different cache generation")
+        record_camera_height = record.get("camera_height_m")
+        if (isinstance(record_camera_height, bool)
+                or not isinstance(record_camera_height, (int, float))
+                or not math.isclose(float(record_camera_height),
+                                    float(camera_height_m),
+                                    rel_tol=0.0, abs_tol=1e-9)):
+            raise DeploymentPoseError(
+                "external ground-scale camera height changed")
+        configuration = external_ground_scale.configuration
+        try:
+            ground_h = float(record["ground_h_est_raw"])
+            metric_scale = float(record["metric_scale_m_per_raw"])
+            bias = float(configuration["bias_correction"])
+            scale_min = float(configuration["scale_min"])
+            scale_max = float(configuration["scale_max"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DeploymentPoseError(
+                "external ground-scale numerical record is malformed") from exc
+        if not math.isfinite(ground_h) or ground_h <= 0.0:
+            raise DeploymentPoseError(
+                "external ground-scale floor height is invalid")
+        raw_scale = bias * float(camera_height_m) / ground_h
+        expected_scale = min(max(raw_scale, scale_min), scale_max)
+        if (not all(math.isfinite(value) for value in (
+                ground_h, metric_scale, raw_scale, expected_scale))
+                or ground_h <= 0.0
+                or not math.isclose(metric_scale, expected_scale,
+                                    rel_tol=1e-6, abs_tol=1e-6)):
+            raise DeploymentPoseError(
+                "external ground scale disagrees with its pinned formula")
+        scale_provenance = {
+            "metric_scale_source": "external_causal_first_prefix_v1",
+            "external_scale_artifact_path": external_ground_scale.artifact_path,
+            "external_scale_artifact_sha256": (
+                external_ground_scale.artifact_sha256),
+            "external_scale_producer_sha256": (
+                external_ground_scale.producer_sha256),
+            "external_scale_configuration_sha256": (
+                external_ground_scale.configuration_sha256),
+            "external_scale_estimator_kind": (
+                external_ground_scale.estimator_kind),
+            "external_scale_lingbot_commit": (
+                external_ground_scale.lingbot_commit),
+            "external_scale_weights_sha256": (
+                external_ground_scale.weights_sha256),
+            "external_scale_stream_source_sha256": (
+                external_ground_scale.stream_source_sha256),
+            "external_scale_prefix_end_frame_exclusive": prefix_end,
+            "external_scale_rgb_prefix": actual_rgb,
+            "external_scale_cam_pose_prefix_sha256": pose_prefix_sha,
+            "ground_h_est_prefix_raw_at_decision": ground_h,
+            "ground_h_est_prefix_semantics": (
+                "causal_first_prefix_floor_hist_v1"),
+        }
+    else:
+        assert prefix_ground is not None
+        assert prefix_ground_frames is not None
+        assert prefix_input_hashes is not None
+        if prefix_ground.shape != (int(episode_frame_count),):
+            raise DeploymentPoseError(
+                "ground_h_est_prefix must have one dense causal value per raw frame")
+        if prefix_ground_frames.shape != (int(episode_frame_count),):
+            raise DeploymentPoseError(
+                "ground_h_est_prefix_frame_indices must be dense [num_frames]")
+        if prefix_input_hashes.shape != (int(episode_frame_count),):
+            raise DeploymentPoseError(
+                "ground_h_est_prefix_causal_prefix_sha256 must be dense [num_frames]")
+        try:
+            prefix_frames = prefix_ground_frames.astype(np.int64)
+        except (TypeError, ValueError) as exc:
+            raise DeploymentPoseError(
+                "ground_h_est_prefix_frame_indices is not integer-valued") from exc
+        expected_frames = np.arange(int(episode_frame_count), dtype=np.int64)
+        if (not np.array_equal(prefix_ground_frames, prefix_frames)
+                or not np.array_equal(prefix_frames, expected_frames)):
+            raise DeploymentPoseError(
+                "ground_h_est_prefix_frame_indices must equal raw frame indices")
+        if prefix_semantics != CAUSAL_GROUND_PREFIX_SEMANTICS:
+            raise DeploymentPoseError(
+                "ground_h_est_prefix semantics is missing or unsupported")
+        for label, digest in (
+                ("builder", prefix_builder_sha),
+                ("configuration", prefix_configuration_sha)):
+            if not _valid_hex_digest(digest):
+                raise DeploymentPoseError(
+                    f"ground_h_est_prefix {label} SHA256 is invalid")
+        expected_pins = {
+            "builder": expected_prefix_builder_sha256,
+            "configuration": expected_prefix_configuration_sha256,
+        }
+        actual_pins = {
+            "builder": prefix_builder_sha,
+            "configuration": prefix_configuration_sha,
+        }
+        for label, expected in expected_pins.items():
+            if not _valid_hex_digest(expected):
+                raise DeploymentPoseError(
+                    f"expected ground_h_est_prefix {label} SHA256 is not pinned")
+            if actual_pins[label] != expected:
+                raise DeploymentPoseError(
+                    f"ground_h_est_prefix {label} differs from its expected pin")
+        causal_hash = str(prefix_input_hashes[int(decision_frame) - 1])
+        if causal_hash != expected_causal_prefix_sha256:
+            raise DeploymentPoseError(
+                "ground_h_est_prefix was not built from this exact causal prefix")
+        ground_h = float(prefix_ground[int(decision_frame) - 1])
+        if not math.isfinite(ground_h) or ground_h <= 0.0:
+            raise DeploymentPoseError(
+                "causal ground_h_est_prefix is unavailable at the decision frame")
+        if not math.isfinite(float(camera_height_m)) or float(camera_height_m) <= 0.0:
+            raise DeploymentPoseError("camera_height_m must be finite and positive")
+        raw_scale = GROUND_BIAS_CORRECTION * float(camera_height_m) / ground_h
+        metric_scale = min(max(raw_scale, GROUND_SCALE_RANGE[0]),
+                           GROUND_SCALE_RANGE[1])
+        scale_provenance = {
+            "metric_scale_source": (
+                "clamp(1.15 * camera_height_m / "
+                "causal_ground_h_est_prefix, 0.8, 6.0)"),
+            "ground_h_est_prefix_semantics": prefix_semantics,
+            "ground_h_est_prefix_builder_sha256": prefix_builder_sha,
+            "ground_h_est_prefix_configuration_sha256": (
+                prefix_configuration_sha),
+            "ground_h_est_prefix_causal_prefix_sha256": causal_hash,
+            "ground_h_est_prefix_raw_at_decision": ground_h,
+        }
     rows = {}
     for frame in range(int(decision_frame)):
         rotation = quaternion_xyzw_to_matrix(pose[frame, 3:7])
@@ -582,6 +769,7 @@ def lingbot_deployment_se2_rows(
         "cache_sha256": cache_sha,
         "aggregator_cache_path": str(aggregator_cache_path.resolve()),
         "aggregator_cache_sha256": aggregator_sha,
+        "future_cache_payload_hashed": external_ground_scale is None,
         "cache_schema_version": schema_version,
         "precompute_signature": signature,
         "pose_frame_mapping": (
@@ -592,16 +780,9 @@ def lingbot_deployment_se2_rows(
         "ground_plane": "LingBot_xz",
         "metric_scale_m_per_raw": metric_scale,
         "metric_scale_unclamped_m_per_raw": raw_scale,
-        "metric_scale_source": (
-            "clamp(1.15 * camera_height_m / causal_ground_h_est_prefix, 0.8, 6.0)"
-        ),
-        "ground_h_est_prefix_semantics": prefix_semantics,
-        "ground_h_est_prefix_builder_sha256": prefix_builder_sha,
-        "ground_h_est_prefix_configuration_sha256": prefix_configuration_sha,
-        "ground_h_est_prefix_causal_prefix_sha256": causal_hash,
-        "ground_h_est_prefix_raw_at_decision": ground_h,
+        **scale_provenance,
         "whole_episode_ground_h_est_present_but_not_used": (
-            whole_episode_ground is not None),
+            whole_episode_ground_present),
         "camera_height_m": float(camera_height_m),
         "gt_sim2_used": False,
         "causal_dense_pose_count": len(rows),
@@ -807,6 +988,271 @@ def _scene_records(manifest: Mapping[str, object]) -> dict[str, Mapping[str, obj
     return result
 
 
+def load_external_ground_scale_bindings(
+    *,
+    path: Path | None,
+    expected_artifact_sha256: str | None,
+    expected_producer_sha256: str | None,
+    expected_configuration_sha256: str | None,
+    expected_lingbot_commit: str | None,
+    expected_weights_sha256: str | None,
+    expected_stream_source_sha256: str | None,
+    manifest: Mapping[str, object],
+    manifest_sha256: str,
+    allowed_scenes: set[str],
+    legacy_builder_pin: str | None,
+    legacy_configuration_pin: str | None,
+) -> tuple[dict[tuple[str, str], ExternalGroundScaleBinding], dict]:
+    """Load one pinned external scale artifact without importing its producer.
+
+    The producer imports this module for canonical I/O helpers, so a reverse
+    import would be cyclic.  The short hashing contract is intentionally
+    duplicated here and locked by an end-to-end unit test.
+    """
+    supplied = (
+        path,
+        expected_artifact_sha256,
+        expected_producer_sha256,
+        expected_configuration_sha256,
+        expected_lingbot_commit,
+        expected_weights_sha256,
+        expected_stream_source_sha256,
+    )
+    if not any(value is not None for value in supplied):
+        return {}, {
+            "mode": "legacy_dense_cache_prefix",
+            "artifact_path": None,
+            "artifact_sha256": None,
+        }
+    if not all(value is not None for value in supplied):
+        raise CandidateBuildError(
+            "external causal ground scale requires its path and every exact pin")
+    if legacy_builder_pin is not None or legacy_configuration_pin is not None:
+        raise CandidateBuildError(
+            "external and legacy dense ground-scale pins are mutually exclusive")
+    assert path is not None
+    assert expected_artifact_sha256 is not None
+    assert expected_producer_sha256 is not None
+    assert expected_configuration_sha256 is not None
+    assert expected_lingbot_commit is not None
+    assert expected_weights_sha256 is not None
+    assert expected_stream_source_sha256 is not None
+    if (not _valid_hex_digest(expected_artifact_sha256)
+            or not _valid_hex_digest(expected_producer_sha256)
+            or not _valid_hex_digest(expected_configuration_sha256)
+            or not _valid_hex_digest(expected_lingbot_commit, (40, 64))
+            or not _valid_hex_digest(expected_weights_sha256)
+            or not _valid_hex_digest(expected_stream_source_sha256)):
+        raise CandidateBuildError("external ground-scale pin format is invalid")
+    if not path.is_file():
+        raise CandidateBuildError(
+            f"external causal ground-scale artifact is missing: {path}")
+    raw = path.read_bytes()
+    actual_sha = sha256_bytes(raw)
+    if actual_sha != expected_artifact_sha256:
+        raise CandidateBuildError(
+            "external causal ground-scale artifact SHA changed")
+    try:
+        artifact = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise CandidateBuildError(
+            "external causal ground-scale artifact is invalid JSON") from exc
+    if not isinstance(artifact, Mapping):
+        raise CandidateBuildError(
+            "external causal ground-scale artifact must be an object")
+    if raw != canonical_json_bytes(artifact):
+        raise CandidateBuildError(
+            "external causal ground-scale artifact is not canonical JSON")
+    if artifact.get("schema_version") != CAUSAL_GROUND_SCALE_SCHEMA_VERSION:
+        raise CandidateBuildError(
+            "external causal ground-scale schema is unsupported")
+    provenance = artifact.get("provenance")
+    configuration = artifact.get("configuration")
+    records = artifact.get("records")
+    if (not isinstance(provenance, Mapping)
+            or not isinstance(configuration, Mapping)
+            or not isinstance(records, list)):
+        raise CandidateBuildError(
+            "external causal ground-scale artifact structure is malformed")
+    if provenance.get("input_manifest_sha256") != manifest_sha256:
+        raise CandidateBuildError(
+            "external ground scale was built from a different manifest")
+    configuration_sha = sha256_bytes(canonical_json_bytes(configuration))
+    if (configuration_sha != expected_configuration_sha256
+            or provenance.get("configuration_sha256") != configuration_sha):
+        raise CandidateBuildError(
+            "external ground-scale configuration pin does not match")
+    if provenance.get("producer_source_sha256") != expected_producer_sha256:
+        raise CandidateBuildError(
+            "external ground-scale producer pin does not match")
+    estimator = provenance.get("estimator")
+    if not isinstance(estimator, Mapping):
+        raise CandidateBuildError(
+            "external ground-scale estimator provenance is missing")
+    expected_estimator = {
+        "kind": "frozen_lingbot_compute_metric_scale_prefix",
+        "lingbot_commit": expected_lingbot_commit,
+        "weights_sha256": expected_weights_sha256,
+        "lingbot_stream_source_sha256": expected_stream_source_sha256,
+    }
+    for field, expected in expected_estimator.items():
+        if estimator.get(field) != expected:
+            raise CandidateBuildError(
+                f"external ground-scale estimator {field} pin does not match")
+    required_configuration = {
+        "prefix_frame_cap", "num_scale_frames", "bias_correction",
+        "scale_min", "scale_max",
+    }
+    if not required_configuration.issubset(configuration):
+        raise CandidateBuildError(
+            "external ground-scale configuration is incomplete")
+    if (type(configuration["prefix_frame_cap"]) is not int
+            or type(configuration["num_scale_frames"]) is not int):
+        raise CandidateBuildError(
+            "external ground-scale frame configuration must use integers")
+    try:
+        prefix_cap = int(configuration["prefix_frame_cap"])
+        num_scale = int(configuration["num_scale_frames"])
+        bias = float(configuration["bias_correction"])
+        scale_min = float(configuration["scale_min"])
+        scale_max = float(configuration["scale_max"])
+    except (TypeError, ValueError) as exc:
+        raise CandidateBuildError(
+            "external ground-scale configuration is not numeric") from exc
+    if (prefix_cap < num_scale or num_scale < 1
+            or not all(math.isfinite(value) for value in (
+                bias, scale_min, scale_max))
+            or bias <= 0.0 or not 0.0 < scale_min < scale_max):
+        raise CandidateBuildError(
+            "external ground-scale configuration values are invalid")
+
+    scene_table = _scene_records(manifest)
+    manifest_samples = manifest.get("samples")
+    if not isinstance(manifest_samples, list):
+        raise CandidateBuildError("causal manifest samples must be a list")
+    expected_by_episode: dict[tuple[str, str], dict[str, object]] = {}
+    for sample in manifest_samples:
+        if not isinstance(sample, Mapping):
+            raise CandidateBuildError("causal manifest sample is malformed")
+        scene = sample.get("scene")
+        episode = sample.get("source_episode")
+        sample_id = sample.get("sample_id")
+        decision = sample.get("decision_frame")
+        split_role = sample.get("split_role")
+        if (not isinstance(scene, str) or scene not in scene_table
+                or not isinstance(episode, str)
+                or not isinstance(sample_id, str)
+                or isinstance(decision, bool) or not isinstance(decision, int)
+                or split_role not in ("train", "development")):
+            raise CandidateBuildError(
+                "causal manifest sample identity is malformed")
+        key = scene, episode
+        row = expected_by_episode.setdefault(key, {
+            "sample_ids": [], "decision_frames": set(),
+            "split_roles": set(),
+        })
+        row["sample_ids"].append(sample_id)  # type: ignore[union-attr]
+        row["decision_frames"].add(decision)  # type: ignore[union-attr]
+        row["split_roles"].add(split_role)  # type: ignore[union-attr]
+    bindings: dict[tuple[str, str], ExternalGroundScaleBinding] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise CandidateBuildError(
+                "external ground-scale record is malformed")
+        scene, episode = record.get("scene"), record.get("episode")
+        if not isinstance(scene, str) or not isinstance(episode, str):
+            raise CandidateBuildError(
+                "external ground-scale episode identity is malformed")
+        key = scene, episode
+        if key not in expected_by_episode or key in bindings:
+            raise CandidateBuildError(
+                "external ground-scale episode is unknown or duplicated")
+        expected = expected_by_episode[key]
+        roles = expected["split_roles"]
+        if (not isinstance(roles, set) or len(roles) != 1
+                or record.get("split_role") != next(iter(roles))):
+            raise CandidateBuildError(
+                "external ground-scale split role differs from the manifest")
+        expected_ids = sorted(expected["sample_ids"])  # type: ignore[arg-type]
+        expected_decisions = sorted(expected["decision_frames"])  # type: ignore[arg-type]
+        if (record.get("sample_ids") != expected_ids
+                or record.get("decision_frames") != expected_decisions
+                or record.get("earliest_decision_frame")
+                != min(expected_decisions)):
+            raise CandidateBuildError(
+                "external ground-scale sample/decision binding changed")
+        scene_record = scene_table[scene]
+        episode_record = _episode_record(scene_record, episode)
+        if record.get("episode_frame_count") != episode_record.get("n_frames"):
+            raise CandidateBuildError(
+                "external ground-scale frame count differs from the manifest")
+        expected_prefix = min(prefix_cap, min(expected_decisions))
+        if (record.get("prefix_end_frame_exclusive") != expected_prefix
+                or expected_prefix < num_scale):
+            raise CandidateBuildError(
+                "external ground-scale causal prefix length changed")
+        rgb_prefix = record.get("rgb_prefix")
+        pose_sha = record.get("cam_pose_prefix_sha256")
+        pose_dtype = record.get("cam_pose_prefix_dtype")
+        if (not isinstance(rgb_prefix, Mapping)
+                or rgb_prefix.get("frame_count") != expected_prefix
+                or not _valid_hex_digest(rgb_prefix.get(
+                    "path_sequence_sha256"))
+                or not _valid_hex_digest(rgb_prefix.get(
+                    "content_sequence_sha256"))
+                or not _valid_hex_digest(pose_sha)
+                or not isinstance(pose_dtype, str) or not pose_dtype):
+            raise CandidateBuildError(
+                "external ground-scale prefix provenance is malformed")
+        valid = record.get("valid")
+        ground_h = record.get("ground_h_est_raw")
+        metric_scale = record.get("metric_scale_m_per_raw")
+        if type(valid) is not bool:
+            raise CandidateBuildError(
+                "external ground-scale validity flag is malformed")
+        if valid:
+            if (isinstance(ground_h, bool) or isinstance(metric_scale, bool)
+                    or not isinstance(ground_h, (int, float))
+                    or not isinstance(metric_scale, (int, float))
+                    or not math.isfinite(float(ground_h))
+                    or not math.isfinite(float(metric_scale))
+                    or float(ground_h) <= 0.0):
+                raise CandidateBuildError(
+                    "external ground-scale valid estimate is malformed")
+        elif ground_h is not None or metric_scale is not None:
+            raise CandidateBuildError(
+                "external ground-scale invalid estimate is not neutralized")
+        bindings[key] = ExternalGroundScaleBinding(
+            artifact_path=str(path.resolve()),
+            artifact_sha256=actual_sha,
+            producer_sha256=expected_producer_sha256,
+            configuration_sha256=configuration_sha,
+            estimator_kind=str(estimator["kind"]),
+            lingbot_commit=expected_lingbot_commit,
+            weights_sha256=expected_weights_sha256,
+            stream_source_sha256=expected_stream_source_sha256,
+            configuration=dict(configuration),
+            record=dict(record),
+        )
+    required_keys = {
+        key for key in expected_by_episode if key[0] in allowed_scenes
+    }
+    missing = required_keys - set(bindings)
+    if missing:
+        raise CandidateBuildError(
+            "external ground-scale artifact lacks selected episodes: "
+            f"{sorted(missing)[:3]}")
+    return bindings, {
+        "mode": "external_causal_first_prefix_v1",
+        "artifact_path": str(path.resolve()),
+        "artifact_sha256": actual_sha,
+        "producer_source_sha256": expected_producer_sha256,
+        "configuration_sha256": configuration_sha,
+        "estimator": dict(estimator),
+        "selected_episode_count": len(required_keys),
+    }
+
+
 def _episode_record(
     scene_record: Mapping[str, object], episode: str,
 ) -> Mapping[str, object]:
@@ -972,6 +1418,13 @@ def build_artifact(
     expected_patch_configuration_sha256: str | None = None,
     expected_ground_prefix_builder_sha256: str | None = None,
     expected_ground_prefix_configuration_sha256: str | None = None,
+    causal_ground_scale_path: Path | None = None,
+    expected_causal_ground_scale_sha256: str | None = None,
+    expected_ground_scale_producer_sha256: str | None = None,
+    expected_ground_scale_configuration_sha256: str | None = None,
+    expected_ground_scale_lingbot_commit: str | None = None,
+    expected_ground_scale_weights_sha256: str | None = None,
+    expected_ground_scale_stream_source_sha256: str | None = None,
     selected_scenes: Sequence[str] = (),
     labeler: ProposalProxyLabeler | None = None,
     depth_unit_m: float = 1e-4,
@@ -1027,6 +1480,30 @@ def build_artifact(
         expected_configuration_sha256=(
             expected_patch_configuration_sha256),
     )
+    external_scales, external_scale_provenance = (
+        load_external_ground_scale_bindings(
+            path=causal_ground_scale_path,
+            expected_artifact_sha256=(
+                expected_causal_ground_scale_sha256),
+            expected_producer_sha256=(
+                expected_ground_scale_producer_sha256),
+            expected_configuration_sha256=(
+                expected_ground_scale_configuration_sha256),
+            expected_lingbot_commit=(
+                expected_ground_scale_lingbot_commit),
+            expected_weights_sha256=(
+                expected_ground_scale_weights_sha256),
+            expected_stream_source_sha256=(
+                expected_ground_scale_stream_source_sha256),
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            allowed_scenes=allowed_scenes,
+            legacy_builder_pin=expected_ground_prefix_builder_sha256,
+            legacy_configuration_pin=(
+                expected_ground_prefix_configuration_sha256),
+        )
+    )
+    external_scale_mode = bool(external_scales)
     samples = manifest.get("samples")
     if not isinstance(samples, list):
         raise CandidateBuildError("causal manifest samples must be a list")
@@ -1180,6 +1657,9 @@ def build_artifact(
                     expected_ground_prefix_builder_sha256 or ""),
                 expected_prefix_configuration_sha256=(
                     expected_ground_prefix_configuration_sha256 or ""),
+                external_ground_scale=external_scales.get(cache_key),
+                episode_dir=cached["episode_dir"],
+                episode_root=episode_root,
                 validation_memo=cache_validation_memo,
                 content_sha_memo=cache_content_sha_memo,
             )
@@ -1208,6 +1688,9 @@ def build_artifact(
                         aggregator_cache_path.resolve()),
                     "gt_sim2_used": False,
                     "fail_closed": True,
+                    "scale_mode": external_scale_provenance["mode"],
+                    "external_scale_artifact_sha256": (
+                        external_scale_provenance.get("artifact_sha256")),
                 },
             )
         records.append({
@@ -1266,7 +1749,9 @@ def build_artifact(
     if not isinstance(split, Mapping) or not isinstance(split.get("sha256"), str):
         raise CandidateBuildError("causal manifest split provenance is malformed")
     artifact = {
-        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "schema_version": (
+            EXTERNAL_SCALE_ARTIFACT_SCHEMA_VERSION
+            if external_scale_mode else ARTIFACT_SCHEMA_VERSION),
         "purpose": (
             "NLSR-V2 J0-P causal proposal and deployment shortlist audit; "
             "not a utility-label candidate-set artifact"
@@ -1285,14 +1770,19 @@ def build_artifact(
                 expected_ground_prefix_builder_sha256),
             "expected_ground_prefix_configuration_sha256": (
                 expected_ground_prefix_configuration_sha256),
+            "causal_ground_scale": external_scale_provenance,
             "privileged_feature_policy": (
                 "GT/pathfinder outputs only in arms.*.proposal_proxy; never in "
                 "candidate_universe, shortlist, or NMS"
             ),
             "deployment_pose_policy": (
-                "header-validated versioned cache pair + dense cam_pose_enc + "
-                "causal ground_h_est_prefix in raw LingBot x-z; whole-episode "
-                "ground_h_est is rejected; no GT Sim2 or teacher fallback"
+                "header-validated versioned cache pair + dense causal "
+                "cam_pose_enc + "
+                + ("externally pinned first-prefix ground scale"
+                   if external_scale_mode
+                   else "legacy dense causal ground_h_est_prefix")
+                + " in raw LingBot x-z; whole-episode ground_h_est is "
+                "rejected; no GT Sim2 or teacher fallback"
             ),
         },
         "configuration": configuration,
@@ -1389,6 +1879,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-patch-configuration-sha")
     parser.add_argument("--expected-ground-prefix-builder-sha")
     parser.add_argument("--expected-ground-prefix-configuration-sha")
+    parser.add_argument("--causal-ground-scale", type=Path)
+    parser.add_argument("--expected-causal-ground-scale-sha")
+    parser.add_argument("--expected-ground-scale-producer-sha")
+    parser.add_argument("--expected-ground-scale-configuration-sha")
+    parser.add_argument("--expected-ground-scale-lingbot-commit")
+    parser.add_argument("--expected-ground-scale-weights-sha")
+    parser.add_argument("--expected-ground-scale-stream-source-sha")
     parser.add_argument("--scene", action="append", default=[])
     parser.add_argument("--depth-unit-m", type=float, default=1e-4)
     parser.add_argument("--depth-column-stride", type=int, default=8)
@@ -1426,6 +1923,19 @@ def main() -> None:
             args.expected_ground_prefix_builder_sha),
         expected_ground_prefix_configuration_sha256=(
             args.expected_ground_prefix_configuration_sha),
+        causal_ground_scale_path=args.causal_ground_scale,
+        expected_causal_ground_scale_sha256=(
+            args.expected_causal_ground_scale_sha),
+        expected_ground_scale_producer_sha256=(
+            args.expected_ground_scale_producer_sha),
+        expected_ground_scale_configuration_sha256=(
+            args.expected_ground_scale_configuration_sha),
+        expected_ground_scale_lingbot_commit=(
+            args.expected_ground_scale_lingbot_commit),
+        expected_ground_scale_weights_sha256=(
+            args.expected_ground_scale_weights_sha),
+        expected_ground_scale_stream_source_sha256=(
+            args.expected_ground_scale_stream_source_sha),
         selected_scenes=tuple(args.scene),
         depth_unit_m=args.depth_unit_m,
         depth_column_stride=args.depth_column_stride,

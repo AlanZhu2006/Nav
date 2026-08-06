@@ -41,7 +41,26 @@ def require(condition: bool, message: str) -> None:
 
 
 def truth(value) -> bool:
-    return bool(int(float(value)))
+    """Parse the explicit boolean encodings emitted by CSV writers.
+
+    Python's ``csv`` module returns strings, and different evaluators have
+    historically written either ``0/1`` or ``False/True``.  Accept only those
+    exact semantic forms; values such as ``2``, ``yes`` or NaN must not be
+    silently treated as true in an audited summary.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        require(math.isfinite(float(value)) and float(value) in (0.0, 1.0),
+                f"invalid boolean value: {value!r}")
+        return bool(int(value))
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1"):
+            return True
+        if normalized in ("false", "0"):
+            return False
+    raise RuntimeError(f"invalid boolean value: {value!r}")
 
 
 def load_arm(scene_root: Path, scene: str, arm: str) -> dict:

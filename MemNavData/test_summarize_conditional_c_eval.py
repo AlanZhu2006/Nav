@@ -1,6 +1,10 @@
 import unittest
 
-from MemNavData.summarize_conditional_c_eval import compare, summarize_rows
+from MemNavData.summarize_conditional_c_eval import (
+    compare,
+    summarize_rows,
+    truth,
+)
 
 
 class ConditionalCSummaryTest(unittest.TestCase):
@@ -37,6 +41,20 @@ class ConditionalCSummaryTest(unittest.TestCase):
         paired = compare("top1", "topk", left, right, {key_a, key_b})
         self.assertEqual(paired["outcomes"]["right_only"], 1)
         self.assertEqual(paired["conditional_C_SR_delta_right_minus_left"], 0.5)
+
+    def test_truth_accepts_csv_bool_and_binary_encodings(self):
+        for value in (True, 1, 1.0, "1", "True", " true "):
+            with self.subTest(value=value):
+                self.assertIs(truth(value), True)
+        for value in (False, 0, 0.0, "0", "False", " false "):
+            with self.subTest(value=value):
+                self.assertIs(truth(value), False)
+
+    def test_truth_rejects_ambiguous_or_nonfinite_values(self):
+        for value in (None, "", "yes", "2", 2, -1, float("nan")):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(RuntimeError, "invalid boolean"):
+                    truth(value)
 
 
 if __name__ == "__main__":

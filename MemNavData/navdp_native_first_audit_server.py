@@ -42,7 +42,7 @@ EXPECTED_DETERMINISTIC_SEED_SHA256 = (
     "1679bd8eb6ce70fde02fcc15abcd4fbff8ae1a0b8a0fa350a357c574b98b4463"
 )
 AUDIT_PROTOCOL = "navdp_native_first_fifo_v1"
-ATOMIC_PLAN_PROTOCOL = "navdp_native_first_atomic_plan_v1"
+ATOMIC_PLAN_PROTOCOL = "navdp_native_first_atomic_plan_v2"
 ATOMIC_PLAN_MODES = frozenset(("native", "image_point"))
 MAX_DIFFUSION_SEED = 2**63 - 1
 
@@ -172,17 +172,26 @@ def snapshot_memory(agent: object) -> dict[str, object]:
     """Return content hashes for the exact queue consumed by NavDP."""
     queues = getattr(agent, "memory_queue", None)
     memory_size = getattr(agent, "memory_size", None)
-    batch_size = getattr(agent, "batch_size", None)
+    raw_batch_size = getattr(agent, "batch_size", None)
     _require(isinstance(queues, list), "agent memory_queue is unavailable")
     _require(
         isinstance(memory_size, int) and not isinstance(memory_size, bool),
         "agent memory_size is unavailable",
     )
+    # The unmodified NavDP server stores ``batch_size`` as the zero-dimensional
+    # NumPy integer produced by ``np.array(payload["batch_size"])``.  Treat it
+    # as the same scalar contract as a Python integer, while rejecting floats,
+    # booleans, and non-scalar arrays.
+    batch_array = np.asarray(raw_batch_size)
     _require(
-        isinstance(batch_size, int)
-        and not isinstance(batch_size, bool)
-        and batch_size >= 1
-        and len(queues) == batch_size,
+        batch_array.shape == ()
+        and np.issubdtype(batch_array.dtype, np.integer)
+        and not np.issubdtype(batch_array.dtype, np.bool_),
+        "agent batch_size is not an integer scalar",
+    )
+    batch_size = int(batch_array.item())
+    _require(
+        batch_size >= 1 and len(queues) == batch_size,
         "agent FIFO count disagrees with batch_size",
     )
     queue_item_sha256 = [
@@ -347,7 +356,15 @@ def _validate_prediction_outputs(
     outputs: object,
     stop_threshold: object,
     mode: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    float,
+    float,
+    bool,
+]:
     _require(
         isinstance(outputs, (tuple, list)) and len(outputs) == 4,
         f"NavDP {mode} predictor returned an unexpected structure",
@@ -365,22 +382,54 @@ def _validate_prediction_outputs(
         f"NavDP {mode} predictor returned non-finite outputs",
     )
     _require(all_values.size > 0, f"NavDP {mode} predictor returned no values")
+    threshold_array = np.asarray(stop_threshold)
     _require(
-        isinstance(stop_threshold, (int, float, np.number))
-        and bool(np.isfinite(stop_threshold)),
+        threshold_array.shape == ()
+        and np.issubdtype(threshold_array.dtype, np.number)
+        and not np.issubdtype(threshold_array.dtype, np.bool_)
+        and bool(np.isfinite(threshold_array)),
         "agent stop_threshold is unavailable",
     )
+    threshold = float(threshold_array.item())
     _require(
         good_trajectory.ndim == 4
         and good_trajectory.shape[1] >= 1
-        and good_trajectory.shape[-1] >= 2,
+        and good_trajectory.shape[-2:] == (24, 3),
         f"NavDP {mode} good trajectory has no executable candidate",
     )
-    if float(all_values.max()) < float(stop_threshold):
+    _require(
+        all_trajectory.ndim == 4
+        and all_trajectory.shape[0] == good_trajectory.shape[0]
+        and all_trajectory.shape[-2:] == good_trajectory.shape[-2:],
+        f"NavDP {mode} candidate trajectories changed shape",
+    )
+    _require(
+        all_values.ndim == 2
+        and all_values.shape[:1] == all_trajectory.shape[:1]
+        and all_values.shape[1] == all_trajectory.shape[1],
+        f"NavDP {mode} critic values disagree with candidate trajectories",
+    )
+    raw_execute = good_trajectory[:, 0].copy()
+    critic_max = float(all_values.max())
+    fallback_applied = critic_max < threshold
+    if fallback_applied:
         good_trajectory[:, :, :, 0] = 0.0
         good_trajectory[:, :, :, 1] = np.sign(
             good_trajectory[:, :, :, 1].mean())
-    return good_trajectory[:, 0], all_trajectory, all_values
+    execute = good_trajectory[:, 0]
+    _require(
+        bool(np.array_equal(execute[:, :, 2], raw_execute[:, :, 2])),
+        f"NavDP {mode} low-critic fallback changed trajectory theta",
+    )
+    return (
+        execute,
+        raw_execute,
+        all_trajectory,
+        all_values,
+        critic_max,
+        threshold,
+        fallback_applied,
+    )
 
 
 def atomic_native_first_plan(
@@ -472,8 +521,15 @@ def atomic_native_first_plan(
             )
             outputs = agent.navi_former.predict_ip_action(
                 processed_point_goal, goal, input_images, depth)
-        execute, all_trajectory, all_values = _validate_prediction_outputs(
-            outputs, agent.stop_threshold, mode)
+        (
+            execute,
+            raw_execute,
+            all_trajectory,
+            all_values,
+            critic_max,
+            stop_threshold,
+            fallback_applied,
+        ) = _validate_prediction_outputs(outputs, agent.stop_threshold, mode)
 
         _require_current_tail_hashes(
             agent, current_item_hashes, "after diffusion inference")
@@ -502,6 +558,11 @@ def atomic_native_first_plan(
         "fifo_lengths_before": before["queue_lengths"],
         "fifo_lengths_after": after_append["queue_lengths"],
         "point_goal_sha256": point_goal_hash,
+        "critic_max": critic_max,
+        "stop_threshold": stop_threshold,
+        "low_critic_fallback_applied": fallback_applied,
+        "raw_selected_trajectory": raw_execute.tolist(),
+        "executable_trajectory": execute.tolist(),
         "inference_fifo_unchanged": True,
         "append_count_per_environment": 1,
     }
@@ -538,6 +599,49 @@ def verify_same_prefix_plan_receipts(
             receipt.get("inference_fifo_unchanged") is True,
             f"{name} receipt did not prove read-only inference",
         )
+        try:
+            critic_max = float(receipt.get("critic_max"))
+            stop_threshold = float(receipt.get("stop_threshold"))
+            raw_selected = np.asarray(
+                receipt.get("raw_selected_trajectory"), dtype=np.float64)
+            executable = np.asarray(
+                receipt.get("executable_trajectory"), dtype=np.float64)
+        except (TypeError, ValueError) as error:
+            raise NativeFirstAuditError(
+                f"{name} receipt trajectory diagnostics are invalid") from error
+        fallback = receipt.get("low_critic_fallback_applied")
+        _require(
+            not isinstance(receipt.get("critic_max"), (bool, np.bool_))
+            and not isinstance(receipt.get("stop_threshold"), (bool, np.bool_))
+            and np.isfinite(critic_max)
+            and np.isfinite(stop_threshold)
+            and isinstance(fallback, bool)
+            and fallback == (critic_max < stop_threshold),
+            f"{name} receipt low-critic decision is invalid",
+        )
+        _require(
+            raw_selected.ndim == 3
+            and raw_selected.shape[-2:] == (24, 3)
+            and executable.shape == raw_selected.shape
+            and bool(np.isfinite(raw_selected).all())
+            and bool(np.isfinite(executable).all()),
+            f"{name} receipt trajectories are malformed",
+        )
+        if fallback:
+            _require(
+                bool(np.all(executable[:, :, 0] == 0.0))
+                and bool(np.all(
+                    executable[:, :, 1] == executable[0, 0, 1]))
+                and float(executable[0, 0, 1]) in (-1.0, 0.0, 1.0)
+                and bool(np.array_equal(
+                    executable[:, :, 2], raw_selected[:, :, 2])),
+                f"{name} receipt fallback trajectory is invalid",
+            )
+        else:
+            _require(
+                bool(np.array_equal(executable, raw_selected)),
+                f"{name} receipt changed a non-fallback trajectory",
+            )
         claimed_sha = receipt.get("receipt_sha256")
         unsigned = dict(receipt)
         unsigned.pop("receipt_sha256", None)
@@ -557,6 +661,7 @@ def verify_same_prefix_plan_receipts(
         "fifo_item_sha256",
         "fifo_lengths_before",
         "fifo_lengths_after",
+        "stop_threshold",
     )
     for field in compared:
         _require(
@@ -731,8 +836,13 @@ def register_audit_routes(base: object, provenance: Mapping[str, str]) -> None:
             return base.jsonify({"error": str(error)}), 409
         return base.jsonify({
             "trajectory": execute.tolist(),
+            "raw_selected_trajectory": receipt["raw_selected_trajectory"],
             "all_trajectory": all_trajectory.tolist(),
             "all_values": all_values.tolist(),
+            "critic_max": receipt["critic_max"],
+            "stop_threshold": receipt["stop_threshold"],
+            "low_critic_fallback_applied": (
+                receipt["low_critic_fallback_applied"]),
             "receipt": receipt,
             "provenance": dict(provenance),
         })

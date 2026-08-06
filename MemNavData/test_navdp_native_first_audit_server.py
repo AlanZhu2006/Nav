@@ -8,6 +8,7 @@ import numpy as np
 from MemNavData.navdp_native_first_audit_server import (
     NativeFirstAuditError,
     atomic_native_first_plan,
+    canonical_json_sha256,
     ndarray_sha256,
     padded_fifo_tensor,
     resample_point_image_goal_read_only,
@@ -31,9 +32,14 @@ class FakePolicy:
                 np.full_like(self.owner.memory_queue[0][-1], 0.25))
         if self.mutate:
             self.owner.memory_queue[0][-1][0, 0, 0] += 0.5
-        batch = self.owner.batch_size
-        all_trajectory = np.ones((batch, 4, 24, 2), dtype=np.float32)
-        all_values = np.ones((batch, 4), dtype=np.float32)
+        batch = int(self.owner.batch_size)
+        all_trajectory = np.zeros((batch, 4, 24, 3), dtype=np.float32)
+        steps = np.arange(1, 25, dtype=np.float32)
+        all_trajectory[:, :, :, 0] = steps[None, None, :] * 0.1
+        all_trajectory[:, :, :, 1] = 0.25
+        all_trajectory[:, :, :, 2] = steps[None, None, :] * 0.01
+        all_values = np.full(
+            (batch, 4), self.owner.critic_value, dtype=np.float32)
         good = all_trajectory[:, :1].copy()
         bad = all_trajectory[:, 1:2].copy()
         return all_trajectory, all_values, good, bad
@@ -54,10 +60,18 @@ class FakePolicy:
 
 
 class FakeAgent:
-    def __init__(self, *, mutate=False, extra_append=False, first_value=0.0):
+    def __init__(
+        self,
+        *,
+        mutate=False,
+        extra_append=False,
+        first_value=0.0,
+        critic_value=1.0,
+    ):
         self.memory_size = 3
         self.batch_size = 1
         self.stop_threshold = -0.5
+        self.critic_value = critic_value
         self.applied_seed = None
         current = np.full((2, 2, 3), 7.0 / 255.0, dtype=np.float32)
         self.memory_queue = [[
@@ -146,13 +160,27 @@ class NavDPNativeFirstAuditServerTest(unittest.TestCase):
         agent.memory_queue[0][-1][0, 0, 0] += 0.1
         self.assertNotEqual(first["fifo_sha256"], snapshot_memory(agent)["fifo_sha256"])
 
+    def test_snapshot_accepts_unmodified_server_numpy_batch_scalar(self):
+        agent = FakeAgent()
+        agent.batch_size = np.asarray(1, dtype=np.int64)
+        self.assertEqual(snapshot_memory(agent)["queue_lengths"], [2])
+
+    def test_snapshot_rejects_noninteger_or_nonscalar_batch_size(self):
+        for bad in (np.asarray([1], dtype=np.int64), 1.0, True):
+            agent = FakeAgent()
+            agent.batch_size = bad
+            with self.subTest(batch_size=repr(bad)):
+                with self.assertRaisesRegex(
+                        NativeFirstAuditError, "integer scalar"):
+                    snapshot_memory(agent)
+
     def test_read_only_mixed_resample_preserves_fifo(self):
         agent = FakeAgent()
         before = snapshot_memory(agent)
         execute, trajectories, values, audit = (
             resample_point_image_goal_read_only(agent, *inputs()))
-        self.assertEqual(execute.shape, (1, 24, 2))
-        self.assertEqual(trajectories.shape, (1, 4, 24, 2))
+        self.assertEqual(execute.shape, (1, 24, 3))
+        self.assertEqual(trajectories.shape, (1, 4, 24, 3))
         self.assertEqual(values.shape, (1, 4))
         self.assertEqual(before, snapshot_memory(agent))
         self.assertEqual(audit["fifo_before"], audit["fifo_after"])
@@ -194,6 +222,45 @@ class NavDPNativeFirstAuditServerTest(unittest.TestCase):
         self.assertEqual(
             snapshot_memory(native_agent), snapshot_memory(residual_agent))
 
+    def test_atomic_accepts_unmodified_server_numpy_threshold_scalar(self):
+        agent = FakeAgent()
+        agent.stop_threshold = np.asarray(-0.5, dtype=np.float64)
+        execute, trajectories, values, _receipt = run_atomic(agent, "native")
+        self.assertEqual(execute.shape, (1, 24, 3))
+        self.assertEqual(trajectories.shape, (1, 4, 24, 3))
+        self.assertEqual(values.shape, (1, 4))
+
+    def test_low_critic_fallback_is_bound_and_preserves_theta(self):
+        agent = FakeAgent(critic_value=-0.5001)
+        execute, _trajectories, _values, receipt = run_atomic(agent, "native")
+        raw = np.asarray(receipt["raw_selected_trajectory"])
+        bound_execute = np.asarray(receipt["executable_trajectory"])
+
+        self.assertTrue(receipt["low_critic_fallback_applied"])
+        self.assertAlmostEqual(receipt["critic_max"], -0.5001, places=6)
+        self.assertEqual(receipt["stop_threshold"], -0.5)
+        self.assertTrue(np.array_equal(execute, bound_execute))
+        self.assertTrue(np.all(execute[:, :, 0] == 0.0))
+        self.assertTrue(np.all(execute[:, :, 1] == 1.0))
+        self.assertTrue(np.array_equal(execute[:, :, 2], raw[:, :, 2]))
+        self.assertFalse(np.array_equal(execute[:, :, :2], raw[:, :, :2]))
+
+    def test_low_critic_fallback_uses_strict_less_than_boundary(self):
+        agent = FakeAgent(critic_value=-0.5)
+        execute, _trajectories, _values, receipt = run_atomic(agent, "native")
+        raw = np.asarray(receipt["raw_selected_trajectory"])
+
+        self.assertFalse(receipt["low_critic_fallback_applied"])
+        self.assertEqual(receipt["critic_max"], receipt["stop_threshold"])
+        self.assertTrue(np.array_equal(execute, raw))
+
+    def test_atomic_rejects_nonscalar_threshold(self):
+        agent = FakeAgent()
+        agent.stop_threshold = np.asarray([-0.5], dtype=np.float64)
+        with self.assertRaisesRegex(
+                NativeFirstAuditError, "stop_threshold"):
+            run_atomic(agent, "native")
+
     def test_atomic_prefix_comparison_is_order_independent(self):
         residual = run_atomic(FakeAgent(), "image_point")[3]
         native = run_atomic(FakeAgent(), "native")[3]
@@ -217,6 +284,15 @@ class NavDPNativeFirstAuditServerTest(unittest.TestCase):
             FakeAgent(first_value=0.125), "image_point")[3]
         with self.assertRaisesRegex(NativeFirstAuditError, "fifo_before"):
             verify_same_prefix_plan_receipts(native, wrong_fifo)
+
+        wrong_threshold = run_atomic(
+            FakeAgent(), "image_point")[3]
+        wrong_threshold["stop_threshold"] = -0.4
+        unsigned = dict(wrong_threshold)
+        unsigned.pop("receipt_sha256")
+        wrong_threshold["receipt_sha256"] = canonical_json_sha256(unsigned)
+        with self.assertRaisesRegex(NativeFirstAuditError, "stop_threshold"):
+            verify_same_prefix_plan_receipts(native, wrong_threshold)
 
     def test_atomic_rejects_non_tail_or_extra_append_and_rolls_back(self):
         mutating = FakeAgent(mutate=True)

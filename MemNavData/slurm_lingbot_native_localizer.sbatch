@@ -43,6 +43,8 @@ PER_CLASS=${PER_CLASS:-2}
 TOP_K=${TOP_K:-4}
 FULL_REPLAY=${FULL_REPLAY:-1}
 NEIGHBOR_OFFSETS=${NEIGHBOR_OFFSETS:-0}
+MAX_CACHED_EPISODES=${MAX_CACHED_EPISODES:-1}
+RESUME_RUN_ROOT=${RESUME_RUN_ROOT:-}
 
 [[ "${RUN_PREFIX}" =~ ^[A-Za-z0-9_.-]+$ ]] || {
   echo "ABORT: invalid RUN_PREFIX=${RUN_PREFIX}" >&2; exit 1; }
@@ -60,6 +62,8 @@ NEIGHBOR_OFFSETS=${NEIGHBOR_OFFSETS:-0}
   echo "ABORT: TOP_K must be a positive integer" >&2; exit 1; }
 [[ "${FULL_REPLAY}" =~ ^[01]$ ]] || {
   echo "ABORT: FULL_REPLAY must be 0 or 1" >&2; exit 1; }
+[[ "${MAX_CACHED_EPISODES}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ABORT: MAX_CACHED_EPISODES must be positive" >&2; exit 1; }
 [[ "${NEIGHBOR_OFFSETS}" =~ ^-?[0-9]+(\|-?[0-9]+)*$ ]] || {
   echo "ABORT: invalid NEIGHBOR_OFFSETS=${NEIGHBOR_OFFSETS}" >&2; exit 1; }
 [[ "|${NEIGHBOR_OFFSETS}|" == *"|0|"* ]] || {
@@ -71,7 +75,18 @@ fi
 
 ROOT=${ROOT:-/scratch/yz11502/Research/Nav-graph-blind}
 RESULT_BASE=${RESULT_BASE:-/scratch/yz11502/Research/Nav-axis-uturn-results/lingbot_native_localizer_20260806}
-RUN_ROOT=${RESULT_BASE}/${RUN_PREFIX}_job_${SLURM_JOB_ID}
+RESUME=0
+if [[ -n "${RESUME_RUN_ROOT}" ]]; then
+  RUN_ROOT=$(realpath -m "${RESUME_RUN_ROOT}")
+  result_base_absolute=$(realpath -m "${RESULT_BASE}")
+  [[ "${RUN_ROOT}" == "${result_base_absolute}"/* ]] || {
+    echo "ABORT: resume root must be below ${result_base_absolute}" >&2
+    exit 1
+  }
+  RESUME=1
+else
+  RUN_ROOT=${RESULT_BASE}/${RUN_PREFIX}_job_${SLURM_JOB_ID}
+fi
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 OVERLAY=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
 MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python
@@ -109,8 +124,15 @@ for task_file in \
   git -C "${ROOT}" diff --cached --quiet -- "${task_file}" || {
     echo "ABORT: staged task-file change: ${task_file}" >&2; exit 1; }
 done
-[[ ! -e "${RUN_ROOT}" ]] || {
-  echo "ABORT: output already exists: ${RUN_ROOT}" >&2; exit 1; }
+if [[ "${RESUME}" -eq 1 ]]; then
+  test -r "${RUN_ROOT}/lingbot_goal_loop_closure_checkpoint.sqlite3" || {
+    echo "ABORT: resume checkpoint is missing from ${RUN_ROOT}" >&2
+    exit 1
+  }
+else
+  [[ ! -e "${RUN_ROOT}" ]] || {
+    echo "ABORT: output already exists: ${RUN_ROOT}" >&2; exit 1; }
+fi
 
 [[ "$(sha256sum "${TEACHER_CSV}" | awk '{print $1}')" == \
     "${EXPECTED_TEACHER_SHA}" ]] || {
@@ -127,8 +149,9 @@ overlay_head_sha=$(dd if="${OVERLAY}" bs=1048576 count=1 status=none | \
 
 mkdir -p "${RESULT_BASE}"
 cd "${ROOT}"
-echo "host=$(hostname) job=${SLURM_JOB_ID} commit=${EXPECTED_COMMIT} mode=${SELECTION_MODE} kind=${KIND} role=${SCENE_ROLE} full_replay=${FULL_REPLAY}"
+echo "host=$(hostname) job=${SLURM_JOB_ID} commit=${EXPECTED_COMMIT} mode=${SELECTION_MODE} kind=${KIND} role=${SCENE_ROLE} full_replay=${FULL_REPLAY} resume=${RESUME} max_cached_episodes=${MAX_CACHED_EPISODES}"
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
 COMMON_ARGS=(
   --internnav-root "${ROOT}/InternNav"
@@ -151,6 +174,7 @@ COMMON_ARGS=(
   --window 32
   --pixel-stride 10
   --max-points 768
+  --max-cached-episodes "${MAX_CACHED_EPISODES}"
 )
 if [[ "${FULL_REPLAY}" == 1 ]]; then
   COMMON_ARGS+=(--full-replay)
@@ -164,6 +188,9 @@ if [[ "${LOOP_SESSIONS}" != "all" ]]; then
   for session in "${selected_sessions[@]}"; do
     [[ -n "${session}" ]] && COMMON_ARGS+=(--session "${session}")
   done
+fi
+if [[ "${RESUME}" -eq 1 ]]; then
+  COMMON_ARGS+=(--resume)
 fi
 
 # Preflight and the real run execute in the exact same container and overlay.

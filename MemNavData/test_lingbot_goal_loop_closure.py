@@ -6,7 +6,9 @@ import numpy as np
 import pandas as pd
 
 from MemNavData.diag_lingbot_goal_loop_closure import (
+    BoundedEpisodeCache,
     CandidateSeed,
+    CollectionCheckpoint,
     _HABITAT_TO_DATA_ROTATION,
     lingbot_relative_prediction,
     navdp_ground_truth_relative,
@@ -123,6 +125,85 @@ class LingBotGoalLoopClosureTest(unittest.TestCase):
         self.assertAlmostEqual(
             errors["relative_position_direction_error_deg"], 0.0)
         self.assertAlmostEqual(errors["relative_rotation_error_deg"], 0.0)
+
+    def test_episode_cache_is_bounded_and_evicts_lru(self):
+        evicted = []
+        cache = BoundedEpisodeCache(
+            2, on_evict=lambda key, value: evicted.append((key, value)))
+        first = cache.get_or_load(("scene", "ep0"), lambda: {"value": 0})
+        cache.get_or_load(("scene", "ep1"), lambda: {"value": 1})
+        self.assertIs(
+            cache.get_or_load(
+                ("scene", "ep0"), lambda: self.fail("unexpected reload")),
+            first,
+        )
+        cache.get_or_load(("scene", "ep2"), lambda: {"value": 2})
+        self.assertEqual(evicted, [(('scene', 'ep1'), {"value": 1})])
+        self.assertEqual(len(cache), 2)
+        cache.clear()
+        self.assertEqual(len(cache), 0)
+        self.assertEqual(
+            [item[0] for item in evicted],
+            [("scene", "ep1"), ("scene", "ep0"), ("scene", "ep2")],
+        )
+
+    def test_collection_checkpoint_is_session_atomic_and_resumable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "checkpoint.sqlite3"
+            signature = {"seed_manifest_sha256": "fixed", "total": 3}
+            checkpoint = CollectionCheckpoint(
+                path, signature, resume=False)
+            checkpoint.save_session(
+                "session_a",
+                [1, 2],
+                [(1, {"session_id": "session_a", "value": 10})],
+            )
+            checkpoint.close()
+
+            with self.assertRaises(FileExistsError):
+                CollectionCheckpoint(path, signature, resume=False)
+            with self.assertRaisesRegex(RuntimeError, "signature mismatch"):
+                CollectionCheckpoint(
+                    path, {"seed_manifest_sha256": "different"},
+                    resume=True)
+
+            resumed = CollectionCheckpoint(path, signature, resume=True)
+            self.assertEqual(resumed.completed_sessions(), {"session_a"})
+            self.assertEqual(resumed.last_completed_session(), "session_a")
+            self.assertEqual(
+                resumed.rows(),
+                [{"session_id": "session_a", "value": 10}],
+            )
+            with self.assertRaisesRegex(
+                    RuntimeError, "already checkpointed"):
+                resumed.save_session(
+                    "session_corrupt", [1],
+                    [(1, {"session_id": "session_corrupt", "value": 99})],
+                )
+            self.assertNotIn(
+                "session_corrupt", resumed.completed_sessions())
+            self.assertEqual(len(resumed.rows()), 1)
+            # A complete session may legitimately have no row when all of its
+            # anchors fall outside the valid cache range.
+            resumed.save_session("session_b", [3], [])
+            progress = resumed.progress(
+                total_sessions=2, total_seeds=3,
+                status="collecting", last_session="session_b")
+            self.assertEqual(progress["completed_sessions"], 2)
+            self.assertEqual(progress["completed_seeds"], 3)
+            self.assertEqual(progress["saved_rows"], 1)
+            self.assertEqual(progress["signature_sha256"],
+                             "2971febdfceed9566549f83aa0600351"
+                             "ec0b8f2c3db7b9da128b643254fe4aea")
+            resumed.close()
+
+    def test_slurm_collection_exposes_bounded_cache_and_resume(self):
+        script = (Path(__file__).resolve().parent
+                  / "slurm_lingbot_native_localizer.sbatch").read_text()
+        self.assertIn("--max-cached-episodes", script)
+        self.assertIn("RESUME_RUN_ROOT", script)
+        self.assertIn("--resume", script)
+        self.assertIn("PYTORCH_CUDA_ALLOC_CONF", script)
 
 
 if __name__ == "__main__":

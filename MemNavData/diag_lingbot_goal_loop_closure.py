@@ -23,11 +23,16 @@ Thresholds must not be chosen from final-reserved scenes.
 from __future__ import annotations
 
 import argparse
+from collections import OrderedDict
+import gc
 import hashlib
 import json
 import math
+import os
+import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,6 +89,233 @@ _HABITAT_TO_DATA_ROTATION = np.array([
 ], dtype=np.float64)
 _LINGBOT_TO_DATA_ROTATION_BASIS = np.diag([-1.0, -1.0, 1.0])
 _DEFAULT_POOLED_METRIC_SCALE = 2.564
+_CHECKPOINT_SCHEMA_VERSION = 1
+_CHECKPOINT_FILENAME = "lingbot_goal_loop_closure_checkpoint.sqlite3"
+_PROGRESS_FILENAME = "lingbot_goal_loop_closure_progress.json"
+_ROWS_FILENAME = "lingbot_goal_loop_closure_rows.csv"
+_REPORT_FILENAME = "diagnostic_lingbot_goal_loop_closure.json"
+
+
+def canonical_json(value: object) -> str:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def atomic_write_json(path: Path, value: object) -> None:
+    """Durably replace one small JSON artifact in its destination directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def atomic_write_frame(path: Path, frame: pd.DataFrame) -> None:
+    """Durably replace a CSV after it has been completely serialized."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    os.close(descriptor)
+    temporary_path = Path(temporary)
+    try:
+        frame.to_csv(temporary_path, index=False)
+        with temporary_path.open("rb+") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+class BoundedEpisodeCache:
+    """Small explicit LRU whose evictions can release accelerator state."""
+
+    def __init__(self, capacity: int, on_evict=None) -> None:
+        if capacity < 1:
+            raise ValueError("episode cache capacity must be positive")
+        self.capacity = int(capacity)
+        self.on_evict = on_evict
+        self._values: "OrderedDict[Tuple[str, str], dict]" = OrderedDict()
+
+    def get_or_load(self, key: Tuple[str, str], loader):
+        if key in self._values:
+            self._values.move_to_end(key)
+            return self._values[key]
+        while len(self._values) >= self.capacity:
+            old_key, old_value = self._values.popitem(last=False)
+            if self.on_evict is not None:
+                self.on_evict(old_key, old_value)
+            del old_value
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        value = loader()
+        self._values[key] = value
+        return value
+
+    def clear(self) -> None:
+        while self._values:
+            key, value = self._values.popitem(last=False)
+            if self.on_evict is not None:
+                self.on_evict(key, value)
+            del value
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+
+class CollectionCheckpoint:
+    """SQLite-backed, session-atomic collector checkpoint.
+
+    Candidate measurements for a session and its completion marker commit in
+    one transaction. A crash can therefore lose at most the current session,
+    and a resumed run never treats a partially written session as complete.
+    """
+
+    def __init__(self, path: Path, signature: dict, *, resume: bool) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        existed = self.path.exists()
+        if existed and not resume:
+            raise FileExistsError(
+                f"collector checkpoint already exists: {self.path}")
+        if resume and not existed:
+            raise FileNotFoundError(
+                f"resume checkpoint does not exist: {self.path}")
+        self.signature_json = canonical_json(signature)
+        self.connection = sqlite3.connect(str(self.path), timeout=60.0)
+        self.connection.execute("PRAGMA journal_mode=DELETE")
+        self.connection.execute("PRAGMA synchronous=FULL")
+        self.connection.executescript("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS rows (
+                seed_index INTEGER PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS completed_sessions (
+                session_id TEXT PRIMARY KEY,
+                first_seed_index INTEGER NOT NULL,
+                last_seed_index INTEGER NOT NULL,
+                expected_seed_count INTEGER NOT NULL,
+                row_count INTEGER NOT NULL
+            );
+        """)
+        if not existed:
+            with self.connection:
+                self.connection.execute(
+                    "INSERT INTO metadata(key, value) VALUES (?, ?)",
+                    ("schema_version", str(_CHECKPOINT_SCHEMA_VERSION)))
+                self.connection.execute(
+                    "INSERT INTO metadata(key, value) VALUES (?, ?)",
+                    ("signature_json", self.signature_json))
+        else:
+            metadata = dict(self.connection.execute(
+                "SELECT key, value FROM metadata").fetchall())
+            if metadata.get("schema_version") != str(
+                    _CHECKPOINT_SCHEMA_VERSION):
+                self.connection.close()
+                raise RuntimeError("collector checkpoint schema mismatch")
+            if metadata.get("signature_json") != self.signature_json:
+                self.connection.close()
+                raise RuntimeError("collector checkpoint signature mismatch")
+
+    def close(self) -> None:
+        self.connection.close()
+
+    def completed_sessions(self) -> set[str]:
+        return {
+            str(row[0]) for row in self.connection.execute(
+                "SELECT session_id FROM completed_sessions")
+        }
+
+    def last_completed_session(self) -> Optional[str]:
+        row = self.connection.execute(
+            "SELECT session_id FROM completed_sessions "
+            "ORDER BY last_seed_index DESC LIMIT 1").fetchone()
+        return str(row[0]) if row is not None else None
+
+    def save_session(
+        self,
+        session_id: str,
+        seed_indices: Sequence[int],
+        row_records: Sequence[Tuple[int, dict]],
+    ) -> None:
+        indices = [int(value) for value in seed_indices]
+        if not indices:
+            raise ValueError("cannot checkpoint an empty seed session")
+        if len(indices) != len(set(indices)):
+            raise ValueError("session seed indices are not unique")
+        expected = set(indices)
+        row_indices = [int(index) for index, _row in row_records]
+        if len(row_indices) != len(set(row_indices)):
+            raise ValueError("session row indices are not unique")
+        if not set(row_indices).issubset(expected):
+            raise ValueError("session rows contain an unexpected seed index")
+        for _index, row in row_records:
+            if str(row.get("session_id")) != str(session_id):
+                raise ValueError("row session differs from checkpoint session")
+        try:
+            with self.connection:
+                for seed_index, row in row_records:
+                    self.connection.execute(
+                        "INSERT INTO rows(seed_index, session_id, payload_json) "
+                        "VALUES (?, ?, ?)",
+                        (int(seed_index), str(session_id),
+                         json.dumps(row)))
+                self.connection.execute(
+                    "INSERT INTO completed_sessions("
+                    "session_id, first_seed_index, last_seed_index, "
+                    "expected_seed_count, row_count) VALUES (?, ?, ?, ?, ?)",
+                    (str(session_id), min(indices), max(indices), len(indices),
+                     len(row_records)))
+        except sqlite3.IntegrityError as error:
+            raise RuntimeError(
+                f"collector session was already checkpointed: {session_id}") \
+                from error
+
+    def rows(self) -> List[dict]:
+        return [
+            json.loads(payload) for (payload,) in self.connection.execute(
+                "SELECT payload_json FROM rows ORDER BY seed_index")
+        ]
+
+    def progress(self, *, total_sessions: int, total_seeds: int,
+                 status: str, last_session: Optional[str]) -> dict:
+        completed = int(self.connection.execute(
+            "SELECT COUNT(*) FROM completed_sessions").fetchone()[0])
+        rows = int(self.connection.execute(
+            "SELECT COUNT(*) FROM rows").fetchone()[0])
+        seeds = int(self.connection.execute(
+            "SELECT COALESCE(SUM(expected_seed_count), 0) "
+            "FROM completed_sessions").fetchone()[0])
+        return {
+            "status": status,
+            "schema_version": _CHECKPOINT_SCHEMA_VERSION,
+            "completed_sessions": completed,
+            "total_sessions": int(total_sessions),
+            "completed_seeds": seeds,
+            "total_seeds": int(total_seeds),
+            "saved_rows": rows,
+            "last_completed_session": last_session,
+            "checkpoint": str(self.path.resolve()),
+            "signature_sha256": hashlib.sha256(
+                self.signature_json.encode("utf-8")).hexdigest(),
+            "updated_unix": time.time(),
+        }
 
 
 def sha256(path: Path, chunk_bytes: int = 8 << 20) -> str:
@@ -95,6 +327,73 @@ def sha256(path: Path, chunk_bytes: int = 8 << 20) -> str:
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def seed_manifest_sha256(seeds: Sequence[CandidateSeed]) -> str:
+    """Hash the exact ordered candidate set used by a resumable collection."""
+    records = [{
+        "session_id": seed.session_id,
+        "scene": seed.scene,
+        "episode": seed.episode,
+        "kind": seed.kind,
+        "query_path": str(seed.query_path),
+        "candidate_path": str(seed.candidate_path),
+        "candidate_frame": seed.candidate_frame,
+        "dino_cosine": seed.dino_cosine,
+        "teacher_covis": seed.teacher_covis,
+        "label": seed.label,
+        "session_has_positive": seed.session_has_positive,
+        "session_is_strict_no_match": seed.session_is_strict_no_match,
+        "session_max_covis": seed.session_max_covis,
+    } for seed in seeds]
+    return hashlib.sha256(canonical_json(records).encode("utf-8")).hexdigest()
+
+
+def session_seed_index_map(
+        seeds: Sequence[CandidateSeed]) -> Tuple[List[str], Dict[str, List[int]]]:
+    """Return stable session order and fail on non-contiguous sessions."""
+    order: List[str] = []
+    indices: Dict[str, List[int]] = {}
+    last = None
+    closed: set[str] = set()
+    for seed_index, seed in enumerate(seeds, 1):
+        session_id = str(seed.session_id)
+        if session_id != last:
+            if last is not None:
+                closed.add(last)
+            if session_id in closed:
+                raise RuntimeError(
+                    f"candidate session is non-contiguous: {session_id}")
+            order.append(session_id)
+            indices[session_id] = []
+            last = session_id
+        indices[session_id].append(seed_index)
+    return order, indices
+
+
+def release_lingbot_device_state(lb) -> None:
+    """Drop model-owned KV references before releasing an episode cache."""
+    model = getattr(lb, "model", None)
+    if model is not None and hasattr(model, "clean_kv_cache"):
+        model.clean_kv_cache()
+    camera_head = getattr(model, "camera_head", None)
+    if camera_head is not None and hasattr(camera_head, "clean_kv_cache"):
+        camera_head.clean_kv_cache()
+    scale_lru = getattr(lb, "_scale_lru", None)
+    if scale_lru is not None:
+        scale_lru.clear()
+
+
+def cuda_memory_summary() -> Optional[dict]:
+    if not torch.cuda.is_available():
+        return None
+    gib = float(1024 ** 3)
+    return {
+        "allocated_gib": torch.cuda.memory_allocated() / gib,
+        "reserved_gib": torch.cuda.memory_reserved() / gib,
+        "peak_allocated_gib": torch.cuda.max_memory_allocated() / gib,
+        "peak_reserved_gib": torch.cuda.max_memory_reserved() / gib,
+    }
 
 
 def git_value(root: Path, *args: str) -> Optional[str]:
@@ -800,6 +1099,15 @@ def parse_args() -> argparse.Namespace:
         "--pooled-metric-scale", type=float,
         default=_DEFAULT_POOLED_METRIC_SCALE,
         help="fallback LingBot-units-to-meters scale if ground recovery fails")
+    parser.add_argument(
+        "--max-cached-episodes", type=int, default=1,
+        help=("maximum LingBot episode caches retained on the accelerator; "
+              "one is sufficient because selected sessions are contiguous"))
+    parser.add_argument(
+        "--resume", action="store_true",
+        help=("resume only sessions atomically committed in the existing "
+              "SQLite checkpoint; the exact candidate/config signature must "
+              "match"))
     parser.add_argument("--device", default="cuda")
     return parser.parse_args()
 
@@ -813,6 +1121,7 @@ def main() -> None:
             or args.candidate_min_gap < 1 or args.warm < 1
             or args.num_scale < 1 or args.pixel_stride < 1
             or args.max_points < 16 or args.overlap_ratio <= 0.0
+            or args.max_cached_episodes < 1
             or not np.isfinite(args.pooled_metric_scale)
             or args.pooled_metric_scale <= 0.0):
         raise ValueError("invalid diagnostic configuration")
@@ -830,6 +1139,9 @@ def main() -> None:
     sys.path.insert(0, str(args.internnav_root.resolve()))
 
     weight_sha = sha256(args.weights)
+    teacher_sha = sha256(args.teacher_csv)
+    source_commit = git_value(
+        Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
     lingbot_commit = git_value(args.lingbot_repo, "rev-parse", "HEAD")
     if args.expected_weight_sha and weight_sha != args.expected_weight_sha:
         raise RuntimeError(
@@ -861,6 +1173,7 @@ def main() -> None:
     if not seeds:
         raise RuntimeError(
             f"no {args.selection_mode} candidate seeds selected")
+    session_order, seed_indices_by_session = session_seed_index_map(seeds)
     split_manifest_sha = None
     if args.split_manifest:
         with args.split_manifest.open(encoding="utf-8") as handle:
@@ -912,6 +1225,7 @@ def main() -> None:
         print(json.dumps({
             "status": "preflight_passed",
             "n_seeds": len(seeds),
+            "n_sessions": len(session_order),
             "n_episodes": len(checked_episodes),
             "n_pose_episodes": len(pose_cache),
             "selection_mode": args.selection_mode,
@@ -919,7 +1233,7 @@ def main() -> None:
             "split_manifest_sha256": split_manifest_sha,
             "lingbot_commit": lingbot_commit,
             "lingbot_weight_sha256": weight_sha,
-            "teacher_csv_sha256": sha256(args.teacher_csv),
+            "teacher_csv_sha256": teacher_sha,
         }, indent=2, sort_keys=True))
         return
 
@@ -927,6 +1241,66 @@ def main() -> None:
         LingBotStream,
         ground_scale_from_h_est,
     )
+
+    checkpoint_signature = {
+        "schema_version": _CHECKPOINT_SCHEMA_VERSION,
+        "seed_manifest_sha256": seed_manifest_sha256(seeds),
+        "total_seeds": len(seeds),
+        "total_sessions": len(session_order),
+        "compute_config": {
+            "selection_mode": args.selection_mode,
+            "kind": args.kind,
+            "allowed_role": args.allowed_role,
+            "sessions": args.session,
+            "max_sessions": args.max_sessions,
+            "per_class": args.per_class,
+            "top_k": args.top_k,
+            "candidate_min_gap": args.candidate_min_gap,
+            "positive_threshold": args.positive_threshold,
+            "negative_threshold": args.negative_threshold,
+            "neighbor_offsets": offsets,
+            "warm": args.warm,
+            "full_replay": args.full_replay,
+            "num_scale": args.num_scale,
+            "window": args.window,
+            "max_frame_num": args.max_frame_num,
+            "camera_num_iterations": args.camera_num_iterations,
+            "pixel_stride": args.pixel_stride,
+            "confidence_quantile": args.confidence_quantile,
+            "max_points": args.max_points,
+            "overlap_ratio": args.overlap_ratio,
+            "pooled_metric_scale": args.pooled_metric_scale,
+            "max_cached_episodes": args.max_cached_episodes,
+            "device": args.device,
+        },
+        "provenance": {
+            "source_commit": source_commit,
+            "lingbot_commit": lingbot_commit,
+            "lingbot_weight_sha256": weight_sha,
+            "teacher_csv_sha256": teacher_sha,
+            "split_manifest_sha256": split_manifest_sha,
+            "feature_root": str(args.feature_root.resolve()),
+        },
+    }
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = args.out_dir / _ROWS_FILENAME
+    json_path = args.out_dir / _REPORT_FILENAME
+    progress_path = args.out_dir / _PROGRESS_FILENAME
+    checkpoint = CollectionCheckpoint(
+        args.out_dir / _CHECKPOINT_FILENAME,
+        checkpoint_signature,
+        resume=args.resume,
+    )
+    completed_sessions = checkpoint.completed_sessions()
+    unknown_sessions = completed_sessions - set(session_order)
+    if unknown_sessions:
+        checkpoint.close()
+        raise RuntimeError(
+            f"checkpoint contains unknown sessions: {sorted(unknown_sessions)}")
+    atomic_write_json(progress_path, checkpoint.progress(
+        total_sessions=len(session_order), total_seeds=len(seeds),
+        status="collecting",
+        last_session=checkpoint.last_completed_session()))
 
     started = time.time()
     lb = LingBotStream(
@@ -937,19 +1311,64 @@ def main() -> None:
         max_frame_num=args.max_frame_num,
         camera_num_iterations=args.camera_num_iterations,
         device=args.device,
+        scale_lru_size=args.max_cached_episodes,
     ).eval()
-    rows: List[dict] = []
-    cache_by_episode: Dict[Tuple[str, str], dict] = {}
+    episode_cache = BoundedEpisodeCache(
+        args.max_cached_episodes,
+        on_evict=lambda _key, _value: release_lingbot_device_state(lb),
+    )
     metric_scale_by_episode: Dict[Tuple[str, str], Tuple[float, str]] = {}
+    current_session: Optional[str] = None
+    current_rows: List[Tuple[int, dict]] = []
+
+    def save_current_session() -> None:
+        nonlocal current_rows
+        if current_session is None or current_session in completed_sessions:
+            return
+        checkpoint.save_session(
+            current_session,
+            seed_indices_by_session[current_session],
+            current_rows,
+        )
+        completed_sessions.add(current_session)
+        progress = checkpoint.progress(
+            total_sessions=len(session_order), total_seeds=len(seeds),
+            status="collecting", last_session=current_session)
+        progress["cuda_memory"] = cuda_memory_summary()
+        atomic_write_json(progress_path, progress)
+        print(
+            f"[checkpoint] sessions={len(completed_sessions)}/"
+            f"{len(session_order)} rows={progress['saved_rows']} "
+            f"last={current_session} cuda={progress['cuda_memory']}",
+            flush=True,
+        )
+        current_rows = []
+
     for seed_index, seed in enumerate(seeds, 1):
+        if seed.session_id != current_session:
+            save_current_session()
+            current_session = seed.session_id
+            current_rows = []
+            if current_session in completed_sessions:
+                print(
+                    f"[resume] skip completed session {current_session}",
+                    flush=True,
+                )
+        if current_session in completed_sessions:
+            continue
         key = (seed.scene, seed.episode)
         episode_root = feature_episode_root(args.feature_root, seed)
         cache_path = episode_root / "videos" / "chunk-000" / "lingbot_cache.npz"
         rgb_dir = raw_rgb_dir(seed)
-        if key not in cache_by_episode:
-            cache_by_episode[key] = load_cache(
-                lb, cache_path, rgb_dir, args.num_scale)
-        cache = cache_by_episode[key]
+        # Drop the loop-local reference before get_or_load can evict the prior
+        # episode. Otherwise the caller itself keeps all old CUDA tensors alive
+        # until after the next episode has already been allocated.
+        cache = None
+        cache = episode_cache.get_or_load(
+            key,
+            lambda: load_cache(
+                lb, cache_path, rgb_dir, args.num_scale),
+        )
         candidate_root = episode_root_from_image(
             seed.candidate_path).resolve()
         candidate_pose_data = pose_cache[candidate_root]
@@ -1026,7 +1445,7 @@ def main() -> None:
             result["depth_scale_raw"] for result in hypotheses)
         norm = max(depth_scale, 1e-6)
         center = min(hypotheses, key=lambda result: abs(result["offset"]))
-        rows.append({
+        current_rows.append((seed_index, {
             "session_id": seed.session_id,
             "scene": seed.scene,
             "episode": seed.episode,
@@ -1088,15 +1507,15 @@ def main() -> None:
             "hypotheses_json": json.dumps([
                 jsonable_measurement(item) for item in hypotheses
             ], sort_keys=True),
-        })
-    result_frame = pd.DataFrame(rows)
+        }))
+    save_current_session()
+    episode_cache.clear()
+    result_frame = pd.DataFrame(checkpoint.rows())
     if result_frame.empty:
+        checkpoint.close()
         raise RuntimeError("all selected candidate seeds were skipped")
 
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = args.out_dir / "lingbot_goal_loop_closure_rows.csv"
-    json_path = args.out_dir / "diagnostic_lingbot_goal_loop_closure.json"
-    result_frame.to_csv(csv_path, index=False)
+    atomic_write_frame(csv_path, result_frame)
     by_label = {}
     for label, name in ((0, "negative"), (1, "positive")):
         subset = result_frame.loc[result_frame["label"].eq(label)]
@@ -1180,14 +1599,15 @@ def main() -> None:
             "max_points": args.max_points,
             "overlap_ratio": args.overlap_ratio,
             "pooled_metric_scale": args.pooled_metric_scale,
+            "max_cached_episodes": args.max_cached_episodes,
+            "resumed": args.resume,
         },
         "provenance": {
-            "source_commit": git_value(Path(__file__).resolve().parents[1],
-                                       "rev-parse", "HEAD"),
+            "source_commit": source_commit,
             "lingbot_commit": lingbot_commit,
             "lingbot_weight_sha256": weight_sha,
             "teacher_csv": str(args.teacher_csv.resolve()),
-            "teacher_csv_sha256": sha256(args.teacher_csv),
+            "teacher_csv_sha256": teacher_sha,
             "split_manifest": (
                 str(args.split_manifest.resolve())
                 if args.split_manifest else None),
@@ -1196,8 +1616,15 @@ def main() -> None:
             "elapsed_seconds": time.time() - started,
         },
         "rows_csv": str(csv_path.resolve()),
+        "collector_checkpoint": str(checkpoint.path.resolve()),
     }
-    json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    atomic_write_json(json_path, report)
+    final_progress = checkpoint.progress(
+        total_sessions=len(session_order), total_seeds=len(seeds),
+        status="complete", last_session=session_order[-1])
+    final_progress["cuda_memory"] = cuda_memory_summary()
+    atomic_write_json(progress_path, final_progress)
+    checkpoint.close()
     print(json.dumps(report, indent=2, sort_keys=True), flush=True)
 
 

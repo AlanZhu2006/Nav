@@ -326,11 +326,27 @@ uncertainty coverage、fallback rate 和延迟。
 这个新 head 很小，真正耗 GPU 的是 LingBot exact feature collection，不是优化器。
 因此不应为了“长训”空占 H200 八小时：
 
-1. 让当前 train-role LingBot collection 完成；
-2. 先修 collector 为每 N 个 session 原子保存，防止 walltime 丢失全部 rows；
-3. 提交较短的 development-role feature collection；
-4. 本机/5090 跑 Phase A/B/C smoke 和三 seed full，预计远少于 8 小时；
-5. offline Go 后再提交严格闭环任务，而不是直接提交旧式 end-to-end 8h training。
+2026-08-06 的实际采集结果修正了原计划：
+
+- development job `15421650` 完成 310 rows / 78 sessions；修正 teacher 后按
+  `scene + session_id + candidate_frame` 重新关联，310/310 的 co-visibility 和 label
+  均未变化，因此昂贵特征可保留，只需更新 provenance；
+- train job `15430677` 在 872/1244 rows、218 sessions、28 scenes 后 OOM。旧实现把
+  每个 episode 的 CUDA cache 永久保存在 `cache_by_episode`，最终占用约 79 GB；
+- 旧实现只在整个进程结束时写 CSV，因此失败目录为空，已计算的 70.1% 不构成可训练
+  artifact，禁止从 stdout 冒充恢复结果。
+
+修复后的 collector 必须：
+
+1. 使用默认容量为 1 的 episode LRU，并在 eviction 时清除 aggregation、camera 和
+   scale KV 后执行 CUDA cache 回收；
+2. 使用 SQLite transaction 原子提交一个完整 session 的 rows 与 completion marker，
+   因而中断最多损失当前 session；
+3. 将精确 candidate/config/weight/teacher/split/source-commit signature 写入 checkpoint，
+   resume 时任何不一致都 fail closed；
+4. 每个 session 更新 progress JSON，最终 CSV 和 report 也使用原子替换；
+5. 先运行跨两个 episode 的短 GPU smoke，再恢复 40-scene train collection；完整 train
+   artifact 通过 scene/session/label/SHA 审计后才能开始正式训练。
 
 如果 raw patch/cost-volume 需要重新抽取，可以把“特征抽取 + 训练 + offline report”放进
 同一个最长 8 小时 pipeline，但必须阶段性落盘，并保证 GPU-heavy feature extraction

@@ -175,6 +175,45 @@ balanced hard positives and negatives.  It is a feature/data collection job,
 not a claimed closed-loop improvement; its output is intended to train and
 calibrate a probabilistic loop-factor head.
 
+The completed expansion contains 93 candidate rows from 25 sessions and 22
+scenes.  Cloud overlap remained stronger than DINO at candidate verification
+(ROC-AUC `0.743` versus `0.610`).  A read-only exploratory scene-LOSO logistic
+fusion of DINO, cloud overlap, pose consensus, and refinement reached candidate
+ROC-AUC `0.776`, AP `0.825`, and session top-1 `23/25`, compared with DINO
+`18/25`.  This is a development-only structure signal, not a deployable or
+blind result.
+
+That collection also exposed two limits in the original diagnostic:
+
+- every retained session was deliberately forced to contain both a positive
+  and a negative, so it could not measure a true Novel/no-match decision;
+- the CSV discarded the inferred `goal_pose`, so metric translation,
+  direction, and rotation errors could not be measured against NavDP labels.
+
+`diag_lingbot_goal_loop_closure.py` now has a separate `deployment` sampler.
+It keeps temporal-diverse top-DINO candidate sets, labels strict-positive,
+strict-no-match, and ambiguous sessions separately, and enforces an optional
+frozen scene role.  It also reconstructs the exact axis-fixed NavDP target from
+the candidate episode parquet and query pose, applies per-episode
+ground-anchored LingBot scale (with an explicit pooled fallback), and records:
+
+- predicted and target relative point-goals;
+- metric position, bearing, distance, and camera-rotation errors;
+- the complete inferred goal pose for each nearby-anchor hypothesis;
+- the candidate episode path and set-level no-match status.
+
+For cross-episode queries, replay now derives the RGB stream from
+`candidate_path`, not `query_path`.  This did not alter the earlier 93-row
+`revisit_b` result because those queries and candidates were from the same
+episode, but it is required before collecting cross-episode no-match data.
+The pure pose/axis, set-label, cross-episode path, and split-leak checks pass as
+part of the full 116-test `MemNavData` suite.  A local dependency preflight also
+passed against the real 4.4-GB LingBot weight (SHA256
+`832bc82cbae0bc9bbe946ef5ee1f7226abd8c0e183ccf8beddbb3d133576f409`),
+real paired caches, parquet, metadata, and raw RGB data.  No new GPU collection
+or closed-loop score is claimed until the scene-disjoint smoke and full job
+finish.
+
 ## Dependency and provenance checks
 
 Every submitted task must fail before GPU model allocation unless all of the

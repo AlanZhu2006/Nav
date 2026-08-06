@@ -40,6 +40,7 @@ LOOP_SESSIONS=${LOOP_SESSIONS:-17DRP5sb8fy/episode_0000/revisit_b}
 MAX_SESSIONS=${MAX_SESSIONS:-1}
 PER_CLASS=${PER_CLASS:-2}
 TOP_K=${TOP_K:-8}
+FULL_REPLAY=${FULL_REPLAY:-1}
 
 [[ "${RUN_PREFIX}" =~ ^[A-Za-z0-9_.-]+$ ]] || {
   echo "ABORT: invalid RUN_PREFIX=${RUN_PREFIX}" >&2; exit 1; }
@@ -55,6 +56,8 @@ TOP_K=${TOP_K:-8}
   echo "ABORT: PER_CLASS must be a positive integer" >&2; exit 1; }
 [[ "${TOP_K}" =~ ^[1-9][0-9]*$ ]] || {
   echo "ABORT: TOP_K must be a positive integer" >&2; exit 1; }
+[[ "${FULL_REPLAY}" =~ ^[01]$ ]] || {
+  echo "ABORT: FULL_REPLAY must be 0 or 1" >&2; exit 1; }
 if [[ "${LOOP_SESSIONS}" != "all" ]]; then
   [[ "${LOOP_SESSIONS}" =~ ^[A-Za-z0-9_./|-]+$ ]] || {
     echo "ABORT: invalid LOOP_SESSIONS=${LOOP_SESSIONS}" >&2; exit 1; }
@@ -115,7 +118,7 @@ overlay_head_sha=$(dd if="${OVERLAY}" bs=1048576 count=1 status=none | \
 
 mkdir -p "${RESULT_BASE}"
 cd "${ROOT}"
-echo "host=$(hostname) job=${SLURM_JOB_ID} commit=${EXPECTED_COMMIT} mode=${SELECTION_MODE} kind=${KIND} role=${SCENE_ROLE}"
+echo "host=$(hostname) job=${SLURM_JOB_ID} commit=${EXPECTED_COMMIT} mode=${SELECTION_MODE} kind=${KIND} role=${SCENE_ROLE} full_replay=${FULL_REPLAY}"
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 
 COMMON_ARGS=(
@@ -139,11 +142,13 @@ COMMON_ARGS=(
   --neighbor-offset=0
   --neighbor-offset=4
   --warm 64
-  --full-replay
   --window 32
   --pixel-stride 10
   --max-points 768
 )
+if [[ "${FULL_REPLAY}" == 1 ]]; then
+  COMMON_ARGS+=(--full-replay)
+fi
 if [[ "${LOOP_SESSIONS}" != "all" ]]; then
   IFS='|' read -r -a selected_sessions <<< "${LOOP_SESSIONS}"
   for session in "${selected_sessions[@]}"; do

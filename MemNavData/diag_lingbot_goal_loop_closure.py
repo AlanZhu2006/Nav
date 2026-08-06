@@ -517,6 +517,11 @@ def load_cache(lb, cache_path: Path, rgb_dir: Path, num_scale: int) -> dict:
         "cam_v": cv,
         "cam_pose_enc": torch.as_tensor(
             cam["cam_pose_enc"], device=lb.device, dtype=torch.float32),
+        "ground_h_est": (
+            float(cam["ground_h_est"])
+            if ("ground_h_est" in cam
+                and np.isfinite(float(cam["ground_h_est"])))
+            else None),
     }
     if not layout.legacy_dense:
         result["anchor_frame_indices"] = torch.as_tensor(
@@ -918,7 +923,10 @@ def main() -> None:
         }, indent=2, sort_keys=True))
         return
 
-    from internnav.model.basemodel.memnav.lingbot_stream import LingBotStream
+    from internnav.model.basemodel.memnav.lingbot_stream import (
+        LingBotStream,
+        ground_scale_from_h_est,
+    )
 
     started = time.time()
     lb = LingBotStream(
@@ -949,12 +957,19 @@ def main() -> None:
         if key not in metric_scale_by_episode:
             camera_height = float(candidate_pose_data.metadata.get(
                 "camera_height_m", 0.5))
-            ground_scale = lb.get_metric_scale(
-                str(rgb_dir), cache["cam_pose_enc"], camera_height)
+            cached_ground_height = cache.get("ground_h_est")
+            if cached_ground_height is not None:
+                ground_scale = ground_scale_from_h_est(
+                    cached_ground_height, camera_height)
+                ground_source = "cached_ground_anchored"
+            else:
+                ground_scale = lb.get_metric_scale(
+                    str(rgb_dir), cache["cam_pose_enc"], camera_height)
+                ground_source = "runtime_ground_anchored"
             if (ground_scale is not None
                     and np.isfinite(ground_scale) and ground_scale > 0.0):
                 metric_scale_by_episode[key] = (
-                    float(ground_scale), "ground_anchored")
+                    float(ground_scale), ground_source)
             else:
                 metric_scale_by_episode[key] = (
                     float(args.pooled_metric_scale), "pooled_fallback")

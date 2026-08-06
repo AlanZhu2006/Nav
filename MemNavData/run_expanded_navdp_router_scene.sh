@@ -20,6 +20,7 @@ LEG1_MODE=${LEG1_MODE:-policy}
 STOP_AFTER_LEG1=${STOP_AFTER_LEG1:-0}
 WRITE_LEG1_TRACE=${WRITE_LEG1_TRACE:-0}
 DETERMINISTIC_PLAN_SEEDS=${DETERMINISTIC_PLAN_SEEDS:-0}
+NAVDP_GOAL_SWITCH_RESET=${NAVDP_GOAL_SWITCH_RESET:-carry}
 SHARED_LEG1_ROOT=${SHARED_LEG1_ROOT:-}
 RUN_NAVDP_NATIVE=${RUN_NAVDP_NATIVE:-1}
 RUN_GEOMETRY_TOP1=${RUN_GEOMETRY_TOP1:-1}
@@ -82,6 +83,8 @@ TASK_FILES=(
   MemNavData/summarize_arrival_shadow.py
   MemNavData/test_summarize_arrival_shadow.py
   MemNavData/deterministic_eval_protocol.py
+  MemNavData/navdp_goal_switch.py
+  MemNavData/test_navdp_goal_switch.py
   MemNavData/test_deterministic_eval_protocol.py
   MemNavData/test_navdp_memory_replay.py
   MemNavData/conditional_c_protocol.py
@@ -127,6 +130,15 @@ for flag in STOP_AFTER_LEG1 WRITE_LEG1_TRACE DETERMINISTIC_PLAN_SEEDS; do
   [[ "${!flag}" =~ ^[01]$ ]] || {
     echo "ABORT: ${flag} must be 0 or 1" >&2; exit 1; }
 done
+[[ "${NAVDP_GOAL_SWITCH_RESET}" =~ ^(carry|before_b|every_goal)$ ]] || {
+  echo "ABORT: invalid NAVDP_GOAL_SWITCH_RESET=${NAVDP_GOAL_SWITCH_RESET}" >&2
+  exit 1
+}
+if [[ "${NAVDP_GOAL_SWITCH_RESET}" != carry \
+      && "${DETERMINISTIC_PLAN_SEEDS}" -ne 1 ]]; then
+  echo "ABORT: goal-switch reset ablation requires deterministic plan seeds" >&2
+  exit 1
+fi
 [[ "${LEG1_MODE}" =~ ^(policy|replay|shared_trace)$ ]] || {
   echo "ABORT: invalid LEG1_MODE=${LEG1_MODE}" >&2; exit 1; }
 [[ "${TERMINAL_UTURN}" =~ ^(off|oracle|lingbot_yaw|lingbot_local|lingbot)$ ]] || {
@@ -306,6 +318,7 @@ hab_python -m py_compile \
   "${ROOT}/MemNavData/summarize_terminal_uturn.py"
 "${MEMNAV_PY}" -m py_compile \
   "${ROOT}/MemNavData/deterministic_eval_protocol.py" \
+  "${ROOT}/MemNavData/navdp_goal_switch.py" \
   "${MEMNAV_SERVER}" \
   "${ROOT}/NavDP/baselines/memnav/policy_agent.py" \
   "${ROOT}/NavDP/baselines/memnav/router_candidates.py" \
@@ -322,6 +335,7 @@ hab_python -m py_compile \
     MemNavData.test_arrival_shadow \
     MemNavData.test_summarize_arrival_shadow \
     MemNavData.test_conditional_c_protocol \
+    MemNavData.test_navdp_goal_switch \
     MemNavData.test_summarize_conditional_c_eval -v
 )
 (
@@ -459,6 +473,7 @@ COMMON_ARGS=(
   --max_steps "${MAX_STEPS}"
   --exec_horizon 8
   --trajectory_selector server
+  --navdp_goal_switch_reset "${NAVDP_GOAL_SWITCH_RESET}"
   --leg1_goal_source own
   --seed 20260803
   --terminal_uturn "${TERMINAL_UTURN}"

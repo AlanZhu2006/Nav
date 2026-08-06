@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 import eval_2leg_habitat as base
+from navdp_goal_switch import should_reset_before_leg
 
 
 args = base.args
@@ -94,6 +95,11 @@ def main() -> None:
             args.hybrid_route in base.AUTO_HYBRID_ROUTES,
             "3-leg hybrid evaluation requires automatic routing",
         )
+    if args.navdp_goal_switch_reset != "carry":
+        require(
+            args.deterministic_plan_seeds,
+            "goal-switch reset ablations require --deterministic_plan_seeds",
+        )
 
     os.makedirs(args.out, exist_ok=True)
     episode_dirs = sorted(
@@ -114,7 +120,8 @@ def main() -> None:
     pathfinder = sim.pathfinder
     print(
         f"[eval3leg] episodes={len(episode_dirs)} backend={args.server_backend} "
-        f"route={args.hybrid_route}"
+        f"route={args.hybrid_route} "
+        f"navdp_goal_switch_reset={args.navdp_goal_switch_reset}"
     )
     metrics = []
     try:
@@ -197,7 +204,11 @@ def main() -> None:
             position, yaw = leg_a["end_pos"], leg_a["end_psi"]
 
             leg_b = empty_leg(position, yaw, b_xz)
+            reset_before_b = False
             if leg_a["reached"]:
+                if should_reset_before_leg(args.navdp_goal_switch_reset, 1):
+                    base.srv_reset_navdp_short_memory(env_id=0)
+                    reset_before_b = True
                 leg_b = base.run_policy_leg(
                     sim,
                     pathfinder,
@@ -218,7 +229,11 @@ def main() -> None:
             position, yaw = leg_b["end_pos"], leg_b["end_psi"]
 
             leg_c = empty_leg(position, yaw, c_xz)
+            reset_before_c = False
             if leg_a["reached"] and leg_b["reached"]:
+                if should_reset_before_leg(args.navdp_goal_switch_reset, 2):
+                    base.srv_reset_navdp_short_memory(env_id=0)
+                    reset_before_c = True
                 leg_c = base.run_policy_leg(
                     sim,
                     pathfinder,
@@ -250,6 +265,9 @@ def main() -> None:
                 "seed": episode_seed,
                 "server_backend": args.server_backend,
                 "hybrid_route": args.hybrid_route,
+                "navdp_goal_switch_reset": args.navdp_goal_switch_reset,
+                "navdp_reset_before_B": int(reset_before_b),
+                "navdp_reset_before_C": int(reset_before_c),
                 "reached_A": int(reached_a),
                 "reached_B": int(reached_b),
                 "reached_C": int(reached_c),
@@ -307,6 +325,7 @@ def main() -> None:
             "episodes": len(metrics),
             "server_backend": args.server_backend,
             "hybrid_route": args.hybrid_route,
+            "navdp_goal_switch_reset": args.navdp_goal_switch_reset,
             "SR_A": mean_or_none([row["reached_A"] for row in metrics]),
             "SR_B_given_A": mean_or_none([row["reached_B"] for row in reached_a_rows]),
             "SR_C_given_AB": mean_or_none([row["reached_C"] for row in reached_ab_rows]),

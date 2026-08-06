@@ -62,6 +62,7 @@ from deterministic_eval_protocol import (
     write_leg1_trace,
 )
 from arrival_shadow import ArrivalShadowConfig, ArrivalShadowDetector
+from navdp_goal_switch import RESET_MODES, reset_navdp_short_memory
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--episode_root", type=str, required=True,
@@ -174,6 +175,15 @@ parser.add_argument(
 )
 parser.add_argument("--reset_memory", action="store_true",
                     help="cold arm: wipe server memory at the A->B switch")
+parser.add_argument(
+    "--navdp_goal_switch_reset",
+    choices=RESET_MODES,
+    default="carry",
+    help=("3-leg causal ablation for NavDP's eight-frame local FIFO: carry "
+          "preserves it (current behavior), before_b clears it only at the "
+          "Novel A->B switch, and every_goal also clears it before revisit C. "
+          "This never clears LingBot/MemNav long-term memory."),
+)
 parser.add_argument("--navdp_stop_threshold", type=float, default=-0.5)
 parser.add_argument("--success_dist", type=float, default=1.0)
 parser.add_argument(
@@ -409,6 +419,17 @@ def srv_navdp_memory_replay(image_jpg):
     if payload.get("diffusion_sampled") is not False:
         raise RuntimeError("NavDP replay endpoint sampled diffusion")
     return payload
+
+
+def srv_reset_navdp_short_memory(env_id=0):
+    """Clear NavDP's local observation FIFO without touching MemNav memory."""
+    return reset_navdp_short_memory(
+        requests.post,
+        args.server_backend,
+        BASE,
+        NOVEL_BASE,
+        env_id=env_id,
+    )
 
 
 def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,

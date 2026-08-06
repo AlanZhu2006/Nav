@@ -36,7 +36,8 @@ try:
         AGGREGATOR_FLOW_RELATIVE,
         FLOW_RELATIVE,
         INPUT_MANIFEST_SCHEMA_VERSION,
-        ROUTED_INPUT_MANIFEST_SCHEMA_VERSION,
+        ROUTED_INPUT_MANIFEST_SCHEMA_VERSIONS,
+        SUPPORTED_INPUT_MANIFEST_SCHEMA_VERSIONS,
         METADATA_RELATIVE,
         RGB_RELATIVE,
         _validate_versioned_cache_pair,
@@ -54,7 +55,8 @@ except ModuleNotFoundError:  # Direct execution from MemNavData/.
         AGGREGATOR_FLOW_RELATIVE,
         FLOW_RELATIVE,
         INPUT_MANIFEST_SCHEMA_VERSION,
-        ROUTED_INPUT_MANIFEST_SCHEMA_VERSION,
+        ROUTED_INPUT_MANIFEST_SCHEMA_VERSIONS,
+        SUPPORTED_INPUT_MANIFEST_SCHEMA_VERSIONS,
         METADATA_RELATIVE,
         RGB_RELATIVE,
         _validate_versioned_cache_pair,
@@ -463,10 +465,8 @@ def build_scale_artifact(
     cache_pair_validator: CachePairValidator = _default_cache_validator,
 ) -> dict[str, object]:
     _require(
-        manifest.get("schema_version") in {
-            INPUT_MANIFEST_SCHEMA_VERSION,
-            ROUTED_INPUT_MANIFEST_SCHEMA_VERSION,
-        },
+        manifest.get("schema_version")
+        in SUPPORTED_INPUT_MANIFEST_SCHEMA_VERSIONS,
         "input is not an NLSR-V2 causal manifest",
     )
     _require(_sha_is_valid(expected_manifest_sha256),
@@ -500,7 +500,8 @@ def build_scale_artifact(
         _require(flow_root.is_dir(), "legacy flow root is unavailable")
     else:
         _require(
-            manifest.get("schema_version") == ROUTED_INPUT_MANIFEST_SCHEMA_VERSION,
+            manifest.get("schema_version")
+            in ROUTED_INPUT_MANIFEST_SCHEMA_VERSIONS,
             "legacy manifest cannot enable multi-root flow routing",
         )
         flow_root = None

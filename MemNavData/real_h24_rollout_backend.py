@@ -105,7 +105,17 @@ except ImportError:  # direct ``python MemNavData/<script>.py`` execution
 BACKEND_PROTOCOL = "real_habitat_navdp_h24_v2"
 ATOMIC_PLAN_PROTOCOL = "navdp_native_first_atomic_plan_v2"
 MEMORY_AUDIT_PROTOCOL = "navdp_native_first_fifo_v1"
-SUPPORTED_MANIFEST_SCHEMAS = frozenset((SCHEMA_VERSION, ROUTED_SCHEMA_VERSION))
+MULTISTAGE_MANIFEST_SCHEMA_VERSION = (
+    "nlsr_v2_multistage_expert_candidate_manifest_v1")
+SUPPORTED_MANIFEST_SCHEMAS = frozenset((
+    SCHEMA_VERSION,
+    ROUTED_SCHEMA_VERSION,
+    MULTISTAGE_MANIFEST_SCHEMA_VERSION,
+))
+GOAL_ROLE_BINDINGS = {
+    "B": ("goal_b", "goal_1.jpg", 0, "novel"),
+    "C": ("goal_c", "goal_2.jpg", 1, "revisit"),
+}
 ATOMIC_RECEIPT_FIELDS = frozenset((
     "protocol",
     "mode",
@@ -329,7 +339,7 @@ def load_frozen_manifest(
     path: Path | str,
     expected_sha256: str,
 ) -> Mapping[str, Any]:
-    """Load a canonical v1/v2 state manifest under an external SHA pin."""
+    """Load a canonical v1/v2 or multistage manifest under an external pin."""
     source = Path(path)
     expected = _sha256_string(expected_sha256, "expected manifest SHA256")
     try:
@@ -447,6 +457,19 @@ def load_state_assets_from_manifest(
                if isinstance(row, Mapping) and row.get("sample_id") == sample_id]
     _require(len(matches) == 1, f"sample_id is not unique: {sample_id}")
     sample = matches[0]
+    manifest_schema = manifest.get("schema_version")
+    goal_role = sample.get("goal_role", "B")
+    _require(
+        isinstance(goal_role, str) and goal_role in GOAL_ROLE_BINDINGS,
+        "sample goal_role must be B or C",
+    )
+    _require(
+        goal_role != "C" or manifest_schema == MULTISTAGE_MANIFEST_SCHEMA_VERSION,
+        "Goal C is only valid in a multistage manifest",
+    )
+    goal_record_key, goal_filename, goal_index, expected_goal_kind = (
+        GOAL_ROLE_BINDINGS[goal_role]
+    )
     scene_name = sample.get("scene")
     _require(isinstance(scene_name, str) and scene_name, "sample scene is invalid")
     scenes = manifest.get("scenes")
@@ -476,6 +499,20 @@ def load_state_assets_from_manifest(
         and source_id == f"{scene_name}/{source_name}",
         "sample episode identity is invalid",
     )
+    default_goal_variant = (
+        "factual" if goal_name == source_name else "counterfactual")
+    goal_variant = sample.get("goal_variant", default_goal_variant)
+    _require(
+        goal_variant in ("factual", "counterfactual")
+        and ((goal_variant == "factual") == (goal_name == source_name)),
+        "sample factual/counterfactual goal binding is invalid",
+    )
+    goal_source_id = sample.get(
+        "goal_source_episode_id", f"{scene_name}/{goal_name}")
+    _require(
+        goal_source_id == f"{scene_name}/{goal_name}",
+        "sample goal episode identity is invalid",
+    )
     source_record = _episode_record(scene, source_name)
     goal_record = _episode_record(scene, goal_name)
     source_meta_path, source_meta_raw = _verify_file_record(
@@ -487,10 +524,18 @@ def load_state_assets_from_manifest(
     goal_path, goal_jpeg = _verify_file_record(
         sample.get("goal"), roots["episode_root"], "sample goal")
     expected_goal_path, expected_goal_jpeg = _verify_file_record(
-        goal_record.get("goal_b"), roots["episode_root"], "goal episode goal_b")
+        goal_record.get(goal_record_key),
+        roots["episode_root"],
+        f"goal episode {goal_record_key}",
+    )
     _require(
         goal_path == expected_goal_path and goal_jpeg == expected_goal_jpeg,
-        "sample goal is not goal_b of its declared goal episode",
+        f"sample Goal {goal_role} is not {goal_record_key} of its declared "
+        "goal episode",
+    )
+    _require(
+        goal_path.name == goal_filename,
+        f"Goal {goal_role} must bind to {goal_filename}",
     )
     try:
         source_meta = json.loads(source_meta_raw)
@@ -677,12 +722,17 @@ def load_state_assets_from_manifest(
     goals = goal_meta.get("goals")
     _require(
         isinstance(goals, list)
-        and bool(goals)
-        and isinstance(goals[0], Mapping)
-        and goals[0].get("kind") == "novel",
-        "goal episode has no Novel Goal B label",
+        and len(goals) > goal_index
+        and isinstance(goals[goal_index], Mapping)
+        and goals[goal_index].get("kind") == expected_goal_kind,
+        f"goal episode has no {expected_goal_kind.title()} Goal "
+        f"{goal_role} label",
     )
-    goal_data = _finite_array(goals[0].get("pos"), (3,), "Goal B position")
+    goal_data = _finite_array(
+        goals[goal_index].get("pos"),
+        (3,),
+        f"Goal {goal_role} position",
+    )
     goal_habitat = DATA_TO_HABITAT_ROTATION @ goal_data
 
     settings = identity.navmesh_settings
@@ -698,7 +748,7 @@ def load_state_assets_from_manifest(
     state = FrozenDecisionState(
         state_id=sample_id,
         session_id=str(source_id),
-        goal_epoch=f"B:{sha256_bytes(goal_jpeg)[:16]}",
+        goal_epoch=f"{goal_role}:{sha256_bytes(goal_jpeg)[:16]}",
         goal_sha256=sha256_bytes(goal_jpeg),
         manifest_fifo_sha256=_sha256_string(fifo["fifo_sha256"], "fifo_sha256"),
         current_rgb_sha256=sha256_bytes(current_rgb),

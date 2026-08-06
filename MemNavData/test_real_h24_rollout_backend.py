@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -33,6 +34,7 @@ from MemNavData.real_h24_rollout_backend import (
     MEMORY_AUDIT_PROTOCOL,
     EncodedObservation,
     FrozenStateAssets,
+    MULTISTAGE_MANIFEST_SCHEMA_VERSION,
     PinnedHabitatRuntime,
     RealH24BackendError,
     RealH24RolloutBackend,
@@ -663,6 +665,10 @@ class RealH24RolloutBackendTests(unittest.TestCase):
         self.assertEqual(loaded[0].frozen_current.rgb_jpeg, b"rgb-1")
         self.assertEqual(loaded[0].frozen_current.depth_png, b"depth-1")
         self.assertEqual(loaded[0].label_goal_world_xyz_m, (1.0, 0.0, -3.0))
+        self.assertEqual(
+            loaded[0].state.goal_epoch,
+            f"B:{sha256_bytes(b'fixture-goal')[:16]}",
+        )
 
         # Historical episodes omitted the generator's 0.5 m CLI value.  The
         # loader must not silently guess it: an explicit pin is mandatory.
@@ -714,6 +720,287 @@ class RealH24RolloutBackendTests(unittest.TestCase):
                     identity_path,
                     legacy_camera_height_m=0.6,
                 )
+
+    def test_multistage_goal_c_factual_counterfactual_binding_and_fifo(self):
+        root = Path(self.temporary.name) / "multistage"
+        episode_root = root / "episodes"
+        environment_root = root / "environments"
+        navmesh_root = root / "navmeshes"
+        environment_root.mkdir(parents=True)
+        navmesh_root.mkdir(parents=True)
+        glb = environment_root / "scene.glb"
+        navmesh = navmesh_root / "scene.navmesh"
+        glb.write_bytes(b"multistage-glb")
+        navmesh.write_bytes(b"multistage-navmesh")
+        identity = FrozenGeometryIdentity.capture(
+            glb_path=glb,
+            navmesh_path=navmesh,
+            habitat_sim_version="0.3.1",
+            agent_radius_m=0.30,
+            agent_height_m=1.50,
+            navmesh_settings=self.settings,
+        )
+        identity_path = root / "geometry.json"
+        identity.write_json(identity_path)
+
+        def file_record(path, base):
+            relative = path.relative_to(base).as_posix()
+            payload = path.read_bytes()
+            return {
+                "path": relative,
+                "path_sha256": sha256_bytes(relative.encode()),
+                "bytes": len(payload),
+                "content_sha256": sha256_bytes(payload),
+            }
+
+        episode_records = []
+        for episode_index in range(2):
+            episode_name = f"episode_{episode_index:04d}"
+            episode = episode_root / "scene" / episode_name
+            rgb_root = episode / "videos/chunk-000/observation.images.rgb"
+            depth_root = episode / "videos/chunk-000/observation.images.depth"
+            data_root = episode / "data/chunk-000"
+            meta_root = episode / "meta"
+            for directory in (rgb_root, depth_root, data_root, meta_root):
+                directory.mkdir(parents=True)
+            offset = float(episode_index * 10)
+            metadata = {
+                "camera_height_m": 0.5,
+                "frame_convention": (
+                    "positions+parquet in data(Zup,M_W); "
+                    "yaw_habitat in render frame"),
+                "goals": [
+                    {"kind": "novel", "pos": [1.0 + offset, 3.0 + offset, 0.0]},
+                    {"kind": "revisit", "pos": [4.0 + offset, 5.0 + offset, 0.0]},
+                ],
+            }
+            metadata_path = meta_root / "gen_meta.json"
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            parquet_path = data_root / "episode_000000.parquet"
+            parquet_path.write_bytes(f"parquet-{episode_index}".encode())
+            goal_b = episode / "goal_1.jpg"
+            goal_c = episode / "goal_2.jpg"
+            goal_b.write_bytes(f"goal-b-{episode_index}".encode())
+            goal_c.write_bytes(f"goal-c-{episode_index}".encode())
+            for frame in range(3):
+                (rgb_root / f"{frame}.jpg").write_bytes(
+                    f"rgb-{episode_index}-{frame}".encode())
+                (depth_root / f"{frame}.png").write_bytes(
+                    f"depth-{episode_index}-{frame}".encode())
+            episode_records.append({
+                "episode": episode_name,
+                "n_frames": 3,
+                "metadata": file_record(metadata_path, episode_root),
+                "parquet": file_record(parquet_path, episode_root),
+                "goal_b": file_record(goal_b, episode_root),
+                "goal_c": file_record(goal_c, episode_root),
+            })
+
+        action, extrinsic = habitat_pose_to_parquet_data(
+            HabitatPlanarPose(0.0, 0.0, 0.0, 0.0), camera_height_m=0.5)
+        rows = [{
+            "index": frame,
+            "observation.camera_intrinsic": [
+                [355.0, 0.0, 240.0],
+                [0.0, 351.0, 135.0],
+                [0.0, 0.0, 1.0],
+            ],
+            "observation.camera_extrinsic": extrinsic.tolist(),
+            "action": action.tolist(),
+        } for frame in range(3)]
+
+        source_dir = episode_root / "scene/episode_0000"
+        rgb_records = [
+            file_record(
+                source_dir / f"videos/chunk-000/observation.images.rgb/{frame}.jpg",
+                episode_root,
+            )
+            for frame in range(3)
+        ]
+        depth_records = [
+            file_record(
+                source_dir / f"videos/chunk-000/observation.images.depth/{frame}.png",
+                episode_root,
+            )
+            for frame in range(3)
+        ]
+
+        def sequence_sha(value):
+            return sha256_bytes(manifest_json_bytes(value))
+
+        modalities = {}
+        for name, values in (("rgb", rgb_records), ("depth", depth_records)):
+            modalities[name] = {
+                "path_sequence_sha256": sequence_sha(
+                    [value["path"] for value in values]),
+                "content_sequence_sha256": sequence_sha([{
+                    "path": value["path"],
+                    "bytes": value["bytes"],
+                    "content_sha256": value["content_sha256"],
+                } for value in values]),
+            }
+        parquet_sha = sequence_sha(rows)
+        causal_body = {
+            "frame_count": 3,
+            "rgb": modalities["rgb"],
+            "depth": modalities["depth"],
+            "parquet_rows_sha256": parquet_sha,
+        }
+        fifo_records = [{
+            "path": value["path"],
+            "bytes": value["bytes"],
+            "content_sha256": value["content_sha256"],
+        } for value in rgb_records]
+        fifo_body = {
+            "memory_size": 8,
+            "exec_horizon": 8,
+            "left_zero_pad_count": 5,
+            "replay_frame_indices": [0, 1],
+            "current_frame_index": 2,
+            "after_append_frame_indices": [0, 1, 2],
+            "path_sequence_sha256": sequence_sha(
+                [value["path"] for value in rgb_records]),
+            "content_sequence_sha256": sequence_sha(fifo_records),
+        }
+        sample_base = {
+            "scene": "scene",
+            "source_episode": "episode_0000",
+            "source_episode_id": "scene/episode_0000",
+            "goal_role": "C",
+            "state_name": "goal_c_t0",
+            "decision_frame": 3,
+            "state_frame": rgb_records[2],
+            "causal_prefix": {
+                "exclusive_end_frame": 3,
+                "frame_count": 3,
+                "modalities": modalities,
+                "parquet_columns": [
+                    "index", "observation.camera_intrinsic",
+                    "observation.camera_extrinsic", "action",
+                ],
+                "parquet_row_count": 3,
+                "parquet_rows_sha256": parquet_sha,
+                "causal_prefix_sha256": sha256_bytes(
+                    manifest_json_bytes(causal_body)),
+            },
+            "navdp_fifo": {
+                **fifo_body,
+                "fifo_sha256": sha256_bytes(manifest_json_bytes(fifo_body)),
+            },
+        }
+        samples = []
+        for goal_variant, goal_index in (("factual", 0), ("counterfactual", 1)):
+            goal_episode = episode_records[goal_index]
+            samples.append({
+                **sample_base,
+                "sample_id": (
+                    "train/scene/episode_0000/goal_c_t0/" + goal_variant),
+                "goal_variant": goal_variant,
+                "goal_episode": goal_episode["episode"],
+                "goal_source_episode_id": f"scene/{goal_episode['episode']}",
+                "goal": goal_episode["goal_c"],
+            })
+        common = {
+            "schema_version": MULTISTAGE_MANIFEST_SCHEMA_VERSION,
+            "input_roots": {
+                "episode_root": str(episode_root),
+                "environment_root": str(environment_root),
+                "navmesh_root": str(navmesh_root),
+            },
+            "scenes": [{
+                "scene": "scene",
+                "environment": file_record(glb, environment_root),
+                "navmesh": file_record(navmesh, navmesh_root),
+                "selected_episodes": episode_records,
+            }],
+            "samples": samples,
+        }
+        manifest_path = root / "manifest.json"
+        raw = manifest_json_bytes(common)
+        manifest_path.write_bytes(raw)
+        with mock.patch(
+            "MemNavData.real_h24_rollout_backend.load_parquet_rows",
+            return_value=rows,
+        ):
+            loaded = [
+                load_state_assets_from_manifest(
+                    manifest_path,
+                    sha256_bytes(raw),
+                    sample["sample_id"],
+                    identity_path,
+                )
+                for sample in samples
+            ]
+
+        self.assertEqual(loaded[0].replay_frame_indices, (0, 1))
+        self.assertEqual(
+            loaded[0].replay_rgb_jpegs,
+            (b"rgb-0-0", b"rgb-0-1"),
+        )
+        self.assertEqual(loaded[0].frozen_current.rgb_jpeg, b"rgb-0-2")
+        self.assertEqual(loaded[0].label_goal_world_xyz_m, (4.0, 0.0, -5.0))
+        self.assertEqual(loaded[1].label_goal_world_xyz_m, (14.0, 0.0, -15.0))
+        for index, assets in enumerate(loaded):
+            expected_goal = f"goal-c-{index}".encode()
+            self.assertEqual(assets.goal_jpeg, expected_goal)
+            self.assertEqual(
+                assets.state.goal_epoch,
+                f"C:{sha256_bytes(expected_goal)[:16]}",
+            )
+            self.assertEqual(
+                assets.state.manifest_fifo_sha256,
+                samples[index]["navdp_fifo"]["fifo_sha256"],
+            )
+
+        swapped = copy.deepcopy(common)
+        swapped["samples"][0]["goal"] = swapped["scenes"][0][
+            "selected_episodes"][0]["goal_b"]
+        swapped_path = root / "manifest-swapped-goal.json"
+        swapped_raw = manifest_json_bytes(swapped)
+        swapped_path.write_bytes(swapped_raw)
+        with mock.patch(
+            "MemNavData.real_h24_rollout_backend.load_parquet_rows",
+            return_value=rows,
+        ):
+            with self.assertRaisesRegex(RealH24BackendError, "not goal_c"):
+                load_state_assets_from_manifest(
+                    swapped_path,
+                    sha256_bytes(swapped_raw),
+                    samples[0]["sample_id"],
+                    identity_path,
+                )
+
+        wrong_filename = copy.deepcopy(common)
+        goal_b_record = wrong_filename["scenes"][0]["selected_episodes"][0][
+            "goal_b"]
+        wrong_filename["scenes"][0]["selected_episodes"][0][
+            "goal_c"] = goal_b_record
+        wrong_filename["samples"][0]["goal"] = goal_b_record
+        wrong_filename_path = root / "manifest-wrong-goal-filename.json"
+        wrong_filename_raw = manifest_json_bytes(wrong_filename)
+        wrong_filename_path.write_bytes(wrong_filename_raw)
+        with self.assertRaisesRegex(RealH24BackendError, "goal_2.jpg"):
+            load_state_assets_from_manifest(
+                wrong_filename_path,
+                sha256_bytes(wrong_filename_raw),
+                samples[0]["sample_id"],
+                identity_path,
+            )
+
+        wrong_variant = copy.deepcopy(common)
+        wrong_variant["samples"][1]["goal_variant"] = "factual"
+        wrong_variant_path = root / "manifest-wrong-variant.json"
+        wrong_variant_raw = manifest_json_bytes(wrong_variant)
+        wrong_variant_path.write_bytes(wrong_variant_raw)
+        with self.assertRaisesRegex(
+            RealH24BackendError, "factual/counterfactual"
+        ):
+            load_state_assets_from_manifest(
+                wrong_variant_path,
+                sha256_bytes(wrong_variant_raw),
+                samples[1]["sample_id"],
+                identity_path,
+            )
 
 
 if __name__ == "__main__":

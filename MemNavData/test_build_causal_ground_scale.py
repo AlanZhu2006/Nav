@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -18,6 +19,7 @@ from MemNavData.build_causal_ground_scale import (
 from MemNavData.build_novel_frontier_candidates import (
     CandidateBuildError,
     INPUT_MANIFEST_SCHEMA_VERSION,
+    MULTISTAGE_INPUT_MANIFEST_SCHEMA_VERSION,
     canonical_json_bytes,
     sha256_bytes,
     write_artifact,
@@ -282,6 +284,48 @@ class CausalGroundScaleBuilderTest(unittest.TestCase):
             short_artifact["records"][0]["prefix_end_frame_exclusive"], 20
         )
         self.assertEqual(short_estimator.calls[0]["pose"].shape, (20, 9))
+
+    def test_multistage_manifest_uses_routed_cache_contract(self):
+        class FixtureRoutes:
+            def __init__(self, owner):
+                self.owner = owner
+                self.calls = []
+
+            def resolve_manifest_pair(self, episode_record, scene, episode):
+                del episode_record
+                self.calls.append((scene, episode))
+                return self.owner.aggregator_path, self.owner.camera_path
+
+            @staticmethod
+            def manifest_record():
+                return {"mode": "fixture_multistage_routed"}
+
+        manifest = copy.deepcopy(self.manifest)
+        manifest["schema_version"] = MULTISTAGE_INPUT_MANIFEST_SCHEMA_VERSION
+        manifest["input_roots"].pop("flow_cache_root")
+        manifest["samples"][0]["goal_role"] = "B"
+        manifest["samples"][1]["goal_role"] = "C"
+        path = self.root / "manifest_multistage.json"
+        digest = self._write_manifest(manifest, path)
+        routes = FixtureRoutes(self)
+        with mock.patch(
+            "MemNavData.build_causal_ground_scale.registry_from_manifest",
+            return_value=routes,
+        ):
+            artifact = self._build(
+                manifest=manifest,
+                path=path,
+                digest=digest,
+            )
+        self.assertEqual(routes.calls, [(self.scene, self.episode)])
+        self.assertEqual(
+            artifact["provenance"]["input_manifest_schema_version"],
+            MULTISTAGE_INPUT_MANIFEST_SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            artifact["provenance"]["flow_cache_routing"]["mode"],
+            "fixture_multistage_routed",
+        )
 
     def test_future_rgb_mutation_keeps_canonical_artifact_identical(self):
         before = self._build()

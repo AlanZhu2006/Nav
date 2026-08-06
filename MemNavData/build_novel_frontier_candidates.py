@@ -75,6 +75,17 @@ EXTERNAL_SCALE_ARTIFACT_SCHEMA_VERSION = (
     "nlsr_v2_frontier_proposal_artifact_v2")
 INPUT_MANIFEST_SCHEMA_VERSION = "nlsr_v2_expert_candidate_manifest_v1"
 ROUTED_INPUT_MANIFEST_SCHEMA_VERSION = "nlsr_v2_expert_candidate_manifest_v2"
+MULTISTAGE_INPUT_MANIFEST_SCHEMA_VERSION = (
+    "nlsr_v2_multistage_expert_candidate_manifest_v1")
+SUPPORTED_INPUT_MANIFEST_SCHEMA_VERSIONS = frozenset((
+    INPUT_MANIFEST_SCHEMA_VERSION,
+    ROUTED_INPUT_MANIFEST_SCHEMA_VERSION,
+    MULTISTAGE_INPUT_MANIFEST_SCHEMA_VERSION,
+))
+ROUTED_INPUT_MANIFEST_SCHEMA_VERSIONS = frozenset((
+    ROUTED_INPUT_MANIFEST_SCHEMA_VERSION,
+    MULTISTAGE_INPUT_MANIFEST_SCHEMA_VERSION,
+))
 PATCH_SCORE_SCHEMA_VERSION = "nlsr_v2_goal_patch_frame_scores_v1"
 CAUSAL_GROUND_SCALE_SCHEMA_VERSION = "nlsr_v2_causal_ground_scale_v1"
 TEACHER_ARM = "teacher_pose"
@@ -1441,9 +1452,8 @@ def build_artifact(
     scan_stride: int = 4,
     config: FrontierConfig = FrontierConfig(),
 ) -> dict:
-    if manifest.get("schema_version") not in {
-            INPUT_MANIFEST_SCHEMA_VERSION,
-            ROUTED_INPUT_MANIFEST_SCHEMA_VERSION}:
+    manifest_schema = manifest.get("schema_version")
+    if manifest_schema not in SUPPORTED_INPUT_MANIFEST_SCHEMA_VERSIONS:
         raise CandidateBuildError("input is not the frozen NLSR-V2 causal manifest")
     actual_manifest_sha = sha256_file(manifest_path)
     if actual_manifest_sha != manifest_sha256:
@@ -1479,7 +1489,7 @@ def build_artifact(
         raise CandidateBuildError(
             f"causal manifest routed-flow provenance is invalid: {exc}") from exc
     if flow_routes is None:
-        if manifest.get("schema_version") != INPUT_MANIFEST_SCHEMA_VERSION:
+        if manifest_schema != INPUT_MANIFEST_SCHEMA_VERSION:
             raise CandidateBuildError(
                 "routed causal manifest lacks its flow-cache routing contract")
         try:
@@ -1491,7 +1501,7 @@ def build_artifact(
             raise CandidateBuildError(
                 "legacy causal manifest flow root is unavailable")
     else:
-        if manifest.get("schema_version") != ROUTED_INPUT_MANIFEST_SCHEMA_VERSION:
+        if manifest_schema not in ROUTED_INPUT_MANIFEST_SCHEMA_VERSIONS:
             raise CandidateBuildError(
                 "legacy causal manifest cannot enable multi-root flow routing")
         flow_root = None
@@ -1582,10 +1592,14 @@ def build_artifact(
         sample_id = sample.get("sample_id")
         source_episode = sample.get("source_episode")
         decision = sample.get("decision_frame")
+        goal_role = sample.get("goal_role", "B")
         if (not isinstance(sample_id, str) or not sample_id
                 or not isinstance(source_episode, str) or not source_episode
                 or isinstance(decision, bool) or not isinstance(decision, int)):
             raise CandidateBuildError("sample identity/decision fields are malformed")
+        if goal_role not in ("B", "C"):
+            raise CandidateBuildError(
+                f"sample goal_role must be B or C: {sample_id}")
         scene_record = scene_records[scene]
         episode_record = _episode_record(scene_record, source_episode)
         cache_key = scene, source_episode
@@ -1751,6 +1765,7 @@ def build_artifact(
             "source_episode": source_episode,
             "goal_episode": str(sample["goal_episode"]),
             "goal_variant": str(sample["goal_variant"]),
+            "goal_role": goal_role,
             "state_name": str(sample["state_name"]),
             "split_role": str(sample["split_role"]),
             "decision_frame": decision,

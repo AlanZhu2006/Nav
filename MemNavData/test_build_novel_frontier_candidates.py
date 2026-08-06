@@ -1,7 +1,9 @@
+import copy
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pyarrow as pa
@@ -15,6 +17,7 @@ from MemNavData.build_novel_candidate_manifest import (
 from MemNavData.build_novel_frontier_candidates import (
     CandidateBuildError,
     DEPLOYMENT_ARM,
+    MULTISTAGE_INPUT_MANIFEST_SCHEMA_VERSION,
     TEACHER_ARM,
     build_artifact,
     sha256_bytes,
@@ -322,6 +325,7 @@ class NovelFrontierBuilderTest(unittest.TestCase):
             4,
         )
         for record in records:
+            self.assertEqual(record["goal_role"], "B")
             teacher = record["arms"][TEACHER_ARM]
             deployment = record["arms"][DEPLOYMENT_ARM]
             self.assertTrue(teacher["proposal"]["valid"])
@@ -355,6 +359,63 @@ class NovelFrontierBuilderTest(unittest.TestCase):
                     deployment["proposal"]["invalid_reason"],
                 )
                 self.assertEqual(deployment["proposal"]["shortlist"], [])
+
+    def test_multistage_manifest_is_routed_and_preserves_goal_role(self):
+        class FixtureRoutes:
+            def __init__(self, owner):
+                self.owner = owner
+                self.calls = []
+
+            def resolve_manifest_pair(self, episode_record, scene, episode):
+                del episode_record
+                self.calls.append((scene, episode))
+                chunk = self.owner.flow / scene / episode / "videos/chunk-000"
+                return (
+                    chunk / "lingbot_cache.npz",
+                    chunk / "lingbot_cam_cache.npz",
+                )
+
+            @staticmethod
+            def manifest_record():
+                return {"mode": "fixture_multistage_routed"}
+
+        manifest = copy.deepcopy(self.manifest)
+        manifest["schema_version"] = MULTISTAGE_INPUT_MANIFEST_SCHEMA_VERSION
+        manifest["input_roots"].pop("flow_cache_root")
+        for index, sample in enumerate(manifest["samples"]):
+            sample["goal_role"] = "B" if index % 2 == 0 else "C"
+        path = self.root / "multistage_manifest.json"
+        payload = manifest_json_bytes(manifest)
+        path.write_bytes(payload)
+        routes = FixtureRoutes(self)
+        with mock.patch(
+            "MemNavData.build_novel_frontier_candidates.registry_from_manifest",
+            return_value=routes,
+        ):
+            artifact = build_artifact(
+                manifest=manifest,
+                manifest_path=path,
+                manifest_sha256=sha256_bytes(payload),
+                expected_ground_prefix_builder_sha256="a" * 64,
+                expected_ground_prefix_configuration_sha256="b" * 64,
+                depth_column_stride=4,
+                scan_stride=4,
+            )
+        self.assertEqual(len(routes.calls), len(artifact["records"]))
+        self.assertEqual(
+            set(routes.calls),
+            {(self.scene, "episode_0000"), (self.scene, "episode_0001")},
+        )
+        self.assertEqual(
+            {row["goal_role"] for row in artifact["records"]}, {"B", "C"})
+        self.assertEqual(
+            artifact["provenance"]["input_manifest_schema_version"],
+            MULTISTAGE_INPUT_MANIFEST_SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            artifact["provenance"]["flow_cache_routing"]["mode"],
+            "fixture_multistage_routed",
+        )
 
     def test_missing_patch_uses_masked_degraded_shortlist(self):
         self.assertEqual(self.artifact["provenance"]["patch_scores"]["status"],

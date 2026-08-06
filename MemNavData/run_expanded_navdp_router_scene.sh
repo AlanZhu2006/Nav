@@ -21,6 +21,8 @@ STOP_AFTER_LEG1=${STOP_AFTER_LEG1:-0}
 WRITE_LEG1_TRACE=${WRITE_LEG1_TRACE:-0}
 DETERMINISTIC_PLAN_SEEDS=${DETERMINISTIC_PLAN_SEEDS:-0}
 NAVDP_GOAL_SWITCH_RESET=${NAVDP_GOAL_SWITCH_RESET:-carry}
+TRAJECTORY_SELECTOR=${TRAJECTORY_SELECTOR:-server}
+TRAJECTORY_SELECTOR_SCOPE=${TRAJECTORY_SELECTOR_SCOPE:-all}
 SHARED_LEG1_ROOT=${SHARED_LEG1_ROOT:-}
 RUN_NAVDP_NATIVE=${RUN_NAVDP_NATIVE:-1}
 RUN_GEOMETRY_TOP1=${RUN_GEOMETRY_TOP1:-1}
@@ -134,6 +136,19 @@ done
   echo "ABORT: invalid NAVDP_GOAL_SWITCH_RESET=${NAVDP_GOAL_SWITCH_RESET}" >&2
   exit 1
 }
+[[ "${TRAJECTORY_SELECTOR}" =~ ^(server|oracle_geodesic)$ ]] || {
+  echo "ABORT: invalid TRAJECTORY_SELECTOR=${TRAJECTORY_SELECTOR}" >&2
+  exit 1
+}
+[[ "${TRAJECTORY_SELECTOR_SCOPE}" =~ ^(all|leg_a|leg_b|leg_c)$ ]] || {
+  echo "ABORT: invalid TRAJECTORY_SELECTOR_SCOPE=${TRAJECTORY_SELECTOR_SCOPE}" >&2
+  exit 1
+}
+if [[ "${TRAJECTORY_SELECTOR}" == server \
+      && "${TRAJECTORY_SELECTOR_SCOPE}" != all ]]; then
+  echo "ABORT: a scoped selector requires TRAJECTORY_SELECTOR=oracle_geodesic" >&2
+  exit 1
+fi
 if [[ "${NAVDP_GOAL_SWITCH_RESET}" != carry \
       && "${DETERMINISTIC_PLAN_SEEDS}" -ne 1 ]]; then
   echo "ABORT: goal-switch reset ablation requires deterministic plan seeds" >&2
@@ -472,7 +487,8 @@ COMMON_ARGS=(
   --success_dist 1.0
   --max_steps "${MAX_STEPS}"
   --exec_horizon 8
-  --trajectory_selector server
+  --trajectory_selector "${TRAJECTORY_SELECTOR}"
+  --trajectory_selector_scope "${TRAJECTORY_SELECTOR_SCOPE}"
   --navdp_goal_switch_reset "${NAVDP_GOAL_SWITCH_RESET}"
   --leg1_goal_source own
   --seed 20260803

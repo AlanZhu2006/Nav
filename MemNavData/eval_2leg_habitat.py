@@ -62,7 +62,14 @@ from deterministic_eval_protocol import (
     write_leg1_trace,
 )
 from arrival_shadow import ArrivalShadowConfig, ArrivalShadowDetector
-from navdp_goal_switch import RESET_MODES, reset_navdp_short_memory
+from navdp_goal_switch import (
+    RESET_MODES,
+    TRAJECTORY_SELECTOR_SCOPES,
+    normalize_navdp_candidate_scores,
+    normalize_navdp_trajectory_candidates,
+    reset_navdp_short_memory,
+    trajectory_selector_for_leg,
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--episode_root", type=str, required=True,
@@ -216,6 +223,13 @@ parser.add_argument(
           "execution horizon for every returned candidate and selects the "
           "candidate with the smallest privileged Habitat geodesic distance "
           "to the goal"),
+)
+parser.add_argument(
+    "--trajectory_selector_scope",
+    choices=TRAJECTORY_SELECTOR_SCOPES,
+    default="all",
+    help=("apply a non-server trajectory selector to all legs or only one "
+          "multi-goal leg; non-target legs keep the server-selected path"),
 )
 parser.add_argument("--stuck_window", type=int, default=150)
 parser.add_argument("--stuck_dist", type=float, default=0.10)
@@ -983,7 +997,14 @@ def pursuit_step(pos, psi, path_xz, pf):
     return snap, psi_new, v
 
 
-def select_plan_trajectory(response, pos, psi, pf, goal_xz):
+def select_plan_trajectory(
+    response,
+    pos,
+    psi,
+    pf,
+    goal_xz,
+    trajectory_selector=None,
+):
     """Return the trajectory used by the controller plus selector diagnostics.
 
     ``oracle_geodesic`` is deliberately privileged and is only a causal
@@ -992,9 +1013,13 @@ def select_plan_trajectory(response, pos, psi, pf, goal_xz):
     frames that will be executed before replanning, and asks Habitat's
     pathfinder for the remaining distance to the known evaluation goal.
     """
+    selector = (args.trajectory_selector
+                if trajectory_selector is None else trajectory_selector)
+    if selector not in ("server", "oracle_geodesic"):
+        raise ValueError(f"unknown trajectory selector: {selector!r}")
     selected = np.asarray(response["trajectory"], dtype=float)
     info = dict(
-        trajectory_selector=args.trajectory_selector,
+        trajectory_selector=selector,
         server_selected_idx=None,
         oracle_selected_idx=None,
         current_geodesic_m=None,
@@ -1008,21 +1033,20 @@ def select_plan_trajectory(response, pos, psi, pf, goal_xz):
         collision_score_unique_count=None,
     )
     all_paths_raw = response.get("all_trajectory")
+    all_paths = None
     if all_paths_raw is not None:
-        all_paths = np.asarray(all_paths_raw, dtype=float)
-        if all_paths.ndim == 3 and all_paths.shape[1:] == selected.shape:
+        all_paths = normalize_navdp_trajectory_candidates(all_paths_raw)
+        if all_paths.shape[1:] == selected.shape:
             errors = np.max(np.abs(all_paths - selected[None]), axis=(1, 2))
             info["server_selected_idx"] = int(np.argmin(errors))
 
-    if args.trajectory_selector == "server":
+    if selector == "server":
         return selected, info
     if all_paths_raw is None:
         raise ValueError(
             "--trajectory_selector oracle_geodesic requires all_trajectory "
             "from the policy server")
-    all_paths = np.asarray(all_paths_raw, dtype=float)
-    if all_paths.ndim != 3 or all_paths.shape[-1] != 3 or len(all_paths) == 0:
-        raise ValueError(f"unexpected all_trajectory shape {all_paths.shape}")
+    assert all_paths is not None
 
     scored = []
     goal3 = np.asarray([goal_xz[0], pos[1], goal_xz[1]], dtype=float)
@@ -1056,8 +1080,9 @@ def select_plan_trajectory(response, pos, psi, pf, goal_xz):
             scored[server_pick] - scored[pick])
     collision_scores = response.get("all_values")
     if collision_scores is not None:
-        collision_scores = np.asarray(collision_scores, dtype=float)
-        if collision_scores.shape == (len(all_paths),):
+        collision_scores = normalize_navdp_candidate_scores(
+            collision_scores, len(all_paths))
+        if collision_scores is not None:
             info["collision_score_unique_count"] = int(len(
                 np.unique(np.round(collision_scores, 4))))
             if server_pick is not None:
@@ -1083,6 +1108,11 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
     image's orientation and whether direct visual similarity improves.
     """
     success_dist = args.success_dist if success_dist is None else float(success_dist)
+    leg_trajectory_selector = trajectory_selector_for_leg(
+        args.trajectory_selector,
+        args.trajectory_selector_scope,
+        leg_index,
+    )
     path_len, history, way_world, plans = 0.0, [], None, []
     memory_trace = []
     rollout_trace = []
@@ -1403,7 +1433,13 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                         "NavDP server did not echo the requested diffusion seed")
             if "trajectory" in response:
                 way, selector_info = select_plan_trajectory(
-                    response, pos, psi, pf, goal_xz)
+                    response,
+                    pos,
+                    psi,
+                    pf,
+                    goal_xz,
+                    trajectory_selector=leg_trajectory_selector,
+                )
                 way_world = waypoints_to_world(way, [pos[0], pos[2]], psi)
                 evaluation_gt_goal_distance_m = float(np.linalg.norm(
                     np.asarray([pos[0], pos[2]]) - np.asarray(goal_xz)))
@@ -2099,6 +2135,7 @@ def main():
         max_steps=args.max_steps,
         exec_horizon=args.exec_horizon,
         trajectory_selector=args.trajectory_selector,
+        trajectory_selector_scope=args.trajectory_selector_scope,
         navdp_stop_threshold=(args.navdp_stop_threshold
                               if (args.server_backend == "navdp"
                                   or args.server_backend in HYBRID_BACKENDS)

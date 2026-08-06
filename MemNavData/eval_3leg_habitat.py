@@ -191,6 +191,8 @@ def main() -> None:
                 forced_gate=args.gate_override,
                 policy_backend=backend,
                 success_dist=args.leg1_success_dist,
+                episode_seed=episode_seed,
+                leg_index=0,
             )
             position, yaw = leg_a["end_pos"], leg_a["end_psi"]
 
@@ -210,6 +212,8 @@ def main() -> None:
                     camera_intrinsic=camera_intrinsic,
                     forced_gate=args.gate_override,
                     policy_backend=backend,
+                    episode_seed=episode_seed,
+                    leg_index=1,
                 )
             position, yaw = leg_b["end_pos"], leg_b["end_psi"]
 
@@ -229,6 +233,8 @@ def main() -> None:
                     camera_intrinsic=camera_intrinsic,
                     forced_gate=args.gate_override,
                     policy_backend=backend,
+                    episode_seed=episode_seed,
+                    leg_index=2,
                 )
 
             route_a = router_stats(leg_a["plans"])

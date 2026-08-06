@@ -32,6 +32,23 @@ class NavDP_Agent:
         self.memory_queue = [[] for i in range(batch_size)]
     def reset_env(self,i):
         self.memory_queue[i] = []
+
+    def append_observation(self, images):
+        """Restore a decision observation without sampling an action.
+
+        This is used only by the paired evaluator when replaying a previously
+        frozen Novel rollout.  It follows the exact RGB queue update used by
+        every normal NavDP step and deliberately does not consume DDPM RNG.
+        """
+        process_images = self.process_image(images)
+        if len(process_images) != len(self.memory_queue):
+            raise ValueError("observation batch differs from NavDP batch size")
+        for index, processed in enumerate(process_images):
+            queue = self.memory_queue[index]
+            if len(queue) >= self.memory_size:
+                del queue[0]
+            queue.append(processed)
+        return [len(queue) for queue in self.memory_queue]
     
     def project_trajectory(self,images,n_trajectories,n_values):
         trajectory_masks = []

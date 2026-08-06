@@ -36,6 +36,7 @@ import hashlib
 import io
 import json
 import os
+from pathlib import Path
 
 import numpy as np
 import requests
@@ -52,6 +53,13 @@ from terminal_uturn import (
 from visual_yaw_refinement import (
     estimate_visual_yaw,
     visual_yaw_action_decision,
+)
+from deterministic_eval_protocol import (
+    LEG1_TRACE_SCHEMA_VERSION,
+    bytes_sha256,
+    diffusion_plan_seed,
+    load_leg1_trace,
+    write_leg1_trace,
 )
 
 parser = argparse.ArgumentParser()
@@ -80,7 +88,24 @@ parser.add_argument(
     help=("official NavDP server port for either hybrid backend; "
           "--port remains the MemNav server port"),
 )
-parser.add_argument("--leg1_mode", choices=["replay", "policy"], default="replay")
+parser.add_argument(
+    "--leg1_mode",
+    choices=["replay", "policy", "shared_trace"],
+    default="replay",
+)
+parser.add_argument(
+    "--shared_leg1_trace_root",
+    type=str,
+    default="",
+    help=("directory containing episode_XXXX_leg1_trace.json files; required "
+          "by shared_trace and ignored otherwise"),
+)
+parser.add_argument(
+    "--write_leg1_trace",
+    action="store_true",
+    help=("write the complete causal Goal-A rollout for later paired replay; "
+          "valid only with --leg1_mode policy"),
+)
 parser.add_argument(
     "--probe_leg1_memory",
     action="store_true",
@@ -227,6 +252,12 @@ parser.add_argument("--loop_cos_min", type=float, default=None,
                     help="optional raw-DINO current/goal cosine threshold for loop closure")
 parser.add_argument("--seed", type=int, default=0,
                     help="base diffusion seed; episode i uses seed+i")
+parser.add_argument(
+    "--deterministic_plan_seeds",
+    action="store_true",
+    help=("seed every NavDP diffusion request from episode, leg, and plan "
+          "index so paired arms receive identical DDPM noise"),
+)
 parser.add_argument("--episode_ids", type=str, default="",
                     help="optional comma-separated episode directory names")
 parser.add_argument("--episodes", type=int, default=0, help="cap #episodes (0 = all)")
@@ -346,13 +377,36 @@ def srv_memory(image_jpg):
     return r.json()
 
 
+def srv_navdp_memory_replay(image_jpg):
+    """Restore one frozen decision image without consuming DDPM noise."""
+    if args.server_backend == "navdp":
+        navdp_base = BASE
+    elif args.server_backend in HYBRID_BACKENDS and NOVEL_BASE is not None:
+        navdp_base = NOVEL_BASE
+    else:
+        raise ValueError("NavDP memory replay requires navdp or hybrid backend")
+    response = requests.post(
+        f"{navdp_base}/memory_replay_step",
+        files={"image": ("image.jpg", image_jpg)},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("diffusion_sampled") is not False:
+        raise RuntimeError("NavDP replay endpoint sampled diffusion")
+    return payload
+
+
 def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
-             forced_gate=None, policy_backend=None):
+             forced_gate=None, policy_backend=None, diffusion_seed=None):
     data = {}
     if forced_anchor is not None:
         data["forced_anchor"] = str(int(forced_anchor))
     if forced_gate is not None:
         data["forced_gate"] = str(float(forced_gate))
+
+    navdp_data = {}
+    if diffusion_seed is not None:
+        navdp_data["diffusion_seed"] = str(int(diffusion_seed))
 
     if (args.server_backend == "hybrid_pose"
             and policy_backend in ("navdp_mix", "navdp_auto")):
@@ -564,6 +618,7 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                     "goal": ("goal.jpg", goal_jpg),
                     "depth": ("depth.png", depth_png_bytes(depth)),
                 },
+                data=navdp_data,
             )
             nav.raise_for_status()
             controller = ("navdp_image_router" if not router_active
@@ -578,6 +633,11 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
         # NavDP was trained with both image-goal and point-goal tokens. Its
         # mixed endpoint preserves visual turning cues while metric pose
         # supplies the missing long-range direction and distance.
+        mixed_data = dict(navdp_data)
+        mixed_data["goal_data"] = json.dumps({
+            "goal_x": [float(aux_pose[0])],
+            "goal_y": [float(aux_pose[1])],
+        })
         nav = requests.post(
             f"{NOVEL_BASE}/navdp_step_ip_mixgoal",
             files={
@@ -585,10 +645,7 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 "image_goal": ("goal.jpg", goal_jpg),
                 "depth": ("depth.png", depth_png_bytes(depth)),
             },
-            data={"goal_data": json.dumps({
-                "goal_x": [float(aux_pose[0])],
-                "goal_y": [float(aux_pose[1])],
-            })},
+            data=mixed_data,
         )
         nav.raise_for_status()
         result = attach_memnav_diagnostics(
@@ -636,7 +693,11 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
         plan_base = NOVEL_BASE
     else:
         plan_base = BASE
-    r = requests.post(f"{plan_base}/imagegoal_step", files=files, data=data)
+    request_data = dict(data)
+    if use_navdp:
+        request_data.update(navdp_data)
+    r = requests.post(
+        f"{plan_base}/imagegoal_step", files=files, data=request_data)
     r.raise_for_status()
     out = r.json()
     if probe_out is not None:
@@ -697,6 +758,137 @@ def srv_similarity(image_jpg, goal_jpg):
 # --------------------------------------------------------------------------- #
 def data_to_hab(p):
     return M_W.T @ np.asarray(p, float)
+
+
+def replay_shared_leg1(
+        sim, trace_root, episode, episode_seed, goal_jpg,
+        expected_start_position, expected_start_yaw):
+    """Replay one frozen Novel rollout into the current MemNav instance."""
+    trace_path = Path(trace_root) / f"{episode}_leg1_trace.json"
+    payload, trace_sha = load_leg1_trace(
+        trace_path,
+        expected_episode=episode,
+        expected_seed=int(episode_seed),
+        expected_goal_sha256=bytes_sha256(goal_jpg),
+        expected_source_scene=Path(args.scene).stem,
+    )
+    if payload["goal_source_episode"] != episode:
+        raise RuntimeError("shared trace does not use the episode's own Goal A")
+    if (payload["source_backend"] != "hybrid_pose"
+            or payload["source_hybrid_route"] not in AUTO_HYBRID_ROUTES):
+        raise RuntimeError(
+            "shared trace was not generated by the automatic hybrid router")
+    if payload["source_retrieval_candidate_min_gap"] != 16:
+        raise RuntimeError("shared trace source candidate gap is not 16")
+    if not np.isclose(
+            float(payload["source_graph_subgoal_spacing_m"]), 0.0,
+            rtol=0.0, atol=1e-12):
+        raise RuntimeError("shared trace source is not the direct controller")
+    if not np.isclose(
+            float(payload["source_graph_subgoal_arrival_m"]), 0.60,
+            rtol=0.0, atol=1e-12):
+        raise RuntimeError("shared trace source graph arrival changed")
+    poses = payload["poses"]
+    if poses:
+        first = poses[0]
+        first_position = np.asarray(
+            [first["x"], first["y"], first["z"]], dtype=float)
+        if not np.allclose(
+                first_position, expected_start_position, rtol=0.0, atol=1e-6):
+            raise RuntimeError("shared trace start position mismatch")
+        if abs(wrap_angle(float(first["yaw"]) - expected_start_yaw)) > 1e-6:
+            raise RuntimeError("shared trace start yaw mismatch")
+
+    memory_trace = []
+    plan_steps = [int(plan["step"]) for plan in payload["plans"]]
+    if len(plan_steps) != len(set(plan_steps)):
+        raise RuntimeError("shared trace contains duplicate plan steps")
+    plan_step_set = set(plan_steps)
+    navdp_queue_lengths = None
+    for pose in poses:
+        floor_position = np.asarray(
+            [pose["x"], pose["y"], pose["z"]], dtype=float)
+        rgb, _ = render(
+            sim, floor_position + np.asarray([0.0, CAM_H, 0.0]),
+            float(pose["yaw"]),
+        )
+        frame = jpg_bytes(rgb)
+        if bytes_sha256(frame) != pose.get("jpg_sha256"):
+            raise RuntimeError("shared trace rendered RGB mismatch")
+        response = srv_memory(frame)
+        frame_idx = response.get("frame_idx")
+        if frame_idx is not None:
+            memory_trace.append({
+                "frame_idx": int(frame_idx),
+                "step": int(pose["step"]),
+                "x": float(pose["x"]),
+                "z": float(pose["z"]),
+                "yaw": float(pose["yaw"]),
+            })
+        if int(pose["step"]) in plan_step_set:
+            navdp = srv_navdp_memory_replay(frame)
+            navdp_queue_lengths = navdp.get("queue_lengths")
+
+    if plan_steps:
+        memory_size = int(navdp.get("memory_size", -1))
+        if memory_size <= 0:
+            raise RuntimeError("NavDP replay endpoint omitted memory size")
+        expected_length = min(len(plan_steps), memory_size)
+        if navdp_queue_lengths != [expected_length]:
+            raise RuntimeError(
+                "NavDP replay queue length does not match frozen plan count")
+
+    leg = {
+        "reached": bool(payload["reached"]),
+        "path_len": float(payload["path_len"]),
+        "path_len_at_reach": payload.get("path_len_at_reach"),
+        "step_at_reach": payload.get("step_at_reach"),
+        "steps": int(payload["steps"]),
+        "plans": payload["plans"],
+        "memory_trace": memory_trace,
+        "rollout_trace": poses,
+        "end_pos": np.asarray(payload["end_position"], dtype=float),
+        "end_psi": float(payload["end_yaw"]),
+        "final_goal_dist_m": float(payload["final_goal_dist_m"]),
+        "navdp_replayed_plan_steps": plan_steps,
+    }
+    return leg, trace_sha
+
+
+def leg1_trace_payload(
+        *, episode, episode_seed, goal_jpg, goal_source_episode,
+        source_scene, leg):
+    """Build the audited, JSON-native representation of a Novel rollout."""
+    return {
+        "schema_version": LEG1_TRACE_SCHEMA_VERSION,
+        "episode": episode,
+        "episode_seed": int(episode_seed),
+        "goal_sha256": bytes_sha256(goal_jpg),
+        "goal_source_episode": goal_source_episode,
+        "source_scene": source_scene,
+        "source_backend": args.server_backend,
+        "source_hybrid_route": args.hybrid_route,
+        "source_retrieval_candidate_min_gap": (
+            MEMNAV_SERVER_INFO.get("retrieval_candidate_min_gap")),
+        "source_graph_subgoal_spacing_m": (
+            MEMNAV_SERVER_INFO.get("graph_subgoal_spacing_m")),
+        "source_graph_subgoal_arrival_m": (
+            MEMNAV_SERVER_INFO.get("graph_subgoal_arrival_m")),
+        "reached": bool(leg["reached"]),
+        "path_len": float(leg["path_len"]),
+        "path_len_at_reach": (
+            None if leg.get("path_len_at_reach") is None
+            else float(leg["path_len_at_reach"])),
+        "step_at_reach": (
+            None if leg.get("step_at_reach") is None
+            else int(leg["step_at_reach"])),
+        "steps": int(leg["steps"]),
+        "final_goal_dist_m": float(leg["final_goal_dist_m"]),
+        "end_position": np.asarray(leg["end_pos"], dtype=float).tolist(),
+        "end_yaw": float(leg["end_psi"]),
+        "poses": leg["rollout_trace"],
+        "plans": leg["plans"],
+    }
 
 
 def waypoints_to_world(way, pos_xz, psi):
@@ -833,7 +1025,8 @@ def select_plan_trajectory(response, pos, psi, pf, goal_xz):
 def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                    terminal_mode="off", goal_yaw=None, camera_intrinsic=None,
                    forced_anchor=None, forced_gate=None,
-                   policy_backend=None, success_dist=None):
+                   policy_backend=None, success_dist=None,
+                   episode_seed=None, leg_index=None):
     """Policy-driven leg with optional forward-only terminal pose alignment.
 
     Navigation success remains the benchmark's distance-only event.  When a
@@ -844,6 +1037,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
     success_dist = args.success_dist if success_dist is None else float(success_dist)
     path_len, history, way_world, plans = 0.0, [], None, []
     memory_trace = []
+    rollout_trace = []
     reached_position = False
     path_len_at_reach = None
     step_at_reach = None
@@ -897,6 +1091,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             steps=steps,
             plans=plans,
             memory_trace=memory_trace,
+            rollout_trace=rollout_trace,
             terminal_mode=terminal_mode,
             terminal_attempted=terminal_attempted,
             terminal_completed=terminal_completed,
@@ -945,6 +1140,14 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
     for step in range(total_budget):
         rgb, depth = render(sim, pos + np.array([0, CAM_H, 0]), psi)
         frame = jpg_bytes(rgb)
+        rollout_trace.append({
+            "step": int(step),
+            "x": float(pos[0]),
+            "y": float(pos[1]),
+            "z": float(pos[2]),
+            "yaw": float(psi),
+            "jpg_sha256": bytes_sha256(frame),
+        })
         if writer is not None:
             writer.append_data(rgb)
 
@@ -1092,14 +1295,30 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
 
         response = None
         if step % args.exec_horizon == 0:
+            request_seed = None
+            if args.deterministic_plan_seeds:
+                if episode_seed is None or leg_index is None:
+                    raise ValueError(
+                        "deterministic plan seeds require episode and leg")
+                request_seed = diffusion_plan_seed(
+                    int(episode_seed), int(leg_index), len(plans))
             response = srv_plan(
                 frame, goal_jpg, depth=depth, forced_anchor=forced_anchor,
-                forced_gate=forced_gate, policy_backend=policy_backend)
+                forced_gate=forced_gate, policy_backend=policy_backend,
+                diffusion_seed=request_seed)
+            if request_seed is not None:
+                echoed_seed = response.get("diffusion_seed")
+                if echoed_seed is None or int(echoed_seed) != request_seed:
+                    raise RuntimeError(
+                        "NavDP server did not echo the requested diffusion seed")
             if "trajectory" in response:
                 way, selector_info = select_plan_trajectory(
                     response, pos, psi, pf, goal_xz)
                 way_world = waypoints_to_world(way, [pos[0], pos[2]], psi)
-                plans.append(dict(step=step, gate=response.get("gate"),
+                plans.append(dict(step=step,
+                                  diffusion_seed=response.get("diffusion_seed"),
+                                  requested_diffusion_seed=request_seed,
+                                  gate=response.get("gate"),
                                   match_idx=response.get("match_idx"), anchor=response.get("anchor"),
                                   retrieved_anchor=response.get("retrieved_anchor"),
                                   forced_anchor=response.get("forced_anchor"),
@@ -1314,6 +1533,18 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     if args.stop_after_leg1 and args.leg1_mode != "policy":
         raise ValueError("--stop_after_leg1 requires --leg1_mode policy")
+    if args.write_leg1_trace and args.leg1_mode != "policy":
+        raise ValueError("--write_leg1_trace requires --leg1_mode policy")
+    if args.leg1_mode == "shared_trace" and not args.shared_leg1_trace_root:
+        raise ValueError(
+            "--leg1_mode shared_trace requires --shared_leg1_trace_root")
+    if args.leg1_mode != "shared_trace" and args.shared_leg1_trace_root:
+        raise ValueError(
+            "--shared_leg1_trace_root is valid only for shared_trace")
+    if (args.deterministic_plan_seeds
+            and args.server_backend not in ("navdp", "hybrid_pose")):
+        raise ValueError(
+            "deterministic plan seeds require navdp or hybrid_pose backend")
     if args.server_backend in HYBRID_BACKENDS and args.novel_port is None:
         raise ValueError(
             f"--server_backend {args.server_backend} requires --novel_port")
@@ -1406,6 +1637,7 @@ def main():
                 os.path.join(args.out, os.path.basename(ep_dir) + ".mp4"), fps=10)
 
         # ---- leg 1 ----
+        leg1_trace_sha256 = None
         if args.leg1_mode == "replay":
             memory_trace = []
             for i in range(switch):
@@ -1422,6 +1654,17 @@ def main():
             pos, psi = parquet_pose_hab(rows.iloc[switch - 1]["action"])
             legA = dict(reached=True, path_len=geoA, steps=switch, plans=[],
                         memory_trace=memory_trace)   # scripted: SPL_A undefined
+        elif args.leg1_mode == "shared_trace":
+            legA, leg1_trace_sha256 = replay_shared_leg1(
+                sim,
+                args.shared_leg1_trace_root,
+                os.path.basename(ep_dir),
+                episode_seed,
+                goalA_jpg,
+                start_floor,
+                start_psi,
+            )
+            pos, psi = legA["end_pos"], legA["end_psi"]
         else:
             legA = run_policy_leg(
                 sim, pf, start_floor, start_psi, goalA_jpg, A_xz, geoA, writer,
@@ -1430,10 +1673,25 @@ def main():
                                  if args.hybrid_route in AUTO_HYBRID_ROUTES
                                  else "navdp_probe"
                                  if args.probe_leg1_memory else "navdp")
-                                if args.server_backend in HYBRID_BACKENDS
+                if args.server_backend in HYBRID_BACKENDS
                                 else None),
-                success_dist=args.leg1_success_dist)
+                success_dist=args.leg1_success_dist,
+                episode_seed=episode_seed, leg_index=0)
             pos, psi = legA["end_pos"], legA["end_psi"]
+            if args.write_leg1_trace:
+                trace_path = Path(args.out) / (
+                    f"{os.path.basename(ep_dir)}_leg1_trace.json")
+                leg1_trace_sha256 = write_leg1_trace(
+                    trace_path,
+                    leg1_trace_payload(
+                        episode=os.path.basename(ep_dir),
+                        episode_seed=episode_seed,
+                        goal_jpg=goalA_jpg,
+                        goal_source_episode=os.path.basename(goalA_source_ep),
+                        source_scene=Path(args.scene).stem,
+                        leg=legA,
+                    ),
+                )
 
         path_nearest_anchor = None
         path_nearest_dist_m = None
@@ -1481,6 +1739,7 @@ def main():
                           else "navdp_mix")
                     if args.server_backend == "hybrid_pose"
                     else None),
+                episode_seed=episode_seed, leg_index=1,
             )
 
         if writer is not None:
@@ -1504,6 +1763,12 @@ def main():
             memnav_checkpoint=MEMNAV_SERVER_INFO.get("checkpoint"),
             memnav_retrieval=MEMNAV_SERVER_INFO.get("retrieval"),
             memnav_exclude_recent=MEMNAV_SERVER_INFO.get("exclude_recent"),
+            retrieval_candidate_min_gap=MEMNAV_SERVER_INFO.get(
+                "retrieval_candidate_min_gap"),
+            graph_subgoal_spacing_m=MEMNAV_SERVER_INFO.get(
+                "graph_subgoal_spacing_m"),
+            graph_subgoal_arrival_m=MEMNAV_SERVER_INFO.get(
+                "graph_subgoal_arrival_m"),
             leg1_policy_backend=("navdp"
                                  if args.server_backend in HYBRID_BACKENDS
                                  else args.server_backend),
@@ -1516,9 +1781,12 @@ def main():
                 else args.server_backend),
             leg1_goal_source=args.leg1_goal_source,
             leg1_goal_source_episode=os.path.basename(goalA_source_ep),
+            leg1_trace_sha256=leg1_trace_sha256,
+            deterministic_plan_seeds=args.deterministic_plan_seeds,
             reached_A=float(legA["reached"]), reached_B=float(legB["reached"]),
             spl_A=(spl(legA["reached"], geoA, legA["path_len"])
-                   if args.leg1_mode == "policy" else float("nan")),
+                   if args.leg1_mode in ("policy", "shared_trace")
+                   else float("nan")),
             # Keep the official distance-only SPL comparable to the old
             # evaluator: terminal alignment happens after first success.
             spl_B=spl(
@@ -1607,7 +1875,8 @@ def main():
             loop_closed=legB.get("loop_closed"),
         )
         json.dump(dict(legA=legA["plans"], legB=legB["plans"],
-                       legA_memory_trace=legA.get("memory_trace", [])),
+                       legA_memory_trace=legA.get("memory_trace", []),
+                       leg1_trace_sha256=leg1_trace_sha256),
                   open(os.path.join(args.out, m["episode"] + "_plans.json"), "w"))
         metrics.append(m)
         print(f"[{m['episode']}] A={m['reached_A']:.0f} "
@@ -1644,6 +1913,12 @@ def main():
         memnav_checkpoint=MEMNAV_SERVER_INFO.get("checkpoint"),
         memnav_retrieval=MEMNAV_SERVER_INFO.get("retrieval"),
         memnav_exclude_recent=MEMNAV_SERVER_INFO.get("exclude_recent"),
+        retrieval_candidate_min_gap=MEMNAV_SERVER_INFO.get(
+            "retrieval_candidate_min_gap"),
+        graph_subgoal_spacing_m=MEMNAV_SERVER_INFO.get(
+            "graph_subgoal_spacing_m"),
+        graph_subgoal_arrival_m=MEMNAV_SERVER_INFO.get(
+            "graph_subgoal_arrival_m"),
         leg1_policy_backend=("navdp"
                              if args.server_backend in HYBRID_BACKENDS
                              else args.server_backend),
@@ -1679,11 +1954,16 @@ def main():
         router_confirm_plans=args.router_confirm_plans,
         router_verify_top_k=args.router_verify_top_k,
         gate_override=args.gate_override,
-        SR_A=(nA / n) if n and args.leg1_mode == "policy" else None,
+        deterministic_plan_seeds=args.deterministic_plan_seeds,
+        shared_leg1_trace_root=(args.shared_leg1_trace_root or None),
+        write_leg1_trace=args.write_leg1_trace,
+        SR_A=(nA / n) if n and args.leg1_mode in ("policy", "shared_trace") else None,
         mean_spl_A=(float(np.nanmean([m["spl_A"] for m in metrics]))
-                    if n and args.leg1_mode == "policy" else None),
+                    if n and args.leg1_mode in ("policy", "shared_trace")
+                    else None),
         mean_final_dist_A=(float(np.mean([m["final_dist_A"] for m in metrics]))
-                           if n and args.leg1_mode == "policy" else None),
+                           if n and args.leg1_mode in ("policy", "shared_trace")
+                           else None),
         # Plan-weighted means are comparable across episodes with different
         # stopping times.  Episode-level max/rate below remains macro-averaged.
         mean_gate_A=(sum(m["gate_A_mean"] * m["gate_A_plan_count"]

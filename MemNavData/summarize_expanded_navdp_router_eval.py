@@ -80,6 +80,16 @@ def load_arm(scene_root: Path, arm: str, scene: str) -> dict[tuple[str, str], di
         plans = json.loads(plans_path.read_text())
         leg_a = plans.get("legA", [])
         leg_b = plans.get("legB", [])
+        deterministic_plan_seeds = truth(
+            metric.get("deterministic_plan_seeds"))
+        if deterministic_plan_seeds:
+            for plan in leg_a + leg_b:
+                requested = plan.get("requested_diffusion_seed")
+                echoed = plan.get("diffusion_seed")
+                require(requested is not None and echoed is not None,
+                        f"missing deterministic plan seed: {arm} {scene} {episode}")
+                require(int(requested) == int(echoed),
+                        f"diffusion seed echo mismatch: {arm} {scene} {episode}")
         active_a = [truth(plan.get("router_active")) for plan in leg_a]
         active_b = [truth(plan.get("router_active")) for plan in leg_b]
         verify_ms = []
@@ -121,6 +131,11 @@ def load_arm(scene_root: Path, arm: str, scene: str) -> dict[tuple[str, str], di
             "router_active_episode_b": any(active_b),
             "geometry_verification_ms": verify_ms,
             "selected_candidate_ranks": selected_ranks,
+            "leg1_trace_sha256": (
+                metric.get("leg1_trace_sha256")
+                or plans.get("leg1_trace_sha256")
+                or None),
+            "deterministic_plan_seeds": deterministic_plan_seeds,
         }
     return output
 
@@ -199,6 +214,25 @@ def paired_summary(left_name: str, right_name: str,
                 f"Goal-A geodesic mismatch: {left_name} {right_name} {key}")
         require(math.isclose(left_row["geo_b"], right_row["geo_b"], abs_tol=1e-9),
                 f"Goal-B geodesic mismatch: {left_name} {right_name} {key}")
+        left_trace = left_row.get("leg1_trace_sha256")
+        right_trace = right_row.get("leg1_trace_sha256")
+        if left_trace is not None or right_trace is not None:
+            require(left_trace is not None and right_trace is not None,
+                    f"shared Goal-A trace missing: {left_name} {right_name} {key}")
+            require(left_trace == right_trace,
+                    f"shared Goal-A trace mismatch: {left_name} {right_name} {key}")
+            require(left_row.get("deterministic_plan_seeds") is True
+                    and right_row.get("deterministic_plan_seeds") is True,
+                    f"paired plan seeding disabled: {left_name} {right_name} {key}")
+            require(left_row["reached_a"] == right_row["reached_a"],
+                    f"shared Goal-A outcome mismatch: {left_name} {right_name} {key}")
+            require(left_row["steps_a"] == right_row["steps_a"],
+                    f"shared Goal-A step mismatch: {left_name} {right_name} {key}")
+            for field in ("spl_a", "path_a", "final_dist_a"):
+                require(math.isclose(
+                    left_row[field], right_row[field], abs_tol=1e-9),
+                    f"shared Goal-A {field} mismatch: "
+                    f"{left_name} {right_name} {key}")
         if left_row["joint"] and right_row["joint"]:
             outcome = "both_joint_success"
         elif left_row["joint"]:

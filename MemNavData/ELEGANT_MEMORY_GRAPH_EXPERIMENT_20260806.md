@@ -87,9 +87,57 @@ spacing is tested to be an exact direct-goal fallback.  The report includes
 Novel SR, conditional Revisit SR, joint SR, activation, per-episode paired
 transitions, and exact McNemar tests.
 
+The first development run produced a strong but still preliminary signal:
+
+| controller | Novel | Revisit given Novel | joint |
+|---|---:|---:|---:|
+| direct, gap 16 | `31/40` | `19/31 = 61.3%` | `19/40 = 47.5%` |
+| graph, gap 16 | `31/40` | `25/31 = 80.6%` | `25/40 = 62.5%` |
+
+The six paired gains and no paired losses give an exact two-sided sign-test
+`p=0.03125`.  This is evidence that intermediate reverse-memory subgoals can
+help local control.  It is not yet the final number: the old evaluator seeded
+only once at episode reset, so a different number of earlier diffusion calls
+could give later arms different DDPM noise.  The gap-4 arm changing Novel
+outcomes exposed that confound even though graph-gap16 happened to retain the
+same `31/40` Novel count.
+
+## Strict causal re-evaluation
+
+The replacement protocol removes that confound instead of averaging it away:
+
+1. Run Goal A once with the automatic direct-gap16 baseline router.  This
+   makes the reference arm's Novel trajectory factual and the graph arm a
+   controlled Goal-B intervention.
+2. Save every simulator pose and the SHA256 of its rendered JPEG.
+3. For direct and graph arms, re-render every saved pose and require an exact
+   JPEG hash match before rebuilding LingBot's full streaming memory.
+4. Restore NavDP's eight-frame observation queue only at the original policy
+   decision frames, using a replay endpoint that never samples diffusion.
+5. Seed every actual diffusion request by `(episode, leg, plan index)` and
+   require the server to echo the same seed.
+6. Reject the summary unless both arms have the same Goal-A trace hash, Goal-A
+   outcome, steps, path length, SPL, and final distance.
+
+This means direct versus graph differs only after the shared Goal-A trajectory
+and receives matched DDPM noise at corresponding Goal-B replans.  The strict
+development runner is `run_strict_graph_2leg.sh`.
+
+For three-leg diagnosis, `run_graph_conditional_c.sh` replays the exact causal
+A/B source prefix into both LingBot and NavDP, then evaluates six logical arms:
+native, direct-gap16, graph-gap16, oracle-anchor direct, oracle-anchor graph,
+and oracle point-goal.  This separates retrieval-anchor error, graph-control
+error, and metric point-goal/control error.  It is a conditional diagnostic,
+not an end-to-end three-leg SR claim.
+
 These 20 scenes are now a development ablation because their failures were
-inspected.  Any selected configuration must be frozen before one new blind
-scene split is evaluated.
+inspected.  `build_graph_blind_manifest.py` deterministically selects every
+remaining eligible unseen scene using a frozen hash salt, validates two
+complete episodes per scene, and records hashes for assets, metadata, parquet,
+and goal images.  The resulting 16-scene/32-episode manifest must be generated
+and committed before any blind performance result is inspected.  It is not a
+blind result until the strict development rerun passes and that one-shot run is
+complete.
 
 ## LingBot-native loop-factor expansion
 
@@ -121,5 +169,7 @@ following hold:
 - pinned Habitat and MemNav Python imports;
 - focused unit tests, Python compilation, and shell syntax checks.
 
-No source file under `/home/asus/Research/Nav` is modified.  All source changes
-are confined to `/home/asus/Research/Nav-axis-uturn` and remote clean worktrees.
+No source file under `/home/asus/Research/Nav` is modified.  This strict
+protocol is implemented in the clean child worktree
+`/home/asus/Research/Nav-graph-blind`; remote runs must use a clean worktree at
+the exact committed revision.

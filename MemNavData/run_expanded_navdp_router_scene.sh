@@ -14,6 +14,11 @@ SCENE_INDEX=${SCENE_INDEX:?set SCENE_INDEX}
 HAB_PY=${HAB_PY:?set HAB_PY}
 MEMNAV_PY=${MEMNAV_PY:?set MEMNAV_PY}
 MAX_STEPS=${MAX_STEPS:-500}
+LEG1_MODE=${LEG1_MODE:-policy}
+STOP_AFTER_LEG1=${STOP_AFTER_LEG1:-0}
+WRITE_LEG1_TRACE=${WRITE_LEG1_TRACE:-0}
+DETERMINISTIC_PLAN_SEEDS=${DETERMINISTIC_PLAN_SEEDS:-0}
+SHARED_LEG1_ROOT=${SHARED_LEG1_ROOT:-}
 RUN_NAVDP_NATIVE=${RUN_NAVDP_NATIVE:-1}
 RUN_GEOMETRY_TOP1=${RUN_GEOMETRY_TOP1:-1}
 RUN_GEOMETRY_ROUTER=${RUN_GEOMETRY_ROUTER:-1}
@@ -50,6 +55,8 @@ NAVDP_CKPT=${NAVDP_CKPT:-/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/u
 ASSET_ROOT_OVERRIDE=${ASSET_ROOT_OVERRIDE:-}
 EPISODE_ROOT_OVERRIDE=${EPISODE_ROOT_OVERRIDE:-}
 RUN_CONDITIONAL_ORACLES=${RUN_CONDITIONAL_ORACLES:-0}
+RUN_CONDITIONAL_ORACLE_ANCHOR=${RUN_CONDITIONAL_ORACLE_ANCHOR:-${RUN_CONDITIONAL_ORACLES}}
+RUN_CONDITIONAL_ORACLE_POINT=${RUN_CONDITIONAL_ORACLE_POINT:-${RUN_CONDITIONAL_ORACLES}}
 
 TASK_FILES=(
   MemNavData/eval_2leg_habitat.py
@@ -59,6 +66,9 @@ TASK_FILES=(
   MemNavData/test_router_candidates.py
   MemNavData/test_reverse_memory_graph.py
   MemNavData/test_policy_agent_graph.py
+  MemNavData/deterministic_eval_protocol.py
+  MemNavData/test_deterministic_eval_protocol.py
+  MemNavData/test_navdp_memory_replay.py
   MemNavData/conditional_c_protocol.py
   MemNavData/test_conditional_c_protocol.py
   MemNavData/summarize_conditional_c_eval.py
@@ -71,6 +81,7 @@ TASK_FILES=(
   NavDP/baselines/memnav/router_candidates.py
   NavDP/baselines/memnav/reverse_memory_graph.py
   NavDP/baselines/navdp/navdp_server.py
+  NavDP/baselines/navdp/deterministic_seed.py
   NavDP/baselines/navdp/policy_agent.py
   NavDP/baselines/navdp/policy_network.py
 )
@@ -82,14 +93,34 @@ TASK_FILES=(
   echo "ABORT: invalid UNIT_TEST_MODULE=${UNIT_TEST_MODULE}" >&2
   exit 1
 }
-[[ "${RUN_CONDITIONAL_ORACLES}" =~ ^[01]$ ]] || {
-  echo "ABORT: RUN_CONDITIONAL_ORACLES must be 0 or 1" >&2
-  exit 1
-}
+for flag in RUN_CONDITIONAL_ORACLES RUN_CONDITIONAL_ORACLE_ANCHOR \
+            RUN_CONDITIONAL_ORACLE_POINT; do
+  [[ "${!flag}" =~ ^[01]$ ]] || {
+    echo "ABORT: ${flag} must be 0 or 1" >&2; exit 1; }
+done
 for flag in RUN_NAVDP_NATIVE RUN_GEOMETRY_TOP1 RUN_GEOMETRY_ROUTER; do
   [[ "${!flag}" =~ ^[01]$ ]] || {
     echo "ABORT: ${flag} must be 0 or 1" >&2; exit 1; }
 done
+for flag in STOP_AFTER_LEG1 WRITE_LEG1_TRACE DETERMINISTIC_PLAN_SEEDS; do
+  [[ "${!flag}" =~ ^[01]$ ]] || {
+    echo "ABORT: ${flag} must be 0 or 1" >&2; exit 1; }
+done
+[[ "${LEG1_MODE}" =~ ^(policy|replay|shared_trace)$ ]] || {
+  echo "ABORT: invalid LEG1_MODE=${LEG1_MODE}" >&2; exit 1; }
+if [[ "${LEG1_MODE}" == shared_trace ]]; then
+  [[ -n "${SHARED_LEG1_ROOT}" ]] || {
+    echo "ABORT: shared_trace requires SHARED_LEG1_ROOT" >&2; exit 1; }
+else
+  [[ -z "${SHARED_LEG1_ROOT}" ]] || {
+    echo "ABORT: SHARED_LEG1_ROOT requires shared_trace" >&2; exit 1; }
+fi
+if [[ "${STOP_AFTER_LEG1}" -eq 1 || "${WRITE_LEG1_TRACE}" -eq 1 ]]; then
+  [[ "${LEG1_MODE}" == policy ]] || {
+    echo "ABORT: trace writing/Goal-A-only requires policy LEG1_MODE" >&2
+    exit 1
+  }
+fi
 (( RUN_NAVDP_NATIVE + RUN_GEOMETRY_TOP1 + RUN_GEOMETRY_ROUTER > 0 )) || {
   echo "ABORT: at least one evaluation arm must be enabled" >&2; exit 1; }
 [[ "${RETRIEVAL_CANDIDATE_MIN_GAP}" =~ ^[1-9][0-9]*$ ]] || {
@@ -103,7 +134,7 @@ if not math.isfinite(spacing) or spacing < 0:
 if not math.isfinite(arrival) or arrival <= 0:
     raise SystemExit("GRAPH_SUBGOAL_ARRIVAL_M must be finite and positive")
 PY
-if [[ "${RUN_CONDITIONAL_ORACLES}" -eq 1 ]]; then
+if (( RUN_CONDITIONAL_ORACLE_ANCHOR + RUN_CONDITIONAL_ORACLE_POINT > 0 )); then
   [[ "$(basename "${EVALUATOR}")" == "eval_conditional_c_habitat.py" ]] || {
     echo "ABORT: conditional oracle arms require eval_conditional_c_habitat.py" >&2
     exit 1
@@ -203,11 +234,13 @@ exec > >(tee "${SCENE_ROOT}/run.log") 2>&1
 
 hab_python -m py_compile "${EVALUATOR}" "${VALIDATOR}"
 "${MEMNAV_PY}" -m py_compile \
+  "${ROOT}/MemNavData/deterministic_eval_protocol.py" \
   "${MEMNAV_SERVER}" \
   "${ROOT}/NavDP/baselines/memnav/policy_agent.py" \
   "${ROOT}/NavDP/baselines/memnav/router_candidates.py" \
   "${ROOT}/NavDP/baselines/memnav/reverse_memory_graph.py" \
-  "${NAVDP_SERVER}"
+  "${NAVDP_SERVER}" \
+  "${ROOT}/NavDP/baselines/navdp/deterministic_seed.py"
 (
   cd "${ROOT}"
   hab_python -m unittest \
@@ -219,7 +252,10 @@ hab_python -m py_compile "${EVALUATOR}" "${VALIDATOR}"
 )
 (
   cd "${ROOT}"
-  "${MEMNAV_PY}" -m unittest MemNavData.test_policy_agent_graph -v
+  "${MEMNAV_PY}" -m unittest \
+    MemNavData.test_policy_agent_graph \
+    MemNavData.test_deterministic_eval_protocol \
+    MemNavData.test_navdp_memory_replay -v
 )
 hab_python -c \
   'import habitat_sim,numpy,pandas,pyarrow,PIL,requests,scipy,quaternion,sys; assert requests.__version__ == sys.argv[1]; print("Habitat dependencies OK", habitat_sim.__version__, "requests", requests.__version__)' \
@@ -344,7 +380,7 @@ COMMON_ARGS=(
   --episode_root "${EPISODE_SCENE_ROOT}"
   --scene "${SCENE_FILE}"
   --host 127.0.0.1
-  --leg1_mode policy
+  --leg1_mode "${LEG1_MODE}"
   --success_dist 1.0
   --max_steps "${MAX_STEPS}"
   --exec_horizon 8
@@ -355,6 +391,23 @@ COMMON_ARGS=(
   --terminal_visual_refine off
   --episode_ids "${episode_csv}"
 )
+if [[ "${STOP_AFTER_LEG1}" -eq 1 ]]; then
+  COMMON_ARGS+=(--stop_after_leg1)
+fi
+if [[ "${WRITE_LEG1_TRACE}" -eq 1 ]]; then
+  COMMON_ARGS+=(--write_leg1_trace)
+fi
+if [[ "${DETERMINISTIC_PLAN_SEEDS}" -eq 1 ]]; then
+  COMMON_ARGS+=(--deterministic_plan_seeds)
+fi
+if [[ "${LEG1_MODE}" == shared_trace ]]; then
+  SHARED_SCENE_ROOT=${SHARED_LEG1_ROOT}/scenes/$(printf '%02d' "${SCENE_INDEX}")_${scene}/geometry_router
+  test -d "${SHARED_SCENE_ROOT}" || {
+    echo "ABORT: shared Goal-A trace root missing: ${SHARED_SCENE_ROOT}" >&2
+    exit 1
+  }
+  COMMON_ARGS+=(--shared_leg1_trace_root "${SHARED_SCENE_ROOT}")
+fi
 
 ARMS=()
 if [[ "${RUN_NAVDP_NATIVE}" -eq 1 ]]; then
@@ -429,10 +482,13 @@ run_conditional_oracle_arm() {
   ) > "${SCENE_ROOT}/logs/eval_${arm}.log" 2>&1
 }
 
-if [[ "${RUN_CONDITIONAL_ORACLES}" -eq 1 ]]; then
+if [[ "${RUN_CONDITIONAL_ORACLE_ANCHOR}" -eq 1 ]]; then
   run_conditional_oracle_arm oracle_anchor oracle_anchor
+  ARMS+=(oracle_anchor)
+fi
+if [[ "${RUN_CONDITIONAL_ORACLE_POINT}" -eq 1 ]]; then
   run_conditional_oracle_arm oracle_point oracle_point
-  ARMS+=(oracle_anchor oracle_point)
+  ARMS+=(oracle_point)
 fi
 
 for arm in "${ARMS[@]}"; do

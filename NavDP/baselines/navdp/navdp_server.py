@@ -1,6 +1,7 @@
 from PIL import Image
 from flask import Flask, request, jsonify
 from policy_agent import NavDP_Agent
+from deterministic_seed import apply_seed
 import numpy as np
 import cv2
 import imageio
@@ -8,9 +9,6 @@ import time
 import datetime
 import json
 import os
-import random
-import torch
-
 from PIL import Image, ImageDraw, ImageFont
 import argparse
 parser = argparse.ArgumentParser()
@@ -30,13 +28,7 @@ def navdp_reset():
     threshold = np.array(payload.get('stop_threshold'))
     batchsize = np.array(payload.get('batch_size'))
     seed = payload.get('seed')
-    if seed is not None:
-        seed = int(seed)
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
+    apply_seed(seed)
     if navdp_navigator is None:
         navdp_navigator = NavDP_Agent(intrinsic,
                                 image_size=224,
@@ -70,6 +62,26 @@ def navdp_reset_env():
     navdp_navigator.reset_env(int(request.get_json().get('env_id')))
     return jsonify({"algo":"navdp"})
 
+
+@app.route("/memory_replay_step", methods=['POST'])
+def navdp_memory_replay_step():
+    """Append one frozen decision image without running diffusion."""
+    global navdp_navigator
+    if navdp_navigator is None:
+        return jsonify({"error": "navigator is not initialized"}), 409
+    image_file = request.files['image']
+    batch_size = navdp_navigator.batch_size
+    image = Image.open(image_file.stream).convert('RGB')
+    image = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+    image = image.reshape((batch_size, -1, image.shape[1], 3))
+    queue_lengths = navdp_navigator.append_observation(image)
+    return jsonify({
+        "algo": "navdp",
+        "queue_lengths": queue_lengths,
+        "memory_size": int(navdp_navigator.memory_size),
+        "diffusion_sampled": False,
+    })
+
 @app.route("/pointgoal_step",methods=['POST'])
 def navdp_step_xy():
     global navdp_navigator,navdp_fps_writer
@@ -96,6 +108,7 @@ def navdp_step_xy():
     depth = depth.reshape((batch_size, -1, depth.shape[1], 1))
     
     phase2_time = time.time()
+    diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
     execute_trajectory, all_trajectory, all_values, trajectory_mask = navdp_navigator.step_pointgoal(goal,image,depth)
     phase3_time = time.time()
     if navdp_fps_writer is not None:
@@ -105,7 +118,8 @@ def navdp_step_xy():
 
     return jsonify({'trajectory': execute_trajectory.tolist(),
                     'all_trajectory': all_trajectory.tolist(),
-                    'all_values': all_values.tolist()})
+                    'all_values': all_values.tolist(),
+                    'diffusion_seed': diffusion_seed})
 
 
 @app.route("/pixelgoal_step",methods=['POST'])
@@ -135,6 +149,7 @@ def navdp_step_pixel():
     depth = depth.reshape((batch_size, -1, depth.shape[1], 1))
     
     phase2_time = time.time()
+    diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
     execute_trajectory, all_trajectory, all_values, trajectory_mask = navdp_navigator.step_pixelgoal(goal,image,depth)
     phase3_time = time.time()
     if navdp_fps_writer is not None:
@@ -143,7 +158,8 @@ def navdp_step_pixel():
     print("phase1:%f, phase2:%f, phase3:%f, phase4:%f, all:%f"%(phase1_time - start_time, phase2_time - phase1_time, phase3_time - phase2_time, phase4_time-phase3_time, time.time() - start_time))
     return jsonify({'trajectory': execute_trajectory.tolist(),
                     'all_trajectory': all_trajectory.tolist(),
-                    'all_values': all_values.tolist()})
+                    'all_values': all_values.tolist(),
+                    'diffusion_seed': diffusion_seed})
 
 @app.route("/imagegoal_step",methods=['POST'])
 def navdp_step_image():
@@ -176,6 +192,7 @@ def navdp_step_image():
     depth = depth.reshape((batch_size, -1, depth.shape[1], 1))
     
     phase2_time = time.time()
+    diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
     execute_trajectory, all_trajectory, all_values, trajectory_mask = navdp_navigator.step_imagegoal(goal,image,depth)
     phase3_time = time.time()
     if navdp_fps_writer is not None:
@@ -184,7 +201,8 @@ def navdp_step_image():
     print("phase1:%f, phase2:%f, phase3:%f, phase4:%f, all:%f"%(phase1_time - start_time, phase2_time - phase1_time, phase3_time - phase2_time, phase4_time-phase3_time, time.time() - start_time))
     return jsonify({'trajectory': execute_trajectory.tolist(),
                     'all_trajectory': all_trajectory.tolist(),
-                    'all_values': all_values.tolist()})
+                    'all_values': all_values.tolist(),
+                    'diffusion_seed': diffusion_seed})
 
 @app.route("/nogoal_step",methods=['POST'])
 def navdp_step_nogoal():
@@ -208,6 +226,7 @@ def navdp_step_nogoal():
     depth = depth.reshape((batch_size, -1, depth.shape[1], 1))
     
     phase2_time = time.time()
+    diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
     execute_trajectory, all_trajectory, all_values, trajectory_mask = navdp_navigator.step_nogoal(image,depth)
     phase3_time = time.time()
     if navdp_fps_writer is not None:
@@ -216,7 +235,8 @@ def navdp_step_nogoal():
     print("phase1:%f, phase2:%f, phase3:%f, phase4:%f, all:%f"%(phase1_time - start_time, phase2_time - phase1_time, phase3_time - phase2_time, phase4_time-phase3_time, time.time() - start_time))
     return jsonify({'trajectory': execute_trajectory.tolist(),
                     'all_trajectory': all_trajectory.tolist(),
-                    'all_values': all_values.tolist()})
+                    'all_values': all_values.tolist(),
+                    'diffusion_seed': diffusion_seed})
 
 @app.route("/navdp_step_ip_mixgoal",methods=['POST'])
 def navdp_step_ip_mixgoal():
@@ -253,6 +273,7 @@ def navdp_step_ip_mixgoal():
     depth = depth.reshape((batch_size, -1, depth.shape[1], 1))
     
     phase2_time = time.time()
+    diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
     execute_trajectory, all_trajectory, all_values, trajectory_mask = navdp_navigator.step_point_image_goal(point_goal,image_goal,image,depth)
     phase3_time = time.time()
     if navdp_fps_writer is not None:
@@ -261,7 +282,8 @@ def navdp_step_ip_mixgoal():
     print("phase1:%f, phase2:%f, phase3:%f, phase4:%f, all:%f"%(phase1_time - start_time, phase2_time - phase1_time, phase3_time - phase2_time, phase4_time-phase3_time, time.time() - start_time))
     return jsonify({'trajectory': execute_trajectory.tolist(),
                     'all_trajectory': all_trajectory.tolist(),
-                    'all_values': all_values.tolist()})
+                    'all_values': all_values.tolist(),
+                    'diffusion_seed': diffusion_seed})
     
 
 if __name__ == "__main__":

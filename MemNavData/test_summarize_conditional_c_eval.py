@@ -17,9 +17,11 @@ class ConditionalCSummaryTest(unittest.TestCase):
             "prefix_last_frame": 416,
             "prefix_source_frames": 417,
             "memory_prefix_frames": 417,
+            "navdp_prefix_decision_frames": 53,
             "recall_gap": 353,
             "gt_anchor": 63,
             "router_active": success,
+            "deterministic_plan_seeds": True,
         }
 
     def test_summary_and_pairing(self):

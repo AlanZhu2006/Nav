@@ -136,6 +136,9 @@ def navigator_reset():
         "retrieval": agent.retrieval_mode,
         "checkpoint": args.checkpoint,
         "exclude_recent": agent.exclude_recent,
+        "retrieval_candidate_min_gap": agent.retrieval_candidate_min_gap,
+        "graph_subgoal_spacing_m": agent.graph_subgoal_spacing_m,
+        "graph_subgoal_arrival_m": agent.graph_subgoal_arrival_m,
     })
 
 

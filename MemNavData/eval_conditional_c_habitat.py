@@ -60,11 +60,13 @@ def read_bytes(path: Path) -> bytes:
 
 
 def replay_prefix(rgb_root: Path, rows: pd.DataFrame,
-                  last_frame: int) -> list[dict]:
-    """Replay the exact source prefix and retain a sparse auditable trace."""
+                  last_frame: int) -> tuple[list[dict], list[int]]:
+    """Restore LingBot's full stream and NavDP's decision-frame queue."""
     trace = []
+    navdp_steps = []
     for frame in range(last_frame + 1):
-        response = base.srv_memory(read_bytes(rgb_root / f"{frame}.jpg"))
+        image = read_bytes(rgb_root / f"{frame}.jpg")
+        response = base.srv_memory(image)
         frame_idx = response.get("frame_idx")
         if frame_idx is not None and (
                 frame in (0, last_frame) or frame % 32 == 0):
@@ -76,12 +78,16 @@ def replay_prefix(rgb_root: Path, rows: pd.DataFrame,
                 "z": float(position[2]),
                 "yaw": float(yaw),
             })
-    return trace
+        if frame % args.exec_horizon == 0:
+            base.srv_navdp_memory_replay(image)
+            navdp_steps.append(frame)
+    return trace, navdp_steps
 
 
 def oracle_point_leg(sim, pathfinder, start_position: np.ndarray,
                      start_yaw: float, goal_jpg: bytes,
-                     goal_xz: np.ndarray, geodesic_m: float) -> dict:
+                     goal_xz: np.ndarray, geodesic_m: float,
+                     episode_seed: int) -> dict:
     """Run frozen NavDP with the privileged exact relative point-goal.
 
     The image-goal input remains present.  Only the LingBot-estimated metric
@@ -131,6 +137,17 @@ def oracle_point_leg(sim, pathfinder, start_position: np.ndarray,
         if step % args.exec_horizon == 0:
             local_goal = world_goal_to_local(
                 goal_xz, position[[0, 2]], yaw)
+            request_seed = (
+                base.diffusion_plan_seed(
+                    int(episode_seed), 2, len(plans))
+                if args.deterministic_plan_seeds else None
+            )
+            nav_data = {"goal_data": json.dumps({
+                "goal_x": [float(local_goal[0])],
+                "goal_y": [float(local_goal[1])],
+            })}
+            if request_seed is not None:
+                nav_data["diffusion_seed"] = str(request_seed)
             response = base.requests.post(
                 f"{base.NOVEL_BASE}/navdp_step_ip_mixgoal",
                 files={
@@ -138,13 +155,15 @@ def oracle_point_leg(sim, pathfinder, start_position: np.ndarray,
                     "image_goal": ("goal.jpg", goal_jpg),
                     "depth": ("depth.png", base.depth_png_bytes(depth)),
                 },
-                data={"goal_data": json.dumps({
-                    "goal_x": [float(local_goal[0])],
-                    "goal_y": [float(local_goal[1])],
-                })},
+                data=nav_data,
             )
             response.raise_for_status()
-            plan = base.normalize_navdp_response(response.json())
+            response_json = response.json()
+            if request_seed is not None and int(
+                    response_json.get("diffusion_seed", -1)) != request_seed:
+                raise RuntimeError(
+                    "NavDP server did not echo oracle-point diffusion seed")
+            plan = base.normalize_navdp_response(response_json)
             way, selector = base.select_plan_trajectory(
                 plan, position, yaw, pathfinder, goal_xz)
             way_world = base.waypoints_to_world(
@@ -160,6 +179,8 @@ def oracle_point_leg(sim, pathfinder, start_position: np.ndarray,
                 "pose_controller": "oracle_gt_image_point_mix",
                 "router_active": None,
                 "router_reason": "privileged_oracle_point",
+                "diffusion_seed": plan.get("diffusion_seed"),
+                "requested_diffusion_seed": request_seed,
                 "memory_frame_idx": memory_frame,
                 **selector,
             })
@@ -279,8 +300,9 @@ def main() -> None:
                 camera_intrinsic=camera_intrinsic,
             )
             prefix_trace = []
-            if args.server_backend == "hybrid_pose":
-                prefix_trace = replay_prefix(rgb_root, rows, last_prefix)
+            navdp_prefix_steps = []
+            prefix_trace, navdp_prefix_steps = replay_prefix(
+                rgb_root, rows, last_prefix)
 
             if mode == "native":
                 leg = base.run_policy_leg(
@@ -290,6 +312,7 @@ def main() -> None:
                     goal_yaw=float(goal_c["yaw_habitat"]),
                     camera_intrinsic=camera_intrinsic,
                     policy_backend=None,
+                    episode_seed=episode_seed, leg_index=2,
                 )
             elif mode in ("geometry_top1", "geometry_topk"):
                 leg = base.run_policy_leg(
@@ -299,6 +322,7 @@ def main() -> None:
                     goal_yaw=float(goal_c["yaw_habitat"]),
                     camera_intrinsic=camera_intrinsic,
                     policy_backend="navdp_auto",
+                    episode_seed=episode_seed, leg_index=2,
                 )
             elif mode == "oracle_anchor":
                 leg = base.run_policy_leg(
@@ -309,11 +333,12 @@ def main() -> None:
                     camera_intrinsic=camera_intrinsic,
                     forced_anchor=int(goal_c["covis_argmax"]),
                     policy_backend="navdp_mix",
+                    episode_seed=episode_seed, leg_index=2,
                 )
             else:
                 leg = oracle_point_leg(
                     sim, pathfinder, start_position, start_yaw,
-                    goal_jpg, goal_xz, float(geodesic_c))
+                    goal_jpg, goal_xz, float(geodesic_c), episode_seed)
 
             route = route_stats(leg["plans"])
             metric = {
@@ -321,6 +346,18 @@ def main() -> None:
                 "seed": episode_seed,
                 "mode": mode,
                 "server_backend": args.server_backend,
+                "deterministic_plan_seeds": bool(
+                    args.deterministic_plan_seeds),
+                "retrieval_candidate_min_gap": (
+                    base.MEMNAV_SERVER_INFO.get(
+                        "retrieval_candidate_min_gap")
+                    if args.server_backend == "hybrid_pose" else None),
+                "graph_subgoal_spacing_m": (
+                    base.MEMNAV_SERVER_INFO.get("graph_subgoal_spacing_m")
+                    if args.server_backend == "hybrid_pose" else 0.0),
+                "graph_subgoal_arrival_m": (
+                    base.MEMNAV_SERVER_INFO.get("graph_subgoal_arrival_m")
+                    if args.server_backend == "hybrid_pose" else None),
                 "reached_C": int(bool(leg["reached"])),
                 "spl_C": leg_spl(leg, float(geodesic_c)),
                 "geo_C": float(geodesic_c),
@@ -332,6 +369,7 @@ def main() -> None:
                 "memory_prefix_frames": (
                     int(last_prefix + 1)
                     if args.server_backend == "hybrid_pose" else 0),
+                "navdp_prefix_decision_frames": len(navdp_prefix_steps),
                 "c_recall_gap": int(goal_c["recall_gap"]),
                 "c_gt_covis_anchor": int(goal_c["covis_argmax"]),
                 **route,
@@ -341,6 +379,7 @@ def main() -> None:
                 "protocol": "conditional_C_after_causal_source_AB_replay",
                 "mode": mode,
                 "prefix_trace": prefix_trace,
+                "navdp_prefix_steps": navdp_prefix_steps,
                 "legC": leg["plans"],
             }, indent=2))
             with (output / "metric.csv").open("w", newline="") as handle:

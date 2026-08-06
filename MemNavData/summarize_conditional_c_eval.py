@@ -60,6 +60,16 @@ def load_arm(scene_root: Path, scene: str, arm: str) -> dict:
         require(plan.get("protocol") ==
                 "conditional_C_after_causal_source_AB_replay",
                 f"protocol mismatch: {plan_path}")
+        deterministic_plan_seeds = truth(
+            record.get("deterministic_plan_seeds"))
+        if deterministic_plan_seeds:
+            for decision in plan.get("legC", []):
+                requested = decision.get("requested_diffusion_seed")
+                echoed = decision.get("diffusion_seed")
+                require(requested is not None and echoed is not None,
+                        f"missing conditional-C plan seed: {plan_path}")
+                require(int(requested) == int(echoed),
+                        f"conditional-C seed echo mismatch: {plan_path}")
         key = (scene, episode)
         require(key not in output, f"duplicate conditional-C row: {key}")
         output[key] = {
@@ -75,9 +85,20 @@ def load_arm(scene_root: Path, scene: str, arm: str) -> dict:
             "prefix_last_frame": int(record["prefix_last_source_frame"]),
             "prefix_source_frames": int(record["prefix_source_frames"]),
             "memory_prefix_frames": int(record["memory_prefix_frames"]),
+            "navdp_prefix_decision_frames": int(
+                record.get("navdp_prefix_decision_frames") or 0),
             "recall_gap": int(record["c_recall_gap"]),
             "gt_anchor": int(record["c_gt_covis_anchor"]),
             "router_active": truth(record["router_active_episode"]),
+            "deterministic_plan_seeds": deterministic_plan_seeds,
+            "candidate_gap": (
+                None if record.get("retrieval_candidate_min_gap") in (None, "")
+                else int(record["retrieval_candidate_min_gap"])),
+            "graph_spacing_m": float(
+                record.get("graph_subgoal_spacing_m") or 0.0),
+            "graph_arrival_m": (
+                None if record.get("graph_subgoal_arrival_m") in (None, "")
+                else float(record["graph_subgoal_arrival_m"])),
         }
     return output
 
@@ -104,7 +125,7 @@ def compare(left_name: str, right_name: str, left: dict, right: dict,
     for key in expected:
         a, b = left[key], right[key]
         for field in ("seed", "prefix_last_frame", "prefix_source_frames",
-                      "recall_gap", "gt_anchor"):
+                      "navdp_prefix_decision_frames", "recall_gap", "gt_anchor"):
             require(a[field] == b[field],
                     f"paired {field} mismatch: {left_name} {right_name} {key}")
         require(math.isclose(a["geodesic"], b["geodesic"], abs_tol=1e-9),

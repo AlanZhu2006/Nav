@@ -1,4 +1,5 @@
 import unittest
+import copy
 
 from MemNavData.summarize_expanded_navdp_router_eval import (
     arm_summary,
@@ -33,6 +34,7 @@ def row(*, joint=False, active=False):
         "router_active_episode_b": active,
         "geometry_verification_ms": [5.0],
         "selected_candidate_ranks": [1],
+        "deterministic_plan_seeds": True,
     }
 
 
@@ -52,6 +54,15 @@ class GraphAblationSummaryTest(unittest.TestCase):
         self.assertEqual(
             report["outcomes"]["right_only_joint_success"], 1)
         self.assertEqual(report["joint_sr_delta_right_minus_left"], 1.0)
+
+    def test_pairing_requires_identical_shared_novel_trace(self):
+        key = ("scene", "episode_0000")
+        left = row()
+        right = copy.deepcopy(left)
+        left["leg1_trace_sha256"] = "a" * 64
+        right["leg1_trace_sha256"] = "b" * 64
+        with self.assertRaisesRegex(RuntimeError, "trace mismatch"):
+            paired_summary("direct", "graph", {key: left}, {key: right}, {key})
 
 
 if __name__ == "__main__":

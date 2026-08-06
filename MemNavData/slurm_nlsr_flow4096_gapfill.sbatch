@@ -34,6 +34,7 @@ FLOW_CODE_ROOT="${FLOW_CODE_ROOT:-/scratch/yz11502/Research/Nav-flow-b3dfae9d}"
 PRECOMPUTE_REL="InternNav/scripts/dataset_converters/precompute_lingbot_features.py"
 CACHE_SCHEMA_REL="InternNav/internnav/model/basemodel/memnav/cache_schema.py"
 MERGER_REL="MemNavData/build_nlsr_merged_flow.py"
+ADMISSION_REL="MemNavData/nlsr_flow_threshold_admission.py"
 ROUTER_REL="MemNavData/flow_cache_routing.py"
 SPLIT_REL="MemNavData/router_multiscene_split_20260805.json"
 MEMNAV_PY="${MEMNAV_PY:-/scratch/lg154/conda-envs/memnav/bin/python}"
@@ -46,13 +47,15 @@ PATCH_OUT_ROOT="${RUN_ROOT}/flow_patch/vln_n1/traj_data"
 PATCH_FLOW_ROOT="${PATCH_OUT_ROOT}/mp3d_3leg"
 FLOW_ROUTE_ROOT="${RUN_ROOT}/flow_routes"
 LIST_ROOT="${RUN_ROOT}/flow_lists"
+ADMISSION_ROOT="${RUN_ROOT}/flow_threshold_admission"
 EPISODE_ROOT="/mp3d_revisit_v0/vln_n1/traj_data/mp3d_3leg"
 ROOT_DIRS="/mp3d_revisit_v0/vln_n1/traj_data"
 
 EXPECTED_FLOW_CODE_COMMIT="b3dfae9d5647165927a5ade0d8193fe1d0d3c19d"
 EXPECTED_PRECOMPUTE_SHA="ddf1e425318ea59fed51bb78d5d0e52d54860cab0c60589fcae1b264a87fcbb2"
 EXPECTED_CACHE_SCHEMA_SHA="412fdc9ba11947406297ba639790b9d3acf7d9c3ab6125dea8e1a1246e38f227"
-EXPECTED_MERGER_SHA="75d327a38823baf36635c0c8ce74c7a474744dbd21a2d91be94148d1bec5377c"
+EXPECTED_MERGER_SHA="41dbee3e2ce74880321b2a4078deed0bab8552d56858434bbf9813b8e327ae19"
+EXPECTED_ADMISSION_SHA="331ecf4a904b44d25c69d45ea930d6662e4a6ac6b746e11b3237711d63079d0d"
 EXPECTED_ROUTER_SHA="4896a77fa35871588f4add5c83c10e48fbb9bf45a15845f0a5d4332bc63a0035"
 EXPECTED_SPLIT_SHA="97309c183e25cb3dd65472908748d55a94798a636db6157ab6fe120fca05cf7a"
 EXPECTED_LINGBOT_COMMIT="7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2"
@@ -100,6 +103,8 @@ full_sha_is "${REPO_ROOT}/${CACHE_SCHEMA_REL}" \
   "${EXPECTED_CACHE_SCHEMA_SHA}" "cache schema"
 full_sha_is "${REPO_ROOT}/${MERGER_REL}" \
   "${EXPECTED_MERGER_SHA}" "flow merger"
+full_sha_is "${REPO_ROOT}/${ADMISSION_REL}" \
+  "${EXPECTED_ADMISSION_SHA}" "flow threshold admission helper"
 full_sha_is "${REPO_ROOT}/${ROUTER_REL}" \
   "${EXPECTED_ROUTER_SHA}" "flow route resolver"
 full_sha_is "${REPO_ROOT}/${SPLIT_REL}" "${EXPECTED_SPLIT_SHA}" "strict split"
@@ -186,7 +191,7 @@ for episode, summary in expected.items():
 print(json.dumps({"flow_preflight": "passed", "raw_exact_gate": expected}, sort_keys=True))
 PY
 
-mkdir -p "${PATCH_OUT_ROOT}" "${LIST_ROOT}"
+mkdir -p "${PATCH_OUT_ROOT}" "${LIST_ROOT}" "${ADMISSION_ROOT}"
 printf '%s\n' 'mp3d_3leg/B6ByNegPMKs/episode_0001' > \
   "${LIST_ROOT}/b6_ep1.txt"
 printf '%s\n' 'mp3d_3leg/YmJkqBEsHnH/episode_0000' > \
@@ -199,8 +204,14 @@ nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 run_precompute() {
-  local name="$1" threshold="$2" list="$3"
-  echo "precompute start: ${name} threshold=${threshold} $(date --iso-8601=seconds)"
+  local name="$1" threshold="$2" list="$3" overwrite="$4"
+  local -a overwrite_args=()
+  if [[ "${overwrite}" == "true" ]]; then
+    overwrite_args+=(--overwrite)
+  elif [[ "${overwrite}" != "false" ]]; then
+    fail "invalid overwrite decision for ${name}: ${overwrite}"
+  fi
+  echo "precompute start: ${name} threshold=${threshold} overwrite=${overwrite} $(date --iso-8601=seconds)"
   "${CONTAINER[@]}" "${MEMNAV_PY}" \
     "${FLOW_CODE_ROOT}/${PRECOMPUTE_REL}" \
     --root_dirs "${ROOT_DIRS}" \
@@ -218,12 +229,56 @@ run_precompute() {
     --num_shards 1 \
     --shard 0 \
     --limit 0 \
-    2>&1 | tee "${RUN_ROOT}/flow_${name}.log"
+    "${overwrite_args[@]}" \
+    2>&1 | tee -a "${RUN_ROOT}/flow_${name}.log"
 }
 
-run_precompute b6_ep1 60 "${LIST_ROOT}/b6_ep1.txt"
-run_precompute ymj_ep0 25 "${LIST_ROOT}/ymj_ep0.txt"
-run_precompute ymj_ep1 20 "${LIST_ROOT}/ymj_ep1.txt"
+admit_episode() {
+  local name="$1" episode="$2" frames="$3" minimum="$4" list="$5"
+  local decision action threshold overwrite
+  local attempt_guard=0
+  while (( attempt_guard < 8 )); do
+    attempt_guard=$((attempt_guard + 1))
+    decision="$("${CONTAINER[@]}" "${MEMNAV_PY}" \
+      "${REPO_ROOT}/${ADMISSION_REL}" \
+      --episode "${episode}" \
+      --frames "${frames}" \
+      --minimum-threshold "${minimum}" \
+      --patch-flow-root "${PATCH_FLOW_ROOT}" \
+      --admission-root "${ADMISSION_ROOT}" \
+      --cache-schema "${REPO_ROOT}/${CACHE_SCHEMA_REL}")"
+    printf '%s\n' "${decision}" | tee -a \
+      "${RUN_ROOT}/flow_threshold_selection.log"
+    read -r action threshold overwrite < <(
+      printf '%s' "${decision}" | "${CONTAINER[@]}" "${MEMNAV_PY}" -c \
+        'import json,sys; r=json.load(sys.stdin); print(r["action"], r["threshold"], str(r["overwrite"]).lower())'
+    )
+    case "${action}" in
+      accept)
+        echo "flow threshold accepted: ${episode} threshold=${threshold}"
+        return 0
+        ;;
+      compute|overwrite)
+        run_precompute "${name}" "${threshold}" "${list}" "${overwrite}"
+        ;;
+      *)
+        fail "invalid admission action for ${episode}: ${action}"
+        ;;
+    esac
+  done
+  fail "adaptive threshold attempt guard exhausted for ${episode}"
+}
+
+# Each episode starts at its fixed minimum.  A complete cache is resumed only
+# when its exact provenance and payload hashes fit the pinned 320-view schema
+# budget.  An over-budget result advances one approved tier and necessarily
+# invokes precompute with --overwrite; no label or downstream metric is read.
+admit_episode b6_ep1 \
+  "B6ByNegPMKs/episode_0001" 2456 60 "${LIST_ROOT}/b6_ep1.txt"
+admit_episode ymj_ep0 \
+  "YmJkqBEsHnH/episode_0000" 871 25 "${LIST_ROOT}/ymj_ep0.txt"
+admit_episode ymj_ep1 \
+  "YmJkqBEsHnH/episode_0001" 591 20 "${LIST_ROOT}/ymj_ep1.txt"
 
 "${CONTAINER[@]}" "${MEMNAV_PY}" \
   "${REPO_ROOT}/${MERGER_REL}" \
@@ -231,6 +286,7 @@ run_precompute ymj_ep1 20 "${LIST_ROOT}/ymj_ep1.txt"
   --episode-root "${EPISODE_ROOT}" \
   --official-flow-root "${OFFICIAL_FLOW_ROOT}" \
   --patch-flow-root "${PATCH_FLOW_ROOT}" \
+  --threshold-admission-root "${ADMISSION_ROOT}" \
   --flow-route-root "${FLOW_ROUTE_ROOT}" \
   --cache-schema "${REPO_ROOT}/${CACHE_SCHEMA_REL}" \
   --raw-audit "${RAW_AUDIT}" \

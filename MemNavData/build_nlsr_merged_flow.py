@@ -67,6 +67,21 @@ class FlowAuditError(RuntimeError):
     """A flow cache or merge dependency violated the strict contract."""
 
 
+def _schema_keyframe_budget(cache_schema: ModuleType) -> int:
+    budget = getattr(cache_schema, "DEFAULT_KEYFRAME_BUDGET", None)
+    if (isinstance(budget, bool) or not isinstance(budget, int) or budget < 1):
+        raise FlowAuditError("cache schema has no valid keyframe budget")
+    return budget
+
+
+def _patch_budget_compliant(
+    anchor_count: int,
+    num_scale_frames: int,
+    budget: int,
+) -> bool:
+    return anchor_count + num_scale_frames <= budget
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -279,17 +294,18 @@ def _validate_pair(
     if layout.flow_threshold not in {20.0, 25.0, 30.0, 40.0, 50.0, 60.0}:
         raise FlowAuditError(f"unapproved flow threshold: {layout.flow_threshold}")
     anchor_count = len(layout.anchor_frame_indices)
-    # The three new thresholds were selected against the 270-anchor admission
-    # budget and must satisfy it.  Twelve immutable official caches predate that
-    # strict admission gate (the largest has 323 anchors); rejecting them here
-    # would make the audited 97-pair base impossible to merge.  Their exact
-    # counts remain visible in provenance instead of being silently rewritten.
-    if patch and (
-            anchor_count > 270
-            or anchor_count + layout.num_scale_frames > 278):
+    # New caches must obey the temporal-view budget declared by the exact,
+    # content-pinned cache schema used to validate them.  Binding admission to
+    # that contract keeps the offline cache compatible with the live policy;
+    # an unrelated local 270-anchor limit would reject the official >2048-frame
+    # threshold tier even when scale + anchors remains below the real budget.
+    keyframe_budget = _schema_keyframe_budget(cache_schema)
+    if patch and not _patch_budget_compliant(
+            anchor_count, layout.num_scale_frames, keyframe_budget):
         raise FlowAuditError(
             f"new patch exceeds keyframe budget at {aggregator.parent}: "
-            f"anchors={anchor_count} scale={layout.num_scale_frames}"
+            f"anchors={anchor_count} scale={layout.num_scale_frames} "
+            f"budget={keyframe_budget}"
         )
 
     agg_signature, agg_json, agg_config, agg_ground = _read_provenance(aggregator)
@@ -327,8 +343,8 @@ def _validate_pair(
         "anchor_count": anchor_count,
         "total_memory_frames": anchor_count + layout.num_scale_frames,
         "strict_patch_keyframe_budget_compliant": (
-            anchor_count <= 270
-            and anchor_count + layout.num_scale_frames <= 278
+            _patch_budget_compliant(
+                anchor_count, layout.num_scale_frames, keyframe_budget)
         ),
         "flow_threshold": float(layout.flow_threshold),
         "max_non_keyframe_gap": layout.max_non_keyframe_gap,

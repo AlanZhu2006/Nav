@@ -1,6 +1,7 @@
 import hashlib
 from pathlib import Path
 import re
+from types import SimpleNamespace
 import unittest
 
 from MemNavData.flow_cache_routing import (
@@ -26,6 +27,19 @@ def shell_pin(script: Path, variable: str) -> str:
 
 
 class NlsrGapfillContractTest(unittest.TestCase):
+    def test_patch_admission_uses_content_pinned_schema_budget(self):
+        schema = SimpleNamespace(DEFAULT_KEYFRAME_BUDGET=320)
+        self.assertEqual(route_builder._schema_keyframe_budget(schema), 320)
+        self.assertTrue(route_builder._patch_budget_compliant(301, 8, 320))
+        self.assertTrue(route_builder._patch_budget_compliant(312, 8, 320))
+        self.assertFalse(route_builder._patch_budget_compliant(313, 8, 320))
+        for invalid in (None, True, 0, 320.0):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(
+                        route_builder.FlowAuditError, "keyframe budget"):
+                    route_builder._schema_keyframe_budget(
+                        SimpleNamespace(DEFAULT_KEYFRAME_BUDGET=invalid))
+
     def test_route_schema_is_shared_and_builder_never_materializes_links(self):
         self.assertEqual(route_builder.SCHEMA_VERSION, ROUTE_SCHEMA_VERSION)
         source = (ROOT / "MemNavData/build_nlsr_merged_flow.py").read_text(

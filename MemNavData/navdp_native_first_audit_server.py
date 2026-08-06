@@ -25,8 +25,10 @@ import argparse
 import hashlib
 import importlib
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 from typing import Callable, Mapping, Sequence
 
 import numpy as np
@@ -98,6 +100,66 @@ def canonical_json_sha256(value: object) -> str:
         raise NativeFirstAuditError(
             f"audit value is not canonical JSON: {error}") from error
     return hashlib.sha256(payload).hexdigest()
+
+
+def canonical_json_bytes(value: object) -> bytes:
+    """Encode one provenance object in the collector's canonical format."""
+    try:
+        return (json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ) + "\n").encode("utf-8")
+    except (TypeError, ValueError) as error:
+        raise NativeFirstAuditError(
+            f"provenance value is not canonical JSON: {error}") from error
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_server_provenance(
+    path: str | Path,
+    provenance: Mapping[str, str],
+) -> str:
+    """Persist exact live-server identity without parsing stdout logs."""
+    output = Path(path).resolve()
+    payload = canonical_json_bytes(dict(provenance))
+    digest = hashlib.sha256(payload).hexdigest()
+    sidecar = output.with_suffix(output.suffix + ".sha256")
+    sidecar_payload = f"{digest}  {output.name}\n".encode("ascii")
+    if output.exists() or sidecar.exists():
+        _require(
+            output.is_file() and sidecar.is_file(),
+            "server provenance output pair is incomplete",
+        )
+        _require(
+            output.read_bytes() == payload
+            and sidecar.read_bytes() == sidecar_payload,
+            "server provenance output pair differs from the live server",
+        )
+        return digest
+    _atomic_write_bytes(output, payload)
+    _atomic_write_bytes(sidecar, sidecar_payload)
+    return digest
 
 
 def ndarray_sha256(value: object) -> str:
@@ -767,6 +829,14 @@ def register_audit_routes(base: object, provenance: Mapping[str, str]) -> None:
     """Register routes on the already-imported, source-verified Flask app."""
     _require(hasattr(base, "app"), "NavDP server app is unavailable")
 
+    @base.app.route("/native_first_provenance", methods=["GET"])
+    def native_first_provenance():
+        return base.jsonify({
+            "status": "ready",
+            "protocol": ATOMIC_PLAN_PROTOCOL,
+            "provenance": dict(provenance),
+        })
+
     @base.app.route("/memory_audit", methods=["GET", "POST"])
     def memory_audit():
         agent = base.navdp_navigator
@@ -913,6 +983,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--navdp-dir", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--expected-checkpoint-sha256", required=True)
+    parser.add_argument("--expected-wrapper-sha256", required=True)
+    parser.add_argument("--provenance-output", required=True)
     parser.add_argument("--port", type=int, default=8888)
     parser.add_argument("--host", default="127.0.0.1")
     return parser.parse_args(argv)
@@ -938,6 +1010,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.expected_checkpoint_sha256,
         "NavDP checkpoint",
     )
+    wrapper_sha = verify_source_file(
+        __file__, args.expected_wrapper_sha256, "native-first wrapper")
     sys.path.insert(0, str(navdp_dir))
     old_argv = sys.argv
     sys.argv = [str(server_path), "--port", str(args.port),
@@ -955,15 +1029,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         "policy_agent_sha256": policy_sha,
         "deterministic_seed_sha256": seed_sha,
         "checkpoint_sha256": checkpoint_sha,
-        "wrapper_sha256": sha256_file(__file__),
+        "wrapper_sha256": wrapper_sha,
     }
     register_audit_routes(base, provenance)
+    provenance_sha = write_server_provenance(
+        args.provenance_output, provenance)
     print(json.dumps({
         "status": "native_first_audit_server_ready",
         "protocol": AUDIT_PROTOCOL,
         "host": args.host,
         "port": args.port,
         "provenance": provenance,
+        "provenance_output": str(Path(args.provenance_output).resolve()),
+        "provenance_sha256": provenance_sha,
     }, sort_keys=True), flush=True)
     base.app.run(host=args.host, port=args.port, threaded=False)
 

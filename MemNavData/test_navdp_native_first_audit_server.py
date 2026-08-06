@@ -15,6 +15,7 @@ from MemNavData.navdp_native_first_audit_server import (
     snapshot_memory,
     verify_same_prefix_plan_receipts,
     verify_source_file,
+    write_server_provenance,
 )
 
 
@@ -131,6 +132,29 @@ def run_atomic(agent, mode, *, seed=123, goal_value=9, current_value=8):
 
 
 class NavDPNativeFirstAuditServerTest(unittest.TestCase):
+    def test_server_provenance_is_canonical_atomic_and_immutable(self):
+        provenance = {
+            "checkpoint_sha256": "a" * 64,
+            "wrapper_sha256": "b" * 64,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "server-provenance.json"
+            digest = write_server_provenance(path, provenance)
+            expected = (
+                '{"checkpoint_sha256":"' + "a" * 64
+                + '","wrapper_sha256":"' + "b" * 64 + '"}\n'
+            ).encode("utf-8")
+            self.assertEqual(path.read_bytes(), expected)
+            self.assertEqual(
+                path.with_suffix(".json.sha256").read_text(),
+                f"{digest}  server-provenance.json\n",
+            )
+            self.assertEqual(write_server_provenance(path, provenance), digest)
+            with self.assertRaisesRegex(
+                    NativeFirstAuditError, "differs from the live server"):
+                write_server_provenance(
+                    path, {**provenance, "wrapper_sha256": "c" * 64})
+
     def test_ndarray_hash_includes_dtype_shape_and_bytes(self):
         value = np.arange(6, dtype=np.float32).reshape(2, 3)
         self.assertEqual(ndarray_sha256(value), ndarray_sha256(value.copy()))

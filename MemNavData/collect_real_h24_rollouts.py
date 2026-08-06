@@ -389,6 +389,27 @@ def load_server_provenance(
     return result
 
 
+def verify_candidate_source_policy(
+    records: Sequence[Mapping[str, Any]],
+    server_provenance: Mapping[str, str],
+) -> None:
+    """Reject a policy/checkpoint mismatch before opening Habitat or NavDP."""
+    expected = server_provenance.get("checkpoint_sha256")
+    _valid_sha(expected, "server checkpoint SHA")
+    for index, record in enumerate(records):
+        provenance = record.get("provenance")
+        _require(
+            isinstance(provenance, Mapping),
+            f"candidate record {index} has no provenance",
+        )
+        actual = provenance.get("source_policy_sha256")
+        _valid_sha(actual, f"candidate record {index} source policy SHA")
+        _require(
+            actual == expected,
+            f"candidate record {index} source policy differs from server checkpoint",
+        )
+
+
 def parse_root_overrides(values: Sequence[str]) -> dict[str, Path]:
     result = {}
     allowed = {"episode_root", "environment_root", "navmesh_root"}
@@ -1039,6 +1060,7 @@ def run_collector(inputs: CollectorInputs) -> dict[str, Any]:
     geometry_map = load_geometry_map(inputs.geometry_map_path, geometry_map_sha)
     server_provenance = load_server_provenance(
         inputs.server_provenance_path, provenance_sha)
+    verify_candidate_source_policy(records, server_provenance)
     manifest_index = _manifest_index(inputs.manifest_path, manifest_sha)
     controller = PurePursuitConfig()
     run_signature = build_run_signature(

@@ -23,6 +23,7 @@ from MemNavData.collect_real_h24_rollouts import (
     safe_state_stem,
     selected_shard_records,
     validate_resume_pair,
+    verify_candidate_source_policy,
 )
 from MemNavData.real_h24_rollout_backend import (
     PurePursuitConfig,
@@ -153,6 +154,17 @@ class RealH24CollectorTests(unittest.TestCase):
             labeled_path, labeled_sha)
         self.assertEqual(labeled_rows, [labeled])
         self.assertFalse(labeled_neutral)
+
+    def test_candidate_policy_must_match_live_server_before_collection(self):
+        value = neutral_precollection(record())
+        checkpoint = value["provenance"]["source_policy_sha256"]
+        verify_candidate_source_policy(
+            [value], {"checkpoint_sha256": checkpoint})
+        wrong = copy.deepcopy(value)
+        wrong["provenance"]["source_policy_sha256"] = "f" * 64
+        with self.assertRaisesRegex(CollectorError, "server checkpoint"):
+            verify_candidate_source_policy(
+                [wrong], {"checkpoint_sha256": checkpoint})
 
     def test_candidate_input_fails_on_noncanonical_or_fake_neutral_labels(self):
         value = neutral_precollection(record())

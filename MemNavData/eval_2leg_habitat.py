@@ -250,6 +250,14 @@ parser.add_argument(
           "additional seeds use a read-only NavDP resample endpoint and are "
           "a privileged candidate-recall diagnostic only"),
 )
+parser.add_argument(
+    "--oracle_global_subgoal_m",
+    type=float,
+    default=0.0,
+    help=("privileged 3-leg Novel-B diagnostic: replace the high-level "
+          "ImageGoal direction with a point this many metres ahead on "
+          "Habitat's shortest path; 0 disables it"),
+)
 parser.add_argument("--stuck_window", type=int, default=150)
 parser.add_argument("--stuck_dist", type=float, default=0.10)
 parser.add_argument("--agent_radius", type=float, default=0.30)
@@ -333,6 +341,8 @@ if args.oracle_candidate_seed_count < 1:
     parser.error("--oracle_candidate_seed_count must be positive")
 if args.oracle_candidate_seed_count > 100:
     parser.error("--oracle_candidate_seed_count must be at most 100")
+if not np.isfinite(args.oracle_global_subgoal_m) or args.oracle_global_subgoal_m < 0:
+    parser.error("--oracle_global_subgoal_m must be finite and non-negative")
 if (args.oracle_candidate_seed_count > 1
         and args.trajectory_selector != "oracle_geodesic"):
     parser.error("multiple candidate seeds require oracle_geodesic")
@@ -1794,6 +1804,10 @@ def spl(reached, geo, plen):
 
 def main():
     os.makedirs(args.out, exist_ok=True)
+    if args.oracle_global_subgoal_m > 0:
+        raise ValueError(
+            "--oracle_global_subgoal_m is defined only for "
+            "eval_3leg_habitat.py")
     if args.stop_after_leg1 and args.leg1_mode != "policy":
         raise ValueError("--stop_after_leg1 requires --leg1_mode policy")
     if args.write_leg1_trace and args.leg1_mode != "policy":

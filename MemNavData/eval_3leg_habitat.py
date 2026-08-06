@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 
 import eval_2leg_habitat as base
+from conditional_c_protocol import world_goal_to_local
+from global_subgoal_protocol import polyline_subgoal
 from navdp_goal_switch import should_reset_before_leg
 
 
@@ -78,6 +80,137 @@ def mean_or_none(values: list[float]) -> float | None:
     return float(np.mean(values)) if values else None
 
 
+def run_oracle_global_subgoal_leg(
+    sim,
+    pathfinder,
+    start_position: np.ndarray,
+    start_yaw: float,
+    goal_jpg: bytes,
+    goal_xz: np.ndarray,
+    episode_seed: int,
+) -> dict:
+    """Run frozen NavDP behind a privileged Habitat shortest-path subgoal.
+
+    This arm changes only the high-level target supplied on Novel-B.  NavDP
+    still produces and collision-scores every local trajectory, and the same
+    pure-pursuit executor applies it.  It is an upper bound, not a deployable
+    policy, because the final metric goal and Habitat pathfinder are privileged.
+    """
+    position = np.asarray(start_position, dtype=np.float64).copy()
+    yaw = float(start_yaw)
+    path_len = 0.0
+    path_len_at_reach = None
+    way_world = None
+    plans: list[dict] = []
+    history: list[np.ndarray] = []
+    success_dist = float(args.success_dist)
+
+    def result(reached: bool, steps: int) -> dict:
+        return {
+            "reached": bool(reached),
+            "path_len": float(path_len),
+            "path_len_at_reach": path_len_at_reach,
+            "step_at_reach": int(steps) if reached else None,
+            "steps": int(steps),
+            "plans": plans,
+            "end_pos": position.copy(),
+            "end_psi": float(yaw),
+            "final_goal_dist_m": float(np.linalg.norm(
+                position[[0, 2]] - goal_xz)),
+        }
+
+    if np.linalg.norm(position[[0, 2]] - goal_xz) < success_dist:
+        path_len_at_reach = 0.0
+        return result(True, 0)
+
+    for step in range(args.max_steps):
+        rgb, depth = base.render(
+            sim, position + np.asarray([0.0, base.CAM_H, 0.0]), yaw)
+        frame = base.jpg_bytes(rgb)
+
+        if step % args.exec_horizon == 0:
+            goal3 = np.asarray(
+                [goal_xz[0], position[1], goal_xz[1]], dtype=np.float64)
+            ok, remaining_m, path_points = base.geodesic(
+                pathfinder, position, goal3)
+            require(
+                ok and np.isfinite(remaining_m) and bool(path_points),
+                "oracle global-subgoal geodesic is invalid",
+            )
+            subgoal = polyline_subgoal(
+                path_points, args.oracle_global_subgoal_m)
+            local_goal = world_goal_to_local(
+                subgoal[[0, 2]], position[[0, 2]], yaw)
+            request_seed = base.diffusion_plan_seed(
+                int(episode_seed), 1, len(plans))
+            response = base.requests.post(
+                f"{base.BASE}/navdp_step_ip_mixgoal",
+                files={
+                    "image": ("image.jpg", frame),
+                    "image_goal": ("goal.jpg", goal_jpg),
+                    "depth": ("depth.png", base.depth_png_bytes(depth)),
+                },
+                data={
+                    "goal_data": json.dumps({
+                        "goal_x": [float(local_goal[0])],
+                        "goal_y": [float(local_goal[1])],
+                    }),
+                    "diffusion_seed": str(request_seed),
+                },
+            )
+            response.raise_for_status()
+            response_json = response.json()
+            if int(response_json.get("diffusion_seed", -1)) != request_seed:
+                raise RuntimeError(
+                    "NavDP server did not echo global-subgoal diffusion seed")
+            plan = base.normalize_navdp_response(response_json)
+            way, selector = base.select_plan_trajectory(
+                plan,
+                position,
+                yaw,
+                pathfinder,
+                goal_xz,
+                trajectory_selector="server",
+            )
+            way_world = base.waypoints_to_world(
+                way, position[[0, 2]], yaw)
+            plans.append({
+                "step": int(step),
+                "current_x": float(position[0]),
+                "current_z": float(position[2]),
+                "current_yaw": float(yaw),
+                "current_goal_dist_m": float(np.linalg.norm(
+                    position[[0, 2]] - goal_xz)),
+                "remaining_geodesic_m": float(remaining_m),
+                "oracle_subgoal_world": subgoal.tolist(),
+                "oracle_subgoal_local": local_goal.tolist(),
+                "oracle_subgoal_distance_m": float(np.linalg.norm(
+                    subgoal - position)),
+                "pose_controller": "oracle_habitat_geodesic_subgoal",
+                "router_active": None,
+                "router_reason": "privileged_global_subgoal",
+                "diffusion_seed": plan.get("diffusion_seed"),
+                "requested_diffusion_seed": request_seed,
+                "navdp_critic_max": plan.get("navdp_critic_max"),
+                **selector,
+            })
+
+        if way_world is not None:
+            position, yaw, distance = base.pursuit_step(
+                position, yaw, way_world, pathfinder)
+            path_len += distance
+        history.append(position[[0, 2]].copy())
+        if np.linalg.norm(position[[0, 2]] - goal_xz) < success_dist:
+            path_len_at_reach = float(path_len)
+            return result(True, step + 1)
+        if (len(history) > args.stuck_window
+                and np.linalg.norm(
+                    history[-1] - history[-args.stuck_window]
+                ) < args.stuck_dist):
+            return result(False, step + 1)
+    return result(False, args.max_steps)
+
+
 def main() -> None:
     require(args.leg1_mode == "policy", "3-leg benchmark requires policy leg 1")
     require(args.leg1_goal_source == "own", "3-leg benchmark forbids goal swapping")
@@ -104,6 +237,23 @@ def main() -> None:
         require(
             args.server_backend == "navdp",
             "multi-seed candidate pooling currently supports native NavDP only",
+        )
+    if args.oracle_global_subgoal_m > 0:
+        require(
+            args.server_backend == "navdp",
+            "oracle global subgoals currently support native NavDP only",
+        )
+        require(
+            args.deterministic_plan_seeds,
+            "oracle global subgoals require deterministic plan seeds",
+        )
+        require(
+            args.trajectory_selector == "server",
+            "oracle global subgoals cannot be mixed with trajectory selection",
+        )
+        require(
+            args.navdp_goal_switch_reset == "carry",
+            "oracle global subgoals require carried NavDP short memory",
         )
 
     os.makedirs(args.out, exist_ok=True)
@@ -214,23 +364,34 @@ def main() -> None:
                 if should_reset_before_leg(args.navdp_goal_switch_reset, 1):
                     base.srv_reset_navdp_short_memory(env_id=0)
                     reset_before_b = True
-                leg_b = base.run_policy_leg(
-                    sim,
-                    pathfinder,
-                    position,
-                    yaw,
-                    image_b,
-                    b_xz,
-                    geo_b,
-                    None,
-                    terminal_mode="off",
-                    goal_yaw=float(goal_b["yaw_habitat"]),
-                    camera_intrinsic=camera_intrinsic,
-                    forced_gate=args.gate_override,
-                    policy_backend=backend,
-                    episode_seed=episode_seed,
-                    leg_index=1,
-                )
+                if args.oracle_global_subgoal_m > 0:
+                    leg_b = run_oracle_global_subgoal_leg(
+                        sim,
+                        pathfinder,
+                        position,
+                        yaw,
+                        image_b,
+                        b_xz,
+                        episode_seed,
+                    )
+                else:
+                    leg_b = base.run_policy_leg(
+                        sim,
+                        pathfinder,
+                        position,
+                        yaw,
+                        image_b,
+                        b_xz,
+                        geo_b,
+                        None,
+                        terminal_mode="off",
+                        goal_yaw=float(goal_b["yaw_habitat"]),
+                        camera_intrinsic=camera_intrinsic,
+                        forced_gate=args.gate_override,
+                        policy_backend=backend,
+                        episode_seed=episode_seed,
+                        leg_index=1,
+                    )
             position, yaw = leg_b["end_pos"], leg_b["end_psi"]
 
             leg_c = empty_leg(position, yaw, c_xz)
@@ -278,6 +439,7 @@ def main() -> None:
                     if args.trajectory_selector == "oracle_geodesic" else None
                 ),
                 "oracle_candidate_seed_count": args.oracle_candidate_seed_count,
+                "oracle_global_subgoal_m": args.oracle_global_subgoal_m,
                 "navdp_reset_before_B": int(reset_before_b),
                 "navdp_reset_before_C": int(reset_before_c),
                 "reached_A": int(reached_a),
@@ -345,6 +507,7 @@ def main() -> None:
                 if args.trajectory_selector == "oracle_geodesic" else None
             ),
             "oracle_candidate_seed_count": args.oracle_candidate_seed_count,
+            "oracle_global_subgoal_m": args.oracle_global_subgoal_m,
             "SR_A": mean_or_none([row["reached_A"] for row in metrics]),
             "SR_B_given_A": mean_or_none([row["reached_B"] for row in reached_a_rows]),
             "SR_C_given_AB": mean_or_none([row["reached_C"] for row in reached_ab_rows]),

@@ -25,6 +25,7 @@ TRAJECTORY_SELECTOR=${TRAJECTORY_SELECTOR:-server}
 TRAJECTORY_SELECTOR_SCOPE=${TRAJECTORY_SELECTOR_SCOPE:-all}
 ORACLE_SELECTOR_HORIZON=${ORACLE_SELECTOR_HORIZON:-0}
 ORACLE_CANDIDATE_SEED_COUNT=${ORACLE_CANDIDATE_SEED_COUNT:-1}
+ORACLE_GLOBAL_SUBGOAL_M=${ORACLE_GLOBAL_SUBGOAL_M:-0.0}
 SHARED_LEG1_ROOT=${SHARED_LEG1_ROOT:-}
 RUN_NAVDP_NATIVE=${RUN_NAVDP_NATIVE:-1}
 RUN_GEOMETRY_TOP1=${RUN_GEOMETRY_TOP1:-1}
@@ -89,6 +90,8 @@ TASK_FILES=(
   MemNavData/deterministic_eval_protocol.py
   MemNavData/navdp_goal_switch.py
   MemNavData/test_navdp_goal_switch.py
+  MemNavData/global_subgoal_protocol.py
+  MemNavData/test_global_subgoal_protocol.py
   MemNavData/test_deterministic_eval_protocol.py
   MemNavData/test_navdp_memory_replay.py
   MemNavData/conditional_c_protocol.py
@@ -215,14 +218,44 @@ fi
 [[ "${RETRIEVAL_CANDIDATE_MIN_GAP}" =~ ^[1-9][0-9]*$ ]] || {
   echo "ABORT: RETRIEVAL_CANDIDATE_MIN_GAP must be positive" >&2; exit 1; }
 "${HAB_PY}" - "${GRAPH_SUBGOAL_SPACING_M}" \
-  "${GRAPH_SUBGOAL_ARRIVAL_M}" <<'PY'
+  "${GRAPH_SUBGOAL_ARRIVAL_M}" "${ORACLE_GLOBAL_SUBGOAL_M}" <<'PY'
 import math, sys
-spacing, arrival = map(float, sys.argv[1:])
+spacing, arrival, oracle_global = map(float, sys.argv[1:])
 if not math.isfinite(spacing) or spacing < 0:
     raise SystemExit("GRAPH_SUBGOAL_SPACING_M must be finite and non-negative")
 if not math.isfinite(arrival) or arrival <= 0:
     raise SystemExit("GRAPH_SUBGOAL_ARRIVAL_M must be finite and positive")
+if not math.isfinite(oracle_global) or oracle_global < 0:
+    raise SystemExit("ORACLE_GLOBAL_SUBGOAL_M must be finite and non-negative")
 PY
+if hab_python - "${ORACLE_GLOBAL_SUBGOAL_M}" <<'PY'
+import sys
+raise SystemExit(0 if float(sys.argv[1]) > 0 else 1)
+PY
+then
+  [[ "$(basename "${EVALUATOR}")" == "eval_3leg_habitat.py" ]] || {
+    echo "ABORT: oracle global subgoals require eval_3leg_habitat.py" >&2
+    exit 1
+  }
+  [[ "${RUN_NAVDP_NATIVE}" -eq 1 && "${RUN_GEOMETRY_TOP1}" -eq 0 \
+      && "${RUN_GEOMETRY_ROUTER}" -eq 0 ]] || {
+    echo "ABORT: oracle global subgoals require the native-only arm" >&2
+    exit 1
+  }
+  [[ "${DETERMINISTIC_PLAN_SEEDS}" -eq 1 ]] || {
+    echo "ABORT: oracle global subgoals require deterministic seeds" >&2
+    exit 1
+  }
+  [[ "${TRAJECTORY_SELECTOR}" == server \
+      && "${TRAJECTORY_SELECTOR_SCOPE}" == all ]] || {
+    echo "ABORT: oracle global subgoals cannot mix trajectory selectors" >&2
+    exit 1
+  }
+  [[ "${NAVDP_GOAL_SWITCH_RESET}" == carry ]] || {
+    echo "ABORT: oracle global subgoals require carried short memory" >&2
+    exit 1
+  }
+fi
 if (( RUN_CONDITIONAL_ORACLE_ANCHOR + RUN_CONDITIONAL_ORACLE_POINT > 0 )); then
   [[ "$(basename "${EVALUATOR}")" == "eval_conditional_c_habitat.py" ]] || {
     echo "ABORT: conditional oracle arms require eval_conditional_c_habitat.py" >&2
@@ -357,6 +390,7 @@ hab_python -m py_compile \
   "${VALIDATOR}" \
   "${ROOT}/MemNavData/terminal_uturn.py" \
   "${ROOT}/MemNavData/arrival_shadow.py" \
+  "${ROOT}/MemNavData/global_subgoal_protocol.py" \
   "${ROOT}/MemNavData/summarize_arrival_shadow.py" \
   "${ROOT}/MemNavData/visual_yaw_refinement.py" \
   "${ROOT}/MemNavData/summarize_terminal_uturn.py"
@@ -379,6 +413,7 @@ hab_python -m py_compile \
     MemNavData.test_arrival_shadow \
     MemNavData.test_summarize_arrival_shadow \
     MemNavData.test_conditional_c_protocol \
+    MemNavData.test_global_subgoal_protocol \
     MemNavData.test_navdp_goal_switch \
     MemNavData.test_summarize_conditional_c_eval -v
 )
@@ -520,6 +555,7 @@ COMMON_ARGS=(
   --trajectory_selector_scope "${TRAJECTORY_SELECTOR_SCOPE}"
   --oracle_selector_horizon "${ORACLE_SELECTOR_HORIZON}"
   --oracle_candidate_seed_count "${ORACLE_CANDIDATE_SEED_COUNT}"
+  --oracle_global_subgoal_m "${ORACLE_GLOBAL_SUBGOAL_M}"
   --navdp_goal_switch_reset "${NAVDP_GOAL_SWITCH_RESET}"
   --leg1_goal_source own
   --seed 20260803

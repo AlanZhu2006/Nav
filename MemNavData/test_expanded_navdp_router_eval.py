@@ -145,6 +145,28 @@ class ExpandedBenchmarkTest(unittest.TestCase):
             evaluator,
         )
 
+    def test_global_subgoal_oracle_is_explicit_and_fail_closed(self):
+        runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
+        self.assertIn(
+            "ORACLE_GLOBAL_SUBGOAL_M=${ORACLE_GLOBAL_SUBGOAL_M:-0.0}",
+            runner,
+        )
+        self.assertIn(
+            '--oracle_global_subgoal_m "${ORACLE_GLOBAL_SUBGOAL_M}"',
+            runner,
+        )
+        self.assertIn(
+            "oracle global subgoals require the native-only arm",
+            runner,
+        )
+        evaluator = (ROOT / "eval_3leg_habitat.py").read_text()
+        self.assertIn(
+            '"pose_controller": "oracle_habitat_geodesic_subgoal"',
+            evaluator,
+        )
+        self.assertIn(
+            'args.trajectory_selector == "server"', evaluator)
+
 
 if __name__ == "__main__":
     unittest.main()

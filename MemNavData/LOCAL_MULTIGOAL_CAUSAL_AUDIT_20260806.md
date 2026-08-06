@@ -138,6 +138,69 @@ materially beyond the initial approximately six meters, and the final
 geodesic grows to approximately `6.7 m`. Thus a longer greedy value cannot
 manufacture a globally useful direction from the current candidate set.
 
+## Metric-target upper bound (2026-08-07)
+
+The candidate audit shows that NavDP does not sample a useful high-level
+direction on the difficult Novel-B states. A second intervention separates
+that failure from local collision-aware control. It preserves the image goal,
+frozen NavDP checkpoint, server trajectory selector, eight-frame FIFO,
+pure-pursuit executor, per-request DDPM seeds, and all Goal-A behavior, while
+replacing only the metric point token on Novel-B:
+
+1. `server-pair`: native ImageGoal NavDP;
+2. `geodesic-1.25`: at every replan, Habitat's privileged shortest path is
+   truncated 1.25 m ahead and transformed to NavDP `[forward, left]`;
+3. `final-point`: the same code uses a 100 m truncation distance, which clamps
+   to the final GT endpoint. This supplies the exact relative goal point but
+   no intermediate shortest-path turn.
+
+All three arms ran sequentially against the same live NavDP process. For every
+episode, `reached_A`, `steps_A`, `len_A`, and `final_dist_A` are exactly equal
+across arms. Five episodes reach A:
+
+| Arm | Goal B given A | Mean final B distance | Mean path over B successes | Mean SPL over B successes |
+|---|---:|---:|---:|---:|
+| native server pair | 3/5 | 2.113 m | 10.151 m | 0.764 |
+| geodesic 1.25 m | 5/5 | 0.981 m | 6.669 m | 0.977 |
+| exact final point | 5/5 | 0.979 m | 7.834 m | 0.886 |
+
+The per-episode paths make the recovery explicit:
+
+| Scene / episode | Native server | Geodesic 1.25 m | Exact final point |
+|---|---:|---:|---:|
+| `17D/ep0` | success, 5.034 m | success, 5.063 m | success, 5.384 m |
+| `17D/ep1` | failure, 21.929 m | success, 6.857 m | success, 7.679 m |
+| `17D/ep2` | failure, 21.938 m | success, 5.496 m | success, 6.661 m |
+| `1L/ep0` | success, 15.889 m | success, 8.850 m | success, 8.944 m |
+| `1L/ep1` | success, 9.531 m | success, 7.080 m | success, 10.502 m |
+| `1L/ep2` | A failed | A failed | A failed |
+
+Therefore A* is not required for Goal-B success on this small set: the exact
+final metric point also reaches all five goals. Short geodesic subgoals do,
+however, reduce the mean successful path by 14.9% relative to the exact final
+point and improve SPL. The decisive missing signal is a stable long-horizon
+metric target/direction; shortest-path structure is a secondary efficiency
+gain. Once that signal is provided, frozen NavDP is a competent local
+collision-aware controller.
+
+This is still a privileged upper bound. It uses the unknown GT location of a
+Novel goal and perfect Habitat localization at every replan. LingBot can
+provide a metric point directly only after a goal is localized in memory. For
+a truly Novel goal, a deployable system must instead use persistent geometry
+to propose frontiers or topological subgoals until visual evidence turns it
+into a localized revisit.
+
+Goal-C and joint SR are deliberately not interpreted here: changing the B
+route changes the physical B arrival position/yaw and therefore changes C's
+initial state. A causal C comparison requires replaying a frozen B trace or
+canonicalizing its terminal state.
+
+The native baseline in this new live process is `3/5`, whereas the earlier
+reset/selector process produced `4/5`. Request-level seeds reproduce all arms
+exactly within one live server, but the current CUDA stack is not guaranteed
+bitwise identical across fresh processes. Formal paired arms must therefore
+remain in one pinned server process, as the benchmark runner already does.
+
 ## Conclusion
 
 The local evidence rejects three simple fixes:
@@ -146,10 +209,11 @@ The local evidence rejects three simple fixes:
 2. replacing NavDP's selector with a myopic or 24-step geodesic critic;
 3. increasing the same conditional diffusion pool from 16 to 64 candidates.
 
-The dominant failure is closer to candidate generation and long-horizon
-exploration under a Novel/no-match goal. In difficult states, most diffusion
-candidates share an unhelpful local direction. The server critic cannot choose
-a globally correct route that the candidate set does not contain.
+The metric-target upper bound then positively identifies the missing level of
+control. In difficult states, most diffusion candidates share an unhelpful
+local direction, but the same frozen local controller succeeds when it is
+given a correct long-horizon metric target. The server critic cannot choose a
+globally correct route that the candidate set does not contain.
 
 The most justified next architecture is therefore:
 

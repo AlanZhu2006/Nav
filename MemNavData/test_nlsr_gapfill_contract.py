@@ -81,6 +81,21 @@ class NlsrGapfillContractTest(unittest.TestCase):
         self.assertNotIn("MERGED_FLOW_PROVENANCE.json", script)
         self.assertNotIn('--flow-cache-root "${MERGED_FLOW_ROOT}"', script)
 
+    def test_multistage_stage_is_dependency_pinned_and_has_no_height_default_in_python(self):
+        script_path = ROOT / "MemNavData/slurm_nlsr_multistage_manifest.sbatch"
+        script = script_path.read_text(encoding="utf-8")
+        self.assertEqual(
+            shell_pin(script_path, "EXPECTED_BUILDER_SHA"),
+            sha256(ROOT / "MemNavData/build_multistage_candidate_manifest.py"),
+        )
+        self.assertIn("--expected-routed-manifest-sha", script)
+        self.assertIn("--expected-routed-manifest-audit-sha", script)
+        self.assertIn("--legacy-camera-height-m", script)
+        self.assertIn("multistage_dependency_preflight=passed", script)
+        builder = (ROOT / "MemNavData/build_multistage_candidate_manifest.py").read_text(
+            encoding="utf-8")
+        self.assertNotIn('default=0.5', builder)
+
 
 if __name__ == "__main__":
     unittest.main()

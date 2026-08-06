@@ -33,6 +33,10 @@ from typing import Mapping, Sequence
 import numpy as np
 
 try:
+    from MemNavData.flow_cache_routing import (
+        FlowRoutingError,
+        registry_from_manifest,
+    )
     from MemNavData.novel_frontier_candidates_v2 import (
         FrontierConfig,
         FrontierProposalError,
@@ -47,6 +51,10 @@ try:
         invalid_proposal,
     )
 except ModuleNotFoundError:  # Direct execution from MemNavData/.
+    from flow_cache_routing import (  # type: ignore
+        FlowRoutingError,
+        registry_from_manifest,
+    )
     from novel_frontier_candidates_v2 import (  # type: ignore
         FrontierConfig,
         FrontierProposalError,
@@ -66,6 +74,7 @@ ARTIFACT_SCHEMA_VERSION = "nlsr_v2_frontier_proposal_artifact_v1"
 EXTERNAL_SCALE_ARTIFACT_SCHEMA_VERSION = (
     "nlsr_v2_frontier_proposal_artifact_v2")
 INPUT_MANIFEST_SCHEMA_VERSION = "nlsr_v2_expert_candidate_manifest_v1"
+ROUTED_INPUT_MANIFEST_SCHEMA_VERSION = "nlsr_v2_expert_candidate_manifest_v2"
 PATCH_SCORE_SCHEMA_VERSION = "nlsr_v2_goal_patch_frame_scores_v1"
 CAUSAL_GROUND_SCALE_SCHEMA_VERSION = "nlsr_v2_causal_ground_scale_v1"
 TEACHER_ARM = "teacher_pose"
@@ -1432,7 +1441,9 @@ def build_artifact(
     scan_stride: int = 4,
     config: FrontierConfig = FrontierConfig(),
 ) -> dict:
-    if manifest.get("schema_version") != INPUT_MANIFEST_SCHEMA_VERSION:
+    if manifest.get("schema_version") not in {
+            INPUT_MANIFEST_SCHEMA_VERSION,
+            ROUTED_INPUT_MANIFEST_SCHEMA_VERSION}:
         raise CandidateBuildError("input is not the frozen NLSR-V2 causal manifest")
     actual_manifest_sha = sha256_file(manifest_path)
     if actual_manifest_sha != manifest_sha256:
@@ -1456,11 +1467,34 @@ def build_artifact(
         raise CandidateBuildError("causal manifest input_roots is missing")
     try:
         episode_root = Path(str(roots["episode_root"]))
-        flow_root = Path(str(roots["flow_cache_root"]))
     except KeyError as exc:
         raise CandidateBuildError("causal manifest roots are incomplete") from exc
-    if not episode_root.is_dir() or not flow_root.is_dir():
-        raise CandidateBuildError("causal manifest episode/flow roots are unavailable")
+    if not episode_root.is_dir():
+        raise CandidateBuildError("causal manifest episode root is unavailable")
+    try:
+        flow_routes = registry_from_manifest(manifest)
+    except FlowRoutingError as exc:
+        # A routed-flow artifact is a global input contract.  It must never be
+        # degraded into a per-episode invalid deployment arm.
+        raise CandidateBuildError(
+            f"causal manifest routed-flow provenance is invalid: {exc}") from exc
+    if flow_routes is None:
+        if manifest.get("schema_version") != INPUT_MANIFEST_SCHEMA_VERSION:
+            raise CandidateBuildError(
+                "routed causal manifest lacks its flow-cache routing contract")
+        try:
+            flow_root = Path(str(roots["flow_cache_root"]))
+        except KeyError as exc:
+            raise CandidateBuildError(
+                "legacy causal manifest flow root is absent") from exc
+        if not flow_root.is_dir():
+            raise CandidateBuildError(
+                "legacy causal manifest flow root is unavailable")
+    else:
+        if manifest.get("schema_version") != ROUTED_INPUT_MANIFEST_SCHEMA_VERSION:
+            raise CandidateBuildError(
+                "legacy causal manifest cannot enable multi-root flow routing")
+        flow_root = None
     scene_records = _scene_records(manifest)
     requested = tuple(dict.fromkeys(map(str, selected_scenes)))
     if requested:
@@ -1528,6 +1562,7 @@ def build_artifact(
     source_paths = (
         Path(__file__),
         Path(__file__).with_name("novel_frontier_candidates_v2.py"),
+        Path(__file__).with_name("flow_cache_routing.py"),
         (Path(__file__).resolve().parents[1]
          / "InternNav/internnav/model/basemodel/memnav/cache_schema.py"),
     )
@@ -1637,14 +1672,31 @@ def build_artifact(
             scan_stride=scan_stride,
             config=config,
         )
-        cache_path = flow_root / scene / source_episode / FLOW_RELATIVE
-        aggregator_cache_path = (
-            flow_root / scene / source_episode / AGGREGATOR_FLOW_RELATIVE)
+        if flow_routes is None:
+            assert flow_root is not None
+            cache_path = flow_root / scene / source_episode / FLOW_RELATIVE
+            aggregator_cache_path = (
+                flow_root / scene / source_episode / AGGREGATOR_FLOW_RELATIVE)
+        else:
+            try:
+                aggregator_cache_path, cache_path = (
+                    flow_routes.resolve_manifest_pair(
+                        episode_record,
+                        scene,
+                        source_episode,
+                    )
+                )
+            except FlowRoutingError as exc:
+                raise CandidateBuildError(
+                    f"routed cache binding failed for "
+                    f"{scene}/{source_episode}: {exc}") from exc
         try:
-            _validate_declared_flow_file(
-                episode_record, flow_root, aggregator_cache_path)
-            _validate_declared_flow_file(
-                episode_record, flow_root, cache_path)
+            if flow_routes is None:
+                assert flow_root is not None
+                _validate_declared_flow_file(
+                    episode_record, flow_root, aggregator_cache_path)
+                _validate_declared_flow_file(
+                    episode_record, flow_root, cache_path)
             deployment_poses, deployment_provenance = lingbot_deployment_se2_rows(
                 aggregator_cache_path,
                 cache_path,
@@ -1759,7 +1811,7 @@ def build_artifact(
         "provenance": {
             "input_manifest_path": str(manifest_path.resolve()),
             "input_manifest_sha256": manifest_sha256,
-            "input_manifest_schema_version": INPUT_MANIFEST_SCHEMA_VERSION,
+            "input_manifest_schema_version": manifest["schema_version"],
             "split_sha256": split["sha256"],
             "proposal_schema_version": PROPOSAL_SCHEMA_VERSION,
             "generator_source_sha256": generator_sha,
@@ -1771,6 +1823,13 @@ def build_artifact(
             "expected_ground_prefix_configuration_sha256": (
                 expected_ground_prefix_configuration_sha256),
             "causal_ground_scale": external_scale_provenance,
+            "flow_cache_routing": (
+                flow_routes.manifest_record()
+                if flow_routes is not None else {
+                    "mode": "strict_single_root_v1",
+                    "flow_cache_root": str(flow_root.resolve()),
+                }
+            ),
             "privileged_feature_policy": (
                 "GT/pathfinder outputs only in arms.*.proposal_proxy; never in "
                 "candidate_universe, shortlist, or NMS"

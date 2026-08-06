@@ -28,6 +28,11 @@ from MemNavData.build_novel_frontier_candidates import (
     load_external_ground_scale_bindings,
     sha256_bytes,
 )
+from MemNavData.flow_cache_routing import (
+    ROUTE_SCHEMA_VERSION,
+    ROUTE_STATUS,
+    sha256_file,
+)
 
 
 M_W = np.asarray([
@@ -393,6 +398,109 @@ class ExternalCausalScaleFrontierTest(unittest.TestCase):
             sha256_bytes(self.scale_path.read_bytes()),
         )
         self.assertFalse(provenance["future_cache_payload_hashed"])
+
+    def test_multi_root_route_drives_manifest_scale_and_frontier_end_to_end(self):
+        route_root = self.root / "route_integration"
+        route_root.mkdir(exist_ok=True)
+        route_path = route_root / "FLOW_ROUTE_PROVENANCE.json"
+        split_sha = sha256_bytes(self.split_path.read_bytes())
+        rows = []
+        for episode in ("episode_0000", "episode_0001"):
+            chunk_relative = (
+                f"{self.scene}/{episode}/videos/chunk-000")
+            files = []
+            for name in ("lingbot_cache.npz", "lingbot_cam_cache.npz"):
+                path = self.flow / chunk_relative / name
+                files.append({
+                    "name": name,
+                    "bytes": path.stat().st_size,
+                    "content_sha256": None,
+                })
+            rows.append({
+                "episode": f"{self.scene}/{episode}",
+                "source_id": "official_base",
+                "source_relative_chunk": chunk_relative,
+                "validation": {"files": files},
+            })
+        route = {
+            "schema_version": ROUTE_SCHEMA_VERSION,
+            "status": ROUTE_STATUS,
+            "split_sha256": split_sha,
+            "raw_audit_sha256": "4" * 64,
+            "route_root": str(route_root.resolve()),
+            "source_roots": {"official_base": str(self.flow.resolve())},
+            "official_snapshot_semantics": "fixture metadata pin",
+            "official_snapshot_sha256": "5" * 64,
+            "patch_payloads_fully_sha256": True,
+            "counts": {"scenes": 1, "pairs": 2, "official_base": 2},
+            "pairs": rows,
+        }
+        route_bytes = canonical_json_bytes(route)
+        route_sha = sha256_bytes(route_bytes)
+        route_path.write_bytes(route_bytes)
+        Path(f"{route_path}.sha256").write_text(
+            f"{route_sha}  {route_path.name}\n", encoding="ascii")
+
+        routed_manifest = build_manifest(
+            split_path=self.split_path,
+            episode_root=self.episodes,
+            flow_cache_root=None,
+            flow_route_provenance=route_path,
+            expected_flow_route_sha256=route_sha,
+            environment_root=self.environments,
+            navmesh_root=self.navmeshes,
+            roles=("train",),
+        )
+        self.assertEqual(
+            routed_manifest["schema_version"],
+            "nlsr_v2_expert_candidate_manifest_v2",
+        )
+        self.assertNotIn("flow_cache_root", routed_manifest["input_roots"])
+        routed_manifest_path = route_root / "manifest.json"
+        routed_manifest_bytes = manifest_json_bytes(routed_manifest)
+        routed_manifest_path.write_bytes(routed_manifest_bytes)
+        routed_manifest_sha = sha256_bytes(routed_manifest_bytes)
+        routed_scale = build_scale_artifact(
+            manifest=routed_manifest,
+            manifest_path=routed_manifest_path,
+            expected_manifest_sha256=routed_manifest_sha,
+            estimator=FrozenFakeScaleEstimator(),
+            configuration=self.scale_configuration,
+            cache_pair_validator=lambda aggregator, camera, count: None,
+        )
+        self.assertEqual(
+            routed_scale["provenance"]["flow_cache_routing"]["mode"],
+            "provenance_pinned_multi_root",
+        )
+        routed_scale_path = route_root / "scale.json"
+        routed_scale_path.write_bytes(canonical_json_bytes(routed_scale))
+        estimator = routed_scale["provenance"]["estimator"]
+        artifact = build_artifact(
+            manifest=routed_manifest,
+            manifest_path=routed_manifest_path,
+            manifest_sha256=routed_manifest_sha,
+            causal_ground_scale_path=routed_scale_path,
+            expected_causal_ground_scale_sha256=sha256_file(
+                routed_scale_path),
+            expected_ground_scale_producer_sha256=routed_scale[
+                "provenance"]["producer_source_sha256"],
+            expected_ground_scale_configuration_sha256=routed_scale[
+                "provenance"]["configuration_sha256"],
+            expected_ground_scale_lingbot_commit=estimator["lingbot_commit"],
+            expected_ground_scale_weights_sha256=estimator["weights_sha256"],
+            expected_ground_scale_stream_source_sha256=estimator[
+                "lingbot_stream_source_sha256"],
+            depth_column_stride=4,
+            scan_stride=4,
+        )
+        self.assertEqual(
+            artifact["provenance"]["flow_cache_routing"]["mode"],
+            "provenance_pinned_multi_root",
+        )
+        self.assertTrue(all(
+            row["arms"][DEPLOYMENT_ARM]["proposal"]["valid"]
+            for row in artifact["records"]
+        ))
 
     def test_explicit_invalid_external_never_falls_back_to_dense_prefix(self):
         legacy = build_artifact(

@@ -28,10 +28,15 @@ from typing import Callable, Mapping, Protocol, Sequence
 import numpy as np
 
 try:
+    from MemNavData.flow_cache_routing import (
+        FlowRoutingError,
+        registry_from_manifest,
+    )
     from MemNavData.build_novel_frontier_candidates import (
         AGGREGATOR_FLOW_RELATIVE,
         FLOW_RELATIVE,
         INPUT_MANIFEST_SCHEMA_VERSION,
+        ROUTED_INPUT_MANIFEST_SCHEMA_VERSION,
         METADATA_RELATIVE,
         RGB_RELATIVE,
         _validate_versioned_cache_pair,
@@ -41,10 +46,15 @@ try:
         write_artifact,
     )
 except ModuleNotFoundError:  # Direct execution from MemNavData/.
+    from flow_cache_routing import (  # type: ignore
+        FlowRoutingError,
+        registry_from_manifest,
+    )
     from build_novel_frontier_candidates import (  # type: ignore
         AGGREGATOR_FLOW_RELATIVE,
         FLOW_RELATIVE,
         INPUT_MANIFEST_SCHEMA_VERSION,
+        ROUTED_INPUT_MANIFEST_SCHEMA_VERSION,
         METADATA_RELATIVE,
         RGB_RELATIVE,
         _validate_versioned_cache_pair,
@@ -308,11 +318,12 @@ def _json_safe(value: object, label: str = "value") -> object:
 
 def _flow_file(
     episode_record: Mapping[str, object],
-    flow_root: Path,
+    flow_root: Path | None,
     scene: str,
     episode: str,
     relative_suffix: Path,
 ) -> Path:
+    _require(flow_root is not None, "legacy flow root is absent")
     flow = episode_record.get("flow_cache")
     _require(isinstance(flow, Mapping), "manifest flow record is missing")
     files = flow.get("files")
@@ -452,7 +463,10 @@ def build_scale_artifact(
     cache_pair_validator: CachePairValidator = _default_cache_validator,
 ) -> dict[str, object]:
     _require(
-        manifest.get("schema_version") == INPUT_MANIFEST_SCHEMA_VERSION,
+        manifest.get("schema_version") in {
+            INPUT_MANIFEST_SCHEMA_VERSION,
+            ROUTED_INPUT_MANIFEST_SCHEMA_VERSION,
+        },
         "input is not an NLSR-V2 causal manifest",
     )
     _require(_sha_is_valid(expected_manifest_sha256),
@@ -471,9 +485,25 @@ def build_scale_artifact(
     roots = manifest.get("input_roots")
     _require(isinstance(roots, Mapping), "manifest input roots are missing")
     episode_root = Path(str(roots.get("episode_root", "")))
-    flow_root = Path(str(roots.get("flow_cache_root", "")))
-    _require(episode_root.is_dir() and flow_root.is_dir(),
-             "episode/flow roots are unavailable")
+    _require(episode_root.is_dir(), "episode root is unavailable")
+    try:
+        route_registry = registry_from_manifest(manifest)
+    except FlowRoutingError as error:
+        raise CausalScaleError(
+            f"manifest routed-flow provenance is invalid: {error}") from error
+    if route_registry is None:
+        _require(
+            manifest.get("schema_version") == INPUT_MANIFEST_SCHEMA_VERSION,
+            "routed manifest lacks its flow-cache routing contract",
+        )
+        flow_root = Path(str(roots.get("flow_cache_root", "")))
+        _require(flow_root.is_dir(), "legacy flow root is unavailable")
+    else:
+        _require(
+            manifest.get("schema_version") == ROUTED_INPUT_MANIFEST_SCHEMA_VERSION,
+            "legacy manifest cannot enable multi-root flow routing",
+        )
+        flow_root = None
     episode_records = _episode_index(manifest)
     grouped = _selected_episode_decisions(manifest, selected_scenes)
     estimator_provenance = _json_safe(estimator.provenance(), "estimator provenance")
@@ -483,6 +513,8 @@ def build_scale_artifact(
         Path(__file__).name: sha256_file(Path(__file__)),
         "build_novel_frontier_candidates.py": sha256_file(
             Path(__file__).with_name("build_novel_frontier_candidates.py")),
+        "flow_cache_routing.py": sha256_file(
+            Path(__file__).with_name("flow_cache_routing.py")),
     }
     producer_sha = sha256_bytes(canonical_json_bytes(producer_sources))
     records = []
@@ -543,11 +575,21 @@ def build_scale_artifact(
             and float(camera_height) > 0.0,
             "metadata camera height is invalid",
         )
-        aggregator_path = _flow_file(
-            episode_record, flow_root, scene, episode,
-            AGGREGATOR_FLOW_RELATIVE)
-        camera_path = _flow_file(
-            episode_record, flow_root, scene, episode, FLOW_RELATIVE)
+        if route_registry is None:
+            aggregator_path = _flow_file(
+                episode_record, flow_root, scene, episode,
+                AGGREGATOR_FLOW_RELATIVE)
+            camera_path = _flow_file(
+                episode_record, flow_root, scene, episode, FLOW_RELATIVE)
+        else:
+            try:
+                aggregator_path, camera_path = (
+                    route_registry.resolve_manifest_pair(
+                        episode_record, scene, episode))
+            except FlowRoutingError as error:
+                raise CausalScaleError(
+                    f"routed flow cache binding failed for "
+                    f"{scene}/{episode}: {error}") from error
         camera_signature_before = (
             camera_path.stat().st_size, camera_path.stat().st_mtime_ns)
         cache_pair_validator(aggregator_path, camera_path, int(frame_count))
@@ -655,6 +697,14 @@ def build_scale_artifact(
         "provenance": {
             "input_manifest_path": str(manifest_path.resolve()),
             "input_manifest_sha256": expected_manifest_sha256,
+            "input_manifest_schema_version": manifest["schema_version"],
+            "flow_cache_routing": (
+                route_registry.manifest_record()
+                if route_registry is not None else {
+                    "mode": "strict_single_root_v1",
+                    "flow_cache_root": str(flow_root.resolve()),
+                }
+            ),
             "producer_source_sha256": producer_sha,
             "producer_source_files": producer_sources,
             "configuration_sha256": configuration.sha256,

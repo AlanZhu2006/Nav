@@ -18,6 +18,7 @@ from MemNavData.build_novel_frontier_candidates import (
     TEACHER_ARM,
     build_artifact,
     sha256_bytes,
+    teacher_se2_rows,
     write_artifact,
 )
 from MemNavData.novel_frontier_candidates_v2 import ProxyMeasurement
@@ -243,6 +244,44 @@ class NovelFrontierBuilderTest(unittest.TestCase):
             scan_stride=4,
             **kwargs,
         )
+
+    def test_legacy_identity_and_fixed_mount_decode_to_identical_teacher_se2(self):
+        fixed_rows = []
+        legacy_rows = []
+        for frame, yaw in enumerate((0.0, 0.4, -1.1)):
+            c, s = np.cos(yaw), np.sin(yaw)
+            base = np.asarray([
+                [c, -s, 0.0],
+                [s, c, 0.0],
+                [0.0, 0.0, 1.0],
+            ])
+            action = np.eye(4)
+            action[:3, :3] = base @ M_W
+            action[:2, 3] = [frame * 0.7, -frame * 0.2]
+            fixed_mount = np.eye(4)
+            fixed_mount[:3, :3] = M_W
+            legacy_mount = np.eye(4)
+            fixed_rows.append({
+                "action": action.tolist(),
+                "observation.camera_extrinsic": fixed_mount.tolist(),
+            })
+            legacy_rows.append({
+                "action": action.tolist(),
+                "observation.camera_extrinsic": legacy_mount.tolist(),
+            })
+        convention = (
+            "positions+parquet in data(Zup,M_W); "
+            "yaw_habitat in render frame")
+        fixed = teacher_se2_rows(
+            fixed_rows, decision_frame=3, frame_convention=convention)
+        legacy = teacher_se2_rows(
+            legacy_rows, decision_frame=3, frame_convention=convention)
+        self.assertEqual(fixed, legacy)
+        for frame, yaw in enumerate((0.0, 0.4, -1.1)):
+            expected_heading = np.arctan2(np.cos(yaw), -np.sin(yaw))
+            self.assertAlmostEqual(fixed[frame].yaw_rad, expected_heading)
+            self.assertAlmostEqual(fixed[frame].x_m, frame * 0.7)
+            self.assertAlmostEqual(fixed[frame].y_m, -frame * 0.2)
 
     def test_causal_scale_producer_hashes_require_explicit_exact_pins(self):
         artifact = build_artifact(

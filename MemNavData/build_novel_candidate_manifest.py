@@ -25,8 +25,22 @@ from pathlib import Path
 import tempfile
 from typing import Iterable, Mapping, Sequence
 
+try:
+    from MemNavData.flow_cache_routing import (
+        FlowRouteRegistry,
+        FlowRoutingError,
+        load_route_registry,
+    )
+except ImportError:  # Direct ``python MemNavData/<script>.py`` execution.
+    from flow_cache_routing import (  # type: ignore
+        FlowRouteRegistry,
+        FlowRoutingError,
+        load_route_registry,
+    )
+
 
 SCHEMA_VERSION = "nlsr_v2_expert_candidate_manifest_v1"
+ROUTED_SCHEMA_VERSION = "nlsr_v2_expert_candidate_manifest_v2"
 ALLOWED_ROLES = ("train", "development")
 REQUIRED_FLOW_FILES = ("lingbot_cache.npz", "lingbot_cam_cache.npz")
 NAVDP_MEMORY_SIZE = 8
@@ -502,17 +516,79 @@ def _flow_record(flow_root: Path, scene: str, episode: str) -> tuple[dict, list[
     }, missing
 
 
+def _routed_flow_record(
+    registry: FlowRouteRegistry,
+    scene: str,
+    episode: str,
+) -> tuple[dict, list[dict]]:
+    """Freeze one exact multi-root route into the causal manifest.
+
+    A missing route remains visible in the same shape as a missing legacy
+    single-root pair.  Any malformed or stale declared route is a hard failure,
+    rather than being silently converted to "missing".
+    """
+
+    key = f"{scene}/{episode}"
+    if key not in registry.files_by_episode:
+        missing = [
+            {
+                "scene": scene,
+                "episode": episode,
+                "path": f"{key}/videos/chunk-000/{name}",
+                "cache_file": name,
+            }
+            for name in REQUIRED_FLOW_FILES
+        ]
+        return {
+            "complete": False,
+            "files": [],
+            "validation_owner": "downstream_versioned_cache_preflight",
+        }, missing
+    try:
+        files = registry.episode_file_records(scene, episode)
+    except FlowRoutingError as error:
+        raise ManifestError(
+            f"invalid routed flow cache for {key}: {error}") from error
+    return {
+        "complete": True,
+        "files": files,
+        "validation_owner": "downstream_versioned_cache_preflight",
+    }, []
+
+
 def build_manifest(*, split_path: Path, episode_root: Path,
-                   flow_cache_root: Path, environment_root: Path,
+                   flow_cache_root: Path | None, environment_root: Path,
                    navmesh_root: Path,
-                   roles: Sequence[str] = ALLOWED_ROLES) -> dict:
+                   roles: Sequence[str] = ALLOWED_ROLES,
+                   flow_route_provenance: Path | None = None,
+                   expected_flow_route_sha256: str | None = None) -> dict:
     selected_roles = validate_requested_roles(roles)
     roots = {
         "episode_root": episode_root,
-        "flow_cache_root": flow_cache_root,
         "environment_root": environment_root,
         "navmesh_root": navmesh_root,
     }
+    route_requested = flow_route_provenance is not None
+    if route_requested != (expected_flow_route_sha256 is not None):
+        raise ManifestError(
+            "flow route provenance and its expected SHA256 must be supplied together"
+        )
+    if route_requested == (flow_cache_root is not None):
+        raise ManifestError(
+            "choose exactly one flow source: a single root or a pinned route artifact"
+        )
+    route_registry = None
+    if route_requested:
+        assert flow_route_provenance is not None
+        assert expected_flow_route_sha256 is not None
+        try:
+            route_registry = load_route_registry(
+                flow_route_provenance, expected_flow_route_sha256)
+        except FlowRoutingError as error:
+            raise ManifestError(f"flow route provenance is invalid: {error}") from error
+    else:
+        assert flow_cache_root is not None
+        roots["flow_cache_root"] = flow_cache_root
     for label, root in roots.items():
         if not root.is_dir():
             raise ManifestError(f"{label} is not a directory: {root}")
@@ -545,7 +621,13 @@ def build_manifest(*, split_path: Path, episode_root: Path,
             episode_records = []
             for episode in selected:
                 ep_name = str(episode["name"])
-                flow, missing = _flow_record(flow_cache_root, scene, ep_name)
+                if route_registry is None:
+                    assert flow_cache_root is not None
+                    flow, missing = _flow_record(
+                        flow_cache_root, scene, ep_name)
+                else:
+                    flow, missing = _routed_flow_record(
+                        route_registry, scene, ep_name)
                 missing_flow_caches.extend(missing)
                 episode_records.append({
                     "episode": ep_name,
@@ -635,8 +717,11 @@ def build_manifest(*, split_path: Path, episode_root: Path,
         raise ManifestError("sample ids are not unique")
     missing_flow_caches.sort(
         key=lambda row: (row["scene"], row["episode"], row["cache_file"]))
-    return {
-        "schema_version": SCHEMA_VERSION,
+    manifest = {
+        "schema_version": (
+            ROUTED_SCHEMA_VERSION if route_registry is not None
+            else SCHEMA_VERSION
+        ),
         "purpose": (
             "frozen causal expert-state sampling for NLSR-V2 candidate and "
             "counterfactual rollout collection; not a trainable feature artifact"
@@ -683,6 +768,9 @@ def build_manifest(*, split_path: Path, episode_root: Path,
             "all_flow_caches_complete": not missing_flow_caches,
         },
     }
+    if route_registry is not None:
+        manifest["flow_cache_routing"] = route_registry.manifest_record()
+    return manifest
 
 
 def _fsync_directory(path: Path) -> None:
@@ -747,7 +835,12 @@ def parse_args() -> argparse.Namespace:
         default=Path(__file__).with_name(
             "router_multiscene_split_20260805.json"))
     parser.add_argument("--episode-root", type=Path, required=True)
-    parser.add_argument("--flow-cache-root", type=Path, required=True)
+    flow_source = parser.add_mutually_exclusive_group(required=True)
+    flow_source.add_argument("--flow-cache-root", type=Path)
+    flow_source.add_argument("--flow-route-provenance", type=Path)
+    parser.add_argument(
+        "--expected-flow-route-sha",
+        help="required SHA256 pin when --flow-route-provenance is used")
     parser.add_argument("--environment-root", type=Path, required=True)
     parser.add_argument("--navmesh-root", type=Path, required=True)
     parser.add_argument(
@@ -773,6 +866,8 @@ def main() -> None:
         environment_root=args.environment_root,
         navmesh_root=args.navmesh_root,
         roles=roles,
+        flow_route_provenance=args.flow_route_provenance,
+        expected_flow_route_sha256=args.expected_flow_route_sha,
     )
     sha_output = args.sha_out or Path(f"{args.out}.sha256")
     status, digest = write_artifact(

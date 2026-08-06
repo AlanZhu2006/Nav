@@ -23,6 +23,7 @@ DETERMINISTIC_PLAN_SEEDS=${DETERMINISTIC_PLAN_SEEDS:-0}
 NAVDP_GOAL_SWITCH_RESET=${NAVDP_GOAL_SWITCH_RESET:-carry}
 TRAJECTORY_SELECTOR=${TRAJECTORY_SELECTOR:-server}
 TRAJECTORY_SELECTOR_SCOPE=${TRAJECTORY_SELECTOR_SCOPE:-all}
+ORACLE_SELECTOR_HORIZON=${ORACLE_SELECTOR_HORIZON:-0}
 SHARED_LEG1_ROOT=${SHARED_LEG1_ROOT:-}
 RUN_NAVDP_NATIVE=${RUN_NAVDP_NATIVE:-1}
 RUN_GEOMETRY_TOP1=${RUN_GEOMETRY_TOP1:-1}
@@ -144,9 +145,18 @@ done
   echo "ABORT: invalid TRAJECTORY_SELECTOR_SCOPE=${TRAJECTORY_SELECTOR_SCOPE}" >&2
   exit 1
 }
+[[ "${ORACLE_SELECTOR_HORIZON}" =~ ^[0-9]+$ ]] || {
+  echo "ABORT: ORACLE_SELECTOR_HORIZON must be non-negative" >&2
+  exit 1
+}
 if [[ "${TRAJECTORY_SELECTOR}" == server \
       && "${TRAJECTORY_SELECTOR_SCOPE}" != all ]]; then
   echo "ABORT: a scoped selector requires TRAJECTORY_SELECTOR=oracle_geodesic" >&2
+  exit 1
+fi
+if [[ "${TRAJECTORY_SELECTOR}" == server \
+      && "${ORACLE_SELECTOR_HORIZON}" -ne 0 ]]; then
+  echo "ABORT: ORACLE_SELECTOR_HORIZON requires oracle_geodesic" >&2
   exit 1
 fi
 if [[ "${NAVDP_GOAL_SWITCH_RESET}" != carry \
@@ -489,6 +499,7 @@ COMMON_ARGS=(
   --exec_horizon 8
   --trajectory_selector "${TRAJECTORY_SELECTOR}"
   --trajectory_selector_scope "${TRAJECTORY_SELECTOR_SCOPE}"
+  --oracle_selector_horizon "${ORACLE_SELECTOR_HORIZON}"
   --navdp_goal_switch_reset "${NAVDP_GOAL_SWITCH_RESET}"
   --leg1_goal_source own
   --seed 20260803

@@ -231,6 +231,14 @@ parser.add_argument(
     help=("apply a non-server trajectory selector to all legs or only one "
           "multi-goal leg; non-target legs keep the server-selected path"),
 )
+parser.add_argument(
+    "--oracle_selector_horizon",
+    type=int,
+    default=0,
+    help=("pure-pursuit steps used only to score oracle candidate paths; "
+          "0 matches --exec_horizon and does not change the number of steps "
+          "actually executed before replanning"),
+)
 parser.add_argument("--stuck_window", type=int, default=150)
 parser.add_argument("--stuck_dist", type=float, default=0.10)
 parser.add_argument("--agent_radius", type=float, default=0.30)
@@ -308,6 +316,8 @@ parser.add_argument(
 )
 parser.add_argument("--save_video", action="store_true")
 args = parser.parse_args()
+if args.oracle_selector_horizon < 0:
+    parser.error("--oracle_selector_horizon must be non-negative")
 
 BASE = f"http://{args.host}:{args.port}"
 NOVEL_BASE = (f"http://{args.host}:{args.novel_port}"
@@ -1018,8 +1028,14 @@ def select_plan_trajectory(
     if selector not in ("server", "oracle_geodesic"):
         raise ValueError(f"unknown trajectory selector: {selector!r}")
     selected = np.asarray(response["trajectory"], dtype=float)
+    selector_horizon = (
+        args.oracle_selector_horizon
+        if args.oracle_selector_horizon > 0 else args.exec_horizon
+    )
     info = dict(
         trajectory_selector=selector,
+        trajectory_selector_horizon=(selector_horizon
+                                     if selector == "oracle_geodesic" else None),
         server_selected_idx=None,
         oracle_selected_idx=None,
         current_geodesic_m=None,
@@ -1058,7 +1074,7 @@ def select_plan_trajectory(
             candidate, [pos[0], pos[2]], psi)
         trial_pos = np.asarray(pos, dtype=float).copy()
         trial_psi = float(psi)
-        for _ in range(args.exec_horizon):
+        for _ in range(selector_horizon):
             trial_pos, trial_psi, _ = pursuit_step(
                 trial_pos, trial_psi, candidate_world, pf)
         ok, remaining, _ = geodesic(pf, trial_pos, goal3)
@@ -2136,6 +2152,9 @@ def main():
         exec_horizon=args.exec_horizon,
         trajectory_selector=args.trajectory_selector,
         trajectory_selector_scope=args.trajectory_selector_scope,
+        oracle_selector_horizon=(
+            args.oracle_selector_horizon
+            if args.trajectory_selector == "oracle_geodesic" else None),
         navdp_stop_threshold=(args.navdp_stop_threshold
                               if (args.server_backend == "navdp"
                                   or args.server_backend in HYBRID_BACKENDS)

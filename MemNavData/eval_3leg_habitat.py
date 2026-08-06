@@ -268,6 +268,10 @@ def main() -> None:
                 "navdp_goal_switch_reset": args.navdp_goal_switch_reset,
                 "trajectory_selector": args.trajectory_selector,
                 "trajectory_selector_scope": args.trajectory_selector_scope,
+                "oracle_selector_horizon": (
+                    args.oracle_selector_horizon
+                    if args.trajectory_selector == "oracle_geodesic" else None
+                ),
                 "navdp_reset_before_B": int(reset_before_b),
                 "navdp_reset_before_C": int(reset_before_c),
                 "reached_A": int(reached_a),
@@ -330,6 +334,10 @@ def main() -> None:
             "navdp_goal_switch_reset": args.navdp_goal_switch_reset,
             "trajectory_selector": args.trajectory_selector,
             "trajectory_selector_scope": args.trajectory_selector_scope,
+            "oracle_selector_horizon": (
+                args.oracle_selector_horizon
+                if args.trajectory_selector == "oracle_geodesic" else None
+            ),
             "SR_A": mean_or_none([row["reached_A"] for row in metrics]),
             "SR_B_given_A": mean_or_none([row["reached_B"] for row in reached_a_rows]),
             "SR_C_given_AB": mean_or_none([row["reached_C"] for row in reached_ab_rows]),

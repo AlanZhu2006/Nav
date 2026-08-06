@@ -6,6 +6,8 @@ The wrapper refuses to import NavDP unless ``navdp_server.py`` and
 
 * ``/memory_audit``: read-only hashes of the real processed FIFO and padded
   model tensor;
+* ``/navdp_plan_atomic``: one transactional FIFO append followed by exactly
+  one seeded, read-only ``native`` or ``image_point`` diffusion call;
 * ``/navdp_step_ip_mixgoal_resample``: image+point resampling from the FIFO
   already advanced by ``/imagegoal_step`` for this decision frame.
 
@@ -25,7 +27,7 @@ import importlib
 import json
 from pathlib import Path
 import sys
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 import numpy as np
 
@@ -36,7 +38,13 @@ EXPECTED_NAVDP_SERVER_SHA256 = (
 EXPECTED_POLICY_AGENT_SHA256 = (
     "1f9dda348e03591a721606411333232e9b7053d9c68c864bc0f4ed698aa089a9"
 )
+EXPECTED_DETERMINISTIC_SEED_SHA256 = (
+    "1679bd8eb6ce70fde02fcc15abcd4fbff8ae1a0b8a0fa350a357c574b98b4463"
+)
 AUDIT_PROTOCOL = "navdp_native_first_fifo_v1"
+ATOMIC_PLAN_PROTOCOL = "navdp_native_first_atomic_plan_v1"
+ATOMIC_PLAN_MODES = frozenset(("native", "image_point"))
+MAX_DIFFUSION_SEED = 2**63 - 1
 
 
 class NativeFirstAuditError(RuntimeError):
@@ -205,6 +213,360 @@ def snapshot_memory(agent: object) -> dict[str, object]:
     }
 
 
+def _copy_memory_queue(agent: object) -> list[list[np.ndarray]]:
+    """Copy the transaction state so a failed plan can roll back exactly."""
+    queues = getattr(agent, "memory_queue", None)
+    _require(isinstance(queues, list), "agent memory_queue is unavailable")
+    return [
+        [np.asarray(item).copy() for item in queue]
+        for queue in queues
+    ]
+
+
+def _restore_memory_queue(
+    agent: object,
+    queues: Sequence[Sequence[np.ndarray]],
+) -> None:
+    """Restore the FIFO after any rejected atomic-plan transaction."""
+    agent.memory_queue = [
+        [np.asarray(item).copy() for item in queue]
+        for queue in queues
+    ]
+
+
+def _normalize_required_seed(seed: object) -> int:
+    _require(
+        isinstance(seed, int) and not isinstance(seed, bool),
+        "diffusion_seed must be an integer",
+    )
+    _require(
+        0 <= seed <= MAX_DIFFUSION_SEED,
+        f"diffusion_seed must be in [0, {MAX_DIFFUSION_SEED}]",
+    )
+    return seed
+
+
+def _parse_required_seed(value: object) -> int:
+    _require(value is not None and value != "", "diffusion_seed is required")
+    _require(not isinstance(value, bool), "diffusion_seed must be an integer")
+    try:
+        seed = int(value)
+    except (TypeError, ValueError) as error:
+        raise NativeFirstAuditError(
+            "diffusion_seed must be an integer") from error
+    _require(
+        str(value).strip() == str(seed),
+        "diffusion_seed must use canonical integer syntax",
+    )
+    return _normalize_required_seed(seed)
+
+
+def _append_processed_current_once(
+    agent: object,
+    processed_current: np.ndarray,
+    before: Mapping[str, object],
+) -> tuple[dict[str, object], list[str]]:
+    """Advance every environment FIFO exactly once and prove the transition."""
+    queues = getattr(agent, "memory_queue", None)
+    memory_size = getattr(agent, "memory_size", None)
+    _require(isinstance(queues, list), "agent memory_queue is unavailable")
+    _require(
+        isinstance(memory_size, int)
+        and not isinstance(memory_size, bool)
+        and memory_size >= 1,
+        "agent memory_size is unavailable",
+    )
+    _require(
+        len(processed_current) == len(queues),
+        "current-image batch differs from NavDP FIFO batch",
+    )
+    current_hashes: list[str] = []
+    for env_index, current_value in enumerate(processed_current):
+        current = np.asarray(current_value)
+        current_hash = ndarray_sha256(current)
+        queue = queues[env_index]
+        _require(
+            isinstance(queue, list) and len(queue) <= memory_size,
+            f"environment {env_index} FIFO is malformed",
+        )
+        if queue:
+            reference = np.asarray(queue[-1])
+            _require(
+                current.shape == reference.shape
+                and current.dtype == reference.dtype,
+                f"environment {env_index} current image disagrees with FIFO",
+            )
+        if len(queue) == memory_size:
+            del queue[0]
+        queue.append(current.copy())
+        current_hashes.append(current_hash)
+
+    after = snapshot_memory(agent)
+    before_items = before["queue_item_sha256"]
+    _require(isinstance(before_items, list), "invalid FIFO before snapshot")
+    expected_items = []
+    for env_index, (items, current_hash) in enumerate(
+            zip(before_items, current_hashes)):
+        _require(isinstance(items, list), "invalid FIFO item hash list")
+        retained = items[-(memory_size - 1):] if memory_size > 1 else []
+        expected_items.append([*retained, current_hash])
+        _require(
+            after["queue_item_sha256"][env_index][-1] == current_hash,
+            f"environment {env_index} current image is not the FIFO tail",
+        )
+    _require(
+        after["queue_item_sha256"] == expected_items,
+        "atomic plan did not append current exactly once",
+    )
+    return after, current_hashes
+
+
+def _require_current_tail_hashes(
+    agent: object,
+    current_hashes: Sequence[str],
+    phase: str,
+) -> None:
+    queues = getattr(agent, "memory_queue", None)
+    _require(
+        isinstance(queues, list) and len(queues) == len(current_hashes),
+        f"FIFO batch changed {phase}",
+    )
+    for env_index, (queue, expected_hash) in enumerate(
+            zip(queues, current_hashes)):
+        _require(
+            isinstance(queue, list) and bool(queue),
+            f"environment {env_index} FIFO became empty {phase}",
+        )
+        _require(
+            ndarray_sha256(queue[-1]) == expected_hash,
+            f"environment {env_index} current image is not the FIFO tail {phase}",
+        )
+
+
+def _validate_prediction_outputs(
+    outputs: object,
+    stop_threshold: object,
+    mode: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    _require(
+        isinstance(outputs, (tuple, list)) and len(outputs) == 4,
+        f"NavDP {mode} predictor returned an unexpected structure",
+    )
+    all_trajectory, all_values, good_trajectory, _bad_trajectory = outputs
+    all_trajectory = np.asarray(all_trajectory)
+    all_values = np.asarray(all_values)
+    good_trajectory = np.asarray(good_trajectory).copy()
+    _require(
+        all(
+            np.issubdtype(value.dtype, np.number)
+            and bool(np.isfinite(value).all())
+            for value in (all_trajectory, all_values, good_trajectory)
+        ),
+        f"NavDP {mode} predictor returned non-finite outputs",
+    )
+    _require(all_values.size > 0, f"NavDP {mode} predictor returned no values")
+    _require(
+        isinstance(stop_threshold, (int, float, np.number))
+        and bool(np.isfinite(stop_threshold)),
+        "agent stop_threshold is unavailable",
+    )
+    _require(
+        good_trajectory.ndim == 4
+        and good_trajectory.shape[1] >= 1
+        and good_trajectory.shape[-1] >= 2,
+        f"NavDP {mode} good trajectory has no executable candidate",
+    )
+    if float(all_values.max()) < float(stop_threshold):
+        good_trajectory[:, :, :, 0] = 0.0
+        good_trajectory[:, :, :, 1] = np.sign(
+            good_trajectory[:, :, :, 1].mean())
+    return good_trajectory[:, 0], all_trajectory, all_values
+
+
+def atomic_native_first_plan(
+    agent: object,
+    *,
+    mode: str,
+    image_goal: np.ndarray,
+    current_images: np.ndarray,
+    current_depths: np.ndarray,
+    diffusion_seed: int,
+    apply_seed: Callable[[int], object],
+    point_goal: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, object]]:
+    """Commit one observation and sample exactly one read-only NavDP plan.
+
+    Both modes share this transaction, so neither mode can receive a fresher
+    FIFO than the other by construction.  Failed preprocessing, seeding,
+    prediction, or audit restores the pre-request FIFO.
+    """
+    _require(mode in ATOMIC_PLAN_MODES, f"unsupported atomic plan mode: {mode}")
+    seed = _normalize_required_seed(diffusion_seed)
+    _require(callable(apply_seed), "apply_seed must be callable")
+
+    before_queue = _copy_memory_queue(agent)
+    before = snapshot_memory(agent)
+    try:
+        # A malformed goal/current request must never consume an observation.
+        # Preprocessing is inside the transaction too: the pinned NavDP
+        # implementation is pure, and the after-append proof would reject any
+        # hidden FIFO mutation here.
+        current = np.asarray(
+            agent.process_image(np.asarray(current_images).copy()))
+        goal = np.asarray(agent.process_image(np.asarray(image_goal).copy()))
+        _require(
+            len(current) == int(agent.batch_size)
+            and len(goal) == int(agent.batch_size),
+            "current/goal batch differs from NavDP batch_size",
+        )
+        current_batch_hash = ndarray_sha256(current)
+        goal_batch_hash = ndarray_sha256(goal)
+        goal_item_hashes = [ndarray_sha256(item) for item in goal]
+
+        processed_point_goal = None
+        point_goal_hash = None
+        if mode == "image_point":
+            _require(
+                point_goal is not None,
+                "image_point mode requires point_goal",
+            )
+            processed_point_goal = np.asarray(
+                agent.process_pointgoal(np.asarray(point_goal).copy()))
+            _require(
+                len(processed_point_goal) == int(agent.batch_size),
+                "point-goal batch differs from NavDP batch_size",
+            )
+            point_goal_hash = ndarray_sha256(processed_point_goal)
+        else:
+            _require(point_goal is None, "native mode forbids point_goal")
+
+        depth = np.asarray(
+            agent.process_depth(np.asarray(current_depths).copy()))
+        _require(
+            len(depth) == int(agent.batch_size),
+            "depth batch differs from NavDP batch_size",
+        )
+
+        after_append, current_item_hashes = _append_processed_current_once(
+            agent, current, before)
+        input_images = padded_fifo_tensor(agent.memory_queue, agent.memory_size)
+        _require(input_images is not None, "atomic plan FIFO is empty")
+
+        seeded = apply_seed(seed)
+        _require(
+            seeded == seed,
+            f"apply_seed returned {seeded!r}, expected {seed}",
+        )
+        _require(
+            snapshot_memory(agent) == after_append,
+            "seed application mutated NavDP FIFO",
+        )
+
+        if mode == "native":
+            outputs = agent.navi_former.predict_imagegoal_action(
+                goal, input_images, depth)
+        else:
+            _require(
+                processed_point_goal is not None,
+                "processed point goal unexpectedly absent",
+            )
+            outputs = agent.navi_former.predict_ip_action(
+                processed_point_goal, goal, input_images, depth)
+        execute, all_trajectory, all_values = _validate_prediction_outputs(
+            outputs, agent.stop_threshold, mode)
+
+        _require_current_tail_hashes(
+            agent, current_item_hashes, "after diffusion inference")
+        after_inference = snapshot_memory(agent)
+        _require(
+            after_inference == after_append,
+            "diffusion inference mutated NavDP FIFO",
+        )
+    except Exception:
+        _restore_memory_queue(agent, before_queue)
+        raise
+
+    receipt_core: dict[str, object] = {
+        "protocol": ATOMIC_PLAN_PROTOCOL,
+        "mode": mode,
+        "diffusion_seed": seed,
+        "diffusion_call_count": 1,
+        "goal_sha256": goal_batch_hash,
+        "goal_item_sha256": goal_item_hashes,
+        "current_sha256": current_batch_hash,
+        "current_item_sha256": current_item_hashes,
+        "fifo_before_sha256": before["fifo_sha256"],
+        "fifo_after_append_sha256": after_append["fifo_sha256"],
+        "fifo_item_sha256_before": before["queue_item_sha256"],
+        "fifo_item_sha256": after_append["queue_item_sha256"],
+        "fifo_lengths_before": before["queue_lengths"],
+        "fifo_lengths_after": after_append["queue_lengths"],
+        "point_goal_sha256": point_goal_hash,
+        "inference_fifo_unchanged": True,
+        "append_count_per_environment": 1,
+    }
+    receipt = {
+        **receipt_core,
+        "receipt_sha256": canonical_json_sha256(receipt_core),
+    }
+    return execute, all_trajectory, all_values, receipt
+
+
+def verify_same_prefix_plan_receipts(
+    first: Mapping[str, object],
+    second: Mapping[str, object],
+) -> str:
+    """Fail closed unless native and residual plans used one exact prefix."""
+    _require(
+        {first.get("mode"), second.get("mode")} == ATOMIC_PLAN_MODES,
+        "paired receipts must contain native and image_point modes",
+    )
+    for name, receipt in (("first", first), ("second", second)):
+        _require(
+            receipt.get("protocol") == ATOMIC_PLAN_PROTOCOL,
+            f"{name} receipt protocol mismatch",
+        )
+        _require(
+            receipt.get("diffusion_call_count") == 1,
+            f"{name} receipt diffusion call count is not one",
+        )
+        _require(
+            receipt.get("append_count_per_environment") == 1,
+            f"{name} receipt append count is not one",
+        )
+        _require(
+            receipt.get("inference_fifo_unchanged") is True,
+            f"{name} receipt did not prove read-only inference",
+        )
+        claimed_sha = receipt.get("receipt_sha256")
+        unsigned = dict(receipt)
+        unsigned.pop("receipt_sha256", None)
+        _require(
+            claimed_sha == canonical_json_sha256(unsigned),
+            f"{name} receipt hash mismatch",
+        )
+    compared = (
+        "diffusion_seed",
+        "goal_sha256",
+        "goal_item_sha256",
+        "current_sha256",
+        "current_item_sha256",
+        "fifo_before_sha256",
+        "fifo_after_append_sha256",
+        "fifo_item_sha256_before",
+        "fifo_item_sha256",
+        "fifo_lengths_before",
+        "fifo_lengths_after",
+    )
+    for field in compared:
+        _require(
+            first.get(field) == second.get(field),
+            f"paired receipt {field} mismatch",
+        )
+    identity = {field: first.get(field) for field in compared}
+    return canonical_json_sha256(identity)
+
+
 def _processed_current_matches_fifo(
     agent: object,
     images: np.ndarray,
@@ -316,6 +678,65 @@ def register_audit_routes(base: object, provenance: Mapping[str, str]) -> None:
             **snapshot,
         })
 
+    @base.app.route("/navdp_plan_atomic", methods=["POST"])
+    def atomic_plan():
+        """Advance the FIFO once and run one selected diffusion branch."""
+        agent = base.navdp_navigator
+        if agent is None:
+            return base.jsonify({"error": "navigator is not initialized"}), 409
+        try:
+            batch_size = int(agent.batch_size)
+            mode = str(base.request.form.get("mode", ""))
+            current = _decode_rgb(
+                base, base.request.files["image"], batch_size)
+            image_goal = _decode_rgb(
+                base, base.request.files["image_goal"], batch_size)
+            depth = _decode_depth(
+                base, base.request.files["depth"], batch_size)
+            seed = _parse_required_seed(
+                base.request.form.get("diffusion_seed"))
+            point_goal = None
+            if mode == "image_point":
+                point_data = json.loads(base.request.form.get("goal_data"))
+                point_x = np.asarray(point_data["goal_x"])
+                point_y = np.asarray(point_data["goal_y"])
+                _require(
+                    point_x.shape == (batch_size,)
+                    and point_y.shape == (batch_size,)
+                    and bool(np.isfinite(point_x).all())
+                    and bool(np.isfinite(point_y).all()),
+                    "point goal must contain one finite x/y pair per environment",
+                )
+                point_goal = np.stack(
+                    (point_x, point_y, np.zeros_like(point_x)), axis=1)
+            execute, all_trajectory, all_values, receipt = (
+                atomic_native_first_plan(
+                    agent,
+                    mode=mode,
+                    image_goal=image_goal,
+                    current_images=current,
+                    current_depths=depth,
+                    diffusion_seed=seed,
+                    apply_seed=base.apply_seed,
+                    point_goal=point_goal,
+                )
+            )
+        except (
+            NativeFirstAuditError,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            return base.jsonify({"error": str(error)}), 409
+        return base.jsonify({
+            "trajectory": execute.tolist(),
+            "all_trajectory": all_trajectory.tolist(),
+            "all_values": all_values.tolist(),
+            "receipt": receipt,
+            "provenance": dict(provenance),
+        })
+
     @base.app.route(
         "/navdp_step_ip_mixgoal_resample",
         methods=["POST"],
@@ -392,10 +813,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     navdp_dir = Path(args.navdp_dir).resolve()
     server_path = navdp_dir / "navdp_server.py"
     policy_path = navdp_dir / "policy_agent.py"
+    seed_path = navdp_dir / "deterministic_seed.py"
     server_sha = verify_source_file(
         server_path, EXPECTED_NAVDP_SERVER_SHA256, "navdp_server.py")
     policy_sha = verify_source_file(
         policy_path, EXPECTED_POLICY_AGENT_SHA256, "policy_agent.py")
+    seed_sha = verify_source_file(
+        seed_path,
+        EXPECTED_DETERMINISTIC_SEED_SHA256,
+        "deterministic_seed.py",
+    )
     checkpoint_sha = verify_source_file(
         args.checkpoint,
         args.expected_checkpoint_sha256,
@@ -416,6 +843,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     provenance = {
         "navdp_server_sha256": server_sha,
         "policy_agent_sha256": policy_sha,
+        "deterministic_seed_sha256": seed_sha,
         "checkpoint_sha256": checkpoint_sha,
         "wrapper_sha256": sha256_file(__file__),
     }

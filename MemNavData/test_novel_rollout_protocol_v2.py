@@ -11,12 +11,17 @@ from MemNavData.novel_rollout_protocol_v2 import (
     FrozenDecisionState,
     PlanReceipt,
     PreparationReceipt,
+    RuntimeGeometrySpec,
     RolloutProtocolError,
     StepReceipt,
+    artifact_from_dict,
     artifact_to_dict,
     atomic_write_artifact,
     canonical_pose_sha256,
+    canonical_runtime_geometry_signature,
+    collect_native_rollout,
     collect_paired_rollouts,
+    load_artifact,
     run_candidate_arm,
     world_goal_to_local,
 )
@@ -27,6 +32,15 @@ def digest(value):
 
 
 def state():
+    runtime_geometry = RuntimeGeometrySpec(
+        habitat_sim_version="0.3.3",
+        agent_radius_m=0.18,
+        agent_height_m=0.88,
+        agent_max_climb_m=0.2,
+        agent_max_slope_deg=45.0,
+        navmesh_source="loaded_frozen",
+        navmesh_settings_sha256=digest("navmesh-settings"),
+    )
     return FrozenDecisionState(
         state_id="scene/episode/state-b0",
         session_id="scene/episode/session-0",
@@ -37,7 +51,9 @@ def state():
         current_depth_sha256=digest("depth-t0"),
         start_pose_sha256=canonical_pose_sha256((0.0, 0.0, 0.0)),
         environment_id="mp3d/scene.glb",
+        environment_sha256=digest("environment"),
         navmesh_sha256=digest("navmesh"),
+        runtime_geometry=runtime_geometry,
     )
 
 
@@ -57,6 +73,10 @@ class FakeBackend:
         speed=None,
         contaminate_prepare=False,
         mismatch_seed=False,
+        wrong_goal=False,
+        wrong_environment=False,
+        wrong_navmesh=False,
+        wrong_geometry_signature=False,
         mutate_during_pursuit=False,
         bad_t0_append=False,
         bad_projection=False,
@@ -68,6 +88,10 @@ class FakeBackend:
             0.10 if candidate_id == "native" else 0.20)
         self.contaminate_prepare = contaminate_prepare
         self.mismatch_seed = mismatch_seed
+        self.wrong_goal = wrong_goal
+        self.wrong_environment = wrong_environment
+        self.wrong_navmesh = wrong_navmesh
+        self.wrong_geometry_signature = wrong_geometry_signature
         self.mutate_during_pursuit = mutate_during_pursuit
         self.bad_t0_append = bad_t0_append
         self.bad_projection = bad_projection
@@ -95,6 +119,23 @@ class FakeBackend:
                 if self.contaminate_prepare else frozen.current_rgb_sha256),
             current_depth_sha256=frozen.current_depth_sha256,
             start_pose_sha256=frozen.start_pose_sha256,
+            environment_sha256=(
+                digest("wrong-environment")
+                if self.wrong_environment else frozen.environment_sha256
+            ),
+            navmesh_sha256=(
+                digest("wrong-navmesh")
+                if self.wrong_navmesh else frozen.navmesh_sha256
+            ),
+            runtime_geometry_signature=(
+                digest("wrong-runtime-geometry")
+                if self.wrong_geometry_signature
+                else canonical_runtime_geometry_signature(
+                    frozen.environment_sha256,
+                    frozen.navmesh_sha256,
+                    frozen.runtime_geometry,
+                )
+            ),
             world_pose_xz_yaw=(0.0, 0.0, 0.0),
             initial_goal_distance_m=self.distance,
             goal_reachable=True,
@@ -126,6 +167,10 @@ class FakeBackend:
             state_id=request.state_id,
             candidate_id=request.candidate_id,
             candidate_type=request.candidate_type,
+            goal_sha256=(
+                digest("wrong-goal") if self.wrong_goal
+                else request.goal_sha256
+            ),
             commitment_index=request.commitment_index,
             diffusion_seed=(
                 request.diffusion_seed + 1
@@ -257,6 +302,27 @@ class NovelRolloutProtocolV2Test(unittest.TestCase):
                 FakeBackend("native", mismatch_seed=True),
                 state(), NATIVE, SEEDS)
 
+    def test_goal_hash_must_be_echoed_by_every_plan(self):
+        with self.assertRaisesRegex(RolloutProtocolError, "goal_sha256"):
+            run_candidate_arm(
+                FakeBackend("native", wrong_goal=True), state(), NATIVE, SEEDS)
+
+    def test_preparation_must_echo_exact_navmesh(self):
+        with self.assertRaisesRegex(RolloutProtocolError, "navmesh"):
+            run_candidate_arm(
+                FakeBackend("native", wrong_navmesh=True),
+                state(), NATIVE, SEEDS)
+
+    def test_preparation_binds_environment_and_runtime_geometry(self):
+        with self.assertRaisesRegex(RolloutProtocolError, "environment"):
+            run_candidate_arm(
+                FakeBackend("native", wrong_environment=True),
+                state(), NATIVE, SEEDS)
+        with self.assertRaisesRegex(RolloutProtocolError, "runtime geometry"):
+            run_candidate_arm(
+                FakeBackend("native", wrong_geometry_signature=True),
+                state(), NATIVE, SEEDS)
+
     def test_wrong_world_to_local_projection_fails(self):
         with self.assertRaisesRegex(RolloutProtocolError, "local projection"):
             run_candidate_arm(
@@ -347,6 +413,51 @@ class NovelRolloutProtocolV2Test(unittest.TestCase):
             sidecar = path.with_suffix(".json.sha256").read_text().split()
             self.assertEqual(sidecar[1], "row.json")
             self.assertEqual(sidecar[0], hashlib.sha256(path.read_bytes()).hexdigest())
+            loaded = load_artifact(path)
+            self.assertEqual(artifact_to_dict(loaded), artifact_to_dict(artifact))
+
+    def test_artifact_from_dict_rejects_unknown_key(self):
+        artifact = collect_paired_rollouts(
+            factory(), state(), (NATIVE, RESIDUAL), SEEDS,
+            run_signature_sha256=RUN_SHA)
+        payload = json.loads(json.dumps(artifact_to_dict(artifact)))
+        payload["unexpected"] = True
+        with self.assertRaisesRegex(RolloutProtocolError, "unknown keys"):
+            artifact_from_dict(payload)
+
+    def test_disk_loader_rejects_noncanonical_json_even_with_valid_sidecar(self):
+        artifact = collect_paired_rollouts(
+            factory(), state(), (NATIVE, RESIDUAL), SEEDS,
+            run_signature_sha256=RUN_SHA)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "row.json"
+            atomic_write_artifact(path, artifact)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            noncanonical = json.dumps(
+                payload, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8") + b"\n"
+            path.write_bytes(noncanonical)
+            path.with_suffix(".json.sha256").write_text(
+                f"{hashlib.sha256(noncanonical).hexdigest()}  row.json\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                    RolloutProtocolError, "canonical disk encoding"):
+                load_artifact(path)
+
+    def test_explicit_native_only_artifact_is_valid_but_not_paired(self):
+        artifact = collect_native_rollout(
+            factory(), state(), SEEDS, run_signature_sha256=RUN_SHA)
+        self.assertEqual([row.candidate_id for row in artifact.outcomes], ["native"])
+        payload = json.loads(json.dumps(artifact_to_dict(artifact)))
+        self.assertEqual(
+            artifact_to_dict(artifact_from_dict(payload)),
+            artifact_to_dict(artifact),
+        )
+        with self.assertRaisesRegex(RolloutProtocolError, "paired rollout"):
+            collect_paired_rollouts(
+                factory(), state(), (NATIVE,), SEEDS,
+                run_signature_sha256=RUN_SHA)
 
     def test_resume_rejects_different_run(self):
         artifact = collect_paired_rollouts(

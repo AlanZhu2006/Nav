@@ -14,7 +14,7 @@ MANIFEST=${MANIFEST:?set MANIFEST}
 EXPECTED_MANIFEST_SHA=${EXPECTED_MANIFEST_SHA:?set EXPECTED_MANIFEST_SHA}
 MODE=${MODE:?set MODE=smoke or full}
 SCENE_WORKERS=${SCENE_WORKERS:-1}
-SMOKE_SCENE_INDEX=${SMOKE_SCENE_INDEX:-19}
+SMOKE_SCENE_INDEX=${SMOKE_SCENE_INDEX:-7}
 SMOKE_EPISODE_LIMIT=${SMOKE_EPISODE_LIMIT:-1}
 [[ "${MODE}" =~ ^(smoke|full)$ ]] || {
   echo "ABORT: MODE must be smoke or full" >&2; exit 1; }
@@ -27,6 +27,7 @@ SMOKE_EPISODE_LIMIT=${SMOKE_EPISODE_LIMIT:-1}
 
 SCENE_RUNNER=${ROOT}/MemNavData/run_expanded_navdp_router_scene.sh
 SUMMARIZER=${ROOT}/MemNavData/summarize_graph_router_ablation.py
+SMOKE_VALIDATOR=${ROOT}/MemNavData/validate_strict_graph_smoke.py
 TASK_FILES=(
   MemNavData/run_strict_graph_2leg.sh
   MemNavData/slurm_strict_graph_2leg.sbatch
@@ -35,9 +36,11 @@ TASK_FILES=(
   MemNavData/deterministic_eval_protocol.py
   MemNavData/summarize_expanded_navdp_router_eval.py
   MemNavData/summarize_graph_router_ablation.py
+  MemNavData/validate_strict_graph_smoke.py
   MemNavData/test_deterministic_eval_protocol.py
   MemNavData/test_navdp_memory_replay.py
   MemNavData/test_summarize_graph_router_ablation.py
+  MemNavData/test_validate_strict_graph_smoke.py
   NavDP/baselines/navdp/deterministic_seed.py
   NavDP/baselines/navdp/navdp_server.py
   NavDP/baselines/navdp/policy_agent.py
@@ -68,7 +71,7 @@ git -C "${ROOT}" diff --quiet -- "${TASK_FILES[@]}" || {
 git -C "${ROOT}" diff --cached --quiet -- "${TASK_FILES[@]}" || {
   echo "ABORT: staged strict graph task differs from commit" >&2; exit 1; }
 for required in "${HAB_PY}" "${MEMNAV_PY}" "${MANIFEST}" \
-                "${SCENE_RUNNER}" "${SUMMARIZER}"; do
+                "${SCENE_RUNNER}" "${SUMMARIZER}" "${SMOKE_VALIDATOR}"; do
   test -r "${required}" || {
     echo "ABORT: missing dependency ${required}" >&2; exit 1; }
 done
@@ -84,11 +87,13 @@ cd "${ROOT}"
 "${MEMNAV_PY}" -m py_compile \
   MemNavData/deterministic_eval_protocol.py \
   MemNavData/summarize_graph_router_ablation.py \
+  MemNavData/validate_strict_graph_smoke.py \
   NavDP/baselines/navdp/deterministic_seed.py
 "${MEMNAV_PY}" -m unittest \
   MemNavData.test_deterministic_eval_protocol \
   MemNavData.test_navdp_memory_replay \
-  MemNavData.test_summarize_graph_router_ablation -v
+  MemNavData.test_summarize_graph_router_ablation \
+  MemNavData.test_validate_strict_graph_smoke -v
 
 scene_count=$("${HAB_PY}" - "${MANIFEST}" <<'PY'
 import json, sys
@@ -196,7 +201,13 @@ for scene_index in "${SCENE_INDICES[@]}"; do
 done
 (( ${#SCENE_PIDS[@]} == 0 )) || wait_scene_batch
 
-if [[ "${MODE}" == full ]]; then
+if [[ "${MODE}" == smoke ]]; then
+  "${HAB_PY}" "${SMOKE_VALIDATOR}" \
+    --source-root "${SOURCE_ROOT}" \
+    --direct-root "${DIRECT_ROOT}" \
+    --graph-root "${GRAPH_ROOT}" \
+    --output "${RUN_ROOT}/smoke_validation.json"
+else
   "${HAB_PY}" "${SUMMARIZER}" \
     --manifest "${MANIFEST}" \
     --reference-root "${DIRECT_ROOT}" \

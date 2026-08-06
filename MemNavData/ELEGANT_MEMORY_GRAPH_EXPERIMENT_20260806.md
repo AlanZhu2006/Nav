@@ -130,7 +130,13 @@ directories, server processes, and output directories; a failed worker makes
 the whole job fail before summary generation.  `SCENE_WORKERS=1` remains the
 default.  A formal run may request four GPUs and set `SCENE_WORKERS=4` without
 changing any model, seed, episode, or metric.  Smoke mode intentionally uses
-one episode from one explicitly selected scene.
+one episode from one explicitly selected scene.  It defaults to
+`cV4RVeZvu5T/episode_0000`, an existing development episode whose memory route
+activated and whose graph arm recovered a direct-arm failure.  The smoke now
+fails closed unless both control arms activate memory, share the exact Novel
+trace and per-request diffusion seeds, and graph conditioning changes at least
+one paired active point-goal.  This avoids treating a short, retrieval-ineligible
+episode as evidence that the graph execution path works.
 
 For three-leg diagnosis, `run_graph_conditional_c.sh` replays the exact causal
 A/B source prefix into both LingBot and NavDP, then evaluates six logical arms:

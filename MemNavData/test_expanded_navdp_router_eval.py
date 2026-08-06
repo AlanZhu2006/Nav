@@ -135,6 +135,16 @@ class ExpandedBenchmarkTest(unittest.TestCase):
         )
         self.assertNotIn("--terminal_uturn off", runner)
 
+    def test_scene_runner_shadow_arrival_is_explicit_and_default_off(self):
+        runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
+        self.assertIn("ARRIVAL_SHADOW=${ARRIVAL_SHADOW:-off}", runner)
+        self.assertIn('--arrival_shadow "${ARRIVAL_SHADOW}"', runner)
+        evaluator = (ROOT / "eval_2leg_habitat.py").read_text()
+        self.assertIn(
+            'args.arrival_shadow == "diagnostic" and leg_index == 1',
+            evaluator,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

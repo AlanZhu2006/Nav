@@ -18,6 +18,7 @@ SMOKE_SCENE_INDEX=${SMOKE_SCENE_INDEX:-7}
 SMOKE_EPISODE_LIMIT=${SMOKE_EPISODE_LIMIT:-1}
 TERMINAL_UTURN=${TERMINAL_UTURN:-off}
 TERMINAL_VISUAL_REFINE=${TERMINAL_VISUAL_REFINE:-off}
+ARRIVAL_SHADOW=${ARRIVAL_SHADOW:-off}
 [[ "${MODE}" =~ ^(smoke|full)$ ]] || {
   echo "ABORT: MODE must be smoke or full" >&2; exit 1; }
 [[ "${SCENE_WORKERS}" =~ ^[1-9][0-9]*$ ]] || {
@@ -32,6 +33,8 @@ TERMINAL_VISUAL_REFINE=${TERMINAL_VISUAL_REFINE:-off}
   echo "ABORT: invalid TERMINAL_VISUAL_REFINE=${TERMINAL_VISUAL_REFINE}" >&2
   exit 1
 }
+[[ "${ARRIVAL_SHADOW}" =~ ^(off|diagnostic)$ ]] || {
+  echo "ABORT: invalid ARRIVAL_SHADOW=${ARRIVAL_SHADOW}" >&2; exit 1; }
 if [[ "${TERMINAL_UTURN}" == off && "${TERMINAL_VISUAL_REFINE}" != off ]]; then
   echo "ABORT: terminal visual refinement requires a terminal U-turn" >&2
   exit 1
@@ -40,6 +43,7 @@ fi
 SCENE_RUNNER=${ROOT}/MemNavData/run_expanded_navdp_router_scene.sh
 SUMMARIZER=${ROOT}/MemNavData/summarize_graph_router_ablation.py
 TERMINAL_SUMMARIZER=${ROOT}/MemNavData/summarize_terminal_uturn.py
+ARRIVAL_SUMMARIZER=${ROOT}/MemNavData/summarize_arrival_shadow.py
 SMOKE_VALIDATOR=${ROOT}/MemNavData/validate_strict_graph_smoke.py
 TASK_FILES=(
   MemNavData/run_strict_graph_2leg.sh
@@ -58,6 +62,10 @@ TASK_FILES=(
   MemNavData/visual_yaw_refinement.py
   MemNavData/summarize_terminal_uturn.py
   MemNavData/test_terminal_uturn.py
+  MemNavData/arrival_shadow.py
+  MemNavData/test_arrival_shadow.py
+  MemNavData/summarize_arrival_shadow.py
+  MemNavData/test_summarize_arrival_shadow.py
   NavDP/baselines/navdp/deterministic_seed.py
   NavDP/baselines/navdp/navdp_server.py
   NavDP/baselines/navdp/policy_agent.py
@@ -91,7 +99,7 @@ git -C "${ROOT}" diff --cached --quiet -- "${TASK_FILES[@]}" || {
   echo "ABORT: staged strict graph task differs from commit" >&2; exit 1; }
 for required in "${HAB_PY}" "${MEMNAV_PY}" "${MANIFEST}" \
                 "${SCENE_RUNNER}" "${SUMMARIZER}" "${TERMINAL_SUMMARIZER}" \
-                "${SMOKE_VALIDATOR}"; do
+                "${ARRIVAL_SUMMARIZER}" "${SMOKE_VALIDATOR}"; do
   test -r "${required}" || {
     echo "ABORT: missing dependency ${required}" >&2; exit 1; }
 done
@@ -107,6 +115,7 @@ cd "${ROOT}"
 "${MEMNAV_PY}" -m py_compile \
   MemNavData/deterministic_eval_protocol.py \
   MemNavData/summarize_graph_router_ablation.py \
+  MemNavData/summarize_arrival_shadow.py \
   MemNavData/validate_strict_graph_smoke.py \
   NavDP/baselines/navdp/deterministic_seed.py
 "${MEMNAV_PY}" -m unittest \
@@ -114,6 +123,8 @@ cd "${ROOT}"
   MemNavData.test_navdp_memory_replay \
   MemNavData.test_summarize_graph_router_ablation \
   MemNavData.test_terminal_uturn \
+  MemNavData.test_arrival_shadow \
+  MemNavData.test_summarize_arrival_shadow \
   MemNavData.test_validate_strict_graph_smoke -v
 
 scene_count=$("${HAB_PY}" - "${MANIFEST}" <<'PY'
@@ -142,7 +153,8 @@ IFS=',' read -r -a GPU_IDS <<< "${CUDA_VISIBLE_DEVICES:-0}"
 echo "[protocol] mode=${MODE} workers=${SCENE_WORKERS} " \
      "visible_gpus=${CUDA_VISIBLE_DEVICES:-0} episode_limit=${EPISODE_LIMIT} " \
      "terminal_uturn=${TERMINAL_UTURN} " \
-     "terminal_visual_refine=${TERMINAL_VISUAL_REFINE}"
+     "terminal_visual_refine=${TERMINAL_VISUAL_REFINE} " \
+     "arrival_shadow=${ARRIVAL_SHADOW}"
 
 SOURCE_ROOT=${RUN_ROOT}/shared_novel_direct_gap16
 DIRECT_ROOT=${RUN_ROOT}/direct_gap16
@@ -170,6 +182,7 @@ run_scene() {
     GRAPH_SUBGOAL_ARRIVAL_M=0.60 \
     TERMINAL_UTURN="${TERMINAL_UTURN}" \
     TERMINAL_VISUAL_REFINE="${TERMINAL_VISUAL_REFINE}" \
+    ARRIVAL_SHADOW="${ARRIVAL_SHADOW}" \
     MAX_STEPS=500 \
     "$@" \
     "${SCENE_RUNNER}"
@@ -245,5 +258,11 @@ if [[ "${TERMINAL_UTURN}" != off ]]; then
     --root "${GRAPH_ROOT}/scenes" \
     --arm geometry_router \
     --out "${RUN_ROOT}/terminal_summary.json"
+fi
+if [[ "${ARRIVAL_SHADOW}" == diagnostic ]]; then
+  "${HAB_PY}" "${ARRIVAL_SUMMARIZER}" \
+    --root "${GRAPH_ROOT}/scenes" \
+    --arm geometry_router \
+    --out "${RUN_ROOT}/arrival_shadow_summary.json"
 fi
 echo "[complete] mode=${MODE} root=${RUN_ROOT}"

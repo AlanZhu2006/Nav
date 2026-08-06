@@ -29,6 +29,7 @@ GRAPH_SUBGOAL_SPACING_M=${GRAPH_SUBGOAL_SPACING_M:-0.0}
 GRAPH_SUBGOAL_ARRIVAL_M=${GRAPH_SUBGOAL_ARRIVAL_M:-0.60}
 TERMINAL_UTURN=${TERMINAL_UTURN:-off}
 TERMINAL_VISUAL_REFINE=${TERMINAL_VISUAL_REFINE:-off}
+ARRIVAL_SHADOW=${ARRIVAL_SHADOW:-off}
 UNIT_TEST_MODULE=${UNIT_TEST_MODULE:-MemNavData.test_expanded_navdp_router_eval}
 EXPECTED_HAB_REQUESTS_VERSION=${EXPECTED_HAB_REQUESTS_VERSION:-2.32.4}
 EXPECTED_HAB_REQUESTS_INIT_BYTES=5057
@@ -76,6 +77,10 @@ TASK_FILES=(
   MemNavData/visual_yaw_refinement.py
   MemNavData/summarize_terminal_uturn.py
   MemNavData/test_terminal_uturn.py
+  MemNavData/arrival_shadow.py
+  MemNavData/test_arrival_shadow.py
+  MemNavData/summarize_arrival_shadow.py
+  MemNavData/test_summarize_arrival_shadow.py
   MemNavData/deterministic_eval_protocol.py
   MemNavData/test_deterministic_eval_protocol.py
   MemNavData/test_navdp_memory_replay.py
@@ -130,6 +135,8 @@ done
   echo "ABORT: invalid TERMINAL_VISUAL_REFINE=${TERMINAL_VISUAL_REFINE}" >&2
   exit 1
 }
+[[ "${ARRIVAL_SHADOW}" =~ ^(off|diagnostic)$ ]] || {
+  echo "ABORT: invalid ARRIVAL_SHADOW=${ARRIVAL_SHADOW}" >&2; exit 1; }
 if [[ "${TERMINAL_UTURN}" == off && "${TERMINAL_VISUAL_REFINE}" != off ]]; then
   echo "ABORT: terminal visual refinement requires a terminal U-turn" >&2
   exit 1
@@ -293,6 +300,8 @@ hab_python -m py_compile \
   "${EVALUATOR}" \
   "${VALIDATOR}" \
   "${ROOT}/MemNavData/terminal_uturn.py" \
+  "${ROOT}/MemNavData/arrival_shadow.py" \
+  "${ROOT}/MemNavData/summarize_arrival_shadow.py" \
   "${ROOT}/MemNavData/visual_yaw_refinement.py" \
   "${ROOT}/MemNavData/summarize_terminal_uturn.py"
 "${MEMNAV_PY}" -m py_compile \
@@ -310,6 +319,8 @@ hab_python -m py_compile \
     MemNavData.test_router_candidates \
     MemNavData.test_reverse_memory_graph \
     MemNavData.test_terminal_uturn \
+    MemNavData.test_arrival_shadow \
+    MemNavData.test_summarize_arrival_shadow \
     MemNavData.test_conditional_c_protocol \
     MemNavData.test_summarize_conditional_c_eval -v
 )
@@ -452,6 +463,7 @@ COMMON_ARGS=(
   --seed 20260803
   --terminal_uturn "${TERMINAL_UTURN}"
   --terminal_visual_refine "${TERMINAL_VISUAL_REFINE}"
+  --arrival_shadow "${ARRIVAL_SHADOW}"
   --episode_ids "${episode_csv}"
 )
 if [[ "${STOP_AFTER_LEG1}" -eq 1 ]]; then

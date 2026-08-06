@@ -61,6 +61,7 @@ from deterministic_eval_protocol import (
     load_leg1_trace,
     write_leg1_trace,
 )
+from arrival_shadow import ArrivalShadowConfig, ArrivalShadowDetector
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--episode_root", type=str, required=True,
@@ -176,6 +177,18 @@ parser.add_argument("--reset_memory", action="store_true",
 parser.add_argument("--navdp_stop_threshold", type=float, default=-0.5)
 parser.add_argument("--success_dist", type=float, default=1.0)
 parser.add_argument(
+    "--arrival_shadow",
+    choices=["off", "diagnostic"],
+    default="off",
+    help=("privileged-input-free virtual-loop arrival observer; diagnostic "
+          "only logs predictions, performs one observation-only probe after "
+          "official arrival, and never changes the executed path"),
+)
+parser.add_argument("--arrival_shadow_window", type=int, default=3)
+parser.add_argument("--arrival_shadow_distance_m", type=float, default=0.75)
+parser.add_argument("--arrival_shadow_max_mad_m", type=float, default=0.20)
+parser.add_argument("--arrival_shadow_max_growth_m", type=float, default=0.15)
+parser.add_argument(
     "--leg1_success_dist",
     type=float,
     default=None,
@@ -288,6 +301,8 @@ MEMNAV_DIAGNOSTIC_KEYS = (
     "selected_anchor_score", "candidate_count", "anchor_gap",
     "goal_start_frame", "candidate_ceiling",
     "anchor", "aux_pose", "goal_rel_yaw", "current_goal_cos", "frame_idx",
+    "graph_subgoal_enabled", "graph_subgoal_node", "graph_subgoal_cursor",
+    "graph_subgoal_count", "graph_subgoal_complete", "goal_aux_pose",
 )
 
 
@@ -737,6 +752,18 @@ def normalize_navdp_response(out):
     out.setdefault("gate", None)
     out.setdefault("predicted_gate", None)
     out.setdefault("match_idx", None)
+    values = out.get("all_values")
+    critic_max = None
+    if values is not None:
+        values = np.asarray(values, dtype=float)
+        finite = values[np.isfinite(values)]
+        if finite.size:
+            critic_max = float(np.max(finite))
+    out["navdp_critic_max"] = critic_max
+    out["navdp_stop_evidence"] = (
+        bool(critic_max < args.navdp_stop_threshold)
+        if critic_max is not None else None
+    )
     return out
 
 
@@ -1059,6 +1086,21 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
     pre_turn_cos = None
     pre_turn_yaw_err = None
     pre_turn_yaw_signed_err = None
+    arrival_detector = None
+    # Arrival shadow is a Revisit/virtual-loop diagnostic.  Keeping it off on
+    # leg A is essential: even an observation-only post-arrival probe would
+    # append another Novel frame and alter the memory seen by leg B.
+    if args.arrival_shadow == "diagnostic" and leg_index == 1:
+        arrival_detector = ArrivalShadowDetector(ArrivalShadowConfig(
+            window_plans=args.arrival_shadow_window,
+            distance_m=args.arrival_shadow_distance_m,
+            max_distance_mad_m=args.arrival_shadow_max_mad_m,
+            max_distance_growth_m=args.arrival_shadow_max_growth_m,
+        ))
+    arrival_shadow_first_pose_gt_dist_m = None
+    arrival_shadow_first_strict_gt_dist_m = None
+    arrival_shadow_probe_pending = False
+    arrival_shadow_probe_completed = False
 
     def result(steps, final_response=None):
         final_dist = float(np.linalg.norm(
@@ -1081,6 +1123,21 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             loop_closed = bool(
                 pose_aligned and post_cos is not None
                 and post_cos >= args.loop_cos_min)
+        shadow_summary = (
+            arrival_detector.summary() if arrival_detector is not None else {
+                "arrival_shadow_plan_count": 0,
+                "arrival_shadow_pose_trigger_count": 0,
+                "arrival_shadow_strict_trigger_count": 0,
+                "arrival_shadow_pose_triggered": False,
+                "arrival_shadow_strict_triggered": False,
+                "arrival_shadow_first_pose_step": None,
+                "arrival_shadow_first_strict_step": None,
+            }
+        )
+        benchmark_steps = steps
+        if (arrival_detector is not None and terminal_mode == "off"
+                and step_at_reach is not None):
+            benchmark_steps = step_at_reach
         return dict(
             reached=bool(reached_position),
             path_len=path_len,
@@ -1088,7 +1145,8 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             step_at_reach=step_at_reach,
             end_pos=pos,
             end_psi=psi,
-            steps=steps,
+            steps=benchmark_steps,
+            diagnostic_steps=steps,
             plans=plans,
             memory_trace=memory_trace,
             rollout_trace=rollout_trace,
@@ -1134,9 +1192,20 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             goal_yaw_hab=(float(goal_yaw) if goal_yaw is not None else None),
             final_goal_dist_m=final_dist,
             loop_closed=loop_closed,
+            arrival_shadow_mode=args.arrival_shadow,
+            arrival_shadow_first_pose_gt_dist_m=(
+                arrival_shadow_first_pose_gt_dist_m),
+            arrival_shadow_first_strict_gt_dist_m=(
+                arrival_shadow_first_strict_gt_dist_m),
+            arrival_shadow_post_reach_probe=arrival_shadow_probe_completed,
+            **shadow_summary,
         )
 
-    total_budget = args.max_steps + (args.terminal_budget if terminal_mode != "off" else 0)
+    total_budget = (
+        args.max_steps
+        + (args.terminal_budget if terminal_mode != "off" else 0)
+        + (1 if arrival_detector is not None and terminal_mode == "off" else 0)
+    )
     for step in range(total_budget):
         rgb, depth = render(sim, pos + np.array([0, CAM_H, 0]), psi)
         frame = jpg_bytes(rgb)
@@ -1290,11 +1359,11 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             continue
 
         # Do not silently give the navigation policy the terminal-only budget.
-        if step >= args.max_steps:
+        if step >= args.max_steps and not arrival_shadow_probe_pending:
             return result(step)
 
         response = None
-        if step % args.exec_horizon == 0:
+        if step % args.exec_horizon == 0 or arrival_shadow_probe_pending:
             request_seed = None
             if args.deterministic_plan_seeds:
                 if episode_seed is None or leg_index is None:
@@ -1315,6 +1384,19 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 way, selector_info = select_plan_trajectory(
                     response, pos, psi, pf, goal_xz)
                 way_world = waypoints_to_world(way, [pos[0], pos[2]], psi)
+                evaluation_gt_goal_distance_m = float(np.linalg.norm(
+                    np.asarray([pos[0], pos[2]]) - np.asarray(goal_xz)))
+                shadow_diag = {}
+                if arrival_detector is not None:
+                    shadow_diag = arrival_detector.update(response, step=step)
+                    if (shadow_diag["arrival_shadow_pose_ready"]
+                            and arrival_shadow_first_pose_gt_dist_m is None):
+                        arrival_shadow_first_pose_gt_dist_m = (
+                            evaluation_gt_goal_distance_m)
+                    if (shadow_diag["arrival_shadow_strict_ready"]
+                            and arrival_shadow_first_strict_gt_dist_m is None):
+                        arrival_shadow_first_strict_gt_dist_m = (
+                            evaluation_gt_goal_distance_m)
                 plans.append(dict(step=step,
                                   diffusion_seed=response.get("diffusion_seed"),
                                   requested_diffusion_seed=request_seed,
@@ -1346,7 +1428,27 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                   candidate_ceiling=response.get(
                                       "candidate_ceiling"),
                                   aux_pose=response.get("aux_pose"),
+                                  goal_aux_pose=response.get("goal_aux_pose"),
                                   goal_rel_yaw=response.get("goal_rel_yaw"),
+                                  graph_subgoal_enabled=response.get(
+                                      "graph_subgoal_enabled"),
+                                  graph_subgoal_node=response.get(
+                                      "graph_subgoal_node"),
+                                  graph_subgoal_cursor=response.get(
+                                      "graph_subgoal_cursor"),
+                                  graph_subgoal_count=response.get(
+                                      "graph_subgoal_count"),
+                                  graph_subgoal_complete=response.get(
+                                      "graph_subgoal_complete"),
+                                  navdp_critic_max=response.get(
+                                      "navdp_critic_max"),
+                                  navdp_stop_evidence=response.get(
+                                      "navdp_stop_evidence"),
+                                  evaluation_gt_goal_distance_m=(
+                                      evaluation_gt_goal_distance_m),
+                                  evaluation_gt_arrived=(
+                                      evaluation_gt_goal_distance_m
+                                      < success_dist),
                                   pose_controller=response.get("pose_controller"),
                                   pose_error=response.get("pose_error"),
                                   router_memory_advantage=response.get(
@@ -1394,6 +1496,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                   router_reason=response.get("router_reason"),
                                   current_goal_cos=response.get("current_goal_cos"),
                                   frame_idx=response.get("frame_idx"),
+                                  **shadow_diag,
                                   **selector_info))
 
                 aux = response.get("aux_pose")
@@ -1421,6 +1524,14 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 z=float(pos[2]),
                 yaw=float(psi),
             ))
+        if arrival_shadow_probe_pending:
+            # Score one current-view decision after first position success, but
+            # never execute its trajectory.  This gives an autonomous detector
+            # the observation it would receive at its stop decision without
+            # changing the benchmark path prefix or SPL.
+            arrival_shadow_probe_pending = False
+            arrival_shadow_probe_completed = True
+            return result(step + 1)
         if way_world is not None:
             pos, psi, dl = pursuit_step(pos, psi, way_world, pf)
             path_len += dl
@@ -1438,6 +1549,10 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 pre_turn_yaw_signed_err = (wrap_angle(float(goal_yaw) - psi)
                                             if goal_yaw is not None else None)
             if terminal_mode == "off":
+                if arrival_detector is not None:
+                    way_world = None
+                    arrival_shadow_probe_pending = True
+                    continue
                 return result(step + 1)
 
             if not terminal_attempted:
@@ -1800,6 +1915,7 @@ def main():
             final_dist_A=final_dist_A,
             len_B_at_reach=legB.get("path_len_at_reach"),
             steps_A=legA["steps"], steps_B=legB["steps"],
+            steps_B_diagnostic=legB.get("diagnostic_steps"),
             steps_B_at_reach=legB.get("step_at_reach"),
             covis=B.get("covis"), recall_gap=B.get("recall_gap"),
             retrieval_override=args.retrieval_override,
@@ -1873,6 +1989,29 @@ def main():
             terminal_goal_yaw_hab=legB.get("goal_yaw_hab"),
             terminal_final_goal_dist_m=legB.get("final_goal_dist_m"),
             loop_closed=legB.get("loop_closed"),
+            arrival_shadow_mode=legB.get("arrival_shadow_mode"),
+            arrival_shadow_window=args.arrival_shadow_window,
+            arrival_shadow_distance_m=args.arrival_shadow_distance_m,
+            arrival_shadow_max_mad_m=args.arrival_shadow_max_mad_m,
+            arrival_shadow_max_growth_m=args.arrival_shadow_max_growth_m,
+            arrival_shadow_pose_triggered=legB.get(
+                "arrival_shadow_pose_triggered"),
+            arrival_shadow_strict_triggered=legB.get(
+                "arrival_shadow_strict_triggered"),
+            arrival_shadow_pose_trigger_count=legB.get(
+                "arrival_shadow_pose_trigger_count"),
+            arrival_shadow_strict_trigger_count=legB.get(
+                "arrival_shadow_strict_trigger_count"),
+            arrival_shadow_first_pose_step=legB.get(
+                "arrival_shadow_first_pose_step"),
+            arrival_shadow_first_strict_step=legB.get(
+                "arrival_shadow_first_strict_step"),
+            arrival_shadow_first_pose_gt_dist_m=legB.get(
+                "arrival_shadow_first_pose_gt_dist_m"),
+            arrival_shadow_first_strict_gt_dist_m=legB.get(
+                "arrival_shadow_first_strict_gt_dist_m"),
+            arrival_shadow_post_reach_probe=legB.get(
+                "arrival_shadow_post_reach_probe"),
         )
         json.dump(dict(legA=legA["plans"], legB=legB["plans"],
                        legA_memory_trace=legA.get("memory_trace", []),

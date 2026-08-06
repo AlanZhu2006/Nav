@@ -188,7 +188,7 @@ def localization_metrics(
         "sessions": len(target),
         "positive_sessions": int(target.sum()),
         "joint_localization_accuracy": float(np.mean(joint)),
-        "match_accuracy": float(np.mean((score >= 0.5) == target)),
+        "match_accuracy": float(np.mean((score >= match_threshold) == target)),
         "match_roc_auc": (
             float(roc_auc_score(target, score))
             if len(np.unique(target)) == 2 else None),

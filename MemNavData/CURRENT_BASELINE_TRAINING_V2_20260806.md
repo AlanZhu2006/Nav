@@ -85,9 +85,10 @@ frozen LingBot/DINO memory
                 - raw relative SE(2)
                          |
                          v
-                K+1 set transformer
-                - P(anchor_i)
-                - P(no-match)
+                factorized set localizer
+                - P(candidate_i valid)
+                - P(anchor_i | usable shortlist)
+                - P(global no-match)
                 - delta SE(2)_i
                 - covariance_i
                 - loop utility_i
@@ -194,31 +195,45 @@ consistency；只有当 covariance 学习仍不充分时，才对 hard cases 补
 总损失为：
 
 ```text
-L = L_set
-  + 0.5 * L_top1
+L = L_verify
+  + L_rank
+  + L_novel
   + L_pose_nll
   + 0.25 * L_utility
   + 0.10 * L_cycle
   + 0.10 * L_cal
 ```
 
-### 6.1 K+1 localization loss
+### 6.1 Factorized localization loss
 
-`L_set` 对同一 query 的所有候选和 dustbin 做一个 softmax：
+这里不再把三种不同问题硬塞进同一个 K+1 softmax：
 
-- 有 positive 时，positive target 按 co-visibility 归一化；
-- strict no-match session 的全部概率给 dustbin；
-- ambiguity session 不参与 dustbin 二分类，只提供相对排序/一致性监督。
+- `L_verify` 对每个 strict positive/negative candidate 做 class-balanced BCE，学习绝对
+  几何有效性；
+- `L_rank` 只在 shortlist 内存在 positive 时计算 listwise loss，positive target 按
+  co-visibility 归一化；
+- `L_novel` 只使用全历史存在 positive 的 session 和 strict no-match session；全局
+  ambiguous session 不参与，shortlist miss 也不被改标成 Novel。
 
-这直接统一“选哪个 anchor”和“是否 Novel”，不再分别训练 retrieval 与 scalar gate。
+最终可用匹配概率分解为：
 
-### 6.2 Top-1-consistent loss
+```text
+P(usable match) = P(global match) * max_i P(candidate_i valid)
+```
+
+这同时保留“memory 里有没有目标”“top-K 里有没有可靠候选”“候选中选哪个”三个可诊断
+语义，避免 accuracy 很高但实际 anchor 仍错误的旧问题。
+
+### 6.2 Top-1 consistency（当前作为指标，非额外 loss）
 
 ```text
 L_top1 = relu(margin + max(score_negative) - max(score_positive))
 ```
 
-它补上旧 set-InfoNCE loss 降低、live argmax 却不改善的问题。
+它补上旧 set-InfoNCE loss 降低、live argmax 却不改善的问题。当前 Phase-B 先由
+class-balanced `L_verify + L_rank` 解决这一点，并直接报告 conditional Recall@1/MRR；只有
+正式 40-scene 数据仍出现“loss 降而 argmax 不变”时，才在训练消融中加入这个 hinge，不能
+在 development 上看到结果后临时打开。
 
 ### 6.3 Pose uncertainty loss
 
@@ -366,3 +381,56 @@ uncertainty coverage、fallback rate 和延迟。
 
 随机 batch 的单点 loss 只用于健康检查；是否保留 checkpoint 由固定 scene-disjoint
 evaluation 决定。
+
+## 12. 2026-08-07 的 fail-closed 采集与 Phase-B 训练链
+
+当前已建立的前两级依赖为：
+
+```text
+15438554  two-episode bounded-cache smoke
+    └─ afterok
+15438709  40-scene / 311-session / 1244-seed exact collection
+```
+
+第二级使用 `--kill-on-invalid-dep=yes`；smoke 失败或取消时不会误跑八小时采集。
+collector 固定在 commit `32145f3a3c1ae9f98d9fddbfa8e942e332c7356e`，训练代码使用
+独立 worktree，不能为了更新 trainer 改动这个排队 checkout 的 HEAD。
+
+正式训练前新增两层保护：
+
+1. `audit_lingbot_native_localizer_artifact.py` 同时读取 SQLite、CSV、progress 和 collector
+   report，要求它们对 40 scenes、311 sessions、1244 seeds/rows 完全一致；每个 selected
+   candidate 再与 corrected teacher 一对一关联，并核对 split、teacher、source commit、
+   label、session flags 和全部训练输入的有限性；
+2. `train_lingbot_native_localizer.py --preflight-only` 在真实 artifact 上执行一次所有 head
+   的 backward，要求 encoder、rank、no-match、pose mean 和 pose covariance 都有有限非零
+   梯度，且不读取 development 指标。
+
+只有这两层都通过，才运行 CPU Phase-B 正式训练：
+
+- 显式输入白名单只包含 DINO cosine、LingBot overlap/refinement/depth confidence、metric
+  scale/source 和 LingBot predicted `(forward,lateral)`；
+- `teacher_covis`、`label`、target pose 以及所有 GT error 列都禁止作为模型输入；
+- localization 被明确分成三项：candidate absolute verification、只在
+  selected-positive sessions 上计算的 listwise rank、以及只用全局 strict-positive /
+  strict-no-match session 监督的 Novel head；“memory 有 positive 但 top-4 漏掉”的
+  shortlist miss 只作为安全拒绝，绝不能错误改标成 Novel，ambiguity 也不进入 Novel BCE；
+- 推理时先由 `P(global match) * max P(candidate valid)` 决定是否存在可用 anchor，再在
+  candidate 内归一化排序。这保留了 RANSAC 的“绝对验证”作用，同时不把它固化为最终
+  必需模块；
+- pose head 只在 corrected-teacher positive 上学习 translation residual mean 与 diagonal
+  covariance，并对 batch 内最差 20% translation error 加 CVaR tail-risk 项；当前 artifact
+  没有完整 target yaw，因此不能把 translation-only 结果冒充 yaw head；
+- pose residual 从零初始化，并只在 train-internal validation 上从 `[0, 1]` 选择 gain；
+  若任何 learned correction 不能降低 translation p90，`gain=0` 会原样保留 raw LingBot
+  pose。未采用的 residual mean 会并入预测风险，避免“pose 不修了、uncertainty 也失真”；
+- stopping epoch 和 threshold 只由 40 个 train scenes 内部的确定性 scene split 决定；
+  split 同时保证 core/tune 都含 selected positive 和 strict no-match，否则 fail closed；
+  十个 development scenes 在冻结后三 seed ensemble 上评估一次；
+- 输出仍标记 `deployment_approved=false`，只有达到第 9 节门槛才允许闭环 learned+fallback
+  评测。
+
+提交 `slurm_train_lingbot_native_localizer.sbatch` 前必须逐项通过依赖检查：trainer commit
+和 task files clean、corrected teacher SHA、split SHA、immutable development CSV SHA、
+collector source commit、artifact audit identity，以及 online W&B 的 API key。任何一项不符
+都必须退出，不能降级为继续训练。

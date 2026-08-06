@@ -55,6 +55,23 @@ class NeuralSetLocalizerTest(unittest.TestCase):
         self.assertGreater(threshold, 0.0)
         self.assertEqual(calibrated["joint_localization_accuracy"], 1.0)
 
+    def test_match_accuracy_uses_the_reported_threshold(self):
+        packed = pack_sessions(
+            np.asarray([[1.0], [2.0], [3.0], [4.0]]),
+            np.asarray(["a", "a", "b", "b"]),
+            np.asarray(["s1", "s1", "s2", "s2"]),
+            np.asarray([0.8, 0.1, 0.2, 0.0]),
+            positive_threshold=0.5)
+        probability = np.asarray([
+            [0.35, 0.05, 0.60],
+            [0.10, 0.10, 0.80],
+        ])
+        report = localization_metrics(
+            packed, probability, positive_threshold=0.5,
+            match_threshold=0.30)
+        self.assertEqual(report["match_accuracy"], 1.0)
+        self.assertEqual(report["match_threshold"], 0.30)
+
 
 if __name__ == "__main__":
     unittest.main()

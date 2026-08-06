@@ -78,13 +78,16 @@ MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python
 LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
 WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
 FEATURE_ROOT=/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat_flowgate/vln_n1/traj_data
-TEACHER_CSV=/scratch/yz11502/Research/Nav-axis-uturn-results/patch_router_multiscene_20260805/full_job_15289458/covisibility_teacher_pairs.csv
+# Keep loop-factor labels aligned with the frozen listwise router/cache used by
+# the graph evaluation.  Job 15315411 has the same candidate keys as the older
+# table, but contains the corrected directional co-visibility labels.
+TEACHER_CSV=/scratch/yz11502/Research/Nav-axis-uturn-results/patch_router_multiscene_20260805/full_job_15315411/covisibility_teacher_pairs.csv
 SPLIT_MANIFEST=${ROOT}/MemNavData/router_multiscene_split_20260805.json
 DIAGNOSTIC=${ROOT}/MemNavData/diag_lingbot_goal_loop_closure.py
 
 EXPECTED_WEIGHT_SHA=832bc82cbae0bc9bbe946ef5ee1f7226abd8c0e183ccf8beddbb3d133576f409
 EXPECTED_LINGBOT_COMMIT=7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2
-EXPECTED_TEACHER_SHA=1a13ea4ff41f632704d499294d74826326c87a49f2f5f7ba49d53fc278c79193
+EXPECTED_TEACHER_SHA=927d0e87fc6b53561d5e5546bbcd5d1b94e11907e0aaecd5c810f4fa8911110d
 EXPECTED_SPLIT_SHA=97309c183e25cb3dd65472908748d55a94798a636db6157ab6fe120fca05cf7a
 EXPECTED_OVERLAY_BYTES=128854888448
 EXPECTED_OVERLAY_HEAD_SHA=43d803c2b39735e764f0c6df8f7c40a7035a1c23789e22fcc9831d29928c801b

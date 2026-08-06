@@ -42,6 +42,16 @@ TASK_FILES=(
 actual_commit=$(git -C "${ROOT}" rev-parse HEAD)
 [[ "${actual_commit}" == "${EXPECTED_COMMIT}" ]] || {
   echo "ABORT: commit ${actual_commit} != ${EXPECTED_COMMIT}" >&2; exit 1; }
+git -C "${ROOT}" ls-files --error-unmatch -- "${TASK_FILES[@]}" \
+  >/dev/null || {
+    echo "ABORT: a conditional graph input is not tracked by the commit" >&2
+    exit 1
+  }
+[[ -z "$(git -C "${ROOT}" status --porcelain --untracked-files=all)" ]] || {
+  echo "ABORT: conditional graph worktree is not completely clean" >&2
+  git -C "${ROOT}" status --short >&2
+  exit 1
+}
 git -C "${ROOT}" diff --quiet -- "${TASK_FILES[@]}" || {
   echo "ABORT: conditional graph task differs from commit" >&2; exit 1; }
 git -C "${ROOT}" diff --cached --quiet -- "${TASK_FILES[@]}" || {

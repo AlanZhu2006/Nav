@@ -50,6 +50,7 @@ NAVDP_SERVER=${ROOT}/NavDP/baselines/navdp/navdp_server.py
 INTERNNAV_ROOT=${ROOT}/InternNav
 LINGBOT_REPO=${LINGBOT_REPO:-/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map}
 LINGBOT_WEIGHTS=${LINGBOT_WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
+EXPECTED_LINGBOT_COMMIT=${EXPECTED_LINGBOT_COMMIT:-7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2}
 MEMNAV_CKPT=${MEMNAV_CKPT:-/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/gatecurr600.memnav.ckpt}
 NAVDP_CKPT=${NAVDP_CKPT:-/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/navdp_checkpoint.ckpt}
 ASSET_ROOT_OVERRIDE=${ASSET_ROOT_OVERRIDE:-}
@@ -156,6 +157,16 @@ actual_commit=$(git -C "${ROOT}" rev-parse HEAD)
   echo "ABORT: code commit ${actual_commit} != ${EXPECTED_COMMIT}" >&2
   exit 1
 }
+git -C "${ROOT}" ls-files --error-unmatch -- "${TASK_FILES[@]}" \
+  >/dev/null || {
+    echo "ABORT: a benchmark task input is not tracked by the commit" >&2
+    exit 1
+  }
+[[ -z "$(git -C "${ROOT}" status --porcelain --untracked-files=all)" ]] || {
+  echo "ABORT: benchmark worktree is not completely clean" >&2
+  git -C "${ROOT}" status --short >&2
+  exit 1
+}
 git -C "${ROOT}" diff --quiet -- "${TASK_FILES[@]}" || {
   echo "ABORT: benchmark task files differ from the checked-out commit" >&2
   exit 1
@@ -173,6 +184,22 @@ for required in "${HAB_PY}" "${MEMNAV_PY}" "${EVALUATOR}" "${VALIDATOR}" \
                 "${HAB_REQUESTS_VENDOR}/requests/__version__.py"; do
   test -r "${required}" || { echo "ABORT: missing dependency ${required}" >&2; exit 1; }
 done
+actual_lingbot_commit=$(git -c safe.directory="${LINGBOT_REPO}" \
+  -C "${LINGBOT_REPO}" rev-parse HEAD)
+[[ "${actual_lingbot_commit}" == "${EXPECTED_LINGBOT_COMMIT}" ]] || {
+  echo "ABORT: LingBot commit ${actual_lingbot_commit} != ${EXPECTED_LINGBOT_COMMIT}" >&2
+  exit 1
+}
+git -c safe.directory="${LINGBOT_REPO}" -C "${LINGBOT_REPO}" \
+  diff --quiet || {
+    echo "ABORT: LingBot tracked files differ from its pinned commit" >&2
+    exit 1
+  }
+git -c safe.directory="${LINGBOT_REPO}" -C "${LINGBOT_REPO}" \
+  diff --cached --quiet || {
+    echo "ABORT: LingBot has staged changes" >&2
+    exit 1
+  }
 REQUESTS_INIT=${HAB_REQUESTS_VENDOR}/requests/__init__.py
 REQUESTS_VERSION=${HAB_REQUESTS_VENDOR}/requests/__version__.py
 [[ "$(stat -c '%s' "${REQUESTS_INIT}")" == "${EXPECTED_HAB_REQUESTS_INIT_BYTES}" ]] || {

@@ -62,8 +62,10 @@ class ExpandedBenchmarkTest(unittest.TestCase):
 
     def test_json_and_csv_truth_values(self):
         self.assertTrue(truth(True))
+        self.assertTrue(truth("True"))
         self.assertTrue(truth("1.0"))
         self.assertFalse(truth(False))
+        self.assertFalse(truth("False"))
         self.assertFalse(truth("0.0"))
         self.assertFalse(truth(None))
 

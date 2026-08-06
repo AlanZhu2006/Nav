@@ -1,10 +1,14 @@
 import unittest
 import copy
+import tempfile
+from pathlib import Path
+from unittest import mock
 
 from MemNavData.summarize_expanded_navdp_router_eval import (
     arm_summary,
     paired_summary,
 )
+from MemNavData.summarize_graph_router_ablation import summarize_ablation
 
 
 def row(*, joint=False, active=False):
@@ -63,6 +67,46 @@ class GraphAblationSummaryTest(unittest.TestCase):
         right["leg1_trace_sha256"] = "b" * 64
         with self.assertRaisesRegex(RuntimeError, "trace mismatch"):
             paired_summary("direct", "graph", {key: left}, {key: right}, {key})
+
+    def test_partial_mode_uses_only_complete_scene_intersection(self):
+        manifest = {
+            "selection": {"selected_scenes": ["scene_a", "scene_b"]},
+            "training_scenes": [],
+            "episodes": {
+                "scene_a": [{"episode": "episode_0000"}],
+                "scene_b": [{"episode": "episode_0000"}],
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            reference = root / "reference"
+            graph = root / "graph"
+            for arm_root in (reference, graph):
+                metric = (arm_root / "scenes" / "00_scene_a" /
+                          "geometry_router" / "metric.csv")
+                metric.parent.mkdir(parents=True)
+                metric.touch()
+            metric = (reference / "scenes" / "01_scene_b" /
+                      "geometry_router" / "metric.csv")
+            metric.parent.mkdir(parents=True)
+            metric.touch()
+
+            def fake_load(_scene_root, _arm, scene):
+                value = row(joint=True, active=True)
+                value["scene"] = scene
+                return {(scene, "episode_0000"): value}
+
+            with mock.patch(
+                    "MemNavData.summarize_graph_router_ablation.load_arm",
+                    side_effect=fake_load):
+                report = summarize_ablation(
+                    manifest, reference, {"graph": graph},
+                    complete_scene_intersection=True)
+        self.assertEqual(report["audit"]["scenes"], 1)
+        self.assertEqual(report["audit"]["episodes"], 1)
+        self.assertTrue(report["audit"]["not_a_full_manifest_result"])
+        self.assertEqual(
+            report["audit"]["excluded_scenes"][0]["scene"], "scene_b")
 
 
 if __name__ == "__main__":

@@ -63,6 +63,12 @@ def truth(value: Any) -> bool:
         return value
     if value is None or value == "":
         return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
     return bool(int(float(value)))
 
 

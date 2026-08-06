@@ -59,6 +59,13 @@ def _completed(row):
     return bool(row.get("terminal_path_type")) and not bool(row.get("terminal_failure"))
 
 
+def metric_paths(root, arm=None):
+    """Find scene metrics in the legacy or strict graph-runner layout."""
+    root = Path(root)
+    pattern = f"*/{arm}/metric.csv" if arm else "*/metric.csv"
+    return sorted(root.glob(pattern))
+
+
 def _pose_success(row, success_dist, yaw_tol_deg):
     """Final-pose metric, intentionally independent of path completion."""
     if not _bool(row, "terminal_attempted"):
@@ -130,15 +137,25 @@ def main():
     parser.add_argument("--root", type=Path, required=True,
                         help="directory whose scene subdirs contain metric.csv")
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument(
+        "--arm",
+        default=None,
+        help=("optional arm directory below each scene, for example "
+              "geometry_router in the strict graph evaluator"),
+    )
     parser.add_argument("--success_dist", type=float, default=1.0)
     parser.add_argument("--yaw_tol_deg", type=float, default=15.0)
     args = parser.parse_args()
 
     by_scene = {}
     pooled = []
-    for metric_path in sorted(args.root.glob("*/metric.csv")):
+    for metric_path in metric_paths(args.root, args.arm):
         rows = list(csv.DictReader(metric_path.open()))
-        by_scene[metric_path.parent.name] = summarize(
+        scene_name = (
+            metric_path.parent.parent.name
+            if args.arm else metric_path.parent.name
+        )
+        by_scene[scene_name] = summarize(
             rows, args.success_dist, args.yaw_tol_deg)
         pooled.extend(rows)
 

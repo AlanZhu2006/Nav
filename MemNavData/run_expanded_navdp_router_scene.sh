@@ -27,6 +27,8 @@ RUN_GEOMETRY_ROUTER=${RUN_GEOMETRY_ROUTER:-1}
 RETRIEVAL_CANDIDATE_MIN_GAP=${RETRIEVAL_CANDIDATE_MIN_GAP:-16}
 GRAPH_SUBGOAL_SPACING_M=${GRAPH_SUBGOAL_SPACING_M:-0.0}
 GRAPH_SUBGOAL_ARRIVAL_M=${GRAPH_SUBGOAL_ARRIVAL_M:-0.60}
+TERMINAL_UTURN=${TERMINAL_UTURN:-off}
+TERMINAL_VISUAL_REFINE=${TERMINAL_VISUAL_REFINE:-off}
 UNIT_TEST_MODULE=${UNIT_TEST_MODULE:-MemNavData.test_expanded_navdp_router_eval}
 EXPECTED_HAB_REQUESTS_VERSION=${EXPECTED_HAB_REQUESTS_VERSION:-2.32.4}
 EXPECTED_HAB_REQUESTS_INIT_BYTES=5057
@@ -50,6 +52,7 @@ VALIDATOR=${VALIDATOR:-${ROOT}/MemNavData/validate_expanded_navdp_router_eval.py
 MEMNAV_SERVER=${ROOT}/NavDP/baselines/memnav/memnav_server.py
 NAVDP_SERVER=${ROOT}/NavDP/baselines/navdp/navdp_server.py
 INTERNNAV_ROOT=${ROOT}/InternNav
+LONGCLIP_ENTRY=${INTERNNAV_ROOT}/internnav/model/basemodel/LongCLIP/model/longclip.py
 LINGBOT_REPO=${LINGBOT_REPO:-/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map}
 LINGBOT_WEIGHTS=${LINGBOT_WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
 EXPECTED_LINGBOT_COMMIT=${EXPECTED_LINGBOT_COMMIT:-7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2}
@@ -69,6 +72,10 @@ TASK_FILES=(
   MemNavData/test_router_candidates.py
   MemNavData/test_reverse_memory_graph.py
   MemNavData/test_policy_agent_graph.py
+  MemNavData/terminal_uturn.py
+  MemNavData/visual_yaw_refinement.py
+  MemNavData/summarize_terminal_uturn.py
+  MemNavData/test_terminal_uturn.py
   MemNavData/deterministic_eval_protocol.py
   MemNavData/test_deterministic_eval_protocol.py
   MemNavData/test_navdp_memory_replay.py
@@ -81,8 +88,10 @@ TASK_FILES=(
   MemNavData/expanded_navdp_router_eval_20260805.json
   NavDP/baselines/memnav/memnav_server.py
   NavDP/baselines/memnav/policy_agent.py
+  NavDP/baselines/memnav/pose_alignment.py
   NavDP/baselines/memnav/router_candidates.py
   NavDP/baselines/memnav/reverse_memory_graph.py
+  InternNav/internnav/model/basemodel/memnav/memnav_policy.py
   NavDP/baselines/navdp/navdp_server.py
   NavDP/baselines/navdp/deterministic_seed.py
   NavDP/baselines/navdp/policy_agent.py
@@ -115,6 +124,16 @@ for flag in STOP_AFTER_LEG1 WRITE_LEG1_TRACE DETERMINISTIC_PLAN_SEEDS; do
 done
 [[ "${LEG1_MODE}" =~ ^(policy|replay|shared_trace)$ ]] || {
   echo "ABORT: invalid LEG1_MODE=${LEG1_MODE}" >&2; exit 1; }
+[[ "${TERMINAL_UTURN}" =~ ^(off|oracle|lingbot_yaw|lingbot_local|lingbot)$ ]] || {
+  echo "ABORT: invalid TERMINAL_UTURN=${TERMINAL_UTURN}" >&2; exit 1; }
+[[ "${TERMINAL_VISUAL_REFINE}" =~ ^(off|verify|refine)$ ]] || {
+  echo "ABORT: invalid TERMINAL_VISUAL_REFINE=${TERMINAL_VISUAL_REFINE}" >&2
+  exit 1
+}
+if [[ "${TERMINAL_UTURN}" == off && "${TERMINAL_VISUAL_REFINE}" != off ]]; then
+  echo "ABORT: terminal visual refinement requires a terminal U-turn" >&2
+  exit 1
+fi
 if [[ "${LEG1_MODE}" == shared_trace ]]; then
   [[ -n "${SHARED_LEG1_ROOT}" ]] || {
     echo "ABORT: shared_trace requires SHARED_LEG1_ROOT" >&2; exit 1; }
@@ -185,7 +204,7 @@ git -C "${ROOT}" diff --cached --quiet -- "${TASK_FILES[@]}" || {
 for required in "${HAB_PY}" "${MEMNAV_PY}" "${EVALUATOR}" "${VALIDATOR}" \
                 "${MEMNAV_SERVER}" "${NAVDP_SERVER}" "${LINGBOT_WEIGHTS}" \
                 "${MEMNAV_CKPT}" "${NAVDP_CKPT}" "${MANIFEST}" \
-                "${UNIT_TEST_PATH}" \
+                "${UNIT_TEST_PATH}" "${LONGCLIP_ENTRY}" \
                 "${HAB_REQUESTS_VENDOR}/requests/__init__.py" \
                 "${HAB_REQUESTS_VENDOR}/requests/__version__.py"; do
   test -r "${required}" || { echo "ABORT: missing dependency ${required}" >&2; exit 1; }
@@ -270,7 +289,12 @@ fi
 mkdir -p "${SCENE_ROOT}/logs" "${SCENE_ROOT}/buffer"
 exec > >(tee "${SCENE_ROOT}/run.log") 2>&1
 
-hab_python -m py_compile "${EVALUATOR}" "${VALIDATOR}"
+hab_python -m py_compile \
+  "${EVALUATOR}" \
+  "${VALIDATOR}" \
+  "${ROOT}/MemNavData/terminal_uturn.py" \
+  "${ROOT}/MemNavData/visual_yaw_refinement.py" \
+  "${ROOT}/MemNavData/summarize_terminal_uturn.py"
 "${MEMNAV_PY}" -m py_compile \
   "${ROOT}/MemNavData/deterministic_eval_protocol.py" \
   "${MEMNAV_SERVER}" \
@@ -285,6 +309,7 @@ hab_python -m py_compile "${EVALUATOR}" "${VALIDATOR}"
     "${UNIT_TEST_MODULE}" \
     MemNavData.test_router_candidates \
     MemNavData.test_reverse_memory_graph \
+    MemNavData.test_terminal_uturn \
     MemNavData.test_conditional_c_protocol \
     MemNavData.test_summarize_conditional_c_eval -v
 )
@@ -425,8 +450,8 @@ COMMON_ARGS=(
   --trajectory_selector server
   --leg1_goal_source own
   --seed 20260803
-  --terminal_uturn off
-  --terminal_visual_refine off
+  --terminal_uturn "${TERMINAL_UTURN}"
+  --terminal_visual_refine "${TERMINAL_VISUAL_REFINE}"
   --episode_ids "${episode_csv}"
 )
 if [[ "${STOP_AFTER_LEG1}" -eq 1 ]]; then

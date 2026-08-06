@@ -1,5 +1,7 @@
 import math
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -10,7 +12,7 @@ from MemNavData.terminal_uturn import (
     relative_xy_to_world,
     wrap_angle,
 )
-from MemNavData.summarize_terminal_uturn import summarize
+from MemNavData.summarize_terminal_uturn import metric_paths, summarize
 from MemNavData.diag_oracle_retrieval_firsthop import (
     angle_error_deg,
     lookahead_point,
@@ -49,6 +51,19 @@ class _NarrowAtGoalPathfinder(_OpenPathfinder):
 
 
 class TerminalUTurnTest(unittest.TestCase):
+    def test_summary_discovers_strict_graph_arm_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = root / "07_scene" / "geometry_router" / "metric.csv"
+            expected.parent.mkdir(parents=True)
+            expected.touch()
+            (root / "07_scene" / "navdp_native").mkdir()
+            (root / "07_scene" / "navdp_native" / "metric.csv").touch()
+            self.assertEqual(
+                metric_paths(root, "geometry_router"),
+                [expected],
+            )
+
     def test_firsthop_direction_metric_uses_navdp_axes(self):
         np.testing.assert_allclose(
             world_delta_to_local([0.0, -1.0], 0.0), [1.0, 0.0])

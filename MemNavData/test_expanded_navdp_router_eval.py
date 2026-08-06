@@ -121,6 +121,20 @@ class ExpandedBenchmarkTest(unittest.TestCase):
         )
         self.assertEqual(set(resolved), set(self.manifest["dependencies"]))
 
+    def test_scene_runner_terminal_alignment_is_explicit_and_default_off(self):
+        runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
+        self.assertIn("TERMINAL_UTURN=${TERMINAL_UTURN:-off}", runner)
+        self.assertIn(
+            "TERMINAL_VISUAL_REFINE=${TERMINAL_VISUAL_REFINE:-off}",
+            runner,
+        )
+        self.assertIn('--terminal_uturn "${TERMINAL_UTURN}"', runner)
+        self.assertIn(
+            '--terminal_visual_refine "${TERMINAL_VISUAL_REFINE}"',
+            runner,
+        )
+        self.assertNotIn("--terminal_uturn off", runner)
+
 
 if __name__ == "__main__":
     unittest.main()

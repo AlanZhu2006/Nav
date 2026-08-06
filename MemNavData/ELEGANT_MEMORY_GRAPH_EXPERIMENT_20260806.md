@@ -123,6 +123,15 @@ This means direct versus graph differs only after the shared Goal-A trajectory
 and receives matched DDPM noise at corresponding Goal-B replans.  The strict
 development runner is `run_strict_graph_2leg.sh`.
 
+Because LingBot streaming, rather than NavDP diffusion, dominates wall time,
+the full runner supports scene-level multi-GPU execution inside one Slurm job.
+Each worker receives one visible GPU and uses scene-specific ports, temporary
+directories, server processes, and output directories; a failed worker makes
+the whole job fail before summary generation.  `SCENE_WORKERS=1` remains the
+default.  A formal run may request four GPUs and set `SCENE_WORKERS=4` without
+changing any model, seed, episode, or metric.  Smoke mode intentionally uses
+one episode from one explicitly selected scene.
+
 For three-leg diagnosis, `run_graph_conditional_c.sh` replays the exact causal
 A/B source prefix into both LingBot and NavDP, then evaluates six logical arms:
 native, direct-gap16, graph-gap16, oracle-anchor direct, oracle-anchor graph,
@@ -138,6 +147,12 @@ and goal images.  The resulting 16-scene/32-episode manifest must be generated
 and committed before any blind performance result is inspected.  It is not a
 blind result until the strict development rerun passes and that one-shot run is
 complete.
+
+That freeze is now materialized as
+`strict_graph_blind_20260806.json`, SHA256
+`b90a03cd6c3456f7741c09c2d8aa4d8f15da1512b9fa6329d31f42b7a03c5fc9`.
+No blind navigation result had been run or inspected when this hash was
+committed.
 
 ## LingBot-native loop-factor expansion
 

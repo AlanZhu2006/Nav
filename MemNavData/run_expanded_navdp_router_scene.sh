@@ -4,6 +4,7 @@
 
 set -euo pipefail
 umask 0022
+export GIT_OPTIONAL_LOCKS=0
 
 ROOT=${ROOT:?set ROOT}
 RUN_ROOT=${RUN_ROOT:?set RUN_ROOT}
@@ -14,6 +15,7 @@ SCENE_INDEX=${SCENE_INDEX:?set SCENE_INDEX}
 HAB_PY=${HAB_PY:?set HAB_PY}
 MEMNAV_PY=${MEMNAV_PY:?set MEMNAV_PY}
 MAX_STEPS=${MAX_STEPS:-500}
+EPISODE_LIMIT=${EPISODE_LIMIT:-0}
 LEG1_MODE=${LEG1_MODE:-policy}
 STOP_AFTER_LEG1=${STOP_AFTER_LEG1:-0}
 WRITE_LEG1_TRACE=${WRITE_LEG1_TRACE:-0}
@@ -88,6 +90,10 @@ TASK_FILES=(
 )
 [[ "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]] || {
   echo "ABORT: MAX_STEPS must be a positive integer" >&2
+  exit 1
+}
+[[ "${EPISODE_LIMIT}" =~ ^[0-9]+$ ]] || {
+  echo "ABORT: EPISODE_LIMIT must be a non-negative integer" >&2
   exit 1
 }
 [[ "${UNIT_TEST_MODULE}" =~ ^[A-Za-z_][A-Za-z0-9_.]*$ ]] || {
@@ -249,6 +255,11 @@ manifest = json.load(open(sys.argv[1]))
 print(*(row["episode"] for row in manifest["episodes"][sys.argv[2]]), sep="\n")
 PY
 )
+if (( EPISODE_LIMIT > 0 && EPISODE_LIMIT < ${#EPISODE_IDS[@]} )); then
+  EPISODE_IDS=("${EPISODE_IDS[@]:0:EPISODE_LIMIT}")
+fi
+(( ${#EPISODE_IDS[@]} > 0 )) || {
+  echo "ABORT: no episodes remain after EPISODE_LIMIT" >&2; exit 1; }
 episode_csv=$(IFS=,; echo "${EPISODE_IDS[*]}")
 
 SCENE_ROOT=${RUN_ROOT}/scenes/$(printf '%02d' "${SCENE_INDEX}")_${scene}

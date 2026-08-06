@@ -3,6 +3,7 @@
 
 set -euo pipefail
 umask 0022
+export GIT_OPTIONAL_LOCKS=0
 
 ROOT=${ROOT:?set ROOT}
 RUN_ROOT=${RUN_ROOT:?set RUN_ROOT}
@@ -12,8 +13,17 @@ MEMNAV_PY=${MEMNAV_PY:?set MEMNAV_PY}
 MANIFEST=${MANIFEST:?set MANIFEST}
 EXPECTED_MANIFEST_SHA=${EXPECTED_MANIFEST_SHA:?set EXPECTED_MANIFEST_SHA}
 MODE=${MODE:?set MODE=smoke or full}
+SCENE_WORKERS=${SCENE_WORKERS:-1}
+SMOKE_SCENE_INDEX=${SMOKE_SCENE_INDEX:-19}
+SMOKE_EPISODE_LIMIT=${SMOKE_EPISODE_LIMIT:-1}
 [[ "${MODE}" =~ ^(smoke|full)$ ]] || {
   echo "ABORT: MODE must be smoke or full" >&2; exit 1; }
+[[ "${SCENE_WORKERS}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ABORT: SCENE_WORKERS must be positive" >&2; exit 1; }
+[[ "${SMOKE_SCENE_INDEX}" =~ ^[0-9]+$ ]] || {
+  echo "ABORT: SMOKE_SCENE_INDEX must be non-negative" >&2; exit 1; }
+[[ "${SMOKE_EPISODE_LIMIT}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ABORT: SMOKE_EPISODE_LIMIT must be positive" >&2; exit 1; }
 
 SCENE_RUNNER=${ROOT}/MemNavData/run_expanded_navdp_router_scene.sh
 SUMMARIZER=${ROOT}/MemNavData/summarize_graph_router_ablation.py
@@ -88,10 +98,23 @@ PY
 [[ "${scene_count}" =~ ^[1-9][0-9]*$ ]] || {
   echo "ABORT: manifest contains no scenes" >&2; exit 1; }
 if [[ "${MODE}" == smoke ]]; then
-  if (( scene_count > 7 )); then SCENE_INDICES=(7); else SCENE_INDICES=(0); fi
+  (( SMOKE_SCENE_INDEX < scene_count )) || {
+    echo "ABORT: smoke scene index is outside the manifest" >&2; exit 1; }
+  SCENE_INDICES=("${SMOKE_SCENE_INDEX}")
+  EPISODE_LIMIT=${SMOKE_EPISODE_LIMIT}
 else
   mapfile -t SCENE_INDICES < <(seq 0 $((scene_count - 1)))
+  EPISODE_LIMIT=0
 fi
+
+IFS=',' read -r -a GPU_IDS <<< "${CUDA_VISIBLE_DEVICES:-0}"
+(( SCENE_WORKERS <= ${#GPU_IDS[@]} )) || {
+  echo "ABORT: SCENE_WORKERS=${SCENE_WORKERS} exceeds visible GPUs " \
+       "${CUDA_VISIBLE_DEVICES:-0}" >&2
+  exit 1
+}
+echo "[protocol] mode=${MODE} workers=${SCENE_WORKERS} " \
+     "visible_gpus=${CUDA_VISIBLE_DEVICES:-0} episode_limit=${EPISODE_LIMIT}"
 
 SOURCE_ROOT=${RUN_ROOT}/shared_novel_direct_gap16
 DIRECT_ROOT=${RUN_ROOT}/direct_gap16
@@ -113,6 +136,7 @@ run_scene() {
     RUN_NAVDP_NATIVE=0 \
     RUN_GEOMETRY_TOP1=0 \
     RUN_GEOMETRY_ROUTER=1 \
+    EPISODE_LIMIT="${EPISODE_LIMIT}" \
     DETERMINISTIC_PLAN_SEEDS=1 \
     RETRIEVAL_CANDIDATE_MIN_GAP=16 \
     GRAPH_SUBGOAL_ARRIVAL_M=0.60 \
@@ -121,8 +145,11 @@ run_scene() {
     "${SCENE_RUNNER}"
 }
 
-for scene_index in "${SCENE_INDICES[@]}"; do
-  echo "[shared direct-controller Novel] scene_index=${scene_index}"
+run_scene_pipeline() {
+  local scene_index=$1
+  local gpu_id=$2
+  export CUDA_VISIBLE_DEVICES="${gpu_id}"
+  echo "[shared direct-controller Novel] scene_index=${scene_index} gpu=${gpu_id}"
   run_scene "${scene_index}" "${SOURCE_ROOT}" \
     LEG1_MODE=policy \
     STOP_AFTER_LEG1=1 \
@@ -140,7 +167,34 @@ for scene_index in "${SCENE_INDICES[@]}"; do
     LEG1_MODE=shared_trace \
     SHARED_LEG1_ROOT="${SOURCE_ROOT}" \
     GRAPH_SUBGOAL_SPACING_M=1.25
+}
+
+wait_scene_batch() {
+  local failed=0
+  local pid
+  for pid in "${SCENE_PIDS[@]}"; do
+    wait "${pid}" || failed=1
+  done
+  SCENE_PIDS=()
+  (( failed == 0 )) || {
+    echo "ABORT: at least one parallel scene pipeline failed" >&2
+    exit 1
+  }
+}
+
+SCENE_PIDS=()
+worker_slot=0
+for scene_index in "${SCENE_INDICES[@]}"; do
+  run_scene_pipeline \
+    "${scene_index}" "${GPU_IDS[${worker_slot}]}" &
+  SCENE_PIDS+=("$!")
+  worker_slot=$((worker_slot + 1))
+  if (( worker_slot == SCENE_WORKERS )); then
+    wait_scene_batch
+    worker_slot=0
+  fi
 done
+(( ${#SCENE_PIDS[@]} == 0 )) || wait_scene_batch
 
 if [[ "${MODE}" == full ]]; then
   "${HAB_PY}" "${SUMMARIZER}" \

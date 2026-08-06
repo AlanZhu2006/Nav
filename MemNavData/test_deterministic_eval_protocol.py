@@ -7,6 +7,7 @@ from pathlib import Path
 from MemNavData.deterministic_eval_protocol import (
     bytes_sha256,
     diffusion_plan_seed,
+    diffusion_resample_seed,
     load_leg1_trace,
     validate_leg1_trace,
     write_leg1_trace,
@@ -52,6 +53,12 @@ class DeterministicEvalProtocolTest(unittest.TestCase):
             diffusion_plan_seed(17, 1, 7),
             diffusion_plan_seed(18, 0, 7),
         )
+        self.assertEqual(
+            diffusion_resample_seed(diffusion_plan_seed(17, 1, 7), 1),
+            171_000_701,
+        )
+        with self.assertRaisesRegex(ValueError, "resample_index"):
+            diffusion_resample_seed(17, 0)
 
     def test_trace_round_trip_and_hash(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -41,6 +41,12 @@ Four arms were evaluated:
    after 24 simulated steps while still executing only eight real steps before
    replanning.
 
+A fifth upper-bound arm was then run on the three `17DRP5sb8fy` episodes:
+
+5. `oracle-B/H24/seed4`: the first normal request advances NavDP's FIFO once;
+   three read-only resample requests reuse that exact FIFO with deterministic
+   seeds, pooling `4 x 16 = 64` candidates before oracle selection.
+
 The oracle arms are privileged causal diagnostics. They are not deployable
 methods and do not change the diffusion candidate set.
 
@@ -76,6 +82,38 @@ episodes more efficient, but loses one server success and does not recover the
 remaining failure. Extending its scoring horizon to all 24 predicted
 waypoints does not change Goal-B success.
 
+## Multi-seed candidate-pool result
+
+Increasing the candidate pool from 16 to 64 does not recover either difficult
+`17D` episode:
+
+| Episode | H24, 16 candidates | H24, 64 candidates |
+|---|---:|---:|
+| `17D/ep0` | success, 4.957 m path | success, 4.917 m path |
+| `17D/ep1` | failure, 5.254 m final | failure, 5.254 m final |
+| `17D/ep2` | failure, 5.207 m final | failure, 5.207 m final |
+
+For `ep2`, the minimum geodesic reached changes only from `5.932 m` to
+`5.887 m`; for `ep1` it remains at the initial `5.952 m`. Thus the failure is
+not explained by unlucky sampling from only 16 trajectories. Repeated seeds
+from the same ImageGoal-conditioned diffusion distribution do not expose a
+missing globally useful mode.
+
+The 64-candidate rerun also records compact direction/path diversity. Circular
+heading resultant `R=1` means every candidate has the same endpoint direction:
+
+| Episode | Mean heading R | Mean maximum heading separation | Mean progress fraction |
+|---|---:|---:|---:|
+| `17D/ep0` success | 0.9961 | 22.17 deg | 100.0% |
+| `17D/ep1` failure | 0.9834 | 34.23 deg | 15.0% |
+| `17D/ep2` failure | 0.9930 | 30.59 deg | 22.7% |
+
+Despite occasional angular outliers, nearly all probability mass remains
+concentrated around one high-level direction. In the successful episode that
+mode points along useful progress; in the failures the same low-diversity mode
+is wrong. Four seeds therefore provide many local perturbations, not four
+independent global route hypotheses.
+
 ## Candidate diagnostics
 
 For the three oracle-success episodes, the fraction of candidates that reduce
@@ -102,10 +140,11 @@ manufacture a globally useful direction from the current candidate set.
 
 ## Conclusion
 
-The local evidence rejects two simple fixes:
+The local evidence rejects three simple fixes:
 
 1. uniformly clearing temporal state at every goal switch;
-2. replacing NavDP's selector with a myopic or 24-step geodesic critic.
+2. replacing NavDP's selector with a myopic or 24-step geodesic critic;
+3. increasing the same conditional diffusion pool from 16 to 64 candidates.
 
 The dominant failure is closer to candidate generation and long-horizon
 exploration under a Novel/no-match goal. In difficult states, most diffusion

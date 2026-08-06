@@ -73,6 +73,69 @@ def normalize_navdp_candidate_scores(value, candidate_count: int):
     return scores if scores.shape == (int(candidate_count),) else None
 
 
+def pool_navdp_candidate_sets(responses: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+    """Concatenate candidate paths/scores returned for independent seeds."""
+    if not responses:
+        raise ValueError("at least one candidate response is required")
+    path_sets = []
+    score_sets = []
+    expected_shape = None
+    for response in responses:
+        paths = normalize_navdp_trajectory_candidates(
+            response.get("all_trajectory"))
+        if expected_shape is None:
+            expected_shape = paths.shape[1:]
+        elif paths.shape[1:] != expected_shape:
+            raise ValueError("candidate trajectory shapes differ across seeds")
+        scores = normalize_navdp_candidate_scores(
+            response.get("all_values"), len(paths))
+        if scores is None:
+            raise ValueError("candidate score shape differs from trajectories")
+        path_sets.append(paths)
+        score_sets.append(scores)
+    return np.concatenate(path_sets, axis=0), np.concatenate(score_sets, axis=0)
+
+
+def navdp_candidate_diversity(candidates) -> dict:
+    """Summarize directional and geometric diversity without saving paths."""
+    paths = normalize_navdp_trajectory_candidates(candidates)
+    endpoints = paths[:, -1, :2]
+    lengths = np.linalg.norm(endpoints, axis=1)
+    valid = lengths > 1e-8
+    if np.any(valid):
+        angles = np.arctan2(endpoints[valid, 1], endpoints[valid, 0])
+        resultant = float(np.abs(np.mean(np.exp(1j * angles))))
+        angle_delta = np.angle(
+            np.exp(1j * (angles[:, None] - angles[None, :])))
+        max_heading_separation_deg = float(
+            np.degrees(np.max(np.abs(angle_delta))))
+    else:
+        resultant = None
+        max_heading_separation_deg = None
+    if len(paths) > 1:
+        upper = np.triu_indices(len(paths), k=1)
+        endpoint_pairwise = np.linalg.norm(
+            endpoints[:, None] - endpoints[None, :], axis=-1)[upper]
+        path_pairwise = np.sqrt(np.mean(
+            np.square(paths[:, None, :, :2] - paths[None, :, :, :2]),
+            axis=(2, 3),
+        ))[upper]
+        endpoint_pairwise_mean = float(np.mean(endpoint_pairwise))
+        path_pairwise_rms_mean = float(np.mean(path_pairwise))
+    else:
+        endpoint_pairwise_mean = 0.0
+        path_pairwise_rms_mean = 0.0
+    return {
+        "trajectory_candidate_count": int(len(paths)),
+        "candidate_endpoint_length_mean": float(np.mean(lengths)),
+        "candidate_endpoint_length_std": float(np.std(lengths)),
+        "candidate_heading_resultant": resultant,
+        "candidate_heading_max_separation_deg": max_heading_separation_deg,
+        "candidate_endpoint_pairwise_mean": endpoint_pairwise_mean,
+        "candidate_path_pairwise_rms_mean": path_pairwise_rms_mean,
+    }
+
+
 def navdp_server_base(
     server_backend: str,
     base_url: str,

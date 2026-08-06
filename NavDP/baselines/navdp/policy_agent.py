@@ -225,6 +225,43 @@ class NavDP_Agent:
         trajectory_mask = self.project_trajectory(images,all_trajectory,all_values) 
         return good_trajectory[:,0], all_trajectory, all_values, trajectory_mask
 
+    def resample_imagegoal(self, goals, images, depths):
+        """Sample new ImageGoal candidates without advancing observation state.
+
+        A normal ``step_imagegoal`` must run first for the current decision
+        frame.  This diagnostic path then reuses that exact FIFO so additional
+        diffusion seeds cannot duplicate the current image or change future
+        policy inputs.
+        """
+        if len(images) != len(self.memory_queue):
+            raise ValueError("observation batch differs from NavDP batch size")
+        input_images = []
+        for queue in self.memory_queue:
+            if not queue:
+                raise RuntimeError(
+                    "ImageGoal resampling requires a prior policy step")
+            input_image = np.array(queue)
+            if input_image.shape[0] < self.memory_size:
+                input_image = np.pad(
+                    input_image,
+                    ((self.memory_size - input_image.shape[0], 0),
+                     (0, 0), (0, 0), (0, 0)),
+                )
+            input_images.append(input_image)
+        input_image = np.array(input_images)
+        input_depth = self.process_depth(depths)
+        input_goals = self.process_image(goals)
+        all_trajectory, all_values, good_trajectory, bad_trajectory = (
+            self.navi_former.predict_imagegoal_action(
+                input_goals, input_image, input_depth))
+        if all_values.max() < self.stop_threshold:
+            good_trajectory[:, :, :, 0] = 0.0
+            good_trajectory[:, :, :, 1] = np.sign(
+                good_trajectory[:, :, :, 1].mean())
+        trajectory_mask = self.project_trajectory(
+            images, all_trajectory, all_values)
+        return good_trajectory[:, 0], all_trajectory, all_values, trajectory_mask
+
     def step_pixelgoal(self,goals,images,depths):
         process_images = self.process_image(images)
         process_depths = self.process_depth(depths)

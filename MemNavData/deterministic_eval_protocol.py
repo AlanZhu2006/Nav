@@ -12,6 +12,7 @@ LEG1_TRACE_SCHEMA_VERSION = 1
 EPISODE_SEED_STRIDE = 100_000
 LEG_SEED_STRIDE = 10_000
 MAX_PLANS_PER_LEG = LEG_SEED_STRIDE
+MAX_RESAMPLES_PER_PLAN = 99
 
 
 def diffusion_plan_seed(
@@ -33,6 +34,20 @@ def diffusion_plan_seed(
         + leg_index * LEG_SEED_STRIDE
         + plan_index
     )
+
+
+def diffusion_resample_seed(primary_seed: int, resample_index: int) -> int:
+    """Derive a deterministic seed outside the primary plan-seed namespace."""
+    values = (primary_seed, resample_index)
+    if any(isinstance(value, bool) or not isinstance(value, int)
+           for value in values):
+        raise TypeError("resample seed coordinates must be integers")
+    if primary_seed < 0:
+        raise ValueError("primary_seed must be non-negative")
+    if not 1 <= resample_index <= MAX_RESAMPLES_PER_PLAN:
+        raise ValueError(
+            f"resample_index must be in [1, {MAX_RESAMPLES_PER_PLAN}]")
+    return primary_seed * 100 + resample_index
 
 
 def file_sha256(path: Path) -> str:

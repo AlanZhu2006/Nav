@@ -204,6 +204,44 @@ def navdp_step_image():
                     'all_values': all_values.tolist(),
                     'diffusion_seed': diffusion_seed})
 
+
+@app.route("/imagegoal_resample", methods=["POST"])
+def navdp_resample_imagegoal():
+    """Resample candidates from the current FIFO without appending an image."""
+    global navdp_navigator
+    if navdp_navigator is None:
+        return jsonify({"error": "navigator is not initialized"}), 409
+    batch_size = navdp_navigator.batch_size
+
+    image = Image.open(request.files['image'].stream).convert('RGB')
+    image = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+    image = image.reshape((batch_size, -1, image.shape[1], 3))
+
+    goal = Image.open(request.files['goal'].stream).convert('RGB')
+    goal = cv2.cvtColor(np.asarray(goal), cv2.COLOR_RGB2BGR)
+    goal = goal.reshape((batch_size, -1, goal.shape[1], 3))
+
+    depth = Image.open(request.files['depth'].stream).convert('I')
+    depth = np.asarray(depth)[:, :, np.newaxis]
+    depth = depth.astype(np.float32) / 10000.0
+    depth = depth.reshape((batch_size, -1, depth.shape[1], 1))
+
+    before_lengths = [len(queue) for queue in navdp_navigator.memory_queue]
+    diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
+    execute_trajectory, all_trajectory, all_values, _trajectory_mask = (
+        navdp_navigator.resample_imagegoal(goal, image, depth))
+    after_lengths = [len(queue) for queue in navdp_navigator.memory_queue]
+    if after_lengths != before_lengths:
+        return jsonify({"error": "resampling mutated NavDP memory"}), 500
+    return jsonify({
+        'trajectory': execute_trajectory.tolist(),
+        'all_trajectory': all_trajectory.tolist(),
+        'all_values': all_values.tolist(),
+        'diffusion_seed': diffusion_seed,
+        'memory_mutated': False,
+        'queue_lengths': after_lengths,
+    })
+
 @app.route("/nogoal_step",methods=['POST'])
 def navdp_step_nogoal():
     global navdp_navigator,navdp_fps_writer

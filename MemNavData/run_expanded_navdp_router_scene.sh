@@ -24,6 +24,7 @@ NAVDP_GOAL_SWITCH_RESET=${NAVDP_GOAL_SWITCH_RESET:-carry}
 TRAJECTORY_SELECTOR=${TRAJECTORY_SELECTOR:-server}
 TRAJECTORY_SELECTOR_SCOPE=${TRAJECTORY_SELECTOR_SCOPE:-all}
 ORACLE_SELECTOR_HORIZON=${ORACLE_SELECTOR_HORIZON:-0}
+ORACLE_CANDIDATE_SEED_COUNT=${ORACLE_CANDIDATE_SEED_COUNT:-1}
 SHARED_LEG1_ROOT=${SHARED_LEG1_ROOT:-}
 RUN_NAVDP_NATIVE=${RUN_NAVDP_NATIVE:-1}
 RUN_GEOMETRY_TOP1=${RUN_GEOMETRY_TOP1:-1}
@@ -149,10 +150,28 @@ done
   echo "ABORT: ORACLE_SELECTOR_HORIZON must be non-negative" >&2
   exit 1
 }
+[[ "${ORACLE_CANDIDATE_SEED_COUNT}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ABORT: ORACLE_CANDIDATE_SEED_COUNT must be positive" >&2
+  exit 1
+}
+[[ "${ORACLE_CANDIDATE_SEED_COUNT}" -le 100 ]] || {
+  echo "ABORT: ORACLE_CANDIDATE_SEED_COUNT must be at most 100" >&2
+  exit 1
+}
 if [[ "${TRAJECTORY_SELECTOR}" == server \
       && "${TRAJECTORY_SELECTOR_SCOPE}" != all ]]; then
   echo "ABORT: a scoped selector requires TRAJECTORY_SELECTOR=oracle_geodesic" >&2
   exit 1
+fi
+if [[ "${ORACLE_CANDIDATE_SEED_COUNT}" -gt 1 ]]; then
+  [[ "${TRAJECTORY_SELECTOR}" == oracle_geodesic ]] || {
+    echo "ABORT: multi-seed candidates require oracle_geodesic" >&2; exit 1; }
+  [[ "${DETERMINISTIC_PLAN_SEEDS}" -eq 1 ]] || {
+    echo "ABORT: multi-seed candidates require deterministic seeds" >&2; exit 1; }
+  [[ "${RUN_GEOMETRY_TOP1}" -eq 0 && "${RUN_GEOMETRY_ROUTER}" -eq 0 ]] || {
+    echo "ABORT: multi-seed diagnostic currently supports native NavDP only" >&2
+    exit 1
+  }
 fi
 if [[ "${TRAJECTORY_SELECTOR}" == server \
       && "${ORACLE_SELECTOR_HORIZON}" -ne 0 ]]; then
@@ -500,6 +519,7 @@ COMMON_ARGS=(
   --trajectory_selector "${TRAJECTORY_SELECTOR}"
   --trajectory_selector_scope "${TRAJECTORY_SELECTOR_SCOPE}"
   --oracle_selector_horizon "${ORACLE_SELECTOR_HORIZON}"
+  --oracle_candidate_seed_count "${ORACLE_CANDIDATE_SEED_COUNT}"
   --navdp_goal_switch_reset "${NAVDP_GOAL_SWITCH_RESET}"
   --leg1_goal_source own
   --seed 20260803

@@ -58,6 +58,7 @@ from deterministic_eval_protocol import (
     LEG1_TRACE_SCHEMA_VERSION,
     bytes_sha256,
     diffusion_plan_seed,
+    diffusion_resample_seed,
     load_leg1_trace,
     write_leg1_trace,
 )
@@ -67,6 +68,8 @@ from navdp_goal_switch import (
     TRAJECTORY_SELECTOR_SCOPES,
     normalize_navdp_candidate_scores,
     normalize_navdp_trajectory_candidates,
+    navdp_candidate_diversity,
+    pool_navdp_candidate_sets,
     reset_navdp_short_memory,
     trajectory_selector_for_leg,
 )
@@ -239,6 +242,14 @@ parser.add_argument(
           "0 matches --exec_horizon and does not change the number of steps "
           "actually executed before replanning"),
 )
+parser.add_argument(
+    "--oracle_candidate_seed_count",
+    type=int,
+    default=1,
+    help=("number of deterministic diffusion seeds pooled per oracle plan; "
+          "additional seeds use a read-only NavDP resample endpoint and are "
+          "a privileged candidate-recall diagnostic only"),
+)
 parser.add_argument("--stuck_window", type=int, default=150)
 parser.add_argument("--stuck_dist", type=float, default=0.10)
 parser.add_argument("--agent_radius", type=float, default=0.30)
@@ -318,6 +329,15 @@ parser.add_argument("--save_video", action="store_true")
 args = parser.parse_args()
 if args.oracle_selector_horizon < 0:
     parser.error("--oracle_selector_horizon must be non-negative")
+if args.oracle_candidate_seed_count < 1:
+    parser.error("--oracle_candidate_seed_count must be positive")
+if args.oracle_candidate_seed_count > 100:
+    parser.error("--oracle_candidate_seed_count must be at most 100")
+if (args.oracle_candidate_seed_count > 1
+        and args.trajectory_selector != "oracle_geodesic"):
+    parser.error("multiple candidate seeds require oracle_geodesic")
+if args.oracle_candidate_seed_count > 1 and not args.deterministic_plan_seeds:
+    parser.error("multiple candidate seeds require deterministic plan seeds")
 
 BASE = f"http://{args.host}:{args.port}"
 NOVEL_BASE = (f"http://{args.host}:{args.novel_port}"
@@ -454,6 +474,30 @@ def srv_reset_navdp_short_memory(env_id=0):
         NOVEL_BASE,
         env_id=env_id,
     )
+
+
+def srv_navdp_imagegoal_resample(
+        image_jpg, goal_jpg, depth, diffusion_seed):
+    """Sample another native-NavDP candidate set without advancing its FIFO."""
+    if args.server_backend != "navdp":
+        raise ValueError(
+            "multi-seed ImageGoal diagnostic currently requires native NavDP")
+    response = requests.post(
+        f"{BASE}/imagegoal_resample",
+        files={
+            "image": ("image.jpg", image_jpg),
+            "goal": ("goal.jpg", goal_jpg),
+            "depth": ("depth.png", depth_png_bytes(depth)),
+        },
+        data={"diffusion_seed": str(int(diffusion_seed))},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("memory_mutated") is not False:
+        raise RuntimeError("NavDP resample endpoint mutated observation state")
+    if int(payload.get("diffusion_seed")) != int(diffusion_seed):
+        raise RuntimeError("NavDP resample endpoint echoed the wrong seed")
+    return payload
 
 
 def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
@@ -1052,6 +1096,7 @@ def select_plan_trajectory(
     all_paths = None
     if all_paths_raw is not None:
         all_paths = normalize_navdp_trajectory_candidates(all_paths_raw)
+        info.update(navdp_candidate_diversity(all_paths))
         if all_paths.shape[1:] == selected.shape:
             errors = np.max(np.abs(all_paths - selected[None]), axis=(1, 2))
             info["server_selected_idx"] = int(np.argmin(errors))
@@ -1447,6 +1492,32 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 if echoed_seed is None or int(echoed_seed) != request_seed:
                     raise RuntimeError(
                         "NavDP server did not echo the requested diffusion seed")
+            if (leg_trajectory_selector == "oracle_geodesic"
+                    and args.oracle_candidate_seed_count > 1):
+                if request_seed is None:
+                    raise ValueError(
+                        "multi-seed oracle requires deterministic plan seeds")
+                candidate_responses = [response]
+                resample_seeds = []
+                for resample_index in range(
+                        1, args.oracle_candidate_seed_count):
+                    resample_seed = diffusion_resample_seed(
+                        int(request_seed), resample_index)
+                    resample_seeds.append(resample_seed)
+                    candidate_responses.append(
+                        srv_navdp_imagegoal_resample(
+                            frame,
+                            goal_jpg,
+                            depth,
+                            diffusion_seed=resample_seed,
+                        ))
+                pooled_paths, pooled_scores = pool_navdp_candidate_sets(
+                    candidate_responses)
+                response = dict(response)
+                response["all_trajectory"] = pooled_paths.tolist()
+                response["all_values"] = pooled_scores.tolist()
+                response["candidate_seed_count"] = len(candidate_responses)
+                response["candidate_resample_seeds"] = resample_seeds
             if "trajectory" in response:
                 way, selector_info = select_plan_trajectory(
                     response,
@@ -1473,6 +1544,10 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 plans.append(dict(step=step,
                                   diffusion_seed=response.get("diffusion_seed"),
                                   requested_diffusion_seed=request_seed,
+                                  candidate_seed_count=response.get(
+                                      "candidate_seed_count", 1),
+                                  candidate_resample_seeds=response.get(
+                                      "candidate_resample_seeds", []),
                                   gate=response.get("gate"),
                                   match_idx=response.get("match_idx"), anchor=response.get("anchor"),
                                   retrieved_anchor=response.get("retrieved_anchor"),
@@ -2155,6 +2230,7 @@ def main():
         oracle_selector_horizon=(
             args.oracle_selector_horizon
             if args.trajectory_selector == "oracle_geodesic" else None),
+        oracle_candidate_seed_count=args.oracle_candidate_seed_count,
         navdp_stop_threshold=(args.navdp_stop_threshold
                               if (args.server_backend == "navdp"
                                   or args.server_backend in HYBRID_BACKENDS)

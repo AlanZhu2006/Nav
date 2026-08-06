@@ -1,9 +1,13 @@
 import unittest
 
+import numpy as np
+
 from MemNavData.navdp_goal_switch import (
     navdp_server_base,
+    navdp_candidate_diversity,
     normalize_navdp_candidate_scores,
     normalize_navdp_trajectory_candidates,
+    pool_navdp_candidate_sets,
     reset_navdp_short_memory,
     should_reset_before_leg,
     trajectory_selector_for_leg,
@@ -72,6 +76,25 @@ class NavDPGoalSwitchTest(unittest.TestCase):
                 [[[[0.0, 0.0, 0.0]]], [[[0.0, 0.0, 0.0]]]]
             )
         self.assertIsNone(normalize_navdp_candidate_scores([[0.0] * 8], 16))
+
+    def test_candidate_sets_pool_across_deterministic_seeds(self):
+        response = {
+            "all_trajectory": [[[[0.0, 0.0, 0.0]] * 3] * 2],
+            "all_values": [[1.0, 0.0]],
+        }
+        paths, scores = pool_navdp_candidate_sets([response, response])
+        self.assertEqual(paths.shape, (4, 3, 3))
+        self.assertEqual(scores.tolist(), [1.0, 0.0, 1.0, 0.0])
+
+    def test_candidate_diversity_reports_directional_collapse(self):
+        collapsed = np.zeros((4, 3, 3), dtype=float)
+        collapsed[:, :, 0] = np.asarray([1.0, 2.0, 3.0])
+        result = navdp_candidate_diversity(collapsed)
+        self.assertEqual(result["trajectory_candidate_count"], 4)
+        self.assertAlmostEqual(result["candidate_heading_resultant"], 1.0)
+        self.assertAlmostEqual(
+            result["candidate_heading_max_separation_deg"], 0.0)
+        self.assertAlmostEqual(result["candidate_endpoint_pairwise_mean"], 0.0)
 
     def test_hybrid_targets_navdp_not_memnav(self):
         self.assertEqual(

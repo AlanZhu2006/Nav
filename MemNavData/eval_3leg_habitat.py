@@ -100,6 +100,11 @@ def main() -> None:
             args.deterministic_plan_seeds,
             "goal-switch reset ablations require --deterministic_plan_seeds",
         )
+    if args.oracle_candidate_seed_count > 1:
+        require(
+            args.server_backend == "navdp",
+            "multi-seed candidate pooling currently supports native NavDP only",
+        )
 
     os.makedirs(args.out, exist_ok=True)
     episode_dirs = sorted(
@@ -272,6 +277,7 @@ def main() -> None:
                     args.oracle_selector_horizon
                     if args.trajectory_selector == "oracle_geodesic" else None
                 ),
+                "oracle_candidate_seed_count": args.oracle_candidate_seed_count,
                 "navdp_reset_before_B": int(reset_before_b),
                 "navdp_reset_before_C": int(reset_before_c),
                 "reached_A": int(reached_a),
@@ -338,6 +344,7 @@ def main() -> None:
                 args.oracle_selector_horizon
                 if args.trajectory_selector == "oracle_geodesic" else None
             ),
+            "oracle_candidate_seed_count": args.oracle_candidate_seed_count,
             "SR_A": mean_or_none([row["reached_A"] for row in metrics]),
             "SR_B_given_A": mean_or_none([row["reached_B"] for row in reached_a_rows]),
             "SR_C_given_AB": mean_or_none([row["reached_C"] for row in reached_ab_rows]),

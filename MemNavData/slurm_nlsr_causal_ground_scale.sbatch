@@ -4,7 +4,7 @@
 # decision is visible.  Submit after the multistage manifest audit succeeds.
 #SBATCH --job-name=nlsr_scale
 #SBATCH --account=torch_pr_769_tandon_advanced
-#SBATCH --partition=h100_tand
+#SBATCH --partition=h100_tandon
 #SBATCH --qos=gpu48
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

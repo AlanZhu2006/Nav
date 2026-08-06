@@ -6,13 +6,14 @@
 # Example development smoke:
 #   sbatch --export=ALL,EXPECTED_COMMIT=<sha>,RUN_PREFIX=dev_smoke,\
 #SELECTION_MODE=deployment,KIND=cross_episode_evaluation,SCENE_ROLE=development,\
-#LOOP_SESSIONS='<positive>|<no-match>',MAX_SESSIONS=0,TOP_K=4 \
+#LOOP_SESSIONS='<positive>|<no-match>',MAX_SESSIONS=0,TOP_K=4,\
+#NEIGHBOR_OFFSETS='-4|0|4' \
 #     MemNavData/slurm_lingbot_native_localizer.sbatch
 #
 # Example frozen development collection after the smoke passes:
 #   sbatch --export=ALL,EXPECTED_COMMIT=<sha>,RUN_PREFIX=dev_full,\
 #SELECTION_MODE=deployment,KIND=cross_episode_evaluation,SCENE_ROLE=development,\
-#LOOP_SESSIONS=all,MAX_SESSIONS=0,TOP_K=8 \
+#LOOP_SESSIONS=all,MAX_SESSIONS=0,TOP_K=4,NEIGHBOR_OFFSETS=0 \
 #     MemNavData/slurm_lingbot_native_localizer.sbatch
 #SBATCH --job-name=lb_native_loc
 #SBATCH --output=/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_lb_native_%j.out
@@ -39,8 +40,9 @@ SCENE_ROLE=${SCENE_ROLE:-train}
 LOOP_SESSIONS=${LOOP_SESSIONS:-17DRP5sb8fy/episode_0000/revisit_b}
 MAX_SESSIONS=${MAX_SESSIONS:-1}
 PER_CLASS=${PER_CLASS:-2}
-TOP_K=${TOP_K:-8}
+TOP_K=${TOP_K:-4}
 FULL_REPLAY=${FULL_REPLAY:-1}
+NEIGHBOR_OFFSETS=${NEIGHBOR_OFFSETS:-0}
 
 [[ "${RUN_PREFIX}" =~ ^[A-Za-z0-9_.-]+$ ]] || {
   echo "ABORT: invalid RUN_PREFIX=${RUN_PREFIX}" >&2; exit 1; }
@@ -58,6 +60,10 @@ FULL_REPLAY=${FULL_REPLAY:-1}
   echo "ABORT: TOP_K must be a positive integer" >&2; exit 1; }
 [[ "${FULL_REPLAY}" =~ ^[01]$ ]] || {
   echo "ABORT: FULL_REPLAY must be 0 or 1" >&2; exit 1; }
+[[ "${NEIGHBOR_OFFSETS}" =~ ^-?[0-9]+(\|-?[0-9]+)*$ ]] || {
+  echo "ABORT: invalid NEIGHBOR_OFFSETS=${NEIGHBOR_OFFSETS}" >&2; exit 1; }
+[[ "|${NEIGHBOR_OFFSETS}|" == *"|0|"* ]] || {
+  echo "ABORT: NEIGHBOR_OFFSETS must contain 0" >&2; exit 1; }
 if [[ "${LOOP_SESSIONS}" != "all" ]]; then
   [[ "${LOOP_SESSIONS}" =~ ^[A-Za-z0-9_./|-]+$ ]] || {
     echo "ABORT: invalid LOOP_SESSIONS=${LOOP_SESSIONS}" >&2; exit 1; }
@@ -138,9 +144,6 @@ COMMON_ARGS=(
   --per-class "${PER_CLASS}"
   --top-k "${TOP_K}"
   --candidate-min-gap 4
-  --neighbor-offset=-4
-  --neighbor-offset=0
-  --neighbor-offset=4
   --warm 64
   --window 32
   --pixel-stride 10
@@ -149,6 +152,10 @@ COMMON_ARGS=(
 if [[ "${FULL_REPLAY}" == 1 ]]; then
   COMMON_ARGS+=(--full-replay)
 fi
+IFS='|' read -r -a neighbor_offsets <<< "${NEIGHBOR_OFFSETS}"
+for offset in "${neighbor_offsets[@]}"; do
+  COMMON_ARGS+=(--neighbor-offset="${offset}")
+done
 if [[ "${LOOP_SESSIONS}" != "all" ]]; then
   IFS='|' read -r -a selected_sessions <<< "${LOOP_SESSIONS}"
   for session in "${selected_sessions[@]}"; do

@@ -33,7 +33,10 @@ umask 0022
 RESULT_BASE="${RESULT_BASE:-/scratch/yz11502/Research/Nav-axis-uturn-results/nlsr_gapfill_20260807}"
 RUN_ROOT="${RESULT_BASE}/${RUN_TAG}"
 MANIFEST="${RUN_ROOT}/manifest_multistage/candidate_manifest_multistage.json"
-OUTPUT_ROOT="${RUN_ROOT}/navmesh_bake_habitat031_agent030"
+# A source revision is part of the bake run contract.  Keep failed or completed
+# attempts from another producer revision immutable instead of trying to
+# resume them under new code.
+OUTPUT_ROOT="${RUN_ROOT}/navmesh_bake_habitat031_agent030_${EXPECTED_COMMIT:0:12}"
 PRODUCER_REL="MemNavData/bake_pinned_navmeshes.py"
 AUDITOR_REL="MemNavData/audit_pinned_navmesh_bake.py"
 LAUNCHER_REL="MemNavData/slurm_nlsr_navmesh_bake.sbatch"

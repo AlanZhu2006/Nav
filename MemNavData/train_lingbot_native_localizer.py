@@ -301,6 +301,52 @@ class PackedExactSessions:
         )
 
 
+def balanced_overfit_subset(
+        packed: PackedExactSessions, max_sessions: int = 16,
+) -> PackedExactSessions:
+    """Select a deterministic positive/no-match subset for a learnability gate."""
+    if max_sessions < 2:
+        raise ValueError("overfit subset needs at least two sessions")
+    selected_match = packed.selected_match_target.detach().cpu().numpy() > 0.5
+    strict_no_match = (
+        packed.no_match_supervision_mask.detach().cpu().numpy()
+        & (packed.no_match_target.detach().cpu().numpy() > 0.5)
+    )
+    positive_indices = np.flatnonzero(selected_match)
+    no_match_indices = np.flatnonzero(strict_no_match)
+    if not len(positive_indices) or not len(no_match_indices):
+        raise RuntimeError(
+            "overfit subset requires selected-positive and strict no-match sessions")
+    per_class = max(1, max_sessions // 2)
+    chosen = list(positive_indices[:per_class]) + list(
+        no_match_indices[:per_class])
+    if len(chosen) < max_sessions:
+        remainder = [
+            index for index in range(len(packed.session_ids))
+            if index not in set(chosen)
+        ]
+        chosen.extend(remainder[:max_sessions - len(chosen)])
+    chosen = sorted(chosen)
+    index = torch.as_tensor(chosen, dtype=torch.long)
+    numpy_index = index.numpy()
+    return PackedExactSessions(
+        features=packed.features[index],
+        mask=packed.mask[index],
+        rank_target=packed.rank_target[index],
+        candidate_target=packed.candidate_target[index],
+        candidate_supervision_mask=packed.candidate_supervision_mask[index],
+        no_match_target=packed.no_match_target[index],
+        no_match_supervision_mask=packed.no_match_supervision_mask[index],
+        selected_match_target=packed.selected_match_target[index],
+        predicted_xy=packed.predicted_xy[index],
+        target_xy=packed.target_xy[index],
+        pose_mask=packed.pose_mask[index],
+        covisibility=packed.covisibility[numpy_index],
+        session_ids=tuple(packed.session_ids[position] for position in chosen),
+        scenes=tuple(packed.scenes[position] for position in chosen),
+    )
+
+
 def pack_exact_sessions(
     features: np.ndarray,
     groups: np.ndarray,
@@ -1034,6 +1080,10 @@ def parse_args() -> argparse.Namespace:
         "--preflight-only", action="store_true",
         help=("load the exact artifacts and run one all-head backward pass "
               "without evaluating development metrics or writing a model"))
+    parser.add_argument(
+        "--overfit-preflight-only", action="store_true",
+        help=("fit a deterministic 16-session train-only subset and fail "
+              "unless rank/no-match heads can memorize the exact labels"))
     return parser.parse_args()
 
 
@@ -1041,6 +1091,8 @@ def main() -> None:
     import pandas as pd
 
     args = parse_args()
+    if args.preflight_only and args.overfit_preflight_only:
+        raise ValueError("preflight modes are mutually exclusive")
     if args.out_dir.exists():
         raise FileExistsError(args.out_dir)
     if (args.epochs < 1 or args.patience < 1 or args.batch_size < 1
@@ -1174,6 +1226,31 @@ def main() -> None:
                 != development_audited_external.get(field)):
             raise RuntimeError(
                 f"train/development audits bind different external-scale {field}")
+    train_upstream = train_audit.get("upstream_receipts", {})
+    development_upstream = development_audit.get("upstream_receipts", {})
+    if train_external_coverage["external_rows"]:
+        for role, upstream in (
+                ("train", train_upstream),
+                ("development", development_upstream)):
+            if (not isinstance(upstream, dict)
+                    or upstream.get("approved") is not True):
+                raise RuntimeError(
+                    f"{role} artifact lacks approved upstream receipts")
+        for section, fields in (
+                ("teacher", ("csv_sha256", "audit_sha256")),
+                ("manifest", ("sha256",)),
+                ("scale", (
+                    "artifact_sha256", "acceptance_sha256",
+                    "acceptance_commit", "source_bundle_sha256",
+                    "configuration_sha256", "lingbot_commit",
+                    "weights_sha256", "stream_source_sha256"))):
+            train_section = train_upstream.get(section, {})
+            development_section = development_upstream.get(section, {})
+            for field in fields:
+                if train_section.get(field) != development_section.get(field):
+                    raise RuntimeError(
+                        "train/development audits bind different upstream "
+                        f"{section}.{field}")
     external_coverage_approved = bool(
         train_exact_coverage_approved
         and development_exact_coverage_approved)
@@ -1294,6 +1371,64 @@ def main() -> None:
                 "artifact_identity_sha256"),
             "development_artifact_identity_sha256": development_audit.get(
                 "artifact_identity_sha256"),
+            "train_audit_sha256": train_audit_sha256,
+            "development_audit_sha256": development_audit_sha256,
+        }, indent=2, sort_keys=True), flush=True)
+        return
+    if args.overfit_preflight_only:
+        overfit = balanced_overfit_subset(core, max_sessions=16)
+        model, selected_epoch, _metrics = train_model(
+            overfit, overfit,
+            input_dim=train_features.shape[1],
+            hidden_dim=args.hidden_dim,
+            dropout=0.0,
+            weight_decay=0.0,
+            learning_rate=max(args.learning_rate, 1e-3),
+            batch_size=len(overfit.session_ids),
+            epochs=max(args.epochs, 300),
+            patience=max(args.epochs, 300),
+            pose_weight=args.pose_weight,
+            pose_tail_weight=args.pose_tail_weight,
+            pose_tail_fraction=args.pose_tail_fraction,
+            seed=0,
+            device=device,
+            positive_threshold=args.positive_threshold,
+        )
+        prediction = predict(model, overfit, device)
+        threshold, localization = select_match_threshold(
+            overfit, prediction.probability,
+            positive_threshold=args.positive_threshold)
+        pose_gain, pose = select_pose_gain(overfit, prediction)
+        factors = localization_factor_metrics(
+            overfit, prediction, match_threshold=threshold)
+        joint = float(localization["joint_localization_accuracy"])
+        recall = float(
+            localization["conditional_candidate_recall_at_1"] or 0.0)
+        false_activation = factors.get(
+            "strict_no_match_false_activation_rate")
+        if joint < 0.95 or recall < 0.95:
+            raise RuntimeError(
+                "production-feature overfit gate failed: "
+                f"joint={joint:.4f} recall@1={recall:.4f}")
+        if false_activation is None or float(false_activation) > 0.05:
+            raise RuntimeError(
+                "production-feature no-match overfit gate failed: "
+                f"false_activation={false_activation}")
+        raw_p90 = pose.get("raw_translation_error_p90_m")
+        corrected_p90 = pose.get("corrected_translation_error_p90_m")
+        if (raw_p90 is not None and corrected_p90 is not None
+                and float(corrected_p90) > float(raw_p90) + 1e-8):
+            raise RuntimeError("pose residual overfit gate worsened translation p90")
+        print(json.dumps({
+            "status": "overfit_preflight_passed",
+            "sessions": len(overfit.session_ids),
+            "selected_epoch": selected_epoch,
+            "joint_localization_accuracy": joint,
+            "conditional_candidate_recall_at_1": recall,
+            "strict_no_match_false_activation_rate": false_activation,
+            "match_threshold": threshold,
+            "pose_gain": pose_gain,
+            "pose": pose,
             "train_audit_sha256": train_audit_sha256,
             "development_audit_sha256": development_audit_sha256,
         }, indent=2, sort_keys=True), flush=True)

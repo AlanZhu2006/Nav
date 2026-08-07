@@ -55,6 +55,10 @@ try:
         FlowRoutingError,
         registry_from_manifest,
     )
+    from MemNavData.phase_b_upstream_receipts import (
+        PhaseBUpstreamPins,
+        validate_phase_b_upstream_receipts,
+    )
 except ModuleNotFoundError:  # direct script invocation
     from external_causal_scale_contract import (  # type: ignore
         CAUSAL_SAMPLE_ID_COLUMN,
@@ -67,6 +71,10 @@ except ModuleNotFoundError:  # direct script invocation
     from flow_cache_routing import (  # type: ignore
         FlowRoutingError,
         registry_from_manifest,
+    )
+    from phase_b_upstream_receipts import (  # type: ignore
+        PhaseBUpstreamPins,
+        validate_phase_b_upstream_receipts,
     )
 
 
@@ -1298,6 +1306,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-external-scale-lingbot-commit")
     parser.add_argument("--expected-external-scale-weights-sha256")
     parser.add_argument("--expected-external-scale-stream-source-sha256")
+    parser.add_argument(
+        "--causal-teacher-audit", type=Path,
+        help="independent audit receipt for the exact causal teacher CSV")
+    parser.add_argument("--expected-causal-teacher-audit-sha256")
+    parser.add_argument(
+        "--causal-scale-acceptance", type=Path,
+        help="independent physical-prefix acceptance receipt for causal scale")
+    parser.add_argument("--expected-causal-scale-acceptance-sha256")
+    parser.add_argument("--expected-causal-scale-acceptance-commit")
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--kind", default="revisit_b")
@@ -1363,6 +1380,11 @@ def main() -> None:
         args.expected_external_scale_lingbot_commit,
         args.expected_external_scale_weights_sha256,
         args.expected_external_scale_stream_source_sha256,
+        args.causal_teacher_audit,
+        args.expected_causal_teacher_audit_sha256,
+        args.causal_scale_acceptance,
+        args.expected_causal_scale_acceptance_sha256,
+        args.expected_causal_scale_acceptance_commit,
     )
     external_scale_mode = any(value is not None for value in external_arguments)
     if external_scale_mode and not all(value is not None
@@ -1414,6 +1436,7 @@ def main() -> None:
 
     external_contract: Optional[ExternalCausalScaleContract] = None
     external_contract_summary: Optional[dict] = None
+    upstream_receipts_summary: Optional[dict] = None
     if external_scale_mode:
         assert args.causal_manifest is not None
         assert args.external_causal_scale_artifact is not None
@@ -1424,6 +1447,11 @@ def main() -> None:
         assert args.expected_external_scale_lingbot_commit is not None
         assert args.expected_external_scale_weights_sha256 is not None
         assert args.expected_external_scale_stream_source_sha256 is not None
+        assert args.causal_teacher_audit is not None
+        assert args.expected_causal_teacher_audit_sha256 is not None
+        assert args.causal_scale_acceptance is not None
+        assert args.expected_causal_scale_acceptance_sha256 is not None
+        assert args.expected_causal_scale_acceptance_commit is not None
         stream_source = (
             args.internnav_root / "internnav" / "model" / "basemodel"
             / "memnav" / "lingbot_stream.py")
@@ -1458,6 +1486,35 @@ def main() -> None:
             raise RuntimeError(
                 "collector num_scale differs from the external scale contract")
         external_contract_summary = external_contract.summary()
+        upstream_receipts_summary = validate_phase_b_upstream_receipts(
+            teacher_csv_path=args.teacher_csv,
+            teacher_audit_path=args.causal_teacher_audit,
+            manifest_path=args.causal_manifest,
+            scale_artifact_path=args.external_causal_scale_artifact,
+            scale_acceptance_path=args.causal_scale_acceptance,
+            pins=PhaseBUpstreamPins(
+                teacher_csv_sha256=teacher_sha,
+                teacher_audit_sha256=(
+                    args.expected_causal_teacher_audit_sha256),
+                manifest_sha256=args.expected_causal_manifest_sha256,
+                scale_artifact_sha256=(
+                    args.expected_external_causal_scale_sha256),
+                scale_acceptance_sha256=(
+                    args.expected_causal_scale_acceptance_sha256),
+                scale_acceptance_commit=(
+                    args.expected_causal_scale_acceptance_commit),
+                scale_producer_sha256=(
+                    args.expected_external_scale_producer_sha256),
+                scale_configuration_sha256=(
+                    args.expected_external_scale_configuration_sha256),
+                scale_lingbot_commit=(
+                    args.expected_external_scale_lingbot_commit),
+                scale_weights_sha256=(
+                    args.expected_external_scale_weights_sha256),
+                scale_stream_source_sha256=(
+                    args.expected_external_scale_stream_source_sha256),
+            ),
+        )
 
     teacher = pd.read_csv(args.teacher_csv)
     missing = REQUIRED_COLUMNS - set(teacher.columns)
@@ -1617,6 +1674,7 @@ def main() -> None:
             "lingbot_weight_sha256": weight_sha,
             "teacher_csv_sha256": teacher_sha,
             "external_causal_scale": external_contract_summary,
+            "upstream_receipts": upstream_receipts_summary,
             "flow_cache_routing": routed_cache_provenance,
         }, indent=2, sort_keys=True))
         return
@@ -1675,6 +1733,7 @@ def main() -> None:
                 if args.feature_root is not None else None),
             "flow_cache_routing": routed_cache_provenance,
             "external_causal_scale": external_contract_summary,
+            "upstream_receipts": upstream_receipts_summary,
         },
     }
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -2048,6 +2107,7 @@ def main() -> None:
                 if args.feature_root is not None else None),
             "flow_cache_routing": routed_cache_provenance,
             "external_causal_scale": external_contract_summary,
+            "upstream_receipts": upstream_receipts_summary,
             "elapsed_seconds": time.time() - started,
         },
         "rows_csv": str(csv_path.resolve()),

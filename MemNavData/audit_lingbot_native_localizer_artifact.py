@@ -33,12 +33,22 @@ try:
         ExternalCausalScalePins,
         validate_external_causal_frame,
     )
+    from MemNavData.phase_b_upstream_receipts import (
+        PhaseBUpstreamPins,
+        PhaseBUpstreamReceiptError,
+        validate_phase_b_upstream_receipts,
+    )
 except ModuleNotFoundError:  # direct script invocation
     from external_causal_scale_contract import (  # type: ignore
         ExternalCausalScaleContract,
         ExternalCausalScaleError,
         ExternalCausalScalePins,
         validate_external_causal_frame,
+    )
+    from phase_b_upstream_receipts import (  # type: ignore
+        PhaseBUpstreamPins,
+        PhaseBUpstreamReceiptError,
+        validate_phase_b_upstream_receipts,
     )
 
 
@@ -452,6 +462,11 @@ def audit_artifact(
     expected_source_commit: Optional[str] = None,
     expected_teacher_sha256: Optional[str] = None,
     expected_split_sha256: Optional[str] = None,
+    causal_teacher_audit: Optional[Path] = None,
+    expected_causal_teacher_audit_sha256: Optional[str] = None,
+    causal_scale_acceptance: Optional[Path] = None,
+    expected_causal_scale_acceptance_sha256: Optional[str] = None,
+    expected_causal_scale_acceptance_commit: Optional[str] = None,
     out_report: Optional[Path] = None,
     raise_on_failure: bool = True,
 ) -> dict:
@@ -741,6 +756,83 @@ def audit_artifact(
                     f"row/collector external scale {row_field} differs",
                 )
 
+    upstream_receipts = {
+        "approved": False,
+        "reason": "legacy artifact without formal upstream receipts",
+    }
+    if isinstance(signature_external, dict):
+        receipt_arguments = (
+            causal_teacher_audit,
+            expected_causal_teacher_audit_sha256,
+            causal_scale_acceptance,
+            expected_causal_scale_acceptance_sha256,
+            expected_causal_scale_acceptance_commit,
+        )
+        if not all(value is not None for value in receipt_arguments):
+            errors.append(
+                "formal external artifact requires independently pinned "
+                "teacher-audit and scale-acceptance receipts")
+        else:
+            try:
+                assert causal_teacher_audit is not None
+                assert expected_causal_teacher_audit_sha256 is not None
+                assert causal_scale_acceptance is not None
+                assert expected_causal_scale_acceptance_sha256 is not None
+                assert expected_causal_scale_acceptance_commit is not None
+                upstream_receipts = validate_phase_b_upstream_receipts(
+                    teacher_csv_path=teacher_csv,
+                    teacher_audit_path=causal_teacher_audit,
+                    manifest_path=Path(str(signature_external["manifest_path"])),
+                    scale_artifact_path=Path(
+                        str(signature_external["artifact_path"])),
+                    scale_acceptance_path=causal_scale_acceptance,
+                    pins=PhaseBUpstreamPins(
+                        teacher_csv_sha256=teacher_sha,
+                        teacher_audit_sha256=(
+                            expected_causal_teacher_audit_sha256),
+                        manifest_sha256=str(
+                            signature_external["manifest_sha256"]),
+                        scale_artifact_sha256=str(
+                            signature_external["artifact_sha256"]),
+                        scale_acceptance_sha256=(
+                            expected_causal_scale_acceptance_sha256),
+                        scale_acceptance_commit=(
+                            expected_causal_scale_acceptance_commit),
+                        scale_producer_sha256=str(
+                            signature_external["producer_source_sha256"]),
+                        scale_configuration_sha256=str(
+                            signature_external["configuration_sha256"]),
+                        scale_lingbot_commit=str(
+                            signature_external["lingbot_commit"]),
+                        scale_weights_sha256=str(
+                            signature_external["weights_sha256"]),
+                        scale_stream_source_sha256=str(
+                            signature_external["stream_source_sha256"]),
+                    ),
+                )
+                signature_receipts = provenance.get("upstream_receipts")
+                report_receipts = report_provenance.get("upstream_receipts")
+                _record(
+                    errors, signature_receipts == upstream_receipts,
+                    "physical upstream receipts differ from checkpoint",
+                )
+                _record(
+                    errors, report_receipts == upstream_receipts,
+                    "collector report/checkpoint upstream receipts differ",
+                )
+                upstream_receipts = {
+                    **upstream_receipts,
+                    "approved": True,
+                }
+            except (
+                    KeyError, TypeError, ValueError,
+                    PhaseBUpstreamReceiptError) as error:
+                errors.append(f"upstream receipt binding failed: {error}")
+                upstream_receipts = {
+                    "approved": False,
+                    "reason": str(error),
+                }
+
     _record(errors, teacher_alignment.get("positive_rows", 0) > 0,
             "artifact has no positive candidates")
     _record(errors, teacher_alignment.get("negative_rows", 0) > 0,
@@ -758,6 +850,8 @@ def audit_artifact(
         "split_manifest_sha256": split_sha,
         "external_causal_scale_contract_sha256": hashlib.sha256(
             canonical_json(external_causal_scale).encode("utf-8")).hexdigest(),
+        "upstream_receipt_binding_sha256": hashlib.sha256(
+            canonical_json(upstream_receipts).encode("utf-8")).hexdigest(),
     }
     result = {
         "training_artifact_approved": not errors,
@@ -774,6 +868,7 @@ def audit_artifact(
         "selection_policy": selection_policy,
         "finite_rates": finite_rates,
         "external_causal_scale": external_causal_scale,
+        "upstream_receipts": upstream_receipts,
         "provenance": {
             **identity_payload,
             "source_commit": provenance.get("source_commit"),
@@ -805,6 +900,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-source-commit")
     parser.add_argument("--expected-teacher-sha256")
     parser.add_argument("--expected-split-sha256")
+    parser.add_argument("--causal-teacher-audit", type=Path)
+    parser.add_argument("--expected-causal-teacher-audit-sha256")
+    parser.add_argument("--causal-scale-acceptance", type=Path)
+    parser.add_argument("--expected-causal-scale-acceptance-sha256")
+    parser.add_argument("--expected-causal-scale-acceptance-commit")
     parser.add_argument("--out-report", type=Path)
     return parser.parse_args()
 
@@ -830,6 +930,14 @@ def main() -> None:
         expected_source_commit=args.expected_source_commit,
         expected_teacher_sha256=args.expected_teacher_sha256,
         expected_split_sha256=args.expected_split_sha256,
+        causal_teacher_audit=args.causal_teacher_audit,
+        expected_causal_teacher_audit_sha256=(
+            args.expected_causal_teacher_audit_sha256),
+        causal_scale_acceptance=args.causal_scale_acceptance,
+        expected_causal_scale_acceptance_sha256=(
+            args.expected_causal_scale_acceptance_sha256),
+        expected_causal_scale_acceptance_commit=(
+            args.expected_causal_scale_acceptance_commit),
         out_report=args.out_report,
     )
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)

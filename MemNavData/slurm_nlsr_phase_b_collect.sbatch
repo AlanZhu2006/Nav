@@ -83,7 +83,8 @@ full_sha_is() {
 }
 
 sidecar_is() {
-  local artifact="$1" expected="$2" sidecar="${artifact}.sha256"
+  local artifact="$1" expected="$2" sidecar
+  sidecar="${artifact}.sha256"
   [[ -f "${sidecar}" && ! -L "${sidecar}" ]] || fail "missing sidecar ${sidecar}"
   [[ "$(<"${sidecar}")" == "${expected}  $(basename "${artifact}")" ]] || \
     fail "sidecar differs for ${artifact}"

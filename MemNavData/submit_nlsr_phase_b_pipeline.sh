@@ -50,17 +50,15 @@ COLLECT_SHA="$(sha256sum "${COLLECT}" | awk '{print $1}')"
 AUDIT_SHA="$(sha256sum "${AUDIT}" | awk '{print $1}')"
 RELAY_SHA="$(sha256sum "${RELAY}" | awk '{print $1}')"
 
-submit_collect() {
-  local role="$1" partition="$2" dependency="${3:-}" exports args job
+submit_collect_array() {
+  local role="$1" partition="$2" exports job
   exports="ALL,REPO_ROOT=${REPO_ROOT},EXPECTED_COMMIT=${EXPECTED_COMMIT}"
   exports+=",EXPECTED_LAUNCHER_SHA=${COLLECT_SHA},RUN_TAG=${RUN_TAG}"
   exports+=",PHASE_B_ROLE=${role}"
-  args=(--partition="${partition}" --export="${exports}")
-  if [[ -n "${dependency}" ]]; then
-    args+=(--dependency="${dependency}" --kill-on-invalid-dep=yes)
-  fi
-  sbatch --test-only "${args[@]}" "${COLLECT}" >/dev/null
-  job="$(sbatch --parsable "${args[@]}" "${COLLECT}")"
+  sbatch --test-only --partition="${partition}" --array=0-1%1 \
+    --export="${exports}" "${COLLECT}" >/dev/null
+  job="$(sbatch --parsable --partition="${partition}" --array=0-1%1 \
+    --export="${exports}" "${COLLECT}")"
   job="${job%%;*}"
   [[ "${job}" =~ ^[0-9]+$ ]] || fail "unexpected collector submission: ${job}"
   printf '%s' "${job}"
@@ -80,17 +78,13 @@ submit_audit() {
   printf '%s' "${job}"
 }
 
-TRAIN_INITIAL="$(submit_collect train "${TRAIN_PARTITION}")"
-DEVELOPMENT_INITIAL="$(submit_collect development "${DEVELOPMENT_PARTITION}")"
-# One continuation per role guarantees that a wall-time timeout loses at most
-# the current session.  If the first job already completed, this job performs
-# the full preflight and exits before allocating LingBot weights.
-TRAIN_CONTINUATION="$(submit_collect train "${TRAIN_PARTITION}" \
-  "afterany:${TRAIN_INITIAL}")"
-DEVELOPMENT_CONTINUATION="$(submit_collect development "${DEVELOPMENT_PARTITION}" \
-  "afterany:${DEVELOPMENT_INITIAL}")"
-TRAIN_AUDIT_JOB="$(submit_audit train "${TRAIN_CONTINUATION}")"
-DEVELOPMENT_AUDIT_JOB="$(submit_audit development "${DEVELOPMENT_CONTINUATION}")"
+# Each role is a two-element, maximum-concurrency-one array.  This keeps only
+# one GPU request per partition eligible at a time (important for H100 user
+# QoS), while the second element remains a session-atomic continuation.
+TRAIN_ARRAY="$(submit_collect_array train "${TRAIN_PARTITION}")"
+DEVELOPMENT_ARRAY="$(submit_collect_array development "${DEVELOPMENT_PARTITION}")"
+TRAIN_AUDIT_JOB="$(submit_audit train "${TRAIN_ARRAY}")"
+DEVELOPMENT_AUDIT_JOB="$(submit_audit development "${DEVELOPMENT_ARRAY}")"
 
 relay_exports="ALL,REPO_ROOT=${REPO_ROOT},EXPECTED_COMMIT=${EXPECTED_COMMIT}"
 relay_exports+=",EXPECTED_LAUNCHER_SHA=${RELAY_SHA},RUN_TAG=${RUN_TAG}"
@@ -104,7 +98,6 @@ RELAY_JOB="$(sbatch --parsable --dependency="${relay_dependency}" \
 RELAY_JOB="${RELAY_JOB%%;*}"
 [[ "${RELAY_JOB}" =~ ^[0-9]+$ ]] || fail "unexpected relay submission: ${RELAY_JOB}"
 
-printf 'submitted_phase_b_pipeline commit=%s train=%s train_resume=%s dev=%s dev_resume=%s train_audit=%s dev_audit=%s relay=%s\n' \
-  "${EXPECTED_COMMIT}" "${TRAIN_INITIAL}" "${TRAIN_CONTINUATION}" \
-  "${DEVELOPMENT_INITIAL}" "${DEVELOPMENT_CONTINUATION}" \
+printf 'submitted_phase_b_pipeline commit=%s train_array=%s dev_array=%s train_audit=%s dev_audit=%s relay=%s\n' \
+  "${EXPECTED_COMMIT}" "${TRAIN_ARRAY}" "${DEVELOPMENT_ARRAY}" \
   "${TRAIN_AUDIT_JOB}" "${DEVELOPMENT_AUDIT_JOB}" "${RELAY_JOB}"

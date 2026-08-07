@@ -20,10 +20,17 @@ from MemNavData.audit_lingbot_native_localizer_artifact import (
     sha256,
 )
 from MemNavData.train_lingbot_native_localizer import (
+    CHECKPOINT_MODEL_KIND,
+    CHECKPOINT_SCHEMA_VERSION,
+    FEATURE_DIMENSION,
+    FEATURE_NAMES_SHA256,
+    FEATURE_SCHEMA_VERSION,
+    METRIC_SCALE_SOURCES,
     LingBotNativeLocalizer,
     Prediction,
     apply_pose_gain,
     build_feature_matrix,
+    load_pinned_artifact_audit,
     model_loss,
     pack_exact_sessions,
     pose_metrics,
@@ -31,6 +38,12 @@ from MemNavData.train_lingbot_native_localizer import (
     select_pose_gain,
     stratified_scene_split,
     train_model,
+    validate_phase_b_checkpoint_artifact,
+)
+from MemNavData.external_causal_scale_contract import (
+    EXTERNAL_CAUSAL_ROW_COLUMNS,
+    EXTERNAL_CAUSAL_SCALE_SOURCE,
+    validate_external_causal_frame,
 )
 
 
@@ -64,6 +77,9 @@ def synthetic_rows() -> pd.DataFrame:
             "dino_cosine": 0.9 - frame / 1000.0,
             "metric_scale_m_per_raw": 2.5,
             "metric_scale_source": "cached_ground_anchored",
+            "external_scale_valid_frame_ratio": 1.0,
+            "external_scale_relative_h_iqr": 0.0,
+            "external_scale_clamped": 0,
             "n_hypotheses": 1,
             "neighbor_offsets": "0",
             "depth_scale_raw": 0.8,
@@ -93,11 +109,55 @@ def synthetic_rows() -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+def externalized_rows() -> pd.DataFrame:
+    frame = synthetic_rows()
+    frame["metric_scale_source"] = EXTERNAL_CAUSAL_SCALE_SOURCE
+    for row_index, row in frame.iterrows():
+        sample_suffix = "positive" if "positive" in row["session_id"] else "novel"
+        values = {
+            "causal_manifest_sample_id": f"train/{row['scene']}/{sample_suffix}",
+            "causal_split_role": "train",
+            "causal_source_episode_id": f"{row['scene']}/episode_0000",
+            "causal_goal_source_episode_id": f"{row['scene']}/episode_goal",
+            "causal_goal_variant": "counterfactual",
+            "causal_goal_role": "B",
+            "causal_state_name": "goal_b_t0",
+            "causal_decision_frame": 32,
+            "causal_prefix_sha256": "1" * 64,
+            "causal_navdp_fifo_sha256": "2" * 64,
+            "causal_goal_sha256": "3" * 64,
+            "causal_manifest_sha256": "4" * 64,
+            "causal_manifest_schema_version": (
+                "nlsr_v2_multistage_expert_candidate_manifest_v1"),
+            "external_scale_artifact_sha256": "5" * 64,
+            "external_scale_record_sha256": "6" * 64,
+            "external_scale_prefix_end_frame_exclusive": 8,
+            "external_scale_cam_pose_prefix_sha256": "7" * 64,
+            "external_scale_rgb_prefix_content_sequence_sha256": "8" * 64,
+            "external_scale_producer_sha256": "9" * 64,
+            "external_scale_configuration_sha256": "a" * 64,
+            "external_scale_lingbot_commit": "b" * 40,
+            "external_scale_weights_sha256": "c" * 64,
+            "external_scale_stream_source_sha256": "d" * 64,
+            "external_scale_valid_frame_ratio": 0.75,
+            "external_scale_relative_h_iqr": 0.1,
+            "external_scale_clamped": 0,
+        }
+        for column, value in values.items():
+            frame.loc[row_index, column] = value
+        frame.loc[row_index, "session_id"] = values[
+            "causal_manifest_sample_id"]
+    self_check = set(EXTERNAL_CAUSAL_ROW_COLUMNS) - set(frame.columns)
+    if self_check:
+        raise AssertionError(f"external fixture lacks {sorted(self_check)}")
+    return frame
+
+
 class LingBotNativeArtifactAuditTest(unittest.TestCase):
-    def build_artifact(self, root: Path):
+    def build_artifact(self, root: Path, *, external: bool = False):
         run = root / "run"
         run.mkdir()
-        rows = synthetic_rows()
+        rows = externalized_rows() if external else synthetic_rows()
         rows.to_csv(run / CSV_NAME, index=False)
         teacher = rows[[
             "session_id", "scene", "episode", "kind", "query_path",
@@ -120,6 +180,9 @@ class LingBotNativeArtifactAuditTest(unittest.TestCase):
             "compute_config": {
                 "positive_threshold": 0.5,
                 "negative_threshold": 0.2,
+                "metric_scale_mode": (
+                    EXTERNAL_CAUSAL_SCALE_SOURCE
+                    if external else "legacy_runtime_or_cached"),
             },
             "provenance": {
                 "source_commit": "abc123",
@@ -129,6 +192,12 @@ class LingBotNativeArtifactAuditTest(unittest.TestCase):
                 "split_manifest_sha256": sha256(split_path),
             },
         }
+        if external:
+            signature["provenance"]["external_causal_scale"] = {
+                "mode": EXTERNAL_CAUSAL_SCALE_SOURCE,
+                "manifest_sha256": "4" * 64,
+                "artifact_sha256": "5" * 64,
+            }
         signature_json = canonical_json(signature)
         connection = sqlite3.connect(run / CHECKPOINT_NAME)
         connection.executescript("""
@@ -155,12 +224,16 @@ class LingBotNativeArtifactAuditTest(unittest.TestCase):
             connection.execute(
                 "INSERT INTO rows VALUES (?, ?, ?)",
                 (index, record["session_id"], json.dumps(record)))
+        sessions = []
+        for session_id, group in rows.groupby("session_id", sort=False):
+            indices = [int(index) + 1 for index in group.index]
+            sessions.append((
+                str(session_id), min(indices), max(indices),
+                len(indices), len(indices),
+            ))
         connection.executemany(
             "INSERT INTO completed_sessions VALUES (?, ?, ?, ?, ?)",
-            [
-                ("scene_a/session_positive", 1, 2, 2, 2),
-                ("scene_b/session_no_match", 3, 4, 2, 2),
-            ])
+            sessions)
         connection.commit()
         connection.close()
         signature_sha = hashlib.sha256(
@@ -231,6 +304,17 @@ class LingBotNativeArtifactAuditTest(unittest.TestCase):
                     raise_on_failure=True,
                 )
 
+    def test_artifact_audit_rejects_self_declared_external_pins(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run, teacher, split = self.build_artifact(root, external=True)
+            with self.assertRaisesRegex(
+                    RuntimeError, "external causal-scale contract"):
+                audit_artifact(
+                    run, teacher, split,
+                    expected_role="train",
+                )
+
 
 class LingBotNativeTrainerTest(unittest.TestCase):
     def packed(self):
@@ -253,10 +337,108 @@ class LingBotNativeTrainerTest(unittest.TestCase):
     def test_feature_allow_list_excludes_ground_truth(self):
         packed, names = self.packed()
         self.assertEqual(packed.features.shape[-1], len(names))
+        self.assertEqual(len(names), FEATURE_DIMENSION)
         for name in names:
             self.assertNotIn("target_", name)
             self.assertNotIn("error", name)
             self.assertNotIn("teacher", name)
+
+    def test_external_scale_has_a_dedicated_one_hot_not_other(self):
+        frame = externalized_rows()
+        features, names, _predicted, _target = build_feature_matrix(frame)
+        external_index = names.index(
+            f"metric_scale_source={EXTERNAL_CAUSAL_SCALE_SOURCE}")
+        other_index = names.index("metric_scale_source=other")
+        np.testing.assert_array_equal(features[:, external_index], 1.0)
+        np.testing.assert_array_equal(features[:, other_index], 0.0)
+        self.assertEqual(names[-8:-3], [
+            *(f"metric_scale_source={source}" for source in METRIC_SCALE_SOURCES),
+            "metric_scale_source=other",
+        ])
+        self.assertEqual(names[-3:], [
+            "external_scale_valid_frame_ratio",
+            "external_scale_relative_h_iqr",
+            "external_scale_clamped",
+        ])
+
+    def test_external_scale_row_contract_reports_real_coverage(self):
+        coverage = validate_external_causal_frame(externalized_rows())
+        self.assertTrue(coverage["approved"])
+        self.assertEqual(coverage["external_rows"], 4)
+        self.assertEqual(coverage["external_sessions"], 2)
+        self.assertEqual(coverage["external_samples"], 2)
+
+    def test_external_scale_rows_cannot_mix_legacy_or_invalid_quality(self):
+        mixed = externalized_rows()
+        mixed.loc[mixed.index[0], "metric_scale_source"] = "pooled_fallback"
+        with self.assertRaisesRegex(RuntimeError, "mixes external and legacy"):
+            validate_external_causal_frame(mixed)
+        malformed = externalized_rows()
+        malformed.loc[
+            malformed.index[0], "external_scale_relative_h_iqr"] = np.nan
+        with self.assertRaisesRegex(RuntimeError, "relative h_iqr"):
+            validate_external_causal_frame(malformed)
+
+    def test_legacy_sixteen_and_seventeen_dimensional_checkpoints_are_rejected(self):
+        frame = externalized_rows()
+        _features, names, _predicted, _target = build_feature_matrix(frame)
+        artifact = {
+            "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "model_kind": CHECKPOINT_MODEL_KIND,
+            "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "input_dim": FEATURE_DIMENSION,
+            "feature_names": names,
+            "feature_names_sha256": FEATURE_NAMES_SHA256,
+            "metric_scale_source_categories": list(METRIC_SCALE_SOURCES),
+            "normalization_mean": [0.0] * FEATURE_DIMENSION,
+            "normalization_scale": [1.0] * FEATURE_DIMENSION,
+            "deployment_input_contract_approved": True,
+            "external_causal_scale_coverage": {
+                "approved": True,
+                "train_exact_coverage_approved": True,
+                "development_exact_coverage_approved": True,
+            },
+            "train_artifact_identity_sha256": "d" * 64,
+            "development_artifact_identity_sha256": "e" * 64,
+            "train_audit_sha256": "f" * 64,
+            "development_audit_sha256": "0" * 64,
+        }
+        validate_phase_b_checkpoint_artifact(artifact)
+        for dimension in (16, 17):
+            legacy = dict(artifact)
+            legacy["input_dim"] = dimension
+            with self.assertRaisesRegex(RuntimeError, "input dimension"):
+                validate_phase_b_checkpoint_artifact(legacy)
+        obsolete = dict(artifact)
+        obsolete["checkpoint_schema_version"] = 1
+        with self.assertRaisesRegex(RuntimeError, "obsolete"):
+            validate_phase_b_checkpoint_artifact(obsolete)
+
+    def test_artifact_audit_requires_external_file_sha_pin(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "audit.json"
+            path.write_text(json.dumps({
+                "training_artifact_approved": True,
+                "role": "train",
+            }), encoding="utf-8")
+            pinned = sha256(path)
+            audit, actual = load_pinned_artifact_audit(
+                path, expected_sha256=pinned, expected_role="train")
+            self.assertTrue(audit["training_artifact_approved"])
+            self.assertEqual(actual, pinned)
+
+            # The JSON can still self-declare approval, but it is no longer
+            # the externally pinned audit receipt after this mutation.
+            path.write_text(json.dumps({
+                "training_artifact_approved": True,
+                "role": "development",
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "audit SHA256 changed"):
+                load_pinned_artifact_audit(
+                    path, expected_sha256=pinned, expected_role="train")
+            with self.assertRaisesRegex(ValueError, "lowercase/complete"):
+                load_pinned_artifact_audit(
+                    path, expected_sha256="bad", expected_role="train")
 
     def test_pack_uses_dustbin_and_pose_only_on_selected_positive(self):
         packed, _ = self.packed()

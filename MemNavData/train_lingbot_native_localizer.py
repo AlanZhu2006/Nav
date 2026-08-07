@@ -25,9 +25,10 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import tempfile
 import time
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 import numpy as np
 import torch
@@ -47,6 +48,22 @@ try:
         localization_metrics,
         select_match_threshold,
     )
+    from MemNavData.external_causal_scale_contract import (
+        ExternalCausalScaleError,
+        validate_external_causal_frame,
+    )
+    from MemNavData.phase_b_feature_schema import (
+        CHECKPOINT_MODEL_KIND,
+        CHECKPOINT_SCHEMA_VERSION,
+        EXTERNAL_SCALE_QUALITY_COLUMNS,
+        FEATURE_DIMENSION,
+        FEATURE_NAMES,
+        FEATURE_NAMES_SHA256,
+        FEATURE_SCHEMA_VERSION,
+        METRIC_SCALE_SOURCES,
+        SCALAR_INPUT_COLUMNS,
+        validate_checkpoint_metadata,
+    )
 except ModuleNotFoundError:  # direct script invocation
     from audit_lingbot_native_localizer_artifact import (  # type: ignore
         CSV_NAME,
@@ -60,24 +77,24 @@ except ModuleNotFoundError:  # direct script invocation
         localization_metrics,
         select_match_threshold,
     )
+    from external_causal_scale_contract import (  # type: ignore
+        ExternalCausalScaleError,
+        validate_external_causal_frame,
+    )
+    from phase_b_feature_schema import (  # type: ignore
+        CHECKPOINT_MODEL_KIND,
+        CHECKPOINT_SCHEMA_VERSION,
+        EXTERNAL_SCALE_QUALITY_COLUMNS,
+        FEATURE_DIMENSION,
+        FEATURE_NAMES,
+        FEATURE_NAMES_SHA256,
+        FEATURE_SCHEMA_VERSION,
+        METRIC_SCALE_SOURCES,
+        SCALAR_INPUT_COLUMNS,
+        validate_checkpoint_metadata,
+    )
 
 
-SCALAR_INPUT_COLUMNS = (
-    "dino_cosine",
-    "metric_scale_m_per_raw",
-    "depth_scale_raw",
-    "cloud_overlap_f1_center",
-    "anchor_goal_distance_norm_center",
-    "goal_refine_translation_norm_median",
-    "goal_refine_rotation_deg_median",
-    "goal_depth_confidence_mean",
-    "candidate_depth_confidence_mean",
-)
-METRIC_SCALE_SOURCES = (
-    "cached_ground_anchored",
-    "runtime_ground_anchored",
-    "pooled_fallback",
-)
 PREDICTED_XY_COLUMN = "predicted_relative_xy_m_center_json"
 TARGET_XY_COLUMN = "target_relative_xy_m_center_json"
 FORBIDDEN_INPUT_FRAGMENTS = (
@@ -89,6 +106,7 @@ FORBIDDEN_INPUT_FRAGMENTS = (
     "teacher_covis",
     "label",
 )
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def atomic_write_json(path: Path, value: object) -> None:
@@ -126,8 +144,9 @@ def atomic_torch_save(path: Path, value: object) -> None:
 
 def build_feature_matrix(frame) -> tuple[np.ndarray, list[str], np.ndarray, np.ndarray]:
     """Construct the sole deployment-input allow-list and pose targets."""
-    missing = set(SCALAR_INPUT_COLUMNS) | {PREDICTED_XY_COLUMN, TARGET_XY_COLUMN,
-                                           "metric_scale_source"}
+    missing = (set(SCALAR_INPUT_COLUMNS) | set(EXTERNAL_SCALE_QUALITY_COLUMNS)
+               | {PREDICTED_XY_COLUMN, TARGET_XY_COLUMN,
+                  "metric_scale_source"})
     if absent := missing - set(frame.columns):
         raise ValueError(f"exact rows missing training columns: {sorted(absent)}")
     features = []
@@ -164,13 +183,78 @@ def build_feature_matrix(frame) -> tuple[np.ndarray, list[str], np.ndarray, np.n
         known |= source == category
     features.append((~known).astype(np.float64)[:, None])
     names.append("metric_scale_source=other")
+    quality = {
+        column: frame[column].to_numpy(dtype=np.float64)
+        for column in EXTERNAL_SCALE_QUALITY_COLUMNS
+    }
+    if (not np.isfinite(quality["external_scale_valid_frame_ratio"]).all()
+            or np.any(quality["external_scale_valid_frame_ratio"] <= 0.0)
+            or np.any(quality["external_scale_valid_frame_ratio"] > 1.0)):
+        raise ValueError("invalid external scale valid-frame ratio")
+    if (not np.isfinite(quality["external_scale_relative_h_iqr"]).all()
+            or np.any(quality["external_scale_relative_h_iqr"] < 0.0)):
+        raise ValueError("invalid external scale relative h_iqr")
+    clamp = quality["external_scale_clamped"]
+    if (not np.isfinite(clamp).all()
+            or not np.isin(clamp, (0.0, 1.0)).all()):
+        raise ValueError("invalid external scale clamp flag")
+    for column in EXTERNAL_SCALE_QUALITY_COLUMNS:
+        features.append(quality[column][:, None])
+        names.append(column)
     for name in names:
         if any(fragment in name for fragment in FORBIDDEN_INPUT_FRAGMENTS):
             raise RuntimeError(f"forbidden target leaked into input: {name}")
     matrix = np.concatenate(features, axis=1).astype(np.float32)
     if not np.isfinite(matrix).all():
         raise ValueError("constructed feature matrix is non-finite")
+    if names != list(FEATURE_NAMES) or matrix.shape[1] != FEATURE_DIMENSION:
+        raise RuntimeError("constructed feature matrix violates shared Phase-B ABI")
     return matrix, names, predicted_xy.astype(np.float32), target_xy.astype(np.float32)
+
+
+def expected_feature_names() -> list[str]:
+    return list(FEATURE_NAMES)
+
+
+def validate_phase_b_checkpoint_artifact(
+    artifact: Mapping[str, Any], *, require_deployment_input_contract: bool = True,
+) -> None:
+    """Reject legacy/shifted Phase-B checkpoints before model construction."""
+    validate_checkpoint_metadata(
+        artifact,
+        require_deployment_input_contract=require_deployment_input_contract,
+    )
+
+
+def load_pinned_artifact_audit(
+    path: Path,
+    *,
+    expected_sha256: str,
+    expected_role: str,
+) -> tuple[dict, str]:
+    """Load an externally SHA-pinned audit instead of trusting self-reporting.
+
+    The audit JSON contains approval and coverage booleans, so its path is not
+    an authority.  The caller must supply the digest obtained from the frozen
+    audit/receipt stage; mutating even one self-declared field then fails before
+    any training input is consumed.
+    """
+
+    if (not isinstance(expected_sha256, str)
+            or _SHA256_RE.fullmatch(expected_sha256) is None):
+        raise ValueError(
+            f"expected {expected_role} audit SHA256 is not lowercase/complete")
+    actual_sha256 = sha256(Path(path))
+    if actual_sha256 != expected_sha256:
+        raise RuntimeError(f"{expected_role} audit SHA256 changed")
+    audit = load_json(Path(path))
+    if audit.get("training_artifact_approved") is not True:
+        raise RuntimeError(
+            f"{expected_role} artifact was not approved by strict audit")
+    if audit.get("role") != expected_role:
+        raise RuntimeError(
+            f"{expected_role} audit role is not {expected_role}")
+    return audit, actual_sha256
 
 
 @dataclass
@@ -917,7 +1001,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-run-dir", type=Path, required=True)
     parser.add_argument("--train-audit", type=Path, required=True)
+    parser.add_argument("--expected-train-audit-sha256", required=True)
     parser.add_argument("--development-csv", type=Path, required=True)
+    parser.add_argument("--development-audit", type=Path, required=True)
+    parser.add_argument("--expected-development-audit-sha256", required=True)
     parser.add_argument("--teacher-csv", type=Path, required=True)
     parser.add_argument("--split-manifest", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
@@ -939,6 +1026,10 @@ def parse_args() -> argparse.Namespace:
         default="disabled")
     parser.add_argument("--wandb-project", default="memnav")
     parser.add_argument("--wandb-name", default="lingbot-native-phase-b")
+    parser.add_argument(
+        "--require-external-causal-scale", action="store_true",
+        help=("fail unless both train and development artifacts contain "
+              "strictly audited external-causal scale samples"))
     parser.add_argument(
         "--preflight-only", action="store_true",
         help=("load the exact artifacts and run one all-head backward pass "
@@ -965,21 +1056,42 @@ def main() -> None:
         args.train_run_dir / CSV_NAME,
         args.train_audit,
         args.development_csv,
+        args.development_audit,
         args.teacher_csv,
         args.split_manifest,
     )
     for path in required:
         if not Path(path).is_file():
             raise FileNotFoundError(path)
-    audit = load_json(args.train_audit)
-    if not audit.get("training_artifact_approved"):
-        raise RuntimeError("train artifact was not approved by strict audit")
+    train_audit, train_audit_sha256 = load_pinned_artifact_audit(
+        args.train_audit,
+        expected_sha256=args.expected_train_audit_sha256,
+        expected_role="train",
+    )
+    development_audit, development_audit_sha256 = load_pinned_artifact_audit(
+        args.development_audit,
+        expected_sha256=args.expected_development_audit_sha256,
+        expected_role="development",
+    )
     train_csv = (args.train_run_dir / CSV_NAME).resolve()
-    if audit.get("provenance", {}).get("rows_csv_sha256") != sha256(train_csv):
+    if (train_audit.get("provenance", {}).get("rows_csv_sha256")
+            != sha256(train_csv)):
         raise RuntimeError("train CSV changed after artifact audit")
+    if (development_audit.get("provenance", {}).get("rows_csv_sha256")
+            != sha256(args.development_csv)):
+        raise RuntimeError("development CSV changed after artifact audit")
 
     started = time.time()
     split = load_json(args.split_manifest)
+    teacher_sha256 = sha256(args.teacher_csv)
+    split_sha256 = sha256(args.split_manifest)
+    for role, audit in (("train", train_audit),
+                        ("development", development_audit)):
+        provenance = audit.get("provenance", {})
+        if (provenance.get("teacher_csv_sha256") != teacher_sha256
+                or provenance.get("split_manifest_sha256") != split_sha256):
+            raise RuntimeError(
+                f"{role} audit is bound to a different teacher or split")
     train_scenes = set(split.get("train", []))
     development_scenes = set(split.get("development", []))
     if not train_scenes or not development_scenes or train_scenes & development_scenes:
@@ -1001,12 +1113,86 @@ def main() -> None:
         raise RuntimeError(
             "development artifact does not cover the frozen development scenes")
 
+    try:
+        train_external_coverage = validate_external_causal_frame(
+            train_frame, expected_split_role="train")
+        development_external_coverage = validate_external_causal_frame(
+            development_frame, expected_split_role="development")
+    except (ExternalCausalScaleError, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"external causal-scale row contract failed: {error}") from error
+    if train_external_coverage["external_rows"]:
+        if train_external_coverage.get("split_roles") != ["train"]:
+            raise RuntimeError(
+                "train external causal-scale rows do not carry train role")
+        audited_external = train_audit.get("external_causal_scale", {})
+        if (not isinstance(audited_external, dict)
+                or audited_external.get("approved") is not True
+                or audited_external.get(
+                    "exact_manifest_sample_coverage_approved") is not True
+                or audited_external.get("manifest_sample_ids_sha256")
+                != train_external_coverage.get("manifest_sample_ids_sha256")):
+            raise RuntimeError(
+                "train external causal-scale rows were not approved by the "
+                "strict artifact audit")
+    if (development_external_coverage["external_rows"]
+            and development_external_coverage.get("split_roles")
+            != ["development"]):
+        raise RuntimeError(
+            "development external causal-scale rows do not carry development role")
+    audited_development_external = development_audit.get(
+        "external_causal_scale", {})
+    if (development_external_coverage["external_rows"]
+            and (not isinstance(audited_development_external, dict)
+                 or audited_development_external.get("approved") is not True
+                 or audited_development_external.get(
+                     "exact_manifest_sample_coverage_approved") is not True
+                 or audited_development_external.get(
+                     "manifest_sample_ids_sha256")
+                 != development_external_coverage.get(
+                     "manifest_sample_ids_sha256"))):
+        raise RuntimeError(
+            "development external causal-scale rows were not approved by the "
+            "strict artifact audit")
+    train_exact_coverage_approved = bool(
+        train_external_coverage["approved"]
+        and train_audit.get("external_causal_scale", {}).get(
+            "exact_manifest_sample_coverage_approved") is True)
+    development_exact_coverage_approved = bool(
+        development_external_coverage["approved"]
+        and development_audit.get("external_causal_scale", {}).get(
+            "exact_manifest_sample_coverage_approved") is True)
+    train_audited_external = train_audit.get("external_causal_scale", {})
+    development_audited_external = development_audit.get(
+        "external_causal_scale", {})
+    for field in (
+            "manifest_sha256", "scale_artifact_sha256",
+            "producer_source_sha256", "configuration_sha256",
+            "lingbot_commit", "weights_sha256", "stream_source_sha256",
+            "manifest_schema_version"):
+        if (train_audited_external.get(field)
+                != development_audited_external.get(field)):
+            raise RuntimeError(
+                f"train/development audits bind different external-scale {field}")
+    external_coverage_approved = bool(
+        train_exact_coverage_approved
+        and development_exact_coverage_approved)
+    if args.require_external_causal_scale and not external_coverage_approved:
+        raise RuntimeError(
+            "deployment training requires external causal-scale samples in "
+            "both train and development artifacts")
+
     train_features, feature_names, train_predicted, train_target = (
         build_feature_matrix(train_frame))
     dev_features, dev_names, dev_predicted, dev_target = (
         build_feature_matrix(development_frame))
     if feature_names != dev_names:
         raise RuntimeError("train/development feature schema differs")
+    if (feature_names != expected_feature_names()
+            or train_features.shape[1] != FEATURE_DIMENSION):
+        raise RuntimeError(
+            f"Phase-B feature schema must contain exactly {FEATURE_DIMENSION} inputs")
+    feature_names_sha256 = FEATURE_NAMES_SHA256
     train_groups = train_frame["session_id"].to_numpy(dtype=str)
     train_scene_rows = train_frame["scene"].to_numpy(dtype=str)
     train_covis = train_frame["teacher_covis"].to_numpy(dtype=np.float64)
@@ -1095,10 +1281,21 @@ def main() -> None:
             "train_scenes": len(train_scenes),
             "development_rows_schema_checked": int(len(development_frame)),
             "input_dim": train_features.shape[1],
+            "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "feature_names_sha256": feature_names_sha256,
+            "external_causal_scale_coverage_approved": (
+                external_coverage_approved),
+            "train_external_causal_scale": train_external_coverage,
+            "development_external_causal_scale": (
+                development_external_coverage),
             "loss": components,
             "gradient_norms": gradient_norms,
-            "train_artifact_identity_sha256": audit.get(
+            "train_artifact_identity_sha256": train_audit.get(
                 "artifact_identity_sha256"),
+            "development_artifact_identity_sha256": development_audit.get(
+                "artifact_identity_sha256"),
+            "train_audit_sha256": train_audit_sha256,
+            "development_audit_sha256": development_audit_sha256,
         }, indent=2, sort_keys=True), flush=True)
         return
     args.out_dir.mkdir(parents=True)
@@ -1114,12 +1311,20 @@ def main() -> None:
             "batch_size_sessions": args.batch_size,
             "learning_rate": args.learning_rate,
             "weight_decay": args.weight_decay,
+            "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "external_causal_scale_coverage_approved": (
+                external_coverage_approved),
             "pose_weight": args.pose_weight,
             "pose_tail_weight": args.pose_tail_weight,
             "pose_tail_fraction": args.pose_tail_fraction,
             "hidden_dim": args.hidden_dim,
             "dropout": args.dropout,
-            "train_artifact_identity": audit.get("artifact_identity_sha256"),
+            "train_artifact_identity": train_audit.get(
+                "artifact_identity_sha256"),
+            "development_artifact_identity": development_audit.get(
+                "artifact_identity_sha256"),
+            "train_audit_sha256": train_audit_sha256,
+            "development_audit_sha256": development_audit_sha256,
         },
     )
     selector, selected_epoch, selector_metrics = train_model(
@@ -1231,11 +1436,15 @@ def main() -> None:
 
     checkpoint_path = args.out_dir / "lingbot_native_phase_b.pt"
     artifact = {
+        "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
         "deployment_approved": False,
-        "model_kind": (
-            "lingbot_native_verify_rank_true_nomatch_translation_uncertainty"),
+        "deployment_input_contract_approved": external_coverage_approved,
+        "model_kind": CHECKPOINT_MODEL_KIND,
         "input_dim": train_features.shape[1],
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_names": feature_names,
+        "feature_names_sha256": feature_names_sha256,
+        "metric_scale_source_categories": list(METRIC_SCALE_SOURCES),
         "normalization_mean": mean.tolist(),
         "normalization_scale": scale.tolist(),
         "config": {
@@ -1246,13 +1455,29 @@ def main() -> None:
             "positive_threshold": args.positive_threshold,
         },
         "states": states,
-        "train_artifact_identity_sha256": audit.get(
+        "external_causal_scale_coverage": {
+            "required": args.require_external_causal_scale,
+            "approved": external_coverage_approved,
+            "train_exact_coverage_approved": train_exact_coverage_approved,
+            "development_exact_coverage_approved": (
+                development_exact_coverage_approved),
+            "train": train_external_coverage,
+            "development": development_external_coverage,
+        },
+        "train_artifact_identity_sha256": train_audit.get(
             "artifact_identity_sha256"),
+        "development_artifact_identity_sha256": development_audit.get(
+            "artifact_identity_sha256"),
+        "train_audit_sha256": train_audit_sha256,
+        "development_audit_sha256": development_audit_sha256,
     }
+    validate_phase_b_checkpoint_artifact(
+        artifact, require_deployment_input_contract=False)
     atomic_torch_save(checkpoint_path, artifact)
     report = {
         "training_complete": True,
         "deployment_approved": False,
+        "deployment_input_contract_approved": external_coverage_approved,
         "reason": (
             "Phase-B development evaluation; closed-loop and untouched final "
             "scenes remain required"),
@@ -1271,6 +1496,19 @@ def main() -> None:
             "pose_gain": pose_gain,
             "seeds": [17, 29, 43],
             "input_feature_allow_list": feature_names,
+            "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "feature_names_sha256": feature_names_sha256,
+            "metric_scale_source_categories": list(METRIC_SCALE_SOURCES),
+            "external_causal_scale_coverage": {
+                "required": args.require_external_causal_scale,
+                "approved": external_coverage_approved,
+                "train_exact_coverage_approved": (
+                    train_exact_coverage_approved),
+                "development_exact_coverage_approved": (
+                    development_exact_coverage_approved),
+                "train": train_external_coverage,
+                "development": development_external_coverage,
+            },
             "forbidden_target_fragments": list(FORBIDDEN_INPUT_FRAGMENTS),
         },
         "selector_validation": selector_metrics,
@@ -1281,7 +1519,12 @@ def main() -> None:
             "train_csv": str(train_csv),
             "train_csv_sha256": sha256(train_csv),
             "train_audit": str(args.train_audit.resolve()),
-            "train_artifact_identity_sha256": audit.get(
+            "train_audit_sha256": train_audit_sha256,
+            "train_artifact_identity_sha256": train_audit.get(
+                "artifact_identity_sha256"),
+            "development_audit": str(args.development_audit.resolve()),
+            "development_audit_sha256": development_audit_sha256,
+            "development_artifact_identity_sha256": development_audit.get(
                 "artifact_identity_sha256"),
             "development_csv": str(args.development_csv.resolve()),
             "development_csv_sha256": sha256(args.development_csv),

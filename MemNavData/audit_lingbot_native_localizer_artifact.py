@@ -26,6 +26,21 @@ from typing import Any, Optional
 
 import numpy as np
 
+try:
+    from MemNavData.external_causal_scale_contract import (
+        ExternalCausalScaleContract,
+        ExternalCausalScaleError,
+        ExternalCausalScalePins,
+        validate_external_causal_frame,
+    )
+except ModuleNotFoundError:  # direct script invocation
+    from external_causal_scale_contract import (  # type: ignore
+        ExternalCausalScaleContract,
+        ExternalCausalScaleError,
+        ExternalCausalScalePins,
+        validate_external_causal_frame,
+    )
+
 
 CHECKPOINT_NAME = "lingbot_goal_loop_closure_checkpoint.sqlite3"
 CSV_NAME = "lingbot_goal_loop_closure_rows.csv"
@@ -494,6 +509,89 @@ def audit_artifact(
             except ValueError as error:
                 errors.append(str(error))
 
+    signature_external = provenance.get("external_causal_scale")
+    external_contract = None
+    expected_external_samples = None
+    expected_external_bindings = None
+    try:
+        if isinstance(signature_external, dict):
+            external_contract = ExternalCausalScaleContract(
+                manifest_path=Path(str(signature_external["manifest_path"])),
+                artifact_path=Path(str(signature_external["artifact_path"])),
+                pins=ExternalCausalScalePins(
+                    manifest_sha256=str(signature_external["manifest_sha256"]),
+                    artifact_sha256=str(signature_external["artifact_sha256"]),
+                    producer_sha256=str(
+                        signature_external["producer_source_sha256"]),
+                    configuration_sha256=str(
+                        signature_external["configuration_sha256"]),
+                    lingbot_commit=str(signature_external["lingbot_commit"]),
+                    weights_sha256=str(signature_external["weights_sha256"]),
+                    stream_source_sha256=str(
+                        signature_external["stream_source_sha256"]),
+                ),
+            )
+            _record(errors, external_contract.summary() == signature_external,
+                    "physical external-scale contract differs from signature")
+            expected_external_samples = external_contract.selected_sample_ids(
+                split_role=expected_role, goal_roles=("B", "C"))
+            expected_external_bindings = {
+                sample_id: external_contract.expected_row_binding(sample_id)
+                for sample_id in expected_external_samples
+            }
+        external_causal_scale = validate_external_causal_frame(
+            rows,
+            expected_sample_ids=expected_external_samples,
+            expected_split_role=expected_role,
+            expected_row_bindings=expected_external_bindings,
+        )
+    except (ExternalCausalScaleError, KeyError, TypeError, ValueError) as error:
+        errors.append(f"external causal-scale contract failed: {error}")
+        external_causal_scale = {
+            "approved": False,
+            "external_rows": 0,
+            "reason": str(error),
+        }
+    if external_causal_scale.get("external_rows", 0):
+        _record(errors,
+                external_causal_scale.get("split_roles") == [expected_role],
+                "external causal-scale row role differs from audit role")
+        report_external = report_provenance.get("external_causal_scale")
+        _record(errors, isinstance(signature_external, dict),
+                "checkpoint lacks external causal-scale provenance")
+        _record(errors, report_external == signature_external,
+                "collector report/checkpoint external-scale provenance differs")
+        if isinstance(signature_external, dict):
+            _record(errors,
+                    config.get("metric_scale_mode")
+                    == "external_causal_first_prefix_v1",
+                    "checkpoint metric-scale mode is not external causal")
+            _record(errors,
+                    external_causal_scale.get("manifest_sha256")
+                    == [signature_external.get("manifest_sha256")],
+                    "row/collector causal manifest SHA differs")
+            _record(errors,
+                    external_causal_scale.get("scale_artifact_sha256")
+                    == [signature_external.get("artifact_sha256")],
+                    "row/collector external scale artifact SHA differs")
+            _record(errors,
+                    external_causal_scale.get(
+                        "exact_manifest_sample_coverage_approved") is True,
+                    "rows do not exactly cover selected manifest samples")
+            for row_field, summary_field in (
+                    ("producer_source_sha256", "producer_source_sha256"),
+                    ("configuration_sha256", "configuration_sha256"),
+                    ("lingbot_commit", "lingbot_commit"),
+                    ("weights_sha256", "weights_sha256"),
+                    ("stream_source_sha256", "stream_source_sha256"),
+                    ("manifest_schema_version", "manifest_schema_version")):
+                _record(
+                    errors,
+                    external_causal_scale.get(row_field)
+                    == signature_external.get(summary_field),
+                    f"row/collector external scale {row_field} differs",
+                )
+
     _record(errors, teacher_alignment.get("positive_rows", 0) > 0,
             "artifact has no positive candidates")
     _record(errors, teacher_alignment.get("negative_rows", 0) > 0,
@@ -509,6 +607,8 @@ def audit_artifact(
         "checkpoint_signature_sha256": signature_sha,
         "teacher_csv_sha256": teacher_sha,
         "split_manifest_sha256": split_sha,
+        "external_causal_scale_contract_sha256": hashlib.sha256(
+            canonical_json(external_causal_scale).encode("utf-8")).hexdigest(),
     }
     result = {
         "training_artifact_approved": not errors,
@@ -523,6 +623,7 @@ def audit_artifact(
         },
         "teacher_alignment": teacher_alignment,
         "finite_rates": finite_rates,
+        "external_causal_scale": external_causal_scale,
         "provenance": {
             **identity_payload,
             "source_commit": provenance.get("source_commit"),

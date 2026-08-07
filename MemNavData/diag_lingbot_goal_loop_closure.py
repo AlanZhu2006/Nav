@@ -42,6 +42,25 @@ import numpy as np
 import pandas as pd
 import torch
 
+try:
+    from MemNavData.external_causal_scale_contract import (
+        CAUSAL_SAMPLE_ID_COLUMN,
+        EXTERNAL_CAUSAL_SCALE_SOURCE,
+        ExternalCausalScaleBinding,
+        ExternalCausalScaleContract,
+        ExternalCausalScalePins,
+        sha256_file as contract_sha256_file,
+    )
+except ModuleNotFoundError:  # direct script invocation
+    from external_causal_scale_contract import (  # type: ignore
+        CAUSAL_SAMPLE_ID_COLUMN,
+        EXTERNAL_CAUSAL_SCALE_SOURCE,
+        ExternalCausalScaleBinding,
+        ExternalCausalScaleContract,
+        ExternalCausalScalePins,
+        sha256_file as contract_sha256_file,
+    )
+
 
 REQUIRED_COLUMNS = {
     "session_id",
@@ -71,6 +90,7 @@ class CandidateSeed:
     session_has_positive: bool
     session_is_strict_no_match: bool
     session_max_covis: float
+    causal_manifest_sample_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -89,7 +109,7 @@ _HABITAT_TO_DATA_ROTATION = np.array([
 ], dtype=np.float64)
 _LINGBOT_TO_DATA_ROTATION_BASIS = np.diag([-1.0, -1.0, 1.0])
 _DEFAULT_POOLED_METRIC_SCALE = 2.564
-_CHECKPOINT_SCHEMA_VERSION = 1
+_CHECKPOINT_SCHEMA_VERSION = 2
 _CHECKPOINT_FILENAME = "lingbot_goal_loop_closure_checkpoint.sqlite3"
 _PROGRESS_FILENAME = "lingbot_goal_loop_closure_progress.json"
 _ROWS_FILENAME = "lingbot_goal_loop_closure_rows.csv"
@@ -345,8 +365,20 @@ def seed_manifest_sha256(seeds: Sequence[CandidateSeed]) -> str:
         "session_has_positive": seed.session_has_positive,
         "session_is_strict_no_match": seed.session_is_strict_no_match,
         "session_max_covis": seed.session_max_covis,
+        "causal_manifest_sample_id": seed.causal_manifest_sample_id,
     } for seed in seeds]
     return hashlib.sha256(canonical_json(records).encode("utf-8")).hexdigest()
+
+
+def optional_causal_sample_id(row: pd.Series) -> Optional[str]:
+    """Read an explicit manifest key without ever inferring a decision state."""
+    if CAUSAL_SAMPLE_ID_COLUMN not in row.index:
+        return None
+    value = row[CAUSAL_SAMPLE_ID_COLUMN]
+    if pd.isna(value):
+        return None
+    result = str(value).strip()
+    return result or None
 
 
 def session_seed_index_map(
@@ -475,6 +507,7 @@ def select_balanced_seeds(frame: pd.DataFrame, *, kind: str,
                 session_has_positive=True,
                 session_is_strict_no_match=False,
                 session_max_covis=float(group["teacher_covis"].max()),
+                causal_manifest_sample_id=optional_causal_sample_id(row),
             ))
     return result
 
@@ -528,6 +561,7 @@ def select_deployment_seeds(
                 session_has_positive=has_positive,
                 session_is_strict_no_match=strict_no_match,
                 session_max_covis=maximum_covisibility,
+                causal_manifest_sample_id=optional_causal_sample_id(row),
             ))
     return result
 
@@ -1063,6 +1097,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weights", type=Path, required=True)
     parser.add_argument("--expected-weight-sha", default="")
     parser.add_argument("--expected-lingbot-commit", default="")
+    parser.add_argument(
+        "--causal-manifest", type=Path,
+        help=("exact multistage manifest used to bind each selected seed; "
+              "requires every external-scale pin below"))
+    parser.add_argument("--expected-causal-manifest-sha256")
+    parser.add_argument("--external-causal-scale-artifact", type=Path)
+    parser.add_argument("--expected-external-causal-scale-sha256")
+    parser.add_argument("--expected-external-scale-producer-sha256")
+    parser.add_argument("--expected-external-scale-configuration-sha256")
+    parser.add_argument("--expected-external-scale-lingbot-commit")
+    parser.add_argument("--expected-external-scale-weights-sha256")
+    parser.add_argument("--expected-external-scale-stream-source-sha256")
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--kind", default="revisit_b")
@@ -1115,6 +1161,23 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     offsets = tuple(sorted(set(args.neighbor_offset or (-4, 0, 4))))
+    external_arguments = (
+        args.causal_manifest,
+        args.expected_causal_manifest_sha256,
+        args.external_causal_scale_artifact,
+        args.expected_external_causal_scale_sha256,
+        args.expected_external_scale_producer_sha256,
+        args.expected_external_scale_configuration_sha256,
+        args.expected_external_scale_lingbot_commit,
+        args.expected_external_scale_weights_sha256,
+        args.expected_external_scale_stream_source_sha256,
+    )
+    external_scale_mode = any(value is not None for value in external_arguments)
+    if external_scale_mode and not all(value is not None
+                                       for value in external_arguments):
+        raise ValueError(
+            "external causal scale requires its manifest, artifact, and every "
+            "exact SHA/model pin")
     if 0 not in offsets:
         raise ValueError("neighbor offsets must include 0")
     if (args.per_class < 1 or args.top_k < 1 or args.max_sessions < 0
@@ -1134,6 +1197,10 @@ def main() -> None:
     if bool(args.split_manifest) != bool(args.allowed_role):
         raise ValueError(
             "--split-manifest and --allowed-role must be provided together")
+    if external_scale_mode and args.allowed_role not in ("train", "development"):
+        raise ValueError(
+            "external causal-scale collection requires an explicit train or "
+            "development scene role")
     if args.split_manifest and not args.split_manifest.is_file():
         raise FileNotFoundError(args.split_manifest)
     sys.path.insert(0, str(args.internnav_root.resolve()))
@@ -1153,10 +1220,62 @@ def main() -> None:
             f"LingBot commit mismatch: {lingbot_commit} != "
             f"{args.expected_lingbot_commit}")
 
+    external_contract: Optional[ExternalCausalScaleContract] = None
+    external_contract_summary: Optional[dict] = None
+    if external_scale_mode:
+        assert args.causal_manifest is not None
+        assert args.external_causal_scale_artifact is not None
+        assert args.expected_causal_manifest_sha256 is not None
+        assert args.expected_external_causal_scale_sha256 is not None
+        assert args.expected_external_scale_producer_sha256 is not None
+        assert args.expected_external_scale_configuration_sha256 is not None
+        assert args.expected_external_scale_lingbot_commit is not None
+        assert args.expected_external_scale_weights_sha256 is not None
+        assert args.expected_external_scale_stream_source_sha256 is not None
+        stream_source = (
+            args.internnav_root / "internnav" / "model" / "basemodel"
+            / "memnav" / "lingbot_stream.py")
+        if not stream_source.is_file():
+            raise FileNotFoundError(stream_source)
+        stream_source_sha = contract_sha256_file(stream_source)
+        if args.expected_external_scale_lingbot_commit != lingbot_commit:
+            raise RuntimeError(
+                "external scale LingBot commit differs from the collector")
+        if args.expected_external_scale_weights_sha256 != weight_sha:
+            raise RuntimeError(
+                "external scale weights differ from the collector")
+        if args.expected_external_scale_stream_source_sha256 != stream_source_sha:
+            raise RuntimeError(
+                "external scale LingBot stream source differs from the collector")
+        external_contract = ExternalCausalScaleContract(
+            manifest_path=args.causal_manifest,
+            artifact_path=args.external_causal_scale_artifact,
+            pins=ExternalCausalScalePins(
+                manifest_sha256=args.expected_causal_manifest_sha256,
+                artifact_sha256=args.expected_external_causal_scale_sha256,
+                producer_sha256=args.expected_external_scale_producer_sha256,
+                configuration_sha256=(
+                    args.expected_external_scale_configuration_sha256),
+                lingbot_commit=args.expected_external_scale_lingbot_commit,
+                weights_sha256=args.expected_external_scale_weights_sha256,
+                stream_source_sha256=(
+                    args.expected_external_scale_stream_source_sha256),
+            ),
+        )
+        if external_contract.num_scale_frames != args.num_scale:
+            raise RuntimeError(
+                "collector num_scale differs from the external scale contract")
+        external_contract_summary = external_contract.summary()
+
     teacher = pd.read_csv(args.teacher_csv)
     missing = REQUIRED_COLUMNS - set(teacher.columns)
     if missing:
         raise ValueError(f"teacher CSV missing columns: {sorted(missing)}")
+    if external_scale_mode and CAUSAL_SAMPLE_ID_COLUMN not in teacher.columns:
+        raise ValueError(
+            "external causal-scale collection requires the teacher CSV to "
+            f"carry explicit {CAUSAL_SAMPLE_ID_COLUMN}; decision state cannot "
+            "be inferred from goal path")
     selection_arguments = dict(
         kind=args.kind, sessions=args.session,
         max_sessions=args.max_sessions,
@@ -1186,6 +1305,33 @@ def main() -> None:
         if not seed.candidate_path.is_file():
             raise FileNotFoundError(seed.candidate_path)
 
+    external_bindings: Dict[CandidateSeed, ExternalCausalScaleBinding] = {}
+    if external_contract is not None:
+        for seed in seeds:
+            if seed.causal_manifest_sample_id is None:
+                raise RuntimeError(
+                    f"selected seed lacks {CAUSAL_SAMPLE_ID_COLUMN}: "
+                    f"{seed.session_id}/{seed.candidate_frame}")
+            external_bindings[seed] = external_contract.bind_seed(
+                manifest_sample_id=seed.causal_manifest_sample_id,
+                scene=seed.scene,
+                episode=seed.episode,
+                query_path=seed.query_path,
+                candidate_path=seed.candidate_path,
+                candidate_frame=seed.candidate_frame,
+                neighbor_offsets=offsets,
+                expected_split_role=str(args.allowed_role),
+            )
+        for session_id in session_order:
+            sample_ids = {
+                external_bindings[seeds[index - 1]].sample_id
+                for index in seed_indices_by_session[session_id]
+            }
+            if len(sample_ids) != 1:
+                raise RuntimeError(
+                    "one candidate session crosses causal manifest samples: "
+                    f"{session_id} -> {sorted(sample_ids)}")
+
     # Validate every selected raw/cache dependency before allocating model
     # weights. This path is also invoked as a standalone Slurm preflight.
     from internnav.model.basemodel.memnav.cache_schema import validate_cache_pair
@@ -1208,6 +1354,18 @@ def main() -> None:
                     cached, camera,
                     expected_num_scale_frames=args.num_scale,
                     require_versioned=False)
+                if external_contract is not None:
+                    cache_schema = int(np.asarray(
+                        camera["cache_schema_version"]).reshape(-1)[0])
+                    precompute_signature = str(np.asarray(
+                        camera["precompute_signature"]).reshape(-1)[0])
+                    external_contract.validate_runtime_episode(
+                        scene=seed.scene,
+                        episode=seed.episode,
+                        cam_pose_enc=np.asarray(camera["cam_pose_enc"]),
+                        cache_schema_version=cache_schema,
+                        precompute_signature=precompute_signature,
+                    )
         candidate_root = episode_root_from_image(
             seed.candidate_path).resolve()
         if candidate_root not in pose_cache:
@@ -1234,6 +1392,7 @@ def main() -> None:
             "lingbot_commit": lingbot_commit,
             "lingbot_weight_sha256": weight_sha,
             "teacher_csv_sha256": teacher_sha,
+            "external_causal_scale": external_contract_summary,
         }, indent=2, sort_keys=True))
         return
 
@@ -1272,6 +1431,9 @@ def main() -> None:
             "pooled_metric_scale": args.pooled_metric_scale,
             "max_cached_episodes": args.max_cached_episodes,
             "device": args.device,
+            "metric_scale_mode": (
+                EXTERNAL_CAUSAL_SCALE_SOURCE
+                if external_contract is not None else "legacy_runtime_or_cached"),
         },
         "provenance": {
             "source_commit": source_commit,
@@ -1280,6 +1442,7 @@ def main() -> None:
             "teacher_csv_sha256": teacher_sha,
             "split_manifest_sha256": split_manifest_sha,
             "feature_root": str(args.feature_root.resolve()),
+            "external_causal_scale": external_contract_summary,
         },
     }
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -1373,7 +1536,18 @@ def main() -> None:
             seed.candidate_path).resolve()
         candidate_pose_data = pose_cache[candidate_root]
         query_pose = query_camera_to_world(seed.query_path, pose_cache)
-        if key not in metric_scale_by_episode:
+        external_binding = external_bindings.get(seed)
+        if external_binding is not None:
+            metric_scale = external_binding.metric_scale_m_per_raw
+            metric_scale_source = EXTERNAL_CAUSAL_SCALE_SOURCE
+            previous = metric_scale_by_episode.get(key)
+            if previous is not None and previous != (
+                    metric_scale, metric_scale_source):
+                raise RuntimeError(
+                    f"external scale changed within {seed.scene}/{seed.episode}")
+            metric_scale_by_episode[key] = (
+                metric_scale, metric_scale_source)
+        elif key not in metric_scale_by_episode:
             camera_height = float(candidate_pose_data.metadata.get(
                 "camera_height_m", 0.5))
             cached_ground_height = cache.get("ground_h_est")
@@ -1392,13 +1566,17 @@ def main() -> None:
             else:
                 metric_scale_by_episode[key] = (
                     float(args.pooled_metric_scale), "pooled_fallback")
-        metric_scale, metric_scale_source = metric_scale_by_episode[key]
+        if external_binding is None:
+            metric_scale, metric_scale_source = metric_scale_by_episode[key]
         goal = lb.load_images([str(seed.query_path)])[0].to(lb.device)
         maximum_anchor = min(
             len(cache["cam_pose_enc"]) - 2,
             len(candidate_pose_data.actions) - 1,
             max(int(path.stem) for path in rgb_dir.glob("*.jpg")
                 if path.stem.isdigit()))
+        if external_binding is not None:
+            maximum_anchor = min(
+                maximum_anchor, external_binding.decision_frame - 1)
         hypotheses = []
         print(
             f"[{seed_index}/{len(seeds)}] {seed.session_id} "
@@ -1445,7 +1623,7 @@ def main() -> None:
             result["depth_scale_raw"] for result in hypotheses)
         norm = max(depth_scale, 1e-6)
         center = min(hypotheses, key=lambda result: abs(result["offset"]))
-        current_rows.append((seed_index, {
+        row = {
             "session_id": seed.session_id,
             "scene": seed.scene,
             "episode": seed.episode,
@@ -1507,7 +1685,10 @@ def main() -> None:
             "hypotheses_json": json.dumps([
                 jsonable_measurement(item) for item in hypotheses
             ], sort_keys=True),
-        }))
+        }
+        if external_binding is not None:
+            row.update(external_binding.row_fields())
+        current_rows.append((seed_index, row))
     save_current_session()
     episode_cache.clear()
     result_frame = pd.DataFrame(checkpoint.rows())
@@ -1601,6 +1782,9 @@ def main() -> None:
             "pooled_metric_scale": args.pooled_metric_scale,
             "max_cached_episodes": args.max_cached_episodes,
             "resumed": args.resume,
+            "metric_scale_mode": (
+                EXTERNAL_CAUSAL_SCALE_SOURCE
+                if external_contract is not None else "legacy_runtime_or_cached"),
         },
         "provenance": {
             "source_commit": source_commit,
@@ -1613,6 +1797,7 @@ def main() -> None:
                 if args.split_manifest else None),
             "split_manifest_sha256": split_manifest_sha,
             "feature_root": str(args.feature_root.resolve()),
+            "external_causal_scale": external_contract_summary,
             "elapsed_seconds": time.time() - started,
         },
         "rows_csv": str(csv_path.resolve()),

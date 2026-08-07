@@ -14,6 +14,7 @@ from MemNavData.diag_lingbot_goal_loop_closure import (
     navdp_ground_truth_relative,
     raw_rgb_dir,
     relative_pose_errors,
+    seed_manifest_sha256,
     select_deployment_seeds,
     validate_scene_role,
 )
@@ -77,6 +78,24 @@ class LingBotGoalLoopClosureTest(unittest.TestCase):
             validate_scene_role(
                 seeds, {"development": ["scene_a", "scene_b"]},
                 "development")
+
+    def test_selection_and_resume_hash_preserve_explicit_causal_sample(self):
+        session = "scene_a/episode_0000/matched"
+        first = self.teacher_row(session, 8, 0.9, 0.8)
+        first["causal_manifest_sample_id"] = "train/scene_a/b_t0/factual"
+        frame = pd.DataFrame([first])
+        seeds = select_deployment_seeds(
+            frame, kind="cross_episode_train", sessions=(), max_sessions=0,
+            top_k=1, minimum_gap=4, positive_threshold=0.5,
+            negative_threshold=0.1, minimum_anchor=8)
+        self.assertEqual(
+            seeds[0].causal_manifest_sample_id,
+            "train/scene_a/b_t0/factual")
+        original = seed_manifest_sha256(seeds)
+        changed = [CandidateSeed(
+            **{**seeds[0].__dict__,
+               "causal_manifest_sample_id": "train/scene_a/b_mid/factual"})]
+        self.assertNotEqual(original, seed_manifest_sha256(changed))
 
     def test_cross_episode_replay_uses_candidate_stream(self):
         with tempfile.TemporaryDirectory() as temporary:

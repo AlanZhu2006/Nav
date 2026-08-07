@@ -14,10 +14,10 @@ LOG_ROOT="/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs"
 
 COLLECT_REL="MemNavData/slurm_nlsr_phase_b_collect.sbatch"
 AUDIT_REL="MemNavData/slurm_nlsr_phase_b_audit.sbatch"
+STAGE_RELAY_REL="MemNavData/slurm_nlsr_phase_b_stage_relay.sbatch"
 RELAY_REL="MemNavData/slurm_nlsr_phase_b_train_relay.sbatch"
 COLLECT="${REPO_ROOT}/${COLLECT_REL}"
-AUDIT="${REPO_ROOT}/${AUDIT_REL}"
-RELAY="${REPO_ROOT}/${RELAY_REL}"
+STAGE_RELAY="${REPO_ROOT}/${STAGE_RELAY_REL}"
 
 fail() { echo "ABORT: $*" >&2; exit 2; }
 for command_name in git sbatch sha256sum; do
@@ -35,7 +35,8 @@ if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
   fail "submission checkout is not clean"
 fi
 
-for relative in "${COLLECT_REL}" "${AUDIT_REL}" "${RELAY_REL}" \
+for relative in "${COLLECT_REL}" "${AUDIT_REL}" "${STAGE_RELAY_REL}" \
+                "${RELAY_REL}" \
                 "MemNavData/slurm_nlsr_phase_b_train.sbatch"; do
   path="${REPO_ROOT}/${relative}"
   [[ -f "${path}" && ! -L "${path}" ]] || fail "missing launcher ${relative}"
@@ -47,57 +48,38 @@ done
 mkdir -p "${LOG_ROOT}"
 
 COLLECT_SHA="$(sha256sum "${COLLECT}" | awk '{print $1}')"
-AUDIT_SHA="$(sha256sum "${AUDIT}" | awk '{print $1}')"
-RELAY_SHA="$(sha256sum "${RELAY}" | awk '{print $1}')"
+STAGE_RELAY_SHA="$(sha256sum "${STAGE_RELAY}" | awk '{print $1}')"
 
-submit_collect_array() {
+submit_collect_once() {
   local role="$1" partition="$2" exports job
   exports="ALL,REPO_ROOT=${REPO_ROOT},EXPECTED_COMMIT=${EXPECTED_COMMIT}"
   exports+=",EXPECTED_LAUNCHER_SHA=${COLLECT_SHA},RUN_TAG=${RUN_TAG}"
   exports+=",PHASE_B_ROLE=${role}"
-  sbatch --test-only --partition="${partition}" --array=0-1%1 \
+  sbatch --test-only --partition="${partition}" \
     --export="${exports}" "${COLLECT}" >/dev/null
-  job="$(sbatch --parsable --partition="${partition}" --array=0-1%1 \
+  job="$(sbatch --parsable --partition="${partition}" \
     --export="${exports}" "${COLLECT}")"
   job="${job%%;*}"
   [[ "${job}" =~ ^[0-9]+$ ]] || fail "unexpected collector submission: ${job}"
   printf '%s' "${job}"
 }
 
-submit_audit() {
-  local role="$1" dependency="$2" exports job
-  exports="ALL,REPO_ROOT=${REPO_ROOT},EXPECTED_COMMIT=${EXPECTED_COMMIT}"
-  exports+=",EXPECTED_LAUNCHER_SHA=${AUDIT_SHA},RUN_TAG=${RUN_TAG}"
-  exports+=",PHASE_B_ROLE=${role}"
-  sbatch --test-only --dependency="afterok:${dependency}" \
-    --kill-on-invalid-dep=yes --export="${exports}" "${AUDIT}" >/dev/null
-  job="$(sbatch --parsable --dependency="afterok:${dependency}" \
-    --kill-on-invalid-dep=yes --export="${exports}" "${AUDIT}")"
-  job="${job%%;*}"
-  [[ "${job}" =~ ^[0-9]+$ ]] || fail "unexpected audit submission: ${job}"
-  printf '%s' "${job}"
-}
+# The account admits one GPU request at a time.  Start only train; a committed
+# CPU relay submitted with afterany will inspect its audited progress and then
+# submit exactly one continuation or the development stage.
+TRAIN_JOB="$(submit_collect_once train "${TRAIN_PARTITION}")"
+stage_exports="ALL,REPO_ROOT=${REPO_ROOT},EXPECTED_COMMIT=${EXPECTED_COMMIT}"
+stage_exports+=",EXPECTED_LAUNCHER_SHA=${STAGE_RELAY_SHA},RUN_TAG=${RUN_TAG}"
+stage_exports+=",PHASE_B_ROLE=train,PHASE_B_ATTEMPT=1"
+stage_exports+=",PHASE_B_GPU_JOB_ID=${TRAIN_JOB},MAX_ATTEMPTS=3"
+stage_exports+=",TRAIN_PARTITION=${TRAIN_PARTITION}"
+stage_exports+=",DEVELOPMENT_PARTITION=${DEVELOPMENT_PARTITION}"
+sbatch --test-only --dependency="afterany:${TRAIN_JOB}" --kill-on-invalid-dep=yes \
+  --export="${stage_exports}" "${STAGE_RELAY}" >/dev/null
+STAGE_RELAY_JOB="$(sbatch --parsable --dependency="afterany:${TRAIN_JOB}" \
+  --kill-on-invalid-dep=yes --export="${stage_exports}" "${STAGE_RELAY}")"
+STAGE_RELAY_JOB="${STAGE_RELAY_JOB%%;*}"
+[[ "${STAGE_RELAY_JOB}" =~ ^[0-9]+$ ]] || fail "unexpected stage relay submission"
 
-# Each role is a two-element, maximum-concurrency-one array.  This keeps only
-# one GPU request per partition eligible at a time (important for H100 user
-# QoS), while the second element remains a session-atomic continuation.
-TRAIN_ARRAY="$(submit_collect_array train "${TRAIN_PARTITION}")"
-DEVELOPMENT_ARRAY="$(submit_collect_array development "${DEVELOPMENT_PARTITION}")"
-TRAIN_AUDIT_JOB="$(submit_audit train "${TRAIN_ARRAY}")"
-DEVELOPMENT_AUDIT_JOB="$(submit_audit development "${DEVELOPMENT_ARRAY}")"
-
-relay_exports="ALL,REPO_ROOT=${REPO_ROOT},EXPECTED_COMMIT=${EXPECTED_COMMIT}"
-relay_exports+=",EXPECTED_LAUNCHER_SHA=${RELAY_SHA},RUN_TAG=${RUN_TAG}"
-relay_exports+=",TRAIN_AUDIT_JOB_ID=${TRAIN_AUDIT_JOB}"
-relay_exports+=",DEVELOPMENT_AUDIT_JOB_ID=${DEVELOPMENT_AUDIT_JOB}"
-relay_dependency="afterok:${TRAIN_AUDIT_JOB}:${DEVELOPMENT_AUDIT_JOB}"
-sbatch --test-only --dependency="${relay_dependency}" --kill-on-invalid-dep=yes \
-  --export="${relay_exports}" "${RELAY}" >/dev/null
-RELAY_JOB="$(sbatch --parsable --dependency="${relay_dependency}" \
-  --kill-on-invalid-dep=yes --export="${relay_exports}" "${RELAY}")"
-RELAY_JOB="${RELAY_JOB%%;*}"
-[[ "${RELAY_JOB}" =~ ^[0-9]+$ ]] || fail "unexpected relay submission: ${RELAY_JOB}"
-
-printf 'submitted_phase_b_pipeline commit=%s train_array=%s dev_array=%s train_audit=%s dev_audit=%s relay=%s\n' \
-  "${EXPECTED_COMMIT}" "${TRAIN_ARRAY}" "${DEVELOPMENT_ARRAY}" \
-  "${TRAIN_AUDIT_JOB}" "${DEVELOPMENT_AUDIT_JOB}" "${RELAY_JOB}"
+printf 'submitted_phase_b_pipeline commit=%s train_job=%s stage_relay=%s gpu_serialization=one_request\n' \
+  "${EXPECTED_COMMIT}" "${TRAIN_JOB}" "${STAGE_RELAY_JOB}"

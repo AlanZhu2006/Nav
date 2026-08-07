@@ -31,7 +31,8 @@ SETTINGS_REL="MemNavData/navmesh_settings_habitat_0_3_1_agent030.json"
 BUILDER_REL="MemNavData/build_frozen_geometry_map.py"
 LAUNCHER_REL="MemNavData/slurm_nlsr_frozen_geometry_map.sbatch"
 OUTPUT_ROOT="${RUN_ROOT}/frozen_geometry_map_${EXPECTED_COMMIT:0:12}_8a7e71e9514b"
-PYTHON_BIN="${PYTHON_BIN:-/scratch/lg154/conda-envs/habitat/bin/python}"
+PYTHON_BIN="/scratch/lg154/conda-envs/habitat/bin/python"
+EXPECTED_PYTHON_TARGET="/scratch/lg154/conda-envs/habitat/bin/python3.9"
 
 EXPECTED_DERIVED_MANIFEST_SHA="8a7e71e9514b5cf135b87d628ddabf4db805e95f6699baedfd8a0370f00e20db"
 EXPECTED_DERIVED_SIDECAR_SHA="8d7ee80c35ef95169d1d66aa8a3392086e3ecccb8dd8165821dcb2517c5d10c6"
@@ -53,6 +54,21 @@ full_sha_is() {
   actual="$(sha256sum "${path}" | awk '{print $1}')"
   [[ "${actual}" == "${expected}" ]] || \
     fail "${label} SHA mismatch: ${actual} != ${expected}"
+}
+
+pinned_python_is() {
+  local resolved actual
+  [[ -L "${PYTHON_BIN}" ]] || fail "Python entry point is not the pinned symlink"
+  [[ "$(readlink "${PYTHON_BIN}")" == "python3.9" ]] || \
+    fail "Python symlink target changed"
+  resolved="$(readlink -f "${PYTHON_BIN}")"
+  [[ "${resolved}" == "${EXPECTED_PYTHON_TARGET}" ]] || \
+    fail "resolved Python path changed: ${resolved}"
+  [[ -f "${resolved}" && ! -L "${resolved}" ]] || \
+    fail "resolved Python runtime is not a physical file"
+  actual="$(sha256sum "${resolved}" | awk '{print $1}')"
+  [[ "${actual}" == "${EXPECTED_PYTHON_SHA}" ]] || \
+    fail "Python runtime SHA mismatch: ${actual}"
 }
 
 [[ "${RUN_TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || fail "invalid RUN_TAG"
@@ -83,7 +99,7 @@ full_sha_is "${BAKE_AUDIT_RECEIPT}" "${EXPECTED_BAKE_RECEIPT_SHA}" \
   "NavMesh cross-audit receipt"
 full_sha_is "${BAKE_AUDIT_RECEIPT}.sha256" \
   "${EXPECTED_BAKE_RECEIPT_SIDECAR_SHA}" "NavMesh cross-audit receipt sidecar"
-full_sha_is "${PYTHON_BIN}" "${EXPECTED_PYTHON_SHA}" "Python runtime"
+pinned_python_is
 
 "${PYTHON_BIN}" - "${DERIVED_MANIFEST}" "${EXPECTED_PARENT_MANIFEST_SHA}" \
   "${BAKE_AUDIT_RECEIPT}" "${EXPECTED_DERIVED_MANIFEST_SHA}" <<'PY'

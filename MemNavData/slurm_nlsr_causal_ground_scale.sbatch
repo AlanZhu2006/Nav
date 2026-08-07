@@ -43,6 +43,9 @@ EPISODE_ROOT="/mp3d_revisit_v0/vln_n1/traj_data/mp3d_3leg"
 
 EXPECTED_MANIFEST_SHA="bc6bf58536f6c159d1898ac03abe365eadba65c22cd246e39401821962abb34c"
 EXPECTED_PRODUCER_SHA="523126bb1f56f4754d0b8a0a34b327e3d334fbc01bd0ae51f12c27c50ffebf20"
+EXPECTED_FRONTIER_BUILDER_SHA="d2e5889736488f21449fd5d9a054d945cd17bdb509bc311eb23dd58c4de23aa5"
+EXPECTED_FLOW_ROUTER_SHA="4896a77fa35871588f4add5c83c10e48fbb9bf45a15845f0a5d4332bc63a0035"
+EXPECTED_PRODUCER_BUNDLE_SHA="8da2a4c42de010e699c5ab65a2f6bbc9600c29acc96b71ef82d89126d8b4ca26"
 EXPECTED_STREAM_SHA="b5142b76f9062634db826a0e7f2c3da19e4b07e21c2325ecbc60a44cc52370b0"
 EXPECTED_LINGBOT_COMMIT="7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2"
 EXPECTED_WEIGHT_SHA="832bc82cbae0bc9bbe946ef5ee1f7226abd8c0e183ccf8beddbb3d133576f409"
@@ -78,6 +81,10 @@ if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
 fi
 full_sha_is "${REPO_ROOT}/${PRODUCER_REL}" "${EXPECTED_PRODUCER_SHA}" \
   "causal-scale producer"
+full_sha_is "${REPO_ROOT}/MemNavData/build_novel_frontier_candidates.py" \
+  "${EXPECTED_FRONTIER_BUILDER_SHA}" "causal-scale frontier dependency"
+full_sha_is "${REPO_ROOT}/MemNavData/flow_cache_routing.py" \
+  "${EXPECTED_FLOW_ROUTER_SHA}" "causal-scale route dependency"
 full_sha_is "${REPO_ROOT}/${STREAM_REL}" "${EXPECTED_STREAM_SHA}" \
   "LingBot stream source"
 full_sha_is "${MANIFEST}" "${EXPECTED_MANIFEST_SHA}" "multistage manifest"
@@ -164,7 +171,9 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
   | tee "${OUTPUT_ROOT}/producer_stdout.json"
 
 "${CONTAINER[@]}" "${MEMNAV_PY}" - \
-  "${OUTPUT}" "${EXPECTED_MANIFEST_SHA}" "${EXPECTED_PRODUCER_SHA}" <<'PY'
+  "${OUTPUT}" "${EXPECTED_MANIFEST_SHA}" "${EXPECTED_PRODUCER_BUNDLE_SHA}" \
+  "${EXPECTED_PRODUCER_SHA}" "${EXPECTED_FRONTIER_BUILDER_SHA}" \
+  "${EXPECTED_FLOW_ROUTER_SHA}" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -187,6 +196,14 @@ if provenance.get("input_manifest_sha256") != sys.argv[2]:
     raise SystemExit("causal-scale manifest binding changed")
 if provenance.get("producer_source_sha256") != sys.argv[3]:
     raise SystemExit("causal-scale producer binding changed")
+source_files = provenance.get("producer_source_files", {})
+expected_sources = {
+    "build_causal_ground_scale.py": sys.argv[4],
+    "build_novel_frontier_candidates.py": sys.argv[5],
+    "flow_cache_routing.py": sys.argv[6],
+}
+if source_files != expected_sources:
+    raise SystemExit("causal-scale producer source-file bindings changed")
 summary = record.get("summary", {})
 expected = {
     "scene_count": 50,

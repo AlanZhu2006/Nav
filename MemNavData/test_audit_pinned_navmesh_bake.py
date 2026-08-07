@@ -316,6 +316,32 @@ class NavmeshBakeAuditorTests(unittest.TestCase):
         ):
             audit_navmesh_bake(self._contract(expected_auditor_sha256="f" * 64))
 
+    def test_auditor_matches_habitat_vertical_bounds_semantics(self) -> None:
+        in_simulator = {
+            "navigable_area_m2": 26.0,
+            "bounds_min_xyz": [-11.0, -0.1, -5.0],
+            "bounds_max_xyz": [4.0, 4.3, 3.0],
+            "vertex_count": 522,
+            "index_count": 522,
+        }
+        base = dict(in_simulator)
+        serialized = {
+            **base,
+            "bounds_min_xyz": list(base["bounds_min_xyz"]),
+            "bounds_max_xyz": [4.0, 2.7, 3.0],
+        }
+        self.assertTrue(
+            auditor._observations_serialization_equivalent(
+                in_simulator, serialized
+            )
+        )
+        serialized["bounds_max_xyz"][2] += 0.01
+        self.assertFalse(
+            auditor._observations_serialization_equivalent(
+                in_simulator, serialized
+            )
+        )
+
     def test_slurm_launcher_pins_the_exact_auditor_source(self) -> None:
         launcher = Path(auditor.__file__).with_name("slurm_nlsr_navmesh_bake.sbatch")
         match = re.search(

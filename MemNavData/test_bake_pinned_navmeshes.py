@@ -465,6 +465,43 @@ class NavmeshBakeContractTests(unittest.TestCase):
         with self.assertRaisesRegex(NavmeshBakeError, "minimum bounds"):
             NavmeshObservation.from_dict(invalid_bounds)
 
+    def test_serialization_equivalence_uses_serialized_vertical_bounds(self) -> None:
+        in_simulator = NavmeshObservation(
+            navigable_area_m2=26.0,
+            bounds_min_xyz=(-11.0, -0.1, -5.0),
+            bounds_max_xyz=(4.0, 4.3, 3.0),
+            vertex_count=522,
+            index_count=522,
+        )
+        serialized = NavmeshObservation(
+            navigable_area_m2=26.0,
+            bounds_min_xyz=(-11.0, -0.1, -5.0),
+            bounds_max_xyz=(4.0, 2.7, 3.0),
+            vertex_count=522,
+            index_count=522,
+        )
+        baker._observations_serialization_equivalent(
+            in_simulator, serialized, "fixture"
+        )
+
+        horizontal_drift = copy.deepcopy(serialized.to_dict())
+        horizontal_drift["bounds_max_xyz"][0] += 0.01
+        with self.assertRaisesRegex(NavmeshBakeError, "horizontal maximum"):
+            baker._observations_serialization_equivalent(
+                in_simulator,
+                NavmeshObservation.from_dict(horizontal_drift),
+                "fixture",
+            )
+
+        vertical_escape = copy.deepcopy(serialized.to_dict())
+        vertical_escape["bounds_max_xyz"][1] = 4.4
+        with self.assertRaisesRegex(NavmeshBakeError, "vertical bounds escape"):
+            baker._observations_serialization_equivalent(
+                in_simulator,
+                NavmeshObservation.from_dict(vertical_escape),
+                "fixture",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -597,7 +597,7 @@ class HabitatBakeRuntime:
             navmesh_output, requested_settings
         )
         _settings_close(roundtrip_settings, effective, "bake/roundtrip settings")
-        _observations_close(
+        _observations_serialization_equivalent(
             bake_observation, roundtrip_observation, "bake/roundtrip observation"
         )
         return BakeResult(effective, bake_observation, roundtrip_observation)
@@ -643,6 +643,69 @@ def _observations_close(
     _require(
         actual.vertex_count == expected.vertex_count
         and actual.index_count == expected.index_count,
+        f"{label} topology counts changed",
+    )
+
+
+def _observations_serialization_equivalent(
+    in_simulator: NavmeshObservation,
+    serialized: NavmeshObservation,
+    label: str,
+) -> None:
+    """Validate save/load equivalence across Habitat's two bounds semantics.
+
+    Habitat 0.3.1 exposes the stage AABB through ``Simulator.pathfinder``
+    immediately after recomputation, but a standalone ``PathFinder`` loaded
+    from the saved NavMesh exposes the serialized navigation AABB.  Their
+    vertical maxima can therefore differ by the non-navigable scene volume
+    even when area, topology, horizontal extent, and serialized bytes are
+    unchanged.  The serialized observation is the canonical one.  We require
+    it to stay inside the in-simulator vertical extent and compare every other
+    geometric invariant exactly within float round-off.
+    """
+    _require(
+        math.isclose(
+            in_simulator.navigable_area_m2,
+            serialized.navigable_area_m2,
+            rel_tol=0.0,
+            abs_tol=1e-6,
+        ),
+        f"{label} navigable area changed",
+    )
+    for bound_name, in_bounds, serialized_bounds in (
+        (
+            "minimum",
+            in_simulator.bounds_min_xyz,
+            serialized.bounds_min_xyz,
+        ),
+        (
+            "maximum",
+            in_simulator.bounds_max_xyz,
+            serialized.bounds_max_xyz,
+        ),
+    ):
+        _require(
+            all(
+                math.isclose(
+                    float(in_bounds[axis]),
+                    float(serialized_bounds[axis]),
+                    rel_tol=0.0,
+                    abs_tol=1e-6,
+                )
+                for axis in (0, 2)
+            ),
+            f"{label} horizontal {bound_name} bounds changed",
+        )
+    _require(
+        float(in_simulator.bounds_min_xyz[1])
+        <= float(serialized.bounds_min_xyz[1]) + 1e-6
+        and float(serialized.bounds_max_xyz[1])
+        <= float(in_simulator.bounds_max_xyz[1]) + 1e-6,
+        f"{label} serialized vertical bounds escape the simulator stage bounds",
+    )
+    _require(
+        in_simulator.vertex_count == serialized.vertex_count
+        and in_simulator.index_count == serialized.index_count,
         f"{label} topology counts changed",
     )
 
@@ -965,7 +1028,9 @@ def _validate_receipt(
         recorded_roundtrip,
         "resume roundtrip",
     )
-    _observations_close(recorded_bake, recorded_roundtrip, "recorded bake/roundtrip")
+    _observations_serialization_equivalent(
+        recorded_bake, recorded_roundtrip, "recorded bake/roundtrip"
+    )
     _require(
         receipt["selection_boundary"] == SELECTION_BOUNDARY
         and receipt["determinism_boundary"] == DETERMINISM_BOUNDARY,

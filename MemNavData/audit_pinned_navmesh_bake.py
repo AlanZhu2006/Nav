@@ -344,24 +344,33 @@ def _validate_observation(value: object, label: str) -> dict[str, Any]:
     return value
 
 
-def _observations_equal(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
+def _observations_serialization_equivalent(
+    in_simulator: Mapping[str, Any], serialized: Mapping[str, Any]
+) -> bool:
+    """Mirror Habitat 0.3.1's stage-AABB versus serialized-AABB contract."""
     return (
         math.isclose(
-            float(first["navigable_area_m2"]),
-            float(second["navigable_area_m2"]),
+            float(in_simulator["navigable_area_m2"]),
+            float(serialized["navigable_area_m2"]),
             rel_tol=0.0,
             abs_tol=1e-6,
         )
         and all(
-            math.isclose(float(left), float(right), rel_tol=0.0, abs_tol=1e-6)
-            for left, right in zip(first["bounds_min_xyz"], second["bounds_min_xyz"])
+            math.isclose(
+                float(in_simulator[key][axis]),
+                float(serialized[key][axis]),
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            )
+            for key in ("bounds_min_xyz", "bounds_max_xyz")
+            for axis in (0, 2)
         )
-        and all(
-            math.isclose(float(left), float(right), rel_tol=0.0, abs_tol=1e-6)
-            for left, right in zip(first["bounds_max_xyz"], second["bounds_max_xyz"])
-        )
-        and first["vertex_count"] == second["vertex_count"]
-        and first["index_count"] == second["index_count"]
+        and float(in_simulator["bounds_min_xyz"][1])
+        <= float(serialized["bounds_min_xyz"][1]) + 1e-6
+        and float(serialized["bounds_max_xyz"][1])
+        <= float(in_simulator["bounds_max_xyz"][1]) + 1e-6
+        and in_simulator["vertex_count"] == serialized["vertex_count"]
+        and in_simulator["index_count"] == serialized["index_count"]
     )
 
 
@@ -805,7 +814,9 @@ def audit_navmesh_bake(contract: AuditContract) -> dict[str, object]:
             f"{scene_id} roundtrip observation",
         )
         _require(
-            _observations_equal(bake_observation, roundtrip_observation),
+            _observations_serialization_equivalent(
+                bake_observation, roundtrip_observation
+            ),
             f"receipt bake/roundtrip observation differs: {scene_id}",
         )
         _require(

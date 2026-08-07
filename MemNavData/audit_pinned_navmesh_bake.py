@@ -345,9 +345,21 @@ def _validate_observation(value: object, label: str) -> dict[str, Any]:
 
 
 def _observations_serialization_equivalent(
-    in_simulator: Mapping[str, Any], serialized: Mapping[str, Any]
+    in_simulator: Mapping[str, Any],
+    serialized: Mapping[str, Any],
+    effective_settings: Mapping[str, Any],
 ) -> bool:
-    """Mirror Habitat 0.3.1's stage-AABB versus serialized-AABB contract."""
+    """Mirror Habitat 0.3.1's quantized standalone vertical expansion."""
+    agent_height = float(effective_settings["agent_height"])
+    cell_height = float(effective_settings["cell_height"])
+    if not (
+        math.isfinite(agent_height)
+        and math.isfinite(cell_height)
+        and agent_height > 0.0
+        and cell_height > 0.0
+    ):
+        return False
+    quantized_agent_height = math.ceil(agent_height / cell_height) * cell_height
     return (
         math.isclose(
             float(in_simulator["navigable_area_m2"]),
@@ -365,10 +377,19 @@ def _observations_serialization_equivalent(
             for key in ("bounds_min_xyz", "bounds_max_xyz")
             for axis in (0, 2)
         )
-        and float(in_simulator["bounds_min_xyz"][1])
-        <= float(serialized["bounds_min_xyz"][1]) + 1e-6
-        and float(serialized["bounds_max_xyz"][1])
-        <= float(in_simulator["bounds_max_xyz"][1]) + 1e-6
+        and math.isclose(
+            float(in_simulator["bounds_min_xyz"][1]),
+            float(serialized["bounds_min_xyz"][1]),
+            rel_tol=0.0,
+            abs_tol=1e-6,
+        )
+        and math.isclose(
+            float(serialized["bounds_max_xyz"][1])
+            - float(in_simulator["bounds_max_xyz"][1]),
+            quantized_agent_height,
+            rel_tol=0.0,
+            abs_tol=1e-6,
+        )
         and in_simulator["vertex_count"] == serialized["vertex_count"]
         and in_simulator["index_count"] == serialized["index_count"]
     )
@@ -815,7 +836,7 @@ def audit_navmesh_bake(contract: AuditContract) -> dict[str, object]:
         )
         _require(
             _observations_serialization_equivalent(
-                bake_observation, roundtrip_observation
+                bake_observation, roundtrip_observation, effective
             ),
             f"receipt bake/roundtrip observation differs: {scene_id}",
         )

@@ -598,7 +598,10 @@ class HabitatBakeRuntime:
         )
         _settings_close(roundtrip_settings, effective, "bake/roundtrip settings")
         _observations_serialization_equivalent(
-            bake_observation, roundtrip_observation, "bake/roundtrip observation"
+            bake_observation,
+            roundtrip_observation,
+            effective,
+            "bake/roundtrip observation",
         )
         return BakeResult(effective, bake_observation, roundtrip_observation)
 
@@ -650,19 +653,29 @@ def _observations_close(
 def _observations_serialization_equivalent(
     in_simulator: NavmeshObservation,
     serialized: NavmeshObservation,
+    effective_settings: Mapping[str, Any],
     label: str,
 ) -> None:
     """Validate save/load equivalence across Habitat's two bounds semantics.
 
-    Habitat 0.3.1 exposes the stage AABB through ``Simulator.pathfinder``
-    immediately after recomputation, but a standalone ``PathFinder`` loaded
-    from the saved NavMesh exposes the serialized navigation AABB.  Their
-    vertical maxima can therefore differ by the non-navigable scene volume
-    even when area, topology, horizontal extent, and serialized bytes are
-    unchanged.  The serialized observation is the canonical one.  We require
-    it to stay inside the in-simulator vertical extent and compare every other
-    geometric invariant exactly within float round-off.
+    Habitat 0.3.1 expands the standalone ``PathFinder`` upper Y bound by
+    Recast's voxel-quantized walkable height when it reloads a saved NavMesh.
+    The in-simulator observation ends at the walkable surface instead.  This
+    is an API representation change, not geometry drift: minimum Y, both
+    horizontal bounds, area, and topology remain equal.  Check the expansion
+    against the pinned agent-height/cell-height settings instead of silently
+    ignoring the vertical coordinate.
     """
+    agent_height = float(effective_settings["agent_height"])
+    cell_height = float(effective_settings["cell_height"])
+    _require(
+        math.isfinite(agent_height)
+        and math.isfinite(cell_height)
+        and agent_height > 0.0
+        and cell_height > 0.0,
+        f"{label} has invalid vertical NavMesh settings",
+    )
+    quantized_agent_height = math.ceil(agent_height / cell_height) * cell_height
     _require(
         math.isclose(
             in_simulator.navigable_area_m2,
@@ -697,11 +710,20 @@ def _observations_serialization_equivalent(
             f"{label} horizontal {bound_name} bounds changed",
         )
     _require(
-        float(in_simulator.bounds_min_xyz[1])
-        <= float(serialized.bounds_min_xyz[1]) + 1e-6
-        and float(serialized.bounds_max_xyz[1])
-        <= float(in_simulator.bounds_max_xyz[1]) + 1e-6,
-        f"{label} serialized vertical bounds escape the simulator stage bounds",
+        math.isclose(
+            float(in_simulator.bounds_min_xyz[1]),
+            float(serialized.bounds_min_xyz[1]),
+            rel_tol=0.0,
+            abs_tol=1e-6,
+        )
+        and math.isclose(
+            float(serialized.bounds_max_xyz[1])
+            - float(in_simulator.bounds_max_xyz[1]),
+            quantized_agent_height,
+            rel_tol=0.0,
+            abs_tol=1e-6,
+        ),
+        f"{label} vertical bounds do not match Habitat's quantized agent-height expansion",
     )
     _require(
         in_simulator.vertex_count == serialized.vertex_count
@@ -1029,7 +1051,10 @@ def _validate_receipt(
         "resume roundtrip",
     )
     _observations_serialization_equivalent(
-        recorded_bake, recorded_roundtrip, "recorded bake/roundtrip"
+        recorded_bake,
+        recorded_roundtrip,
+        requested_settings,
+        "recorded bake/roundtrip",
     )
     _require(
         receipt["selection_boundary"] == SELECTION_BOUNDARY

@@ -142,6 +142,21 @@ class FakeBakeRuntime:
             index_count=36,
         )
 
+    @classmethod
+    def _serialized_observation(cls, glb_or_navmesh: Path) -> NavmeshObservation:
+        observation = cls._observation(glb_or_navmesh)
+        return NavmeshObservation(
+            navigable_area_m2=observation.navigable_area_m2,
+            bounds_min_xyz=observation.bounds_min_xyz,
+            bounds_max_xyz=(
+                observation.bounds_max_xyz[0],
+                observation.bounds_max_xyz[1] + 1.6,
+                observation.bounds_max_xyz[2],
+            ),
+            vertex_count=observation.vertex_count,
+            index_count=observation.index_count,
+        )
+
     def bake_once(
         self,
         glb_path: Path,
@@ -165,7 +180,11 @@ class FakeBakeRuntime:
             and self._per_scene_calls[scene] == baker.REPETITIONS
         ):
             glb_path.write_bytes(glb_path.read_bytes() + b"DRIFT")
-        return BakeResult(copy.deepcopy(requested_settings), observation, observation)
+        return BakeResult(
+            copy.deepcopy(requested_settings),
+            observation,
+            self._serialized_observation(glb_path),
+        )
 
     def validate_output(
         self,
@@ -175,7 +194,7 @@ class FakeBakeRuntime:
         self.validate_calls.append(navmesh_path)
         if not navmesh_path.read_bytes().startswith(b"FAKE_NAVMESH_V1\x00"):
             raise NavmeshBakeError("fake runtime rejected navmesh bytes")
-        observation = self._observation(Path("scene-a.glb"))
+        observation = self._serialized_observation(Path("scene-a.glb"))
         return BakeResult(copy.deepcopy(requested_settings), observation, observation)
 
 
@@ -469,19 +488,20 @@ class NavmeshBakeContractTests(unittest.TestCase):
         in_simulator = NavmeshObservation(
             navigable_area_m2=26.0,
             bounds_min_xyz=(-11.0, -0.1, -5.0),
-            bounds_max_xyz=(4.0, 4.3, 3.0),
+            bounds_max_xyz=(4.0, 2.7, 3.0),
             vertex_count=522,
             index_count=522,
         )
         serialized = NavmeshObservation(
             navigable_area_m2=26.0,
             bounds_min_xyz=(-11.0, -0.1, -5.0),
-            bounds_max_xyz=(4.0, 2.7, 3.0),
+            bounds_max_xyz=(4.0, 4.3, 3.0),
             vertex_count=522,
             index_count=522,
         )
+        settings = {"agent_height": 1.5, "cell_height": 0.2}
         baker._observations_serialization_equivalent(
-            in_simulator, serialized, "fixture"
+            in_simulator, serialized, settings, "fixture"
         )
 
         horizontal_drift = copy.deepcopy(serialized.to_dict())
@@ -490,15 +510,27 @@ class NavmeshBakeContractTests(unittest.TestCase):
             baker._observations_serialization_equivalent(
                 in_simulator,
                 NavmeshObservation.from_dict(horizontal_drift),
+                settings,
                 "fixture",
             )
 
-        vertical_escape = copy.deepcopy(serialized.to_dict())
-        vertical_escape["bounds_max_xyz"][1] = 4.4
-        with self.assertRaisesRegex(NavmeshBakeError, "vertical bounds escape"):
+        wrong_vertical_expansion = copy.deepcopy(serialized.to_dict())
+        wrong_vertical_expansion["bounds_max_xyz"][1] = 4.4
+        with self.assertRaisesRegex(NavmeshBakeError, "quantized agent-height"):
             baker._observations_serialization_equivalent(
                 in_simulator,
-                NavmeshObservation.from_dict(vertical_escape),
+                NavmeshObservation.from_dict(wrong_vertical_expansion),
+                settings,
+                "fixture",
+            )
+
+        shifted_vertical_minimum = copy.deepcopy(serialized.to_dict())
+        shifted_vertical_minimum["bounds_min_xyz"][1] += 0.01
+        with self.assertRaisesRegex(NavmeshBakeError, "quantized agent-height"):
+            baker._observations_serialization_equivalent(
+                in_simulator,
+                NavmeshObservation.from_dict(shifted_vertical_minimum),
+                settings,
                 "fixture",
             )
 

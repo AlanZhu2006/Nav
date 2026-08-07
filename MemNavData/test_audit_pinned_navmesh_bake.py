@@ -320,7 +320,7 @@ class NavmeshBakeAuditorTests(unittest.TestCase):
         in_simulator = {
             "navigable_area_m2": 26.0,
             "bounds_min_xyz": [-11.0, -0.1, -5.0],
-            "bounds_max_xyz": [4.0, 4.3, 3.0],
+            "bounds_max_xyz": [4.0, 2.7, 3.0],
             "vertex_count": 522,
             "index_count": 522,
         }
@@ -328,17 +328,26 @@ class NavmeshBakeAuditorTests(unittest.TestCase):
         serialized = {
             **base,
             "bounds_min_xyz": list(base["bounds_min_xyz"]),
-            "bounds_max_xyz": [4.0, 2.7, 3.0],
+            "bounds_max_xyz": [4.0, 4.3, 3.0],
         }
+        settings = {"agent_height": 1.5, "cell_height": 0.2}
         self.assertTrue(
             auditor._observations_serialization_equivalent(
-                in_simulator, serialized
+                in_simulator, serialized, settings
             )
         )
         serialized["bounds_max_xyz"][2] += 0.01
         self.assertFalse(
             auditor._observations_serialization_equivalent(
-                in_simulator, serialized
+                in_simulator, serialized, settings
+            )
+        )
+
+        serialized["bounds_max_xyz"][2] -= 0.01
+        serialized["bounds_max_xyz"][1] += 0.1
+        self.assertFalse(
+            auditor._observations_serialization_equivalent(
+                in_simulator, serialized, settings
             )
         )
 

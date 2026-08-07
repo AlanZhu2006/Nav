@@ -263,9 +263,7 @@ class NavmeshObservation:
         _require(
             all(
                 lower <= upper
-                for lower, upper in zip(
-                    self.bounds_min_xyz, self.bounds_max_xyz, strict=True
-                )
+                for lower, upper in zip(self.bounds_min_xyz, self.bounds_max_xyz)
             ),
             "navmesh minimum bounds must not exceed maximum bounds",
         )

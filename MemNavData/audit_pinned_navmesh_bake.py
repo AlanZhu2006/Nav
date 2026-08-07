@@ -654,8 +654,12 @@ def audit_navmesh_bake(contract: AuditContract) -> dict[str, object]:
         all(isinstance(scene_id, str) and scene_id for scene_id in index_scenes),
         "index scene id is invalid",
     )
+    _require(
+        len(scene_ids) == len(derived_scenes),
+        "derived scene count changed while building the scene index",
+    )
     derived_by_scene = {
-        scene_id: row for scene_id, row in zip(scene_ids, derived_scenes, strict=True)
+        scene_id: row for scene_id, row in zip(scene_ids, derived_scenes)
     }
     _require(
         len(derived_by_scene) == contract.expected_scene_count

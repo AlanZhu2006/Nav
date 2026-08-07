@@ -90,6 +90,12 @@ FINITE_SCALAR_COLUMNS = (
     "goal_depth_confidence_mean",
     "candidate_depth_confidence_mean",
 )
+SELECTION_ORIGIN_COLUMN = "candidate_selection_origin"
+FORMAL_TRAIN_SELECTION_ORIGINS = frozenset({
+    "deployment_topk",
+    "teacher_forced_positive",
+    "teacher_forced_hard_negative",
+})
 
 
 def sha256(path: Path, chunk_bytes: int = 8 << 20) -> str:
@@ -108,18 +114,43 @@ def canonical_json(value: object) -> str:
 def atomic_write_json(path: Path, value: object) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temporary_path = Path(temporary)
+    payload = (json.dumps(
+        value, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()
+    sidecar = Path(f"{path}.sha256")
+    sidecar_payload = f"{digest}  {path.name}\n".encode("ascii")
+    if path.exists() or sidecar.exists():
+        if (not path.is_file() or path.is_symlink()
+                or not sidecar.is_file() or sidecar.is_symlink()):
+            raise RuntimeError("existing audit/sidecar pair is incomplete")
+        if path.read_bytes() != payload:
+            raise RuntimeError("existing artifact audit differs")
+        if sidecar.read_bytes() != sidecar_payload:
+            raise RuntimeError("existing artifact audit sidecar differs")
+        return
+    temporaries: list[tuple[Path, bytes]] = []
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
+        for destination, content in (
+                (path, payload), (sidecar, sidecar_payload)):
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=f".{destination.name}.", suffix=".tmp",
+                dir=destination.parent)
+            temporary_path = Path(temporary)
+            temporaries.append((temporary_path, content))
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        os.replace(temporaries[0][0], path)
+        os.replace(temporaries[1][0], sidecar)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
-        temporary_path.unlink(missing_ok=True)
+        for temporary_path, _content in temporaries:
+            temporary_path.unlink(missing_ok=True)
 
 
 def load_json(path: Path) -> dict:
@@ -307,6 +338,107 @@ def corrected_teacher_alignment(
     }
 
 
+def validate_formal_selection_policy(rows, teacher, signature,
+                                     *, expected_role: str) -> dict:
+    """Prove train-only teacher augmentation never leaks into development."""
+
+    config = signature.get("compute_config")
+    if not isinstance(config, dict):
+        raise ValueError("collector compute_config is malformed")
+    mode = config.get("selection_mode")
+    top_k = config.get("top_k")
+    kind = config.get("kind")
+    if (not isinstance(top_k, int) or isinstance(top_k, bool) or top_k < 1
+            or not isinstance(kind, str) or not kind):
+        raise ValueError("collector selection top_k/kind is malformed")
+    if SELECTION_ORIGIN_COLUMN not in rows.columns:
+        raise ValueError(
+            f"formal rows lack {SELECTION_ORIGIN_COLUMN}")
+    if not {"kind", "split_role"}.issubset(teacher.columns):
+        raise ValueError("formal teacher lacks kind/split_role")
+    teacher_kind = teacher.loc[
+        teacher["kind"].eq(kind)
+        & teacher["split_role"].eq(expected_role)].copy()
+    if teacher_kind.empty:
+        raise ValueError(f"formal teacher has no rows for kind={kind}")
+
+    row_sessions = set(zip(
+        rows["scene"].astype(str), rows["session_id"].astype(str)))
+    teacher_sessions = set(zip(
+        teacher_kind["scene"].astype(str),
+        teacher_kind["session_id"].astype(str)))
+    if row_sessions != teacher_sessions:
+        raise ValueError(
+            "formal selection does not exactly cover teacher sessions")
+    counts = rows.groupby(["scene", "session_id"], sort=False).size()
+    origins = set(rows[SELECTION_ORIGIN_COLUMN].astype(str))
+
+    positive_threshold = float(config.get("positive_threshold", 0.5))
+    if expected_role == "train":
+        if mode != "train_augmented":
+            raise ValueError(
+                "formal train collection must use train_augmented selection")
+        if not origins.issubset(FORMAL_TRAIN_SELECTION_ORIGINS):
+            raise ValueError(
+                f"formal train selection has forbidden origins: "
+                f"{sorted(origins - FORMAL_TRAIN_SELECTION_ORIGINS)}")
+        if int(counts.max()) > top_k + 2:
+            raise ValueError("formal train selection exceeds top_k+2 rows")
+        teacher_positive = teacher_kind.groupby(
+            ["scene", "session_id"], sort=False)["teacher_covis"].max()
+        teacher_positive = set(teacher_positive.loc[
+            teacher_positive.ge(positive_threshold)].index.tolist())
+        selected_positive = rows.loc[
+            rows["teacher_covis"].ge(positive_threshold)].groupby(
+                ["scene", "session_id"], sort=False).size()
+        selected_positive_sessions = set(selected_positive.index.tolist())
+        missing_positive = teacher_positive - selected_positive_sessions
+        if missing_positive:
+            raise ValueError(
+                "train augmentation failed to expose teacher positives: "
+                f"{sorted(missing_positive)[:5]}")
+    elif expected_role == "development":
+        if mode != "deployment":
+            raise ValueError(
+                "formal development collection must use deployment selection")
+        if origins != {"deployment_topk"}:
+            raise ValueError(
+                "development contains train-only teacher augmentation")
+        if int(counts.max()) > top_k:
+            raise ValueError("formal development selection exceeds top_k rows")
+        teacher_positive = teacher_kind.groupby(
+            ["scene", "session_id"], sort=False)["teacher_covis"].max()
+        teacher_positive = set(teacher_positive.loc[
+            teacher_positive.ge(positive_threshold)].index.tolist())
+        selected_positive_sessions = set(rows.loc[
+            rows["teacher_covis"].ge(positive_threshold),
+            ["scene", "session_id"]].itertuples(index=False, name=None))
+    else:
+        raise ValueError(
+            "formal Phase-B selection is restricted to train/development")
+
+    positive_recall = (
+        len(teacher_positive & selected_positive_sessions)
+        / len(teacher_positive) if teacher_positive else None)
+    return {
+        "approved": True,
+        "selection_mode": mode,
+        "top_k": top_k,
+        "session_count": len(row_sessions),
+        "maximum_rows_per_session": int(counts.max()),
+        "selection_origin_counts": {
+            str(name): int(count)
+            for name, count in rows[
+                SELECTION_ORIGIN_COLUMN].value_counts().sort_index().items()
+        },
+        "teacher_positive_sessions": len(teacher_positive),
+        "selected_positive_sessions": len(
+            teacher_positive & selected_positive_sessions),
+        "positive_session_recall": positive_recall,
+        "development_uses_teacher_augmentation": False,
+    }
+
+
 def audit_artifact(
     run_dir: Path,
     teacher_csv: Path,
@@ -478,6 +610,7 @@ def audit_artifact(
     config = signature.get("compute_config", {})
     positive_threshold = float(config.get("positive_threshold", 0.5))
     negative_threshold = float(config.get("negative_threshold", 0.2))
+    teacher = None
     try:
         teacher = pd.read_csv(teacher_csv)
         teacher_alignment = corrected_teacher_alignment(
@@ -510,6 +643,22 @@ def audit_artifact(
                 errors.append(str(error))
 
     signature_external = provenance.get("external_causal_scale")
+    selection_policy = {
+        "approved": False,
+        "reason": "legacy artifact without external causal-scale contract",
+    }
+    if isinstance(signature_external, dict):
+        try:
+            if teacher is None:
+                raise ValueError("formal teacher could not be loaded")
+            selection_policy = validate_formal_selection_policy(
+                rows, teacher, signature, expected_role=expected_role)
+        except (ValueError, KeyError, TypeError) as error:
+            errors.append(f"formal selection policy failed: {error}")
+            selection_policy = {
+                "approved": False,
+                "reason": str(error),
+            }
     external_contract = None
     expected_external_samples = None
     expected_external_bindings = None
@@ -622,6 +771,7 @@ def audit_artifact(
             "scenes": len(selected_scenes),
         },
         "teacher_alignment": teacher_alignment,
+        "selection_policy": selection_policy,
         "finite_rates": finite_rates,
         "external_causal_scale": external_causal_scale,
         "provenance": {

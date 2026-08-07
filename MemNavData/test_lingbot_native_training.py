@@ -18,6 +18,7 @@ from MemNavData.audit_lingbot_native_localizer_artifact import (
     audit_artifact,
     canonical_json,
     sha256,
+    validate_formal_selection_policy,
 )
 from MemNavData.train_lingbot_native_localizer import (
     CHECKPOINT_MODEL_KIND,
@@ -154,6 +155,52 @@ def externalized_rows() -> pd.DataFrame:
 
 
 class LingBotNativeArtifactAuditTest(unittest.TestCase):
+    def test_formal_selection_policy_separates_train_teacher_from_development(self):
+        teacher = pd.DataFrame([
+            {"scene": "s", "session_id": "positive", "kind": "formal",
+             "split_role": "train", "teacher_covis": 0.05},
+            {"scene": "s", "session_id": "positive", "kind": "formal",
+             "split_role": "train", "teacher_covis": 0.80},
+            {"scene": "s", "session_id": "no_match", "kind": "formal",
+             "split_role": "train", "teacher_covis": 0.10},
+        ])
+        train_rows = teacher.copy()
+        train_rows["candidate_selection_origin"] = [
+            "deployment_topk", "teacher_forced_positive", "deployment_topk"]
+        train_signature = {"compute_config": {
+            "selection_mode": "train_augmented", "top_k": 1,
+            "kind": "formal", "positive_threshold": 0.5,
+        }}
+        summary = validate_formal_selection_policy(
+            train_rows, teacher, train_signature, expected_role="train")
+        self.assertTrue(summary["approved"])
+        self.assertEqual(summary["positive_session_recall"], 1.0)
+        self.assertEqual(summary["maximum_rows_per_session"], 2)
+
+        development_rows = train_rows.loc[
+            train_rows["candidate_selection_origin"].eq(
+                "deployment_topk")].copy()
+        development_rows["split_role"] = "development"
+        development_teacher = teacher.copy()
+        development_teacher["split_role"] = "development"
+        development_signature = {"compute_config": {
+            "selection_mode": "deployment", "top_k": 1,
+            "kind": "formal", "positive_threshold": 0.5,
+        }}
+        summary = validate_formal_selection_policy(
+            development_rows, development_teacher, development_signature,
+            expected_role="development")
+        self.assertTrue(summary["approved"])
+        self.assertEqual(summary["positive_session_recall"], 0.0)
+
+        leaked = development_rows.copy()
+        leaked.loc[leaked.index[0], "candidate_selection_origin"] = (
+            "teacher_forced_positive")
+        with self.assertRaisesRegex(ValueError, "train-only"):
+            validate_formal_selection_policy(
+                leaked, development_teacher, development_signature,
+                expected_role="development")
+
     def build_artifact(self, root: Path, *, external: bool = False):
         run = root / "run"
         run.mkdir()
@@ -272,7 +319,37 @@ class LingBotNativeArtifactAuditTest(unittest.TestCase):
             self.assertTrue(report["training_artifact_approved"])
             self.assertEqual(report["counts"]["saved_rows"], 4)
             self.assertEqual(report["teacher_alignment"]["positive_rows"], 1)
-            self.assertTrue((run / AUDIT_NAME).is_file())
+            audit_path = run / AUDIT_NAME
+            sidecar_path = Path(f"{audit_path}.sha256")
+            self.assertTrue(audit_path.is_file())
+            digest = hashlib.sha256(audit_path.read_bytes()).hexdigest()
+            self.assertEqual(
+                sidecar_path.read_text(), f"{digest}  {AUDIT_NAME}\n")
+            repeated = audit_artifact(
+                run, teacher, split,
+                expected_role="train",
+                expected_scenes=2,
+                expected_sessions=2,
+                expected_seeds=4,
+                expected_rows=4,
+                expected_source_commit="abc123",
+                expected_teacher_sha256=sha256(teacher),
+                expected_split_sha256=sha256(split),
+            )
+            self.assertEqual(repeated, report)
+            sidecar_path.write_text("0" * 64 + f"  {AUDIT_NAME}\n")
+            with self.assertRaisesRegex(RuntimeError, "sidecar differs"):
+                audit_artifact(
+                    run, teacher, split,
+                    expected_role="train",
+                    expected_scenes=2,
+                    expected_sessions=2,
+                    expected_seeds=4,
+                    expected_rows=4,
+                    expected_source_commit="abc123",
+                    expected_teacher_sha256=sha256(teacher),
+                    expected_split_sha256=sha256(split),
+                )
 
     def test_artifact_audit_rejects_progress_mismatch(self):
         with tempfile.TemporaryDirectory() as temporary:

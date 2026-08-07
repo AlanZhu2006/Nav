@@ -36,7 +36,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -51,6 +51,10 @@ try:
         ExternalCausalScalePins,
         sha256_file as contract_sha256_file,
     )
+    from MemNavData.flow_cache_routing import (
+        FlowRoutingError,
+        registry_from_manifest,
+    )
 except ModuleNotFoundError:  # direct script invocation
     from external_causal_scale_contract import (  # type: ignore
         CAUSAL_SAMPLE_ID_COLUMN,
@@ -59,6 +63,10 @@ except ModuleNotFoundError:  # direct script invocation
         ExternalCausalScaleContract,
         ExternalCausalScalePins,
         sha256_file as contract_sha256_file,
+    )
+    from flow_cache_routing import (  # type: ignore
+        FlowRoutingError,
+        registry_from_manifest,
     )
 
 
@@ -91,6 +99,7 @@ class CandidateSeed:
     session_is_strict_no_match: bool
     session_max_covis: float
     causal_manifest_sample_id: Optional[str] = None
+    selection_origin: str = "deployment_topk"
 
 
 @dataclass(frozen=True)
@@ -109,7 +118,7 @@ _HABITAT_TO_DATA_ROTATION = np.array([
 ], dtype=np.float64)
 _LINGBOT_TO_DATA_ROTATION_BASIS = np.diag([-1.0, -1.0, 1.0])
 _DEFAULT_POOLED_METRIC_SCALE = 2.564
-_CHECKPOINT_SCHEMA_VERSION = 2
+_CHECKPOINT_SCHEMA_VERSION = 3
 _CHECKPOINT_FILENAME = "lingbot_goal_loop_closure_checkpoint.sqlite3"
 _PROGRESS_FILENAME = "lingbot_goal_loop_closure_progress.json"
 _ROWS_FILENAME = "lingbot_goal_loop_closure_rows.csv"
@@ -366,6 +375,7 @@ def seed_manifest_sha256(seeds: Sequence[CandidateSeed]) -> str:
         "session_is_strict_no_match": seed.session_is_strict_no_match,
         "session_max_covis": seed.session_max_covis,
         "causal_manifest_sample_id": seed.causal_manifest_sample_id,
+        "selection_origin": seed.selection_origin,
     } for seed in seeds]
     return hashlib.sha256(canonical_json(records).encode("utf-8")).hexdigest()
 
@@ -508,6 +518,9 @@ def select_balanced_seeds(frame: pd.DataFrame, *, kind: str,
                 session_is_strict_no_match=False,
                 session_max_covis=float(group["teacher_covis"].max()),
                 causal_manifest_sample_id=optional_causal_sample_id(row),
+                selection_origin=(
+                    "teacher_balanced_positive" if label == 1
+                    else "teacher_balanced_negative"),
             ))
     return result
 
@@ -562,6 +575,94 @@ def select_deployment_seeds(
                 session_is_strict_no_match=strict_no_match,
                 session_max_covis=maximum_covisibility,
                 causal_manifest_sample_id=optional_causal_sample_id(row),
+                selection_origin="deployment_topk",
+            ))
+    return result
+
+
+def select_train_augmented_seeds(
+        frame: pd.DataFrame, *, kind: str, sessions: Sequence[str],
+        max_sessions: int, top_k: int, minimum_gap: int,
+        positive_threshold: float, negative_threshold: float,
+        minimum_anchor: int) -> List[CandidateSeed]:
+    """Keep deployment candidates, then expose missing train-only supervision.
+
+    Raw DINO rank is not the training target.  If the deployment top-K misses a
+    geometric positive (or a hard negative) that is nevertheless present in
+    the signed teacher shortlist, a localizer trained only on top-K never sees
+    the missing class.  On the train split only, add at most one highest-DINO
+    positive and one highest-DINO negative per session.  Development remains
+    untouched and uses ``select_deployment_seeds``.
+    """
+
+    data = frame.loc[frame["kind"].eq(kind)].copy()
+    if sessions:
+        data = data.loc[data["session_id"].isin(sessions)]
+    data = data.loc[
+        data["teacher_covis"].notna()
+        & data["dino_cosine"].notna()
+        & data["candidate_frame"].ge(minimum_anchor)]
+    session_ids = sorted(data["session_id"].unique().tolist())
+    if max_sessions:
+        session_ids = session_ids[:max_sessions]
+
+    result: List[CandidateSeed] = []
+    for session_id in session_ids:
+        group = data.loc[data["session_id"].eq(session_id)]
+        maximum_covisibility = float(group["teacher_covis"].max())
+        has_positive = maximum_covisibility >= positive_threshold
+        strict_no_match = maximum_covisibility <= negative_threshold
+        selected = temporal_diverse(group, top_k, minimum_gap)
+        selected_frames = {int(row["candidate_frame"]) for row in selected}
+        selection_origin = {
+            int(row["candidate_frame"]): "deployment_topk" for row in selected
+        }
+
+        # This augmentation is label-authorized only for the train collector.
+        # Pick by DINO within each class so it remains a hard, deployment-like
+        # example instead of an oracle-best co-visibility frame.
+        augmentation_classes = (
+            (lambda value: value >= positive_threshold,
+             group.loc[group["teacher_covis"].ge(positive_threshold)],
+             "teacher_forced_positive"),
+            (lambda value: value <= negative_threshold,
+             group.loc[group["teacher_covis"].le(negative_threshold)],
+             "teacher_forced_hard_negative"),
+        )
+        for belongs_to_class, subset, origin in augmentation_classes:
+            if any(belongs_to_class(float(row["teacher_covis"]))
+                   for row in selected):
+                continue
+            for row in temporal_diverse(subset, 1, minimum_gap):
+                candidate_frame = int(row["candidate_frame"])
+                if candidate_frame not in selected_frames:
+                    selected.append(row)
+                    selected_frames.add(candidate_frame)
+                    selection_origin[candidate_frame] = origin
+
+        selected.sort(
+            key=lambda row: (-float(row["dino_cosine"]),
+                             int(row["candidate_frame"])))
+        for row in selected:
+            covisibility = float(row["teacher_covis"])
+            label = (1 if covisibility >= positive_threshold else
+                     0 if covisibility <= negative_threshold else -1)
+            result.append(CandidateSeed(
+                session_id=str(row["session_id"]),
+                scene=str(row["scene"]),
+                episode=str(row["episode"]),
+                kind=str(row["kind"]),
+                query_path=Path(str(row["query_path"])).resolve(),
+                candidate_path=Path(str(row["candidate_path"])).resolve(),
+                candidate_frame=int(row["candidate_frame"]),
+                dino_cosine=float(row["dino_cosine"]),
+                teacher_covis=covisibility,
+                label=label,
+                session_has_positive=has_positive,
+                session_is_strict_no_match=strict_no_match,
+                session_max_covis=maximum_covisibility,
+                causal_manifest_sample_id=optional_causal_sample_id(row),
+                selection_origin=selection_origin[int(row["candidate_frame"])],
             ))
     return result
 
@@ -580,16 +681,101 @@ def validate_scene_role(seeds: Sequence[CandidateSeed], manifest: dict,
 
 
 def feature_episode_root(feature_root: Path, seed: CandidateSeed) -> Path:
-    # Feature roots used by the project either point at ``.../mp3d_2leg`` or at
-    # its parent.  Resolve both layouts without writing symlinks.
+    # Legacy feature roots may point at one task directory or its parent.  The
+    # formal routed-cache path below is preferred for multi-root 3-leg data.
     direct = feature_root / seed.scene / seed.episode
-    nested = feature_root / "mp3d_2leg" / seed.scene / seed.episode
-    for path in (direct, nested):
+    nested_2leg = feature_root / "mp3d_2leg" / seed.scene / seed.episode
+    nested_3leg = feature_root / "mp3d_3leg" / seed.scene / seed.episode
+    for path in (direct, nested_2leg, nested_3leg):
         if path.is_dir():
             return path.resolve()
     raise FileNotFoundError(
         f"feature episode absent for {seed.scene}/{seed.episode} under "
         f"{feature_root}")
+
+
+def resolve_routed_feature_cache_pairs(
+    manifest: Mapping[str, object],
+    seeds: Sequence[CandidateSeed],
+    *,
+    route_registry: object | None = None,
+) -> tuple[
+    Dict[Tuple[str, str], Tuple[Path, Path]],
+    Mapping[str, object],
+] | None:
+    """Resolve selected cache pairs through the manifest's physical routing.
+
+    The old collector accepted one broad ``feature_root``.  The formal 3-leg
+    set deliberately combines an immutable official cache root with audited
+    gap-fill episodes, so guessing a root is both incomplete and unsafe.  A
+    routed manifest is therefore the sole authority for every selected pair.
+    """
+
+    routing = manifest.get("flow_cache_routing")
+    if routing is None:
+        if route_registry is not None:
+            raise ValueError("route registry supplied for an unrouted manifest")
+        return None
+    if not isinstance(routing, Mapping):
+        raise ValueError("causal manifest flow_cache_routing is malformed")
+    try:
+        registry = (
+            route_registry
+            if route_registry is not None
+            else registry_from_manifest(manifest)
+        )
+    except FlowRoutingError as error:
+        raise RuntimeError(
+            f"causal manifest flow-cache routing is invalid: {error}") from error
+    if registry is None or not hasattr(registry, "resolve_manifest_pair"):
+        raise RuntimeError("routed causal manifest produced no route registry")
+
+    episodes: Dict[Tuple[str, str], Mapping[str, object]] = {}
+    raw_scenes = manifest.get("scenes")
+    if not isinstance(raw_scenes, list):
+        raise ValueError("causal manifest scenes are missing")
+    for raw_scene in raw_scenes:
+        if not isinstance(raw_scene, Mapping):
+            raise ValueError("causal manifest scene is malformed")
+        scene = raw_scene.get("scene")
+        raw_episodes = raw_scene.get("selected_episodes")
+        if not isinstance(scene, str) or not isinstance(raw_episodes, list):
+            raise ValueError("causal manifest scene identity is malformed")
+        for raw_episode in raw_episodes:
+            if not isinstance(raw_episode, Mapping):
+                raise ValueError("causal manifest episode is malformed")
+            episode = raw_episode.get("episode")
+            key = scene, episode
+            if not isinstance(episode, str) or key in episodes:
+                raise ValueError(
+                    "causal manifest episode identity is empty or duplicated")
+            episodes[(scene, episode)] = raw_episode
+
+    selected = sorted({(seed.scene, seed.episode) for seed in seeds})
+    if not selected:
+        raise ValueError("cannot route an empty candidate selection")
+    missing = set(selected) - set(episodes)
+    if missing:
+        raise RuntimeError(
+            f"selected episodes are absent from causal manifest: {sorted(missing)}")
+    result: Dict[Tuple[str, str], Tuple[Path, Path]] = {}
+    for scene, episode in selected:
+        try:
+            aggregator, camera = registry.resolve_manifest_pair(
+                episodes[(scene, episode)], scene, episode)
+        except FlowRoutingError as error:
+            raise RuntimeError(
+                f"routed cache resolution failed for {scene}/{episode}: {error}"
+            ) from error
+        aggregator = Path(aggregator).resolve()
+        camera = Path(camera).resolve()
+        if (aggregator.name != "lingbot_cache.npz"
+                or camera.name != "lingbot_cam_cache.npz"
+                or aggregator.parent != camera.parent):
+            raise RuntimeError(
+                f"routed cache pair has an invalid layout: {scene}/{episode}")
+        result[(scene, episode)] = aggregator, camera
+    return result, dict(routing)
 
 
 def raw_rgb_dir(seed: CandidateSeed) -> Path:
@@ -1092,7 +1278,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--allowed-role", choices=("train", "development", "final_reserved"),
         help="fail if any selected session is outside this frozen scene role")
-    parser.add_argument("--feature-root", type=Path, required=True)
+    parser.add_argument(
+        "--feature-root", type=Path,
+        help=("legacy single-root LingBot cache location; a routed causal "
+              "manifest supersedes this path"))
     parser.add_argument("--lingbot-repo", type=Path, required=True)
     parser.add_argument("--weights", type=Path, required=True)
     parser.add_argument("--expected-weight-sha", default="")
@@ -1113,10 +1302,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--kind", default="revisit_b")
     parser.add_argument(
-        "--selection-mode", choices=("balanced", "deployment"),
+        "--selection-mode", choices=(
+            "balanced", "deployment", "train_augmented"),
         default="balanced",
         help=("balanced: positive/negative feasibility pairs; deployment: "
-              "temporal-diverse top-DINO sets including true no-match"))
+              "temporal-diverse top-DINO sets including true no-match; "
+              "train_augmented: deployment set plus at most one missing "
+              "teacher-positive and hard-negative candidate"))
     parser.add_argument("--session", action="append", default=[])
     parser.add_argument("--max-sessions", type=int, default=1)
     parser.add_argument("--per-class", type=int, default=2)
@@ -1190,7 +1382,7 @@ def main() -> None:
         raise ValueError("invalid diagnostic configuration")
     if not 0.0 <= args.negative_threshold < args.positive_threshold <= 1.0:
         raise ValueError("invalid co-visibility thresholds")
-    for path in (args.internnav_root, args.teacher_csv, args.feature_root,
+    for path in (args.internnav_root, args.teacher_csv,
                  args.lingbot_repo, args.weights):
         if not path.exists():
             raise FileNotFoundError(path)
@@ -1286,8 +1478,14 @@ def main() -> None:
     if args.selection_mode == "balanced":
         seeds = select_balanced_seeds(
             teacher, per_class=args.per_class, **selection_arguments)
-    else:
+    elif args.selection_mode == "deployment":
         seeds = select_deployment_seeds(
+            teacher, top_k=args.top_k, **selection_arguments)
+    else:
+        if args.allowed_role != "train":
+            raise ValueError(
+                "train_augmented selection is forbidden outside the train split")
+        seeds = select_train_augmented_seeds(
             teacher, top_k=args.top_k, **selection_arguments)
     if not seeds:
         raise RuntimeError(
@@ -1332,6 +1530,35 @@ def main() -> None:
                     "one candidate session crosses causal manifest samples: "
                     f"{session_id} -> {sorted(sample_ids)}")
 
+    routed_cache_pairs: Optional[
+        Dict[Tuple[str, str], Tuple[Path, Path]]
+    ] = None
+    routed_cache_provenance: Optional[Mapping[str, object]] = None
+    if external_contract is not None:
+        routed = resolve_routed_feature_cache_pairs(
+            external_contract.manifest, seeds)
+        if routed is None:
+            raise RuntimeError(
+                "formal external causal-scale collection requires the pinned "
+                "manifest flow_cache_routing contract")
+        routed_cache_pairs, routed_cache_provenance = routed
+    elif args.feature_root is None or not args.feature_root.exists():
+        raise FileNotFoundError(
+            "legacy collection requires an existing --feature-root")
+
+    def cache_pair_for_seed(seed: CandidateSeed) -> Tuple[Path, Path]:
+        if routed_cache_pairs is not None:
+            key = seed.scene, seed.episode
+            if key not in routed_cache_pairs:
+                raise RuntimeError(
+                    f"selected episode lacks a routed cache pair: {key}")
+            return routed_cache_pairs[key]
+        assert args.feature_root is not None
+        episode_root = feature_episode_root(args.feature_root, seed)
+        aggregator = (
+            episode_root / "videos" / "chunk-000" / "lingbot_cache.npz")
+        return aggregator, aggregator.with_name("lingbot_cam_cache.npz")
+
     # Validate every selected raw/cache dependency before allocating model
     # weights. This path is also invoked as a standalone Slurm preflight.
     from internnav.model.basemodel.memnav.cache_schema import validate_cache_pair
@@ -1342,10 +1569,7 @@ def main() -> None:
         key = (seed.scene, seed.episode)
         if key not in checked_episodes:
             checked_episodes.add(key)
-            episode_root = feature_episode_root(args.feature_root, seed)
-            cache_path = (episode_root / "videos" / "chunk-000"
-                          / "lingbot_cache.npz")
-            cam_path = cache_path.with_name("lingbot_cam_cache.npz")
+            cache_path, cam_path = cache_pair_for_seed(seed)
             for required in (cache_path, cam_path):
                 if not required.exists():
                     raise FileNotFoundError(required)
@@ -1393,6 +1617,7 @@ def main() -> None:
             "lingbot_weight_sha256": weight_sha,
             "teacher_csv_sha256": teacher_sha,
             "external_causal_scale": external_contract_summary,
+            "flow_cache_routing": routed_cache_provenance,
         }, indent=2, sort_keys=True))
         return
 
@@ -1434,6 +1659,10 @@ def main() -> None:
             "metric_scale_mode": (
                 EXTERNAL_CAUSAL_SCALE_SOURCE
                 if external_contract is not None else "legacy_runtime_or_cached"),
+            "feature_cache_mode": (
+                "manifest_provenance_pinned_multi_root"
+                if routed_cache_pairs is not None
+                else "legacy_single_root"),
         },
         "provenance": {
             "source_commit": source_commit,
@@ -1441,7 +1670,10 @@ def main() -> None:
             "lingbot_weight_sha256": weight_sha,
             "teacher_csv_sha256": teacher_sha,
             "split_manifest_sha256": split_manifest_sha,
-            "feature_root": str(args.feature_root.resolve()),
+            "feature_root": (
+                str(args.feature_root.resolve())
+                if args.feature_root is not None else None),
+            "flow_cache_routing": routed_cache_provenance,
             "external_causal_scale": external_contract_summary,
         },
     }
@@ -1520,8 +1752,7 @@ def main() -> None:
         if current_session in completed_sessions:
             continue
         key = (seed.scene, seed.episode)
-        episode_root = feature_episode_root(args.feature_root, seed)
-        cache_path = episode_root / "videos" / "chunk-000" / "lingbot_cache.npz"
+        cache_path, _cam_path = cache_pair_for_seed(seed)
         rgb_dir = raw_rgb_dir(seed)
         # Drop the loop-local reference before get_or_load can evict the prior
         # episode. Otherwise the caller itself keeps all old CUDA tensors alive
@@ -1635,6 +1866,7 @@ def main() -> None:
             "session_has_positive": seed.session_has_positive,
             "session_is_strict_no_match": seed.session_is_strict_no_match,
             "session_max_covis": seed.session_max_covis,
+            "candidate_selection_origin": seed.selection_origin,
             "teacher_covis": seed.teacher_covis,
             "dino_cosine": seed.dino_cosine,
             "metric_scale_m_per_raw": metric_scale,
@@ -1732,17 +1964,27 @@ def main() -> None:
     candidate_recall = (
         len(positive_sessions & selected_positive_sessions)
         / len(positive_sessions) if positive_sessions else float("nan"))
+    selection_origin_counts = {
+        str(name): int(count)
+        for name, count in result_frame[
+            "candidate_selection_origin"].value_counts().sort_index().items()
+    }
     report = {
         "status": "diagnostic_not_for_deployment",
         "objective": (
             "test whether LingBot-native pose consensus, point-cloud overlap, "
             "metric relative pose, and uncertainty can localize an ImageGoal "
             "without always invoking SIFT/RANSAC"),
-        "limitations": ([
-            "small deliberately balanced feasibility subset",
-        ] if args.selection_mode == "balanced" else [
-            "top-DINO deployment-style subset; no learned probability calibration yet",
-        ]) + [
+        "limitations": ({
+            "balanced": ["small deliberately balanced feasibility subset"],
+            "deployment": [
+                "top-DINO deployment-style subset; no learned probability calibration yet",
+            ],
+            "train_augmented": [
+                "train-only top-DINO set augmented by at most one signed-teacher "
+                "positive and hard negative; development must remain deployment-only",
+            ],
+        }[args.selection_mode]) + [
             "candidate labels come from task-aligned co-visibility teacher",
             "ground-truth pose errors are evaluation targets, not deployment inputs",
             "no threshold may be selected from final-reserved scenes",
@@ -1755,6 +1997,7 @@ def main() -> None:
             "strict_no_match_sessions": len(strict_no_match_sessions),
             "ambiguous_sessions": len(ambiguous_sessions),
             "positive_session_candidate_recall_at_selected_k": candidate_recall,
+            "candidate_selection_origin_counts": selection_origin_counts,
         },
         "by_label": by_label,
         "feature_separation": auc_summary(result_frame),
@@ -1785,6 +2028,10 @@ def main() -> None:
             "metric_scale_mode": (
                 EXTERNAL_CAUSAL_SCALE_SOURCE
                 if external_contract is not None else "legacy_runtime_or_cached"),
+            "feature_cache_mode": (
+                "manifest_provenance_pinned_multi_root"
+                if routed_cache_pairs is not None
+                else "legacy_single_root"),
         },
         "provenance": {
             "source_commit": source_commit,
@@ -1796,7 +2043,10 @@ def main() -> None:
                 str(args.split_manifest.resolve())
                 if args.split_manifest else None),
             "split_manifest_sha256": split_manifest_sha,
-            "feature_root": str(args.feature_root.resolve()),
+            "feature_root": (
+                str(args.feature_root.resolve())
+                if args.feature_root is not None else None),
+            "flow_cache_routing": routed_cache_provenance,
             "external_causal_scale": external_contract_summary,
             "elapsed_seconds": time.time() - started,
         },

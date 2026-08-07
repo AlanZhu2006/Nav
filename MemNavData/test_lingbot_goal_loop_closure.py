@@ -10,12 +10,15 @@ from MemNavData.diag_lingbot_goal_loop_closure import (
     CandidateSeed,
     CollectionCheckpoint,
     _HABITAT_TO_DATA_ROTATION,
+    feature_episode_root,
     lingbot_relative_prediction,
     navdp_ground_truth_relative,
     raw_rgb_dir,
     relative_pose_errors,
+    resolve_routed_feature_cache_pairs,
     seed_manifest_sha256,
     select_deployment_seeds,
+    select_train_augmented_seeds,
     validate_scene_role,
 )
 
@@ -79,6 +82,38 @@ class LingBotGoalLoopClosureTest(unittest.TestCase):
                 seeds, {"development": ["scene_a", "scene_b"]},
                 "development")
 
+    def test_train_augmentation_exposes_missed_positive_without_replacing_topk(self):
+        matched = "scene_a/episode_0000/matched"
+        no_match = "scene_b/episode_0000/no_match"
+        frame = pd.DataFrame([
+            self.teacher_row(matched, 8, 0.99, 0.05),
+            self.teacher_row(matched, 20, 0.98, 0.30),
+            self.teacher_row(matched, 32, 0.70, 0.80),
+            self.teacher_row(no_match, 8, 0.99, 0.05),
+            self.teacher_row(no_match, 20, 0.90, 0.10),
+            self.teacher_row(no_match, 32, 0.80, 0.15),
+        ])
+        seeds = select_train_augmented_seeds(
+            frame, kind="cross_episode_train", sessions=(), max_sessions=0,
+            top_k=2, minimum_gap=4, positive_threshold=0.5,
+            negative_threshold=0.2, minimum_anchor=8)
+        by_session = {}
+        for seed in seeds:
+            by_session.setdefault(seed.session_id, []).append(seed)
+        self.assertEqual(
+            [seed.candidate_frame for seed in by_session[matched]],
+            [8, 20, 32])
+        self.assertEqual(
+            {seed.label for seed in by_session[matched]}, {0, -1, 1})
+        self.assertEqual(
+            [seed.selection_origin for seed in by_session[matched]],
+            ["deployment_topk", "deployment_topk",
+             "teacher_forced_positive"])
+        self.assertEqual(
+            [seed.candidate_frame for seed in by_session[no_match]], [8, 20])
+        self.assertTrue(all(
+            seed.session_is_strict_no_match for seed in by_session[no_match]))
+
     def test_selection_and_resume_hash_preserve_explicit_causal_sample(self):
         session = "scene_a/episode_0000/matched"
         first = self.teacher_row(session, 8, 0.9, 0.8)
@@ -116,6 +151,97 @@ class LingBotGoalLoopClosureTest(unittest.TestCase):
                 session_is_strict_no_match=False,
                 session_max_covis=0.7)
             self.assertEqual(raw_rgb_dir(seed), candidate.resolve())
+
+    def test_routed_cache_pair_supersedes_single_feature_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            chunk = root / "patch" / "scene" / "episode_0000" / "chunk-000"
+            chunk.mkdir(parents=True)
+            aggregator = chunk / "lingbot_cache.npz"
+            camera = chunk / "lingbot_cam_cache.npz"
+            aggregator.write_bytes(b"aggregator")
+            camera.write_bytes(b"camera")
+
+            class Registry:
+                def resolve_manifest_pair(self, record, scene, episode):
+                    self.last = record, scene, episode
+                    return aggregator, camera
+
+            registry = Registry()
+            seed = CandidateSeed(
+                session_id="scene/episode_0000/goal_b_t0",
+                scene="scene", episode="episode_0000", kind="revisit_b",
+                query_path=root / "goal.jpg",
+                candidate_path=root / "8.jpg", candidate_frame=8,
+                dino_cosine=0.8, teacher_covis=0.7, label=1,
+                session_has_positive=True,
+                session_is_strict_no_match=False,
+                session_max_covis=0.7,
+                causal_manifest_sample_id="train/scene/episode_0000/b")
+            episode_record = {"episode": "episode_0000", "n_frames": 32}
+            manifest = {
+                "flow_cache_routing": {"mode": "pinned"},
+                "scenes": [{
+                    "scene": "scene",
+                    "selected_episodes": [episode_record],
+                }],
+            }
+            routed = resolve_routed_feature_cache_pairs(
+                manifest, [seed], route_registry=registry)
+            self.assertIsNotNone(routed)
+            pairs, provenance = routed
+            self.assertEqual(
+                pairs[("scene", "episode_0000")],
+                (aggregator.resolve(), camera.resolve()))
+            self.assertEqual(provenance, {"mode": "pinned"})
+            self.assertEqual(
+                registry.last, (episode_record, "scene", "episode_0000"))
+
+    def test_routed_cache_rejects_missing_episode_and_bad_layout(self):
+        root = Path("/tmp/routed-cache-test")
+        seed = CandidateSeed(
+            session_id="scene/episode_0000/goal", scene="scene",
+            episode="episode_0000", kind="revisit_b",
+            query_path=root / "goal.jpg", candidate_path=root / "8.jpg",
+            candidate_frame=8, dino_cosine=0.8, teacher_covis=0.7,
+            label=1, session_has_positive=True,
+            session_is_strict_no_match=False, session_max_covis=0.7)
+        manifest = {
+            "flow_cache_routing": {"mode": "pinned"},
+            "scenes": [{"scene": "other", "selected_episodes": [{
+                "episode": "episode_0000"}]}],
+        }
+
+        class UnusedRegistry:
+            def resolve_manifest_pair(self, _record, _scene, _episode):
+                self.fail("route resolution must follow membership validation")
+
+        with self.assertRaisesRegex(RuntimeError, "absent from causal"):
+            resolve_routed_feature_cache_pairs(
+                manifest, [seed], route_registry=UnusedRegistry())
+
+        class BadRegistry:
+            def resolve_manifest_pair(self, _record, _scene, _episode):
+                return root / "wrong.npz", root / "also_wrong.npz"
+
+        manifest["scenes"][0]["scene"] = "scene"
+        with self.assertRaisesRegex(RuntimeError, "invalid layout"):
+            resolve_routed_feature_cache_pairs(
+                manifest, [seed], route_registry=BadRegistry())
+
+    def test_legacy_feature_root_accepts_explicit_3leg_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            episode = root / "mp3d_3leg" / "scene" / "episode_0000"
+            episode.mkdir(parents=True)
+            seed = CandidateSeed(
+                session_id="scene/episode_0000/goal", scene="scene",
+                episode="episode_0000", kind="revisit_b",
+                query_path=root / "goal.jpg", candidate_path=root / "8.jpg",
+                candidate_frame=8, dino_cosine=0.8, teacher_covis=0.7,
+                label=1, session_has_positive=True,
+                session_is_strict_no_match=False, session_max_covis=0.7)
+            self.assertEqual(feature_episode_root(root, seed), episode.resolve())
 
     def test_navdp_mount_fix_preserves_forward_translation(self):
         candidate = np.eye(4)

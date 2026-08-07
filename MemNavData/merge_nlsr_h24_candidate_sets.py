@@ -125,13 +125,17 @@ class CandidateMergeError(RuntimeError):
 
 @dataclass(frozen=True)
 class H24RunBinding:
-    """All external values needed to reproduce the collector run signature."""
+    """Semantic external values needed to reproduce the collector signature.
+
+    Physical server URLs are deliberately absent.  Each per-state plan
+    diagnostic retains its connection target, while equivalent shards may run
+    against different instances of the exact same pinned server artifact.
+    """
 
     manifest_sha256: str
     geometry_map_sha256: str
     server_provenance_sha256: str
     server_provenance: Mapping[str, str]
-    server_url: str
     stop_threshold: float
     legacy_camera_height_m: float
 
@@ -259,11 +263,6 @@ def _verify_run_binding(
         "in-memory server provenance differs from its canonical SHA pin",
     )
     _require(
-        isinstance(binding.server_url, str)
-        and binding.server_url.startswith(("http://", "https://")),
-        "server URL must be HTTP(S)",
-    )
-    _require(
         isinstance(binding.stop_threshold, (int, float))
         and not isinstance(binding.stop_threshold, bool)
         and math.isfinite(float(binding.stop_threshold)),
@@ -281,7 +280,6 @@ def _verify_run_binding(
         manifest_sha256=manifest_sha,
         geometry_map_sha256=geometry_sha,
         server_provenance_sha256=server_sha,
-        server_url=binding.server_url,
         base_seed=base_seed,
         stop_threshold=float(binding.stop_threshold),
         legacy_camera_height_m=float(binding.legacy_camera_height_m),
@@ -298,7 +296,6 @@ def _verify_run_binding(
                 "manifest_sha256": manifest_sha,
                 "geometry_map_sha256": geometry_sha,
                 "server_provenance_sha256": server_sha,
-                "server_url": binding.server_url.rstrip("/"),
                 "stop_threshold": float(binding.stop_threshold),
                 "legacy_camera_height_m": float(binding.legacy_camera_height_m),
                 "base_seed": base_seed,
@@ -700,7 +697,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--geometry-map-sha", required=True)
     parser.add_argument("--server-provenance", type=Path, required=True)
     parser.add_argument("--expected-server-provenance-sha", required=True)
-    parser.add_argument("--server-url", required=True)
     parser.add_argument("--stop-threshold", type=float, required=True)
     parser.add_argument("--legacy-camera-height-m", type=float, required=True)
     parser.add_argument("--out", type=Path, required=True)
@@ -741,7 +737,6 @@ def main() -> None:
             geometry_map_sha256=args.geometry_map_sha,
             server_provenance_sha256=args.expected_server_provenance_sha,
             server_provenance=server_provenance,
-            server_url=args.server_url,
             stop_threshold=args.stop_threshold,
             legacy_camera_height_m=args.legacy_camera_height_m,
         ),

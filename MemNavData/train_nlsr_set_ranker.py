@@ -67,6 +67,11 @@ METRICS_NAME = "metrics.json"
 CALIBRATION_NAME = "calibration.json"
 PROVENANCE_NAME = "provenance.json"
 MANIFEST_NAME = "manifest.json"
+COVERAGE_POLICY_REQUIRED = "required"
+COVERAGE_POLICY_ADVISORY_UNAVAILABLE = "advisory_unavailable"
+COVERAGE_POLICIES = frozenset(
+    {COVERAGE_POLICY_REQUIRED, COVERAGE_POLICY_ADVISORY_UNAVAILABLE}
+)
 
 
 class NLSRTrainingError(RuntimeError):
@@ -1219,7 +1224,7 @@ def _fail_closed_calibration(
         "independence_unit": "scene_id",
     }
     return {
-        "calibration_format_version": "nlsr_set_ranker_calibration_v2",
+        "calibration_format_version": "nlsr_set_ranker_calibration_v3",
         "development_only": True,
         "scene_disjoint_audit": False,
         "calibration_scenes": [],
@@ -1238,6 +1243,7 @@ def _fail_closed_calibration(
         },
         "harm": dict(threshold),
         "coverage_miss_abstain": dict(threshold),
+        "coverage_policy": COVERAGE_POLICY_REQUIRED,
         "rank": {"minimum_residual_minus_native_score": 0.0},
         "decision_protocol": {
             "inputs": "model_outputs_and_structural_candidate_masks_only",
@@ -1328,12 +1334,17 @@ def fit_development_calibration(
         target_upper=config.target_coverage_miss_upper,
     )
     coverage_calibration["independence_unit"] = "scene_id"
+    coverage_policy = (
+        COVERAGE_POLICY_REQUIRED
+        if int(coverage_calibration["valid_rows"]) > 0
+        else COVERAGE_POLICY_ADVISORY_UNAVAILABLE
+    )
 
     advantage_supported = (
         len(normalized_scene_max)
         >= config.minimum_advantage_calibration_scenes)
     calibration = {
-        "calibration_format_version": "nlsr_set_ranker_calibration_v2",
+        "calibration_format_version": "nlsr_set_ranker_calibration_v3",
         "development_only": True,
         "scene_disjoint_audit": True,
         "calibration_scenes": sorted({
@@ -1354,6 +1365,7 @@ def fit_development_calibration(
         },
         "harm": harm_calibration,
         "coverage_miss_abstain": coverage_calibration,
+        "coverage_policy": coverage_policy,
         "rank": {
             "minimum_residual_minus_native_score": 0.0,
         },
@@ -1368,7 +1380,10 @@ def fit_development_calibration(
         "shadow_eligible": bool(
             advantage_supported
             and harm_calibration["statistically_supported"]
-            and coverage_calibration["statistically_supported"]),
+            and (
+                coverage_policy == COVERAGE_POLICY_ADVISORY_UNAVAILABLE
+                or coverage_calibration["statistically_supported"]
+            )),
         "deployment_approved": False,
     }
     return calibration
@@ -1389,11 +1404,27 @@ def structural_policy_decisions(
     native_mask = output.native_mask.detach().cpu()
     residual_mask = output.residual_mask.detach().cpu()
     selectable_mask = output.selectable_mask.detach().cpu()
+    for label, tensor in (
+        ("advantage mean", mean),
+        ("advantage scale", scale),
+        ("rank score", rank),
+        ("harm probability", harm_probability),
+        ("coverage probability", coverage_probability),
+    ):
+        if not torch.isfinite(tensor).all():
+            raise NLSRTrainingError(
+                f"decision model output contains non-finite {label}"
+            )
     q_lcb = float(calibration["advantage"][
         "one_sided_normalized_quantile"])
     harm_threshold = float(calibration["harm"]["threshold"])
     coverage_threshold = float(
         calibration["coverage_miss_abstain"]["threshold"])
+    coverage_policy = calibration.get("coverage_policy")
+    if coverage_policy not in COVERAGE_POLICIES:
+        raise NLSRTrainingError(
+            "calibration coverage_policy is absent or unsupported"
+        )
     if any(not math.isfinite(value) for value in (
             q_lcb, harm_threshold, coverage_threshold)):
         raise NLSRTrainingError("calibration contains non-finite thresholds")
@@ -1413,8 +1444,12 @@ def structural_policy_decisions(
         top_rank_index = max(
             selectable, key=lambda index: (float(rank[row_index, index]), -index))
         selected = native_index
+        coverage_passed = bool(
+            coverage_policy == COVERAGE_POLICY_ADVISORY_UNAVAILABLE
+            or float(coverage_probability[row_index]) <= coverage_threshold
+        )
         reason = "coverage_risk_abstain"
-        if float(coverage_probability[row_index]) <= coverage_threshold:
+        if coverage_passed:
             eligible = []
             for index in torch.nonzero(
                     residual_mask[row_index, :count],
@@ -1443,6 +1478,7 @@ def structural_policy_decisions(
             "top_rank_candidate_id": str(candidate_ids[top_rank_index]),
             "coverage_miss_probability": float(
                 coverage_probability[row_index]),
+            "coverage_policy": str(coverage_policy),
             "selected_advantage_lcb_m": float(lcb[row_index, selected]),
             "selected_harm_probability": float(
                 harm_probability[row_index, selected]),
@@ -1601,8 +1637,11 @@ def calibrate_development(
         scene_disjoint_split_available
         and calibration["advantage"]["supported"]
         and calibration["harm"]["statistically_supported"]
-        and calibration["coverage_miss_abstain"][
-            "statistically_supported"])
+        and (
+            calibration["coverage_policy"]
+            == COVERAGE_POLICY_ADVISORY_UNAVAILABLE
+            or calibration["coverage_miss_abstain"]["statistically_supported"]
+        ))
     calibration["deployment_approved"] = False
     metrics = evaluate_calibrated_audit(
         model, audit_records, feature_spec, config, calibration)

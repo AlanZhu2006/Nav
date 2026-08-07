@@ -23,6 +23,7 @@ from MemNavData.collect_real_h24_rollouts import (
     _atomic_write_pair,
     build_plan_diagnostics,
     build_run_signature,
+    build_server_instance_diagnostics,
     decision_seeds,
 )
 from MemNavData.merge_nlsr_h24_candidate_sets import (
@@ -71,6 +72,11 @@ def manifest_fixture():
     return {
         "schema_version": "nlsr_v2_multistage_expert_candidate_manifest_v1",
         "split": {"sha256": "5" * 64},
+        "input_roots": {
+            "episode_root": "/causal/episodes",
+            "environment_root": "/causal/environments",
+            "navmesh_root": "/causal/navmeshes",
+        },
         "scenes": [
             {
                 "scene": "scene",
@@ -88,6 +94,43 @@ def manifest_fixture():
             }
         ],
     }
+
+
+def stable_file_record(path, content_sha):
+    return {
+        "path": path,
+        "path_sha256": sha256_bytes(path.encode("utf-8")),
+        "bytes": 123,
+        "content_sha256": content_sha,
+    }
+
+
+def derived_geometry_manifest(causal, causal_sha):
+    derived = copy.deepcopy(causal)
+    derived["input_roots"]["navmesh_root"] = "/derived/bake/scenes"
+    derived["input_roots"]["geometry_bake_root"] = "/derived/bake"
+    derived["scenes"][0]["navmesh"] = stable_file_record(
+        "scene/scene.navmesh", "c" * 64
+    )
+    derived["scenes"][0]["geometry_bake_receipt"] = stable_file_record(
+        "scenes/scene/bake_receipt.json", "d" * 64
+    )
+    derived["geometry_bake_derivation"] = {
+        "schema_version": "nlsr_derived_geometry_manifest_v1",
+        "status": "fresh_double_bake_roundtrip_verified",
+        "parent_manifest_sha256": causal_sha,
+        "settings_file_sha256": "8" * 64,
+        "requested_settings_sha256": "9" * 64,
+        "runtime_effective_settings_sha256": "e" * 64,
+        "runtime": {"habitat_sim_version": "0.3.1"},
+        "run_contract": stable_file_record("run_contract.json", "f" * 64),
+        "bake_index": stable_file_record(
+            "published/navmesh_bake_index.json", "0" * 64
+        ),
+        "selection_boundary": "causal manifest scene membership only",
+        "determinism_boundary": "two fresh simulator bakes",
+    }
+    return derived
 
 
 def proposal_candidate(candidate_id="deployment-frontier"):
@@ -311,6 +354,67 @@ class NLSRPrecollectionBridgeTests(unittest.TestCase):
         )
         self.assertEqual(residual["features"]["pose_translation_p90_m"], 0.25)
 
+    def test_derived_geometry_only_replaces_navmesh_for_h24(self):
+        manifest = manifest_fixture()
+        manifest_sha = sha256_bytes(canonical_json_bytes(manifest))
+        proposals = proposal_artifact(manifest_sha)
+        proposal_sha = sha256_bytes(canonical_json_bytes(proposals))
+        derived = derived_geometry_manifest(manifest, manifest_sha)
+        derived_sha = sha256_bytes(canonical_json_bytes(derived))
+        records = build_precollection_records(
+            manifest=manifest,
+            manifest_sha256=manifest_sha,
+            evaluation_geometry_manifest=derived,
+            evaluation_geometry_manifest_sha256=derived_sha,
+            proposal_artifact=proposals,
+            proposal_sha256=proposal_sha,
+            source_policy_sha256=POLICY_SHA,
+        )
+        self.assertEqual(records[0]["provenance"]["navmesh_sha256"], "c" * 64)
+        self.assertEqual(
+            records[0]["provenance"]["candidate_generator_sha256"], proposal_sha
+        )
+
+    def test_derived_geometry_lineage_and_non_geometry_drift_fail_closed(self):
+        manifest = manifest_fixture()
+        manifest_sha = sha256_bytes(canonical_json_bytes(manifest))
+        proposals = proposal_artifact(manifest_sha)
+        proposal_sha = sha256_bytes(canonical_json_bytes(proposals))
+
+        corruptions = {
+            "wrong parent": lambda value: value["geometry_bake_derivation"].update(
+                {"parent_manifest_sha256": "1" * 64}
+            ),
+            "sample drift": lambda value: value["samples"][0].update(
+                {"decision_frame": 17}
+            ),
+            "environment drift": lambda value: value["scenes"][0][
+                "environment"
+            ].update({"content_sha256": "2" * 64}),
+            "root drift": lambda value: value["input_roots"].update(
+                {"episode_root": "/different/episodes"}
+            ),
+            "extra scene field": lambda value: value["scenes"][0].update(
+                {"future_label": True}
+            ),
+        }
+        for label, corrupt in corruptions.items():
+            with self.subTest(label=label):
+                derived = derived_geometry_manifest(manifest, manifest_sha)
+                corrupt(derived)
+                with self.assertRaises(PrecollectionBuildError):
+                    build_precollection_records(
+                        manifest=manifest,
+                        manifest_sha256=manifest_sha,
+                        evaluation_geometry_manifest=derived,
+                        evaluation_geometry_manifest_sha256=sha256_bytes(
+                            canonical_json_bytes(derived)
+                        ),
+                        proposal_artifact=proposals,
+                        proposal_sha256=proposal_sha,
+                        source_policy_sha256=POLICY_SHA,
+                    )
+
     def test_missing_extra_teacher_or_feature_leakage_fail_closed(self):
         manifest = manifest_fixture()
         manifest_sha = sha256_bytes(canonical_json_bytes(manifest))
@@ -437,7 +541,6 @@ class NLSRH24MergeBridgeTests(unittest.TestCase):
             geometry_map_sha256=self.geometry_map_sha,
             server_provenance_sha256=self.server_provenance_sha,
             server_provenance=backend_test_support.FakeTransport.provenance,
-            server_url="http://127.0.0.1:28991",
             stop_threshold=-0.5,
             legacy_camera_height_m=0.5,
         )
@@ -446,7 +549,6 @@ class NLSRH24MergeBridgeTests(unittest.TestCase):
             manifest_sha256=self.manifest_sha,
             geometry_map_sha256=self.geometry_map_sha,
             server_provenance_sha256=self.server_provenance_sha,
-            server_url=self.run_binding.server_url,
             base_seed=BASE_SEED,
             stop_threshold=self.run_binding.stop_threshold,
             legacy_camera_height_m=self.run_binding.legacy_camera_height_m,
@@ -454,10 +556,11 @@ class NLSRH24MergeBridgeTests(unittest.TestCase):
         )
         self.seeds = decision_seeds(BASE_SEED, self.fixture.assets.state.state_id)
         self.backends = {}
+        shared_transport = backend_test_support.FakeTransport()
 
         def factory(candidate_id):
             backend = self.fixture.backend(
-                transport=backend_test_support.FakeTransport(),
+                transport=shared_transport,
                 runtime=backend_test_support.FakeRuntime(self.fixture.identity),
             )
             self.backends[candidate_id] = backend
@@ -473,7 +576,13 @@ class NLSRH24MergeBridgeTests(unittest.TestCase):
             self.seeds,
             run_signature_sha256=self.run_signature,
         )
-        self.diagnostics = build_plan_diagnostics(self.artifact, self.backends)
+        self.diagnostics = build_plan_diagnostics(
+            self.artifact,
+            self.backends,
+            server_instance=build_server_instance_diagnostics(
+                "http://127.0.0.1:28991", self.server_provenance_sha
+            ),
+        )
         self.artifact_path = self.root / "shard-0000/state.json"
         self.diagnostics_path = self.root / "shard-0000/state.plans.json"
         atomic_write_artifact(self.artifact_path, self.artifact)

@@ -92,9 +92,10 @@ except ImportError:  # direct script execution with pinned PYTHONPATH
     )
 
 
-COLLECTOR_SCHEMA = "real_h24_collector_v2"
+COLLECTOR_SCHEMA = "real_h24_collector_v3"
 GEOMETRY_MAP_SCHEMA = "frozen_geometry_map_v1"
-PLAN_DIAGNOSTICS_SCHEMA = "real_h24_plan_diagnostics_v2"
+PLAN_DIAGNOSTICS_SCHEMA = "real_h24_plan_diagnostics_v3"
+SERVER_INSTANCE_SCHEMA = "real_h24_server_instance_v1"
 
 
 class CollectorError(RuntimeError):
@@ -512,7 +513,6 @@ def build_run_signature(
     manifest_sha256: str,
     geometry_map_sha256: str,
     server_provenance_sha256: str,
-    server_url: str,
     base_seed: int,
     stop_threshold: float,
     legacy_camera_height_m: float,
@@ -531,7 +531,6 @@ def build_run_signature(
         "geometry_map_sha256": _valid_sha(geometry_map_sha256, "geometry map SHA"),
         "server_provenance_sha256": _valid_sha(
             server_provenance_sha256, "server provenance SHA"),
-        "server_url": server_url.rstrip("/"),
         "base_seed": base_seed,
         "stop_threshold": stop_threshold,
         "legacy_camera_height_m": legacy_camera_height_m,
@@ -544,6 +543,58 @@ def build_run_signature(
             "creep_fraction": controller.creep_fraction,
         },
     }))
+
+
+def build_server_instance_diagnostics(
+    server_url: str,
+    server_provenance_sha256: str,
+) -> dict[str, object]:
+    """Describe the physical connection target without semantic binding."""
+    _require(
+        isinstance(server_url, str)
+        and server_url.startswith(("http://", "https://")),
+        "server instance URL must be HTTP(S)",
+    )
+    normalized = server_url.rstrip("/")
+    _require(bool(normalized), "server instance URL is empty")
+    return {
+        "schema_version": SERVER_INSTANCE_SCHEMA,
+        "physical_server_url": normalized,
+        "server_provenance_sha256": _valid_sha(
+            server_provenance_sha256, "server instance provenance SHA"
+        ),
+        "scope": "one_state_all_arms",
+        "same_state_arms_single_transport_enforced": True,
+    }
+
+
+def _validate_server_instance_diagnostics(value: object) -> Mapping[str, Any]:
+    _require(
+        isinstance(value, Mapping)
+        and set(value) == {
+            "schema_version",
+            "physical_server_url",
+            "server_provenance_sha256",
+            "scope",
+            "same_state_arms_single_transport_enforced",
+        },
+        "server instance diagnostics fields changed",
+    )
+    _require(
+        value["schema_version"] == SERVER_INSTANCE_SCHEMA
+        and value["scope"] == "one_state_all_arms"
+        and value["same_state_arms_single_transport_enforced"] is True,
+        "server instance diagnostics contract changed",
+    )
+    url = value["physical_server_url"]
+    _require(
+        isinstance(url, str)
+        and url.startswith(("http://", "https://"))
+        and url == url.rstrip("/"),
+        "server instance physical URL is malformed",
+    )
+    _valid_sha(value["server_provenance_sha256"], "server instance provenance SHA")
+    return value
 
 
 def _atomic_write_pair(path: Path, payload: Mapping[str, Any]) -> str:
@@ -598,7 +649,7 @@ def load_plan_diagnostics(path: Path | str) -> Mapping[str, Any]:
     _require(
         set(value) == {
             "schema_version", "artifact_sha256", "run_signature_sha256",
-            "state_id", "diffusion_seeds", "by_candidate",
+            "state_id", "diffusion_seeds", "server_instance", "by_candidate",
         }
         and value["schema_version"] == PLAN_DIAGNOSTICS_SCHEMA,
         "plan diagnostics schema/fields changed",
@@ -606,6 +657,7 @@ def load_plan_diagnostics(path: Path | str) -> Mapping[str, Any]:
     _valid_sha(value["artifact_sha256"], "diagnostics artifact SHA")
     _valid_sha(value["run_signature_sha256"], "diagnostics run signature")
     _require(isinstance(value["state_id"], str), "diagnostics state id is invalid")
+    _validate_server_instance_diagnostics(value["server_instance"])
     _require(
         isinstance(value["diffusion_seeds"], list)
         and len(value["diffusion_seeds"]) == 3
@@ -719,10 +771,33 @@ def _trajectory_array(value: object, label: str) -> np.ndarray:
 def build_plan_diagnostics(
     artifact: PairedRolloutArtifact,
     backends: Mapping[str, RealH24RolloutBackend],
+    *,
+    server_instance: Mapping[str, Any],
 ) -> dict[str, Any]:
+    instance = dict(_validate_server_instance_diagnostics(server_instance))
     exported_by_candidate = {}
     expected_ids = {outcome.candidate_id for outcome in artifact.outcomes}
     _require(set(backends) == expected_ids, "backend diagnostics candidate set changed")
+    transports = [backend.transport for backend in backends.values()]
+    _require(
+        bool(transports) and all(transport is transports[0] for transport in transports),
+        "same-state candidate arms did not share one live server transport",
+    )
+    transport_base_url = getattr(transports[0], "base_url", None)
+    if transport_base_url is not None:
+        _require(
+            str(transport_base_url).rstrip("/")
+            == instance["physical_server_url"],
+            "transport target differs from server instance diagnostics",
+        )
+    for backend in backends.values():
+        actual_server_sha = sha256_bytes(
+            canonical_bytes(dict(backend.expected_server_provenance))
+        )
+        _require(
+            actual_server_sha == instance["server_provenance_sha256"],
+            "backend server provenance differs from instance diagnostics",
+        )
     for candidate_id in sorted(backends):
         exported = backends[candidate_id].export_plan_diagnostics()
         outcome = next(row for row in artifact.outcomes
@@ -770,6 +845,7 @@ def build_plan_diagnostics(
         "run_signature_sha256": artifact.run_signature_sha256,
         "state_id": artifact.state.state_id,
         "diffusion_seeds": list(artifact.diffusion_seeds),
+        "server_instance": instance,
         "by_candidate": by_candidate,
     }
 
@@ -987,6 +1063,7 @@ def collect_one_decision(
     runtime: PinnedHabitatRuntime,
     server_url: str,
     server_provenance: Mapping[str, str],
+    server_provenance_sha256: str,
     run_signature_sha256: str,
     base_seed: int,
     stop_threshold: float,
@@ -1023,7 +1100,12 @@ def collect_one_decision(
     except (RolloutProtocolError, RuntimeError, ValueError) as error:
         raise CollectorError(
             f"H24 collection failed for {assets.state.state_id}: {error}") from error
-    return artifact, build_plan_diagnostics(artifact, backends)
+    server_instance = build_server_instance_diagnostics(
+        server_url, server_provenance_sha256
+    )
+    return artifact, build_plan_diagnostics(
+        artifact, backends, server_instance=server_instance
+    )
 
 
 def run_collector(inputs: CollectorInputs) -> dict[str, Any]:
@@ -1068,7 +1150,6 @@ def run_collector(inputs: CollectorInputs) -> dict[str, Any]:
         manifest_sha256=manifest_sha,
         geometry_map_sha256=geometry_map_sha,
         server_provenance_sha256=provenance_sha,
-        server_url=inputs.server_url,
         base_seed=inputs.base_seed,
         stop_threshold=inputs.stop_threshold,
         legacy_camera_height_m=inputs.legacy_camera_height_m,
@@ -1113,6 +1194,9 @@ def run_collector(inputs: CollectorInputs) -> dict[str, Any]:
             "preflight_only" if inputs.preflight_only else "collect"
         ),
         "run_signature_sha256": run_signature,
+        "server_instance": build_server_instance_diagnostics(
+            inputs.server_url, provenance_sha
+        ),
         "candidate_count_total": len(records),
         "candidate_count_shard": len(work),
         "precollection_neutral_labels_present": precollection,
@@ -1175,6 +1259,7 @@ def run_collector(inputs: CollectorInputs) -> dict[str, Any]:
                 runtime=runtime,
                 server_url=inputs.server_url,
                 server_provenance=server_provenance,
+                server_provenance_sha256=provenance_sha,
                 run_signature_sha256=run_signature,
                 base_seed=inputs.base_seed,
                 stop_threshold=inputs.stop_threshold,

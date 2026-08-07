@@ -3,8 +3,11 @@
 
 The bridge intentionally has a narrow trust boundary.  It consumes one
 content-pinned causal expert manifest and the frontier artifact generated from
-that exact manifest.  Only ``lingbot_deployment_pose`` proposals can become
-residual candidates; the parallel ``teacher_pose`` arm remains audit-only.
+that exact manifest.  An optional second manifest may supply freshly baked
+evaluation geometry, but only after this module proves that it is an exact
+derived copy whose sole semantic changes are the NavMesh records.  Only
+``lingbot_deployment_pose`` proposals can become residual candidates; the
+parallel ``teacher_pose`` arm remains audit-only.
 
 The output is canonical ``novel_candidate_set_v2`` JSON/JSONL.  Rollout,
 match, co-visibility, and pose labels are neutral.  Proposal-proxy labels are
@@ -21,7 +24,7 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import tempfile
 from typing import Any, Mapping, Sequence
 
@@ -43,8 +46,10 @@ except ImportError:  # pragma: no cover - direct script execution
     )
 
 
-BUILDER_SCHEMA = "nlsr_precollection_bridge_v1"
+BUILDER_SCHEMA = "nlsr_precollection_bridge_v2"
 RELATION_ARTIFACT_SCHEMA = "nlsr_deployment_relation_artifact_v1"
+DERIVED_GEOMETRY_SCHEMA = "nlsr_derived_geometry_manifest_v1"
+DERIVED_GEOMETRY_STATUS = "fresh_double_bake_roundtrip_verified"
 SUPPORTED_MANIFEST_SCHEMAS = frozenset(
     {
         "nlsr_v2_expert_candidate_manifest_v1",
@@ -165,6 +170,24 @@ PROPOSAL_RECORD_KEYS_WITH_GOAL_ROLE = frozenset(
     set(PROPOSAL_RECORD_KEYS) | {"goal_role"}
 )
 ZERO_SHA = "0" * 64
+DERIVATION_KEYS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "parent_manifest_sha256",
+        "settings_file_sha256",
+        "requested_settings_sha256",
+        "runtime_effective_settings_sha256",
+        "runtime",
+        "run_contract",
+        "bake_index",
+        "selection_boundary",
+        "determinism_boundary",
+    }
+)
+STABLE_FILE_RECORD_KEYS = frozenset(
+    {"path", "path_sha256", "bytes", "content_sha256"}
+)
 
 
 class PrecollectionBuildError(RuntimeError):
@@ -421,6 +444,206 @@ def _validate_manifest(
         _valid_sha(fifo.get("fifo_sha256"), f"{sample_id} FIFO SHA")
         _valid_sha(goal.get("content_sha256"), f"{sample_id} goal SHA")
     return samples, scenes, groups
+
+
+def _validate_stable_file_record(value: object, label: str) -> Mapping[str, Any]:
+    record = _exact_mapping(value, STABLE_FILE_RECORD_KEYS, label)
+    relative = record["path"]
+    _require(isinstance(relative, str) and relative, f"{label}.path is malformed")
+    posix = PurePosixPath(relative)
+    _require(
+        not posix.is_absolute()
+        and ".." not in posix.parts
+        and str(posix) == relative,
+        f"{label}.path must be a normalized relative POSIX path",
+    )
+    _require(
+        record["path_sha256"] == _sha256_bytes(relative.encode("utf-8")),
+        f"{label}.path_sha256 disagrees with path",
+    )
+    _require(
+        isinstance(record["bytes"], int)
+        and not isinstance(record["bytes"], bool)
+        and int(record["bytes"]) > 0,
+        f"{label}.bytes must be a positive integer",
+    )
+    _valid_sha(record["content_sha256"], f"{label}.content_sha256")
+    return record
+
+
+def _validate_evaluation_geometry_manifest(
+    *,
+    causal_manifest: Mapping[str, Any],
+    causal_manifest_sha256: str,
+    evaluation_manifest: Mapping[str, Any] | None,
+    evaluation_manifest_sha256: str | None,
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, str]]:
+    """Return geometry scenes after proving the exact causal/derived lineage.
+
+    The proposal and relation artifacts remain bound to ``causal_manifest``.
+    A supplied evaluation manifest is accepted only if removing its derivation
+    receipt, restoring the original root/NavMesh records, and removing each
+    scene bake receipt reproduces the causal manifest exactly.
+    """
+    _require(
+        (evaluation_manifest is None) == (evaluation_manifest_sha256 is None),
+        "evaluation geometry manifest and SHA must be supplied together",
+    )
+    causal_scenes = _scene_index(causal_manifest)
+    if evaluation_manifest is None:
+        return causal_scenes, {
+            "mode": "causal_manifest_geometry",
+            "causal_manifest_sha256": causal_manifest_sha256,
+            "evaluation_geometry_manifest_sha256": causal_manifest_sha256,
+        }
+
+    evaluation_sha = _valid_sha(
+        evaluation_manifest_sha256, "evaluation geometry manifest SHA"
+    )
+    _require(
+        _sha256_bytes(canonical_json_bytes(evaluation_manifest)) == evaluation_sha,
+        "in-memory evaluation geometry manifest differs from its canonical SHA pin",
+    )
+    _require(
+        "geometry_bake_derivation" not in causal_manifest,
+        "causal source manifest is already geometry-derived",
+    )
+    causal_roots = causal_manifest.get("input_roots")
+    evaluation_roots = evaluation_manifest.get("input_roots")
+    _require(
+        isinstance(causal_roots, Mapping)
+        and isinstance(evaluation_roots, Mapping),
+        "dual-manifest geometry requires input_roots objects",
+    )
+    _require(
+        "geometry_bake_root" not in causal_roots,
+        "causal source manifest already declares a geometry bake root",
+    )
+    _require(
+        isinstance(causal_roots.get("navmesh_root"), str)
+        and bool(causal_roots["navmesh_root"]),
+        "causal source manifest navmesh root is malformed",
+    )
+    _require(
+        set(evaluation_manifest) == set(causal_manifest) | {"geometry_bake_derivation"},
+        "derived manifest top-level fields differ beyond geometry derivation",
+    )
+    _require(
+        set(evaluation_roots) == set(causal_roots) | {"geometry_bake_root"},
+        "derived input roots differ beyond navmesh/geometry bake roots",
+    )
+    for key in causal_roots:
+        if key != "navmesh_root":
+            _require(
+                evaluation_roots[key] == causal_roots[key],
+                f"derived input root changed forbidden field {key}",
+            )
+    _require(
+        isinstance(evaluation_roots.get("navmesh_root"), str)
+        and bool(evaluation_roots["navmesh_root"])
+        and isinstance(evaluation_roots.get("geometry_bake_root"), str)
+        and bool(evaluation_roots["geometry_bake_root"]),
+        "derived geometry roots are malformed",
+    )
+
+    derivation = _exact_mapping(
+        evaluation_manifest.get("geometry_bake_derivation"),
+        DERIVATION_KEYS,
+        "geometry_bake_derivation",
+    )
+    _require(
+        derivation["schema_version"] == DERIVED_GEOMETRY_SCHEMA
+        and derivation["status"] == DERIVED_GEOMETRY_STATUS,
+        "derived geometry schema/status changed",
+    )
+    _require(
+        derivation["parent_manifest_sha256"] == causal_manifest_sha256,
+        "derived geometry parent is not the exact causal manifest SHA",
+    )
+    for key in (
+        "parent_manifest_sha256",
+        "settings_file_sha256",
+        "requested_settings_sha256",
+        "runtime_effective_settings_sha256",
+    ):
+        _valid_sha(derivation[key], f"geometry_bake_derivation.{key}")
+    _require(
+        isinstance(derivation["runtime"], Mapping) and bool(derivation["runtime"]),
+        "geometry bake runtime provenance is absent",
+    )
+    canonical_json_bytes(derivation["runtime"])
+    _validate_stable_file_record(
+        derivation["run_contract"], "geometry_bake_derivation.run_contract"
+    )
+    _validate_stable_file_record(
+        derivation["bake_index"], "geometry_bake_derivation.bake_index"
+    )
+    for key in ("selection_boundary", "determinism_boundary"):
+        _require(
+            isinstance(derivation[key], str) and bool(derivation[key]),
+            f"geometry_bake_derivation.{key} is malformed",
+        )
+
+    causal_scene_rows = causal_manifest.get("scenes")
+    evaluation_scene_rows = evaluation_manifest.get("scenes")
+    _require(
+        isinstance(causal_scene_rows, list)
+        and isinstance(evaluation_scene_rows, list)
+        and len(evaluation_scene_rows) == len(causal_scene_rows),
+        "derived scene list length changed",
+    )
+    rebuilt_scenes = []
+    for index, (causal_scene, evaluation_scene) in enumerate(
+        zip(causal_scene_rows, evaluation_scene_rows)
+    ):
+        _require(
+            isinstance(causal_scene, Mapping) and isinstance(evaluation_scene, Mapping),
+            f"derived scene row {index} is malformed",
+        )
+        scene_id = causal_scene.get("scene")
+        _require(
+            evaluation_scene.get("scene") == scene_id,
+            f"derived scene order/identity changed at index {index}",
+        )
+        _require(
+            "geometry_bake_receipt" not in causal_scene
+            and set(evaluation_scene) == set(causal_scene) | {"geometry_bake_receipt"},
+            f"derived scene {scene_id} fields changed beyond bake receipt",
+        )
+        _validate_stable_file_record(
+            evaluation_scene.get("navmesh"), f"derived scene {scene_id}.navmesh"
+        )
+        _validate_stable_file_record(
+            evaluation_scene.get("geometry_bake_receipt"),
+            f"derived scene {scene_id}.geometry_bake_receipt",
+        )
+        rebuilt_scene = copy.deepcopy(dict(evaluation_scene))
+        rebuilt_scene.pop("geometry_bake_receipt")
+        rebuilt_scene["navmesh"] = copy.deepcopy(causal_scene["navmesh"])
+        _require(
+            rebuilt_scene == causal_scene,
+            f"derived scene {scene_id} changed non-geometry content",
+        )
+        rebuilt_scenes.append(rebuilt_scene)
+
+    rebuilt = copy.deepcopy(dict(evaluation_manifest))
+    rebuilt.pop("geometry_bake_derivation")
+    rebuilt_roots = dict(rebuilt["input_roots"])
+    rebuilt_roots.pop("geometry_bake_root")
+    rebuilt_roots["navmesh_root"] = copy.deepcopy(causal_roots["navmesh_root"])
+    rebuilt["input_roots"] = rebuilt_roots
+    rebuilt["scenes"] = rebuilt_scenes
+    _require(
+        rebuilt == causal_manifest,
+        "derived geometry manifest cannot be exactly reduced to its causal parent",
+    )
+    _samples, evaluation_scenes, _groups = _validate_manifest(evaluation_manifest)
+    return evaluation_scenes, {
+        "mode": "verified_derived_geometry_manifest",
+        "causal_manifest_sha256": causal_manifest_sha256,
+        "evaluation_geometry_manifest_sha256": evaluation_sha,
+        "parent_manifest_sha256": str(derivation["parent_manifest_sha256"]),
+    }
 
 
 def _validate_proxy(
@@ -937,6 +1160,8 @@ def build_precollection_records(
     *,
     manifest: Mapping[str, Any],
     manifest_sha256: str,
+    evaluation_geometry_manifest: Mapping[str, Any] | None = None,
+    evaluation_geometry_manifest_sha256: str | None = None,
     proposal_artifact: Mapping[str, Any],
     proposal_sha256: str,
     source_policy_sha256: str,
@@ -974,7 +1199,13 @@ def build_precollection_records(
             ),
             "local rollout-labeler code bundle differs from its pin",
         )
-    samples, scenes, groups = _validate_manifest(manifest)
+    samples, _causal_scenes, groups = _validate_manifest(manifest)
+    geometry_scenes, geometry_lineage = _validate_evaluation_geometry_manifest(
+        causal_manifest=manifest,
+        causal_manifest_sha256=manifest_sha,
+        evaluation_manifest=evaluation_geometry_manifest,
+        evaluation_manifest_sha256=evaluation_geometry_manifest_sha256,
+    )
     proposals = _proposal_index(proposal_artifact, manifest_sha, samples)
     relations, relation_shapes = _relation_index(
         relation_artifact,
@@ -990,6 +1221,10 @@ def build_precollection_records(
             {
                 "schema": BUILDER_SCHEMA,
                 "manifest_sha256": manifest_sha,
+                "evaluation_geometry_manifest_sha256": geometry_lineage[
+                    "evaluation_geometry_manifest_sha256"
+                ],
+                "geometry_lineage": geometry_lineage,
                 "proposal_sha256": proposal_sha,
                 "relation_sha256": relation_sha,
                 "source_policy_sha256": policy_sha,
@@ -1039,7 +1274,7 @@ def build_precollection_records(
                 }
             )
         scene_id = str(sample["scene"])
-        scene = scenes[scene_id]
+        scene = geometry_scenes[scene_id]
         set_features = {
             "feature_presence_mask": [0.0] * SET_FEATURE_PRESENCE_MASK_SIZE,
             "native_stagnation_plans": 0,
@@ -1185,6 +1420,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--expected-manifest-sha", required=True)
+    parser.add_argument("--evaluation-geometry-manifest", type=Path)
+    parser.add_argument("--expected-evaluation-geometry-manifest-sha")
     parser.add_argument("--proposal-artifact", type=Path, required=True)
     parser.add_argument("--expected-proposal-sha", required=True)
     parser.add_argument("--source-policy-sha", required=True)
@@ -1205,7 +1442,20 @@ def main() -> None:
         (args.relation_artifact is None) == (args.expected_relation_sha is None),
         "relation artifact and expected SHA must be supplied together",
     )
+    _require(
+        (args.evaluation_geometry_manifest is None)
+        == (args.expected_evaluation_geometry_manifest_sha is None),
+        "evaluation geometry manifest and expected SHA must be supplied together",
+    )
     manifest = load_pinned_canonical_json(args.manifest, args.expected_manifest_sha)
+    evaluation_geometry_manifest = (
+        load_pinned_canonical_json(
+            args.evaluation_geometry_manifest,
+            args.expected_evaluation_geometry_manifest_sha,
+        )
+        if args.evaluation_geometry_manifest is not None
+        else None
+    )
     proposal = load_pinned_canonical_json(
         args.proposal_artifact, args.expected_proposal_sha
     )
@@ -1217,6 +1467,10 @@ def main() -> None:
     records = build_precollection_records(
         manifest=manifest,
         manifest_sha256=args.expected_manifest_sha,
+        evaluation_geometry_manifest=evaluation_geometry_manifest,
+        evaluation_geometry_manifest_sha256=(
+            args.expected_evaluation_geometry_manifest_sha
+        ),
         proposal_artifact=proposal,
         proposal_sha256=args.expected_proposal_sha,
         source_policy_sha256=args.source_policy_sha,

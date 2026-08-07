@@ -14,6 +14,7 @@ from MemNavData.collect_real_h24_rollouts import (
     assert_pythonpath,
     build_plan_diagnostics,
     build_run_signature,
+    build_server_instance_diagnostics,
     canonical_bytes,
     decision_seeds,
     load_candidate_records,
@@ -108,8 +109,18 @@ def plan_diagnostics(artifact):
         "run_signature_sha256": artifact.run_signature_sha256,
         "state_id": artifact.state.state_id,
         "diffusion_seeds": list(artifact.diffusion_seeds),
+        "server_instance": build_server_instance_diagnostics(
+            "http://127.0.0.1:18888", "e" * 64
+        ),
         "by_candidate": rows,
     }
+
+
+def fake_server_instance(url="http://127.0.0.1:18888"):
+    return build_server_instance_diagnostics(
+        url,
+        sha256_bytes(canonical_bytes(backend_test_support.FakeTransport.provenance)),
+    )
 
 
 class RealH24CollectorTests(unittest.TestCase):
@@ -272,7 +283,9 @@ class RealH24CollectorTests(unittest.TestCase):
         atomic_write_artifact(artifact_path, artifact)
         _atomic_write_pair(
             diagnostics_path,
-            build_plan_diagnostics(artifact, backends),
+            build_plan_diagnostics(
+                artifact, backends, server_instance=fake_server_instance()
+            ),
         )
         resumed = validate_resume_pair(
             artifact_path,
@@ -291,7 +304,9 @@ class RealH24CollectorTests(unittest.TestCase):
             for row in plans.values()
         ))
 
-        bad_equivalence = build_plan_diagnostics(artifact, backends)
+        bad_equivalence = build_plan_diagnostics(
+            artifact, backends, server_instance=fake_server_instance()
+        )
         residual_plans = bad_equivalence["by_candidate"]["frontier-1"]
         next(iter(residual_plans.values()))[
             "behaviorally_identical_xy"] = False
@@ -307,7 +322,9 @@ class RealH24CollectorTests(unittest.TestCase):
                 candidate_ids=["native", "frontier-1"],
             )
 
-        tampered = build_plan_diagnostics(artifact, backends)
+        tampered = build_plan_diagnostics(
+            artifact, backends, server_instance=fake_server_instance()
+        )
         candidate_plans = next(iter(tampered["by_candidate"].values()))
         diagnostic = next(iter(candidate_plans.values()))
         diagnostic["all_values"] = [[2.0]]
@@ -368,7 +385,9 @@ class RealH24CollectorTests(unittest.TestCase):
             SEEDS,
             run_signature_sha256="d" * 64,
         )
-        diagnostics = build_plan_diagnostics(artifact, backends)
+        diagnostics = build_plan_diagnostics(
+            artifact, backends, server_instance=fake_server_instance()
+        )
         self.assertTrue(all(
             row["behaviorally_identical_xy"]
             for row in diagnostics["by_candidate"]["native"].values()
@@ -399,19 +418,61 @@ class RealH24CollectorTests(unittest.TestCase):
         with self.assertRaisesRegex(CollectorError, "JSON-compatible"):
             _atomic_write_pair(self.root / "nan.plans.json", payload)
 
+        payload = plan_diagnostics(artifact)
+        payload["server_instance"]["physical_server_url"] += "/"
+        path = self.root / "bad-server-instance.plans.json"
+        _atomic_write_pair(path, payload)
+        with self.assertRaisesRegex(CollectorError, "physical URL"):
+            load_plan_diagnostics(path)
+
+    def test_diagnostics_require_one_transport_for_all_same_state_arms(self):
+        fixture = backend_test_support.RealH24RolloutBackendTests(
+            methodName="runTest"
+        )
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        backends = {}
+
+        def split_factory(candidate_id):
+            backend = RealH24RolloutBackend(
+                fixture.assets,
+                backend_test_support.FakeTransport(),
+                backend_test_support.FakeRuntime(fixture.identity),
+                expected_server_provenance=(
+                    backend_test_support.FakeTransport.provenance
+                ),
+                stop_threshold=-0.5,
+            )
+            backends[candidate_id] = backend
+            return backend
+
+        artifact = collect_paired_rollouts(
+            split_factory,
+            fixture.assets.state,
+            (
+                CandidateArm("native", "native"),
+                CandidateArm("frontier-1", "frontier", (1.0, -3.0)),
+            ),
+            SEEDS,
+            run_signature_sha256="d" * 64,
+        )
+        with self.assertRaisesRegex(CollectorError, "one live server transport"):
+            build_plan_diagnostics(
+                artifact, backends, server_instance=fake_server_instance()
+            )
+
     def test_pythonpath_self_check(self):
         root = Path(__file__).resolve().parents[1]
         self.assertEqual(assert_pythonpath(root), root)
         with self.assertRaisesRegex(CollectorError, "absent from PYTHONPATH"):
             assert_pythonpath(self.root / "not-on-path")
 
-    def test_run_signature_binds_explicit_legacy_camera_height(self):
+    def test_run_signature_binds_height_but_instance_url_is_diagnostic_only(self):
         common = {
             "candidate_sha256": "1" * 64,
             "manifest_sha256": "2" * 64,
             "geometry_map_sha256": "3" * 64,
             "server_provenance_sha256": "4" * 64,
-            "server_url": "http://127.0.0.1:18888",
             "base_seed": 17,
             "stop_threshold": -0.5,
             "controller": PurePursuitConfig(),
@@ -421,6 +482,18 @@ class RealH24CollectorTests(unittest.TestCase):
         second = build_run_signature(
             **common, legacy_camera_height_m=0.6)
         self.assertNotEqual(first, second)
+        self.assertNotEqual(
+            build_server_instance_diagnostics(
+                "http://127.0.0.1:18888", "4" * 64
+            ),
+            build_server_instance_diagnostics(
+                "http://127.0.0.1:28888", "4" * 64
+            ),
+        )
+        self.assertEqual(
+            first,
+            build_run_signature(**common, legacy_camera_height_m=0.5),
+        )
 
     def test_cli_requires_explicit_stop_threshold(self):
         argv = [

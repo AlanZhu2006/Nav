@@ -25,6 +25,8 @@ from MemNavData.test_novel_candidate_set_schema_v2 import (
 )
 from MemNavData.train_nlsr_set_ranker import (
     CALIBRATION_NAME,
+    COVERAGE_POLICY_ADVISORY_UNAVAILABLE,
+    COVERAGE_POLICY_REQUIRED,
     FINAL_CHECKPOINT_NAME,
     MANIFEST_NAME,
     METRICS_NAME,
@@ -40,6 +42,7 @@ from MemNavData.train_nlsr_set_ranker import (
     evaluate_calibrated_audit,
     evaluate_loss,
     finite_sample_lcb_quantile,
+    fit_development_calibration,
     load_canonical_candidate_rows,
     resume_payload_sha256,
     run_training,
@@ -175,9 +178,16 @@ def invalid_residual_record(*, scene="audit-invalid"):
 class FixedResidualModel(torch.nn.Module):
     """A deterministic model whose residual always passes model-only gates."""
 
-    def __init__(self):
+    def __init__(
+        self, *, residual_mean=1.0, residual_rank=2.0,
+        residual_harm_logit=-10.0, coverage_logit=-10.0,
+    ):
         super().__init__()
         self.anchor = torch.nn.Parameter(torch.zeros(()))
+        self.residual_mean = float(residual_mean)
+        self.residual_rank = float(residual_rank)
+        self.residual_harm_logit = float(residual_harm_logit)
+        self.coverage_logit = float(coverage_logit)
 
     def forward_batch(self, batch):
         shape = batch.valid_mask.shape
@@ -186,15 +196,16 @@ class FixedResidualModel(torch.nn.Module):
         log_scale = torch.full(shape, -4.0, device=device)
         harm = torch.full(shape, -10.0, device=device)
         rank = torch.zeros(shape, device=device)
-        mean = mean.masked_fill(batch.residual_mask, 1.0)
-        rank = rank.masked_fill(batch.residual_mask, 2.0)
+        mean = mean.masked_fill(batch.residual_mask, self.residual_mean)
+        rank = rank.masked_fill(batch.residual_mask, self.residual_rank)
+        harm = harm.masked_fill(batch.residual_mask, self.residual_harm_logit)
         return NLSRRankerOutput(
             advantage_mean=mean,
             advantage_log_scale=log_scale,
             harm_logit=harm,
             rank_score=rank,
             coverage_logit=torch.full(
-                (shape[0],), -10.0, device=device),
+                (shape[0],), self.coverage_logit, device=device),
             valid_mask=batch.valid_mask,
             native_mask=batch.native_mask,
             dustbin_mask=batch.dustbin_mask,
@@ -208,6 +219,7 @@ def permissive_calibration():
         "advantage": {"one_sided_normalized_quantile": 0.0},
         "harm": {"threshold": 0.5},
         "coverage_miss_abstain": {"threshold": 0.5},
+        "coverage_policy": COVERAGE_POLICY_REQUIRED,
     }
 
 
@@ -325,6 +337,102 @@ class DeploymentDecisionIsolationTest(unittest.TestCase):
         trace = policy["decision_trace"][0]
         self.assertEqual(trace["selected_candidate_id"], "frontier-1")
         self.assertFalse(trace["label_evaluable"])
+
+    def test_advisory_unavailable_skips_only_the_coverage_gate(self):
+        row = invalid_residual_record()
+        spec = feature_spec_from_dataset([row])
+        batch = vectorize_candidate_sets([row], feature_spec=spec)
+        calibration = permissive_calibration()
+        calibration["coverage_policy"] = COVERAGE_POLICY_ADVISORY_UNAVAILABLE
+        calibration["coverage_miss_abstain"]["threshold"] = -1.0
+
+        high_coverage_risk = FixedResidualModel(coverage_logit=10.0)
+        decision = structural_policy_decisions(
+            high_coverage_risk.forward_batch(batch), batch, calibration,
+            tiny_config(),
+        )[0]
+        self.assertEqual(decision["selected_candidate_id"], "frontier-1")
+        self.assertEqual(
+            decision["coverage_policy"], COVERAGE_POLICY_ADVISORY_UNAVAILABLE
+        )
+
+        required = copy.deepcopy(calibration)
+        required["coverage_policy"] = COVERAGE_POLICY_REQUIRED
+        required["coverage_miss_abstain"]["threshold"] = 0.5
+        blocked = structural_policy_decisions(
+            high_coverage_risk.forward_batch(batch), batch, required,
+            tiny_config(),
+        )[0]
+        self.assertEqual(blocked["selected_candidate_id"], "native")
+        self.assertEqual(blocked["reason"], "coverage_risk_abstain")
+
+    def test_advisory_unavailable_keeps_advantage_harm_and_rank_fail_closed(self):
+        row = invalid_residual_record()
+        spec = feature_spec_from_dataset([row])
+        batch = vectorize_candidate_sets([row], feature_spec=spec)
+        calibration = permissive_calibration()
+        calibration["coverage_policy"] = COVERAGE_POLICY_ADVISORY_UNAVAILABLE
+        calibration["coverage_miss_abstain"]["threshold"] = -1.0
+        models = (
+            FixedResidualModel(residual_mean=-1.0, coverage_logit=10.0),
+            FixedResidualModel(residual_harm_logit=10.0, coverage_logit=10.0),
+            FixedResidualModel(residual_rank=-1.0, coverage_logit=10.0),
+        )
+        for model in models:
+            with self.subTest(model=model):
+                decision = structural_policy_decisions(
+                    model.forward_batch(batch), batch, calibration,
+                    tiny_config(),
+                )[0]
+                self.assertEqual(decision["selected_candidate_id"], "native")
+                self.assertEqual(
+                    decision["reason"], "no_structurally_eligible_residual"
+                )
+
+    def test_absent_or_unknown_coverage_policy_fails_closed(self):
+        row = invalid_residual_record()
+        spec = feature_spec_from_dataset([row])
+        batch = vectorize_candidate_sets([row], feature_spec=spec)
+        output = FixedResidualModel().forward_batch(batch)
+        for policy in (None, "optional"):
+            calibration = permissive_calibration()
+            if policy is None:
+                calibration.pop("coverage_policy")
+            else:
+                calibration["coverage_policy"] = policy
+            with self.subTest(policy=policy), self.assertRaisesRegex(
+                NLSRTrainingError, "coverage_policy"
+            ):
+                structural_policy_decisions(
+                    output, batch, calibration, tiny_config()
+                )
+
+    def test_nonfinite_model_output_cannot_bypass_advisory_coverage(self):
+        row = invalid_residual_record()
+        spec = feature_spec_from_dataset([row])
+        batch = vectorize_candidate_sets([row], feature_spec=spec)
+        calibration = permissive_calibration()
+        calibration["coverage_policy"] = COVERAGE_POLICY_ADVISORY_UNAVAILABLE
+        output = FixedResidualModel(coverage_logit=10.0).forward_batch(batch)
+        output.rank_score[0, 1] = float("nan")
+        with self.assertRaisesRegex(NLSRTrainingError, "non-finite rank score"):
+            structural_policy_decisions(output, batch, calibration, tiny_config())
+
+    def test_missing_coverage_labels_calibrate_to_advisory_not_deployment(self):
+        rows = [
+            invalid_residual_record(scene="calibration-a"),
+            invalid_residual_record(scene="calibration-b"),
+        ]
+        spec = feature_spec_from_dataset(rows)
+        calibration = fit_development_calibration(
+            FixedResidualModel(), rows, spec, tiny_config()
+        )
+        self.assertEqual(
+            calibration["coverage_policy"],
+            COVERAGE_POLICY_ADVISORY_UNAVAILABLE,
+        )
+        self.assertEqual(calibration["coverage_miss_abstain"]["valid_rows"], 0)
+        self.assertFalse(calibration["deployment_approved"])
 
 
 class EvaluationAggregationTest(unittest.TestCase):

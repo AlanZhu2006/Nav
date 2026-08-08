@@ -62,7 +62,8 @@ class MemNavAgent:
                  flow_gate="auto", retrieval_candidate_top_k=32,
                  retrieval_candidate_min_gap=16,
                  graph_subgoal_spacing_m=0.0,
-                 graph_subgoal_arrival_m=0.60):
+                 graph_subgoal_arrival_m=0.60,
+                 phase_b_ranker=None):
         # auto: training's per-episode tier; off: legacy dense capture; otherwise
         # parse a fixed pixel-flow threshold.
         self.flow_gate = flow_gate
@@ -107,6 +108,11 @@ class MemNavAgent:
         if (not np.isfinite(self.graph_subgoal_arrival_m)
                 or self.graph_subgoal_arrival_m <= 0.0):
             raise ValueError("graph subgoal arrival radius must be finite and positive")
+        # Experimental P0 component. It is intentionally injected by the
+        # server so the base MemNav agent has no training-stack dependency.
+        # The ranker can only order candidates; activation remains outside the
+        # agent in the evaluator's existing SIFT/RANSAC gate.
+        self.phase_b_ranker = phase_b_ranker
         self.L_depth = self.lb.depth                    # aggregator layers
         self.psi = self.lb.num_special                  # 6 special tokens
 
@@ -186,6 +192,15 @@ class MemNavAgent:
         # positive and negative results so temporal confirmation checks anchor
         # stability instead of recomputing the identical image pair.
         self._retrieval_verification_cache = {}
+        # Read-only learned-ranking results are frozen per goal and exact
+        # shortlist.  DINO scores can vary by a few floating-point bits across
+        # otherwise identical GPU queries, so the expensive deterministic
+        # geometry is cached separately by its actual immutable inputs.  The
+        # cheap model rank is still recomputed from each request's exact DINO
+        # scores whenever the exact-result cache misses.
+        self._phase_b_rank_cache = {}
+        self._phase_b_scale_cache = {}
+        self._phase_b_geometry_cache = {}
         # tower-1 live capture: the current frame's post-GCT tokens + agg list from the
         # CONTINUOUS stream. Training used window_forward's cold-cache recompute only
         # because samples load from disk; at eval the live stream supersedes it.
@@ -337,6 +352,247 @@ class MemNavAgent:
         except Exception as exc:
             return finish(dict(
                 empty, error=f"overlap verification failed: {exc}"))
+
+    def phase_b_status(self):
+        if self.phase_b_ranker is None:
+            return {
+                "enabled": False,
+                "activation_semantics": "geometry_gate_unchanged",
+            }
+        return self.phase_b_ranker.status()
+
+    @torch.no_grad()
+    def rank_retrieval_candidates(self, goal_jpg_bytes, candidates):
+        """Rank one already-frozen DINO shortlist without mutating memory.
+
+        Candidate activation is deliberately absent from this method. The
+        caller must run the same geometric verifier and confirmation latch as
+        the DINO-order baseline. Candidate-validity and no-match outputs are
+        returned only as diagnostics.
+        """
+        import copy
+        import hashlib
+        import time
+
+        started = time.perf_counter()
+
+        def failure(message):
+            return {
+                "ok": False,
+                "error": str(message),
+                "cached": False,
+                "ranking_ms": 1000.0 * (time.perf_counter() - started),
+                "activation_uses_model_score": False,
+            }
+
+        if self.phase_b_ranker is None:
+            return failure("Phase-B ranker is not enabled on this server")
+        if not isinstance(candidates, list) or not candidates:
+            return failure("candidates must be a non-empty JSON list")
+
+        parsed = []
+        seen = set()
+        for input_rank, item in enumerate(candidates, start=1):
+            if not isinstance(item, dict):
+                return failure(f"candidate {input_rank} is not an object")
+            try:
+                anchor = int(item["anchor"])
+                score = float(item["score"])
+            except (KeyError, TypeError, ValueError) as error:
+                return failure(f"candidate {input_rank} is malformed: {error}")
+            if not np.isfinite(score):
+                return failure(f"candidate {input_rank} score is non-finite")
+            if anchor in seen:
+                return failure(f"candidate anchor is duplicated: {anchor}")
+            seen.add(anchor)
+            parsed.append({
+                "anchor": anchor,
+                "score": score,
+                "dino_rank": input_rank,
+            })
+
+        try:
+            from MemNavData.phase_b_runtime import RUNTIME_CONFIG
+        except ModuleNotFoundError as error:
+            return failure(f"Phase-B runtime import failed: {error}")
+        if len(parsed) > RUNTIME_CONFIG.candidate_top_k:
+            return failure(
+                f"candidate shortlist exceeds top-{RUNTIME_CONFIG.candidate_top_k}")
+        anchors = [item["anchor"] for item in parsed]
+        if any(
+            abs(left - right) < RUNTIME_CONFIG.candidate_min_gap
+            for index, left in enumerate(anchors)
+            for right in anchors[index + 1:]
+        ):
+            return failure(
+                "candidate shortlist violates the audited temporal gap"
+            )
+
+        goal_key = hashlib.md5(goal_jpg_bytes).hexdigest()
+        goal_start_frame = self._goal_start_frame.get(goal_key)
+        if goal_start_frame is None:
+            return failure(
+                "goal must be registered by retrieval_probe_step before ranking"
+            )
+        candidate_ceiling = int(goal_start_frame) - 1
+        for item in parsed:
+            anchor = item["anchor"]
+            if not self.amargin <= anchor <= candidate_ceiling:
+                return failure(
+                    f"candidate {anchor} is outside causal retrieval range "
+                    f"[{self.amargin}, {candidate_ceiling}]"
+                )
+            if anchor >= self.n:
+                return failure(f"candidate {anchor} is outside live history")
+            if not os.path.isfile(os.path.join(self.rgb_dir, f"{anchor}.jpg")):
+                return failure(f"candidate image is missing: {anchor}.jpg")
+
+        signature = tuple(
+            (item["anchor"], float(item["score"])) for item in parsed
+        )
+        cache_key = (goal_key, int(goal_start_frame), signature)
+        cached = self._phase_b_rank_cache.get(cache_key)
+        if cached is not None:
+            result = copy.deepcopy(cached)
+            result["cached"] = True
+            result["ranking_ms"] = 1000.0 * (time.perf_counter() - started)
+            return result
+
+        snapshot = self._snapshot()
+        try:
+            from pathlib import Path
+            from MemNavData.phase_b_runtime import (
+                append_goal_geometry,
+                external_causal_metric_scale,
+                measurement_feature_row,
+            )
+
+            live_cache = self._live_cache()
+            scale_key = (goal_key, int(goal_start_frame))
+            cached_scale = self._phase_b_scale_cache.get(scale_key)
+            scale_cached = cached_scale is not None
+            if cached_scale is None:
+                metric_scale, scale_quality = external_causal_metric_scale(
+                    self.lb,
+                    Path(self.rgb_dir),
+                    live_cache["cam_pose_enc"],
+                    self.camera_height,
+                    int(goal_start_frame),
+                )
+                self._phase_b_scale_cache[scale_key] = (
+                    float(metric_scale), copy.deepcopy(scale_quality))
+            else:
+                metric_scale, scale_quality = copy.deepcopy(cached_scale)
+
+            geometry_keys = [
+                (goal_key, int(goal_start_frame), item["anchor"])
+                for item in parsed
+            ]
+            missing_geometry = [
+                key for key in geometry_keys
+                if key not in self._phase_b_geometry_cache
+            ]
+            goal_image = None
+            if missing_geometry:
+                goal_path = os.path.join(
+                    self.rgb_dir, f"_phase_b_goal_{goal_key}.jpg")
+                with open(goal_path, "wb") as handle:
+                    handle.write(goal_jpg_bytes)
+                goal_image = self.lb.load_images([goal_path])[0].to(self.device)
+
+            feature_rows = []
+            measurements = []
+            geometry_cache_hits = 0
+            geometry_cache_misses = 0
+            for item, geometry_key in zip(parsed, geometry_keys):
+                cached_measurement = self._phase_b_geometry_cache.get(
+                    geometry_key)
+                if cached_measurement is None:
+                    measurement = append_goal_geometry(
+                        self.lb,
+                        live_cache,
+                        Path(self.rgb_dir),
+                        goal_image,
+                        item["anchor"],
+                    )
+                    self._phase_b_geometry_cache[geometry_key] = (
+                        copy.deepcopy(measurement))
+                    geometry_cache_misses += 1
+                else:
+                    measurement = copy.deepcopy(cached_measurement)
+                    geometry_cache_hits += 1
+                row = measurement_feature_row(
+                    measurement,
+                    dino_cosine=item["score"],
+                    metric_scale=metric_scale,
+                    scale_quality=scale_quality,
+                )
+                feature_rows.append(row)
+                predicted_xy = np.asarray(
+                    row["predicted_relative_xy_m"], dtype=np.float64)
+                measurements.append({
+                    "anchor": item["anchor"],
+                    "dino_rank": item["dino_rank"],
+                    "dino_cosine": item["score"],
+                    "predicted_relative_xy_m": predicted_xy.tolist(),
+                    "cloud_overlap_f1": float(
+                        measurement["cloud_overlap_f1"]),
+                    "anchor_goal_distance_norm": float(
+                        row["anchor_goal_distance_norm_center"]),
+                    "goal_refine_translation_norm": float(
+                        row["goal_refine_translation_norm_median"]),
+                    "goal_refine_rotation_deg": float(
+                        row["goal_refine_rotation_deg_median"]),
+                })
+
+            ranked = self.phase_b_ranker.rank(feature_rows)
+            order = ranked["order"]
+            if sorted(order) != list(range(len(parsed))):
+                raise RuntimeError("Phase-B ranker returned a non-permutation")
+            ranked_candidates = []
+            for learned_rank, index in enumerate(order, start=1):
+                item = dict(parsed[index])
+                item.update({
+                    "learned_rank": learned_rank,
+                    "rank_probability": float(
+                        ranked["rank_probability"][index]),
+                    "candidate_validity_diagnostic": float(
+                        ranked["candidate_validity"][index]),
+                })
+                ranked_candidates.append(item)
+            elapsed_ms = 1000.0 * (time.perf_counter() - started)
+            result = {
+                "ok": True,
+                "error": None,
+                "cached": False,
+                "ranking_ms": elapsed_ms,
+                "uncached_ranking_ms": elapsed_ms,
+                "ranked_candidates": ranked_candidates,
+                "candidate_measurements": measurements,
+                "metric_scale_m_per_raw": float(metric_scale),
+                "metric_scale_source": (
+                    "external_causal_first_prefix_v1"),
+                **{key: float(value)
+                   for key, value in scale_quality.items()},
+                "no_match_probability_diagnostic": float(
+                    ranked["no_match_probability_diagnostic"]),
+                "activation_uses_model_score": False,
+                "checkpoint_sha256": (
+                    self.phase_b_ranker.checkpoint_sha256),
+                "goal_start_frame": int(goal_start_frame),
+                "candidate_ceiling": candidate_ceiling,
+                "scale_cached": bool(scale_cached),
+                "geometry_cache_hit_count": int(geometry_cache_hits),
+                "geometry_cache_miss_count": int(geometry_cache_misses),
+            }
+            self._phase_b_rank_cache[cache_key] = copy.deepcopy(result)
+            return result
+        except Exception as error:
+            return failure(
+                f"Phase-B feature/ranking failure "
+                f"({type(error).__name__}): {error}")
+        finally:
+            self._restore(snapshot)
 
     # ------------------------------------------------------------------ #
     # capture-stream internals (mirrors precompute extract_trajectory)
@@ -668,7 +924,13 @@ class MemNavAgent:
             if hi >= lo:
                 cand[0, lo:hi + 1] = True
             candidate_count = int(cand.sum().item())
-            match_idx, gate_logit, _ = self.core.retrieval(goal_cls, mem_cls, cand)
+            # RetrievalHead grew a fourth output (max_cos) after this server was
+            # written; star-unpack so both the 3- and 4-value InternNav
+            # revisions load.  Only the anchor index and the gate logit are
+            # consumed here, and `--retrieval raw` scores candidates from raw
+            # DINO cosine rather than the trained projection.
+            match_idx, gate_logit, *_ = self.core.retrieval(
+                goal_cls, mem_cls, cand)
             gate = torch.sigmoid(gate_logit)     # trained gate: decoder soft-bias, as in training
             predicted_gate = float(gate.item())
             if forced_gate is not None:

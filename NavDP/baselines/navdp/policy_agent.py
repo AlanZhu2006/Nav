@@ -323,3 +323,41 @@ class NavDP_Agent:
         
         trajectory_mask = self.project_trajectory(images,all_trajectory,all_values) 
         return good_trajectory[:,0], all_trajectory, all_values, trajectory_mask
+
+    def resample_point_image_goal(self, pointgoal, imagegoal, images, depths):
+        """Sample mixed-goal candidates without advancing the RGB FIFO.
+
+        A normal ImageGoal step for the current observation must run first.
+        This lets a coverage residual compare a frontier-conditioned proposal
+        against the native proposal while consuming the observation exactly
+        once.
+        """
+        if len(images) != len(self.memory_queue):
+            raise ValueError("observation batch differs from NavDP batch size")
+        input_images = []
+        for queue in self.memory_queue:
+            if not queue:
+                raise RuntimeError(
+                    "mixed-goal resampling requires a prior policy step")
+            input_image = np.asarray(queue)
+            if input_image.shape[0] < self.memory_size:
+                input_image = np.pad(
+                    input_image,
+                    ((self.memory_size - input_image.shape[0], 0),
+                     (0, 0), (0, 0), (0, 0)),
+                )
+            input_images.append(input_image)
+        input_images = np.asarray(input_images)
+        input_depth = self.process_depth(depths)
+        input_pointgoal = self.process_pointgoal(pointgoal)
+        input_imagegoal = self.process_image(imagegoal)
+        all_trajectory, all_values, good_trajectory, bad_trajectory = (
+            self.navi_former.predict_ip_action(
+                input_pointgoal, input_imagegoal, input_images, input_depth))
+        if all_values.max() < self.stop_threshold:
+            good_trajectory[:, :, :, 0] = 0.0
+            good_trajectory[:, :, :, 1] = np.sign(
+                good_trajectory[:, :, :, 1].mean())
+        trajectory_mask = self.project_trajectory(
+            images, all_trajectory, all_values)
+        return good_trajectory[:, 0], all_trajectory, all_values, trajectory_mask

@@ -28,6 +28,9 @@ Endpoints (NavDP wire-contract style):
   POST /retrieval_verify     files: goal (jpg), form: anchor
                              -> CPU two-view geometric overlap diagnostics;
                              does not mutate streaming model state.
+  POST /phase_b_rank         files: goal (jpg), form: candidates (JSON)
+                             -> learned ordering of the frozen DINO shortlist;
+                             no activation decision and no stream mutation.
   POST /imagegoal_similarity files: image (jpg), goal (jpg)
                              -> {"current_goal_cos": float}
                              stateless visual check; does not mutate memory.
@@ -39,7 +42,9 @@ Usage:
 """
 
 import argparse
+import json
 import os
+import sys
 
 # must precede any torch import (policy_agent): reduces fragmentation OOMs from
 # the large KV-cache alloc/free cycle each plan() runs.
@@ -80,6 +85,19 @@ parser.add_argument(
 parser.add_argument("--flow_gate", type=str, default="auto",
                     help="auto = training length tier; off = dense; or fixed px threshold")
 parser.add_argument("--buffer_root", type=str, default="/tmp/memnav_server_buffer")
+parser.add_argument(
+    "--phase_b_checkpoint",
+    type=str,
+    default="",
+    help=("experimental Phase-B checkpoint used only to rank a fixed DINO "
+          "shortlist; empty disables the learned ranker"),
+)
+parser.add_argument(
+    "--phase_b_allow_unapproved",
+    action="store_true",
+    help=("explicitly permit a deployment_approved=false checkpoint for the "
+          "audited P0 closed-loop experiment"),
+)
 args = parser.parse_args()
 
 # The server changes directory below because LingBot historically resolves a
@@ -90,10 +108,31 @@ args = parser.parse_args()
 args.checkpoint = os.path.abspath(args.checkpoint)
 args.internnav_root = os.path.abspath(args.internnav_root)
 args.buffer_root = os.path.abspath(args.buffer_root)
+args.phase_b_checkpoint = (
+    os.path.abspath(args.phase_b_checkpoint)
+    if args.phase_b_checkpoint else ""
+)
 if not os.path.isfile(args.checkpoint):
     raise FileNotFoundError(f"MemNav checkpoint not found: {args.checkpoint}")
 if not os.path.isdir(args.internnav_root):
     raise FileNotFoundError(f"InternNav root not found: {args.internnav_root}")
+if args.phase_b_allow_unapproved and not args.phase_b_checkpoint:
+    parser.error("--phase_b_allow_unapproved requires --phase_b_checkpoint")
+if args.phase_b_checkpoint and not os.path.isfile(args.phase_b_checkpoint):
+    raise FileNotFoundError(
+        f"Phase-B checkpoint not found: {args.phase_b_checkpoint}")
+
+repo_root = os.path.abspath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+phase_b_ranker = None
+if args.phase_b_checkpoint:
+    from MemNavData.phase_b_runtime import PhaseBEnsembleRanker
+    phase_b_ranker = PhaseBEnsembleRanker(
+        args.phase_b_checkpoint,
+        allow_unapproved=args.phase_b_allow_unapproved,
+    )
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 from policy_agent import MemNavAgent  # noqa: E402  (after chdir so lingbot paths resolve)
@@ -113,6 +152,7 @@ agent = MemNavAgent(
     graph_subgoal_spacing_m=args.graph_subgoal_spacing_m,
     graph_subgoal_arrival_m=args.graph_subgoal_arrival_m,
     flow_gate=args.flow_gate,
+    phase_b_ranker=phase_b_ranker,
 )
 
 app = Flask(__name__)
@@ -139,6 +179,7 @@ def navigator_reset():
         "retrieval_candidate_min_gap": agent.retrieval_candidate_min_gap,
         "graph_subgoal_spacing_m": agent.graph_subgoal_spacing_m,
         "graph_subgoal_arrival_m": agent.graph_subgoal_arrival_m,
+        "phase_b_ranker": agent.phase_b_status(),
     })
 
 
@@ -226,6 +267,25 @@ def retrieval_verify():
     return jsonify(out)
 
 
+@app.route("/phase_b_rank", methods=["POST"])
+def phase_b_rank():
+    """Rank a causal DINO shortlist; never decide memory activation."""
+    raw_candidates = request.form.get("candidates")
+    if raw_candidates is None:
+        return jsonify({"ok": False, "error": "candidates is required"}), 400
+    try:
+        candidates = json.loads(raw_candidates)
+    except json.JSONDecodeError as error:
+        return jsonify({
+            "ok": False,
+            "error": f"candidates is invalid JSON: {error}",
+        }), 400
+    goal = request.files.get("goal")
+    if goal is None:
+        return jsonify({"ok": False, "error": "goal is required"}), 400
+    return jsonify(agent.rank_retrieval_candidates(goal.read(), candidates))
+
+
 @app.route("/imagegoal_similarity", methods=["POST"])
 def imagegoal_similarity():
     score = agent.image_goal_similarity(
@@ -242,5 +302,6 @@ if __name__ == "__main__":
           f"candidate_gap={agent.retrieval_candidate_min_gap}, "
           f"graph_spacing_m={agent.graph_subgoal_spacing_m}, "
           f"graph_arrival_m={agent.graph_subgoal_arrival_m}, "
+          f"phase_b_ranker={agent.phase_b_status().get('enabled')}, "
           f"checkpoint={os.path.basename(args.checkpoint)})")
     app.run(host="0.0.0.0", port=args.port, threaded=False)

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Run three paired arms for one scene from the frozen expanded benchmark:
-# native NavDP, the original top-1 geometry router, and temporal top-K geometry.
+# Run paired arms for one scene from the frozen expanded benchmark. The
+# optional P0 arm changes only top-8 candidate order with Phase-B features;
+# native NavDP and both geometry controls retain their existing defaults.
 
 set -euo pipefail
 umask 0022
@@ -30,6 +31,8 @@ SHARED_LEG1_ROOT=${SHARED_LEG1_ROOT:-}
 RUN_NAVDP_NATIVE=${RUN_NAVDP_NATIVE:-1}
 RUN_GEOMETRY_TOP1=${RUN_GEOMETRY_TOP1:-1}
 RUN_GEOMETRY_ROUTER=${RUN_GEOMETRY_ROUTER:-1}
+RUN_LEARNED_RANK_GEOMETRY=${RUN_LEARNED_RANK_GEOMETRY:-0}
+P0_SHARED_PREFIX=${P0_SHARED_PREFIX:-0}
 RETRIEVAL_CANDIDATE_MIN_GAP=${RETRIEVAL_CANDIDATE_MIN_GAP:-16}
 GRAPH_SUBGOAL_SPACING_M=${GRAPH_SUBGOAL_SPACING_M:-0.0}
 GRAPH_SUBGOAL_ARRIVAL_M=${GRAPH_SUBGOAL_ARRIVAL_M:-0.60}
@@ -65,6 +68,8 @@ LINGBOT_WEIGHTS=${LINGBOT_WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
 EXPECTED_LINGBOT_COMMIT=${EXPECTED_LINGBOT_COMMIT:-7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2}
 MEMNAV_CKPT=${MEMNAV_CKPT:-/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/gatecurr600.memnav.ckpt}
 NAVDP_CKPT=${NAVDP_CKPT:-/scratch/yz11502/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/navdp_checkpoint.ckpt}
+PHASE_B_CKPT=${PHASE_B_CKPT:-}
+EXPECTED_PHASE_B_CKPT_SHA=${EXPECTED_PHASE_B_CKPT_SHA:-}
 ASSET_ROOT_OVERRIDE=${ASSET_ROOT_OVERRIDE:-}
 EPISODE_ROOT_OVERRIDE=${EPISODE_ROOT_OVERRIDE:-}
 RUN_CONDITIONAL_ORACLES=${RUN_CONDITIONAL_ORACLES:-0}
@@ -75,10 +80,17 @@ TASK_FILES=(
   MemNavData/eval_2leg_habitat.py
   MemNavData/validate_expanded_navdp_router_eval.py
   MemNavData/summarize_expanded_navdp_router_eval.py
+  MemNavData/summarize_phase_b_p0.py
   MemNavData/test_expanded_navdp_router_eval.py
+  MemNavData/test_summarize_phase_b_p0.py
   MemNavData/test_router_candidates.py
   MemNavData/test_reverse_memory_graph.py
   MemNavData/test_policy_agent_graph.py
+  MemNavData/phase_b_feature_schema.py
+  MemNavData/phase_b_model.py
+  MemNavData/phase_b_runtime.py
+  MemNavData/test_phase_b_runtime.py
+  MemNavData/test_phase_b_policy_cache.py
   MemNavData/terminal_uturn.py
   MemNavData/visual_yaw_refinement.py
   MemNavData/summarize_terminal_uturn.py
@@ -92,6 +104,8 @@ TASK_FILES=(
   MemNavData/test_navdp_goal_switch.py
   MemNavData/global_subgoal_protocol.py
   MemNavData/test_global_subgoal_protocol.py
+  MemNavData/observed_frontier.py
+  MemNavData/test_observed_frontier.py
   MemNavData/test_deterministic_eval_protocol.py
   MemNavData/test_navdp_memory_replay.py
   MemNavData/conditional_c_protocol.py
@@ -99,6 +113,7 @@ TASK_FILES=(
   MemNavData/summarize_conditional_c_eval.py
   MemNavData/test_summarize_conditional_c_eval.py
   MemNavData/run_expanded_navdp_router_scene.sh
+  MemNavData/submit_phase_b_p0_hpc.sh
   MemNavData/slurm_expanded_navdp_router_eval.sbatch
   MemNavData/expanded_navdp_router_eval_20260805.json
   NavDP/baselines/memnav/memnav_server.py
@@ -129,10 +144,37 @@ for flag in RUN_CONDITIONAL_ORACLES RUN_CONDITIONAL_ORACLE_ANCHOR \
   [[ "${!flag}" =~ ^[01]$ ]] || {
     echo "ABORT: ${flag} must be 0 or 1" >&2; exit 1; }
 done
-for flag in RUN_NAVDP_NATIVE RUN_GEOMETRY_TOP1 RUN_GEOMETRY_ROUTER; do
+for flag in RUN_NAVDP_NATIVE RUN_GEOMETRY_TOP1 RUN_GEOMETRY_ROUTER \
+            RUN_LEARNED_RANK_GEOMETRY P0_SHARED_PREFIX; do
   [[ "${!flag}" =~ ^[01]$ ]] || {
     echo "ABORT: ${flag} must be 0 or 1" >&2; exit 1; }
 done
+if [[ "${P0_SHARED_PREFIX}" -eq 1 ]]; then
+  [[ "${RUN_NAVDP_NATIVE}" -eq 1 \
+      && "${RUN_GEOMETRY_TOP1}" -eq 0 \
+      && "${RUN_GEOMETRY_ROUTER}" -eq 1 \
+      && "${RUN_LEARNED_RANK_GEOMETRY}" -eq 1 ]] || {
+    echo "ABORT: P0_SHARED_PREFIX requires exactly native/geometry/learned arms" >&2
+    exit 1
+  }
+  [[ "${LEG1_MODE}" == policy && "${STOP_AFTER_LEG1}" -eq 0 \
+      && "${WRITE_LEG1_TRACE}" -eq 0 && -z "${SHARED_LEG1_ROOT}" ]] || {
+    echo "ABORT: P0_SHARED_PREFIX owns the Goal-A trace protocol" >&2
+    exit 1
+  }
+  [[ "${DETERMINISTIC_PLAN_SEEDS}" -eq 1 \
+      && "${NAVDP_GOAL_SWITCH_RESET}" == carry \
+      && "${TRAJECTORY_SELECTOR}" == server \
+      && "${TRAJECTORY_SELECTOR_SCOPE}" == all ]] || {
+    echo "ABORT: P0_SHARED_PREFIX requires the deterministic server policy" >&2
+    exit 1
+  }
+  [[ "${RUN_CONDITIONAL_ORACLE_ANCHOR}" -eq 0 \
+      && "${RUN_CONDITIONAL_ORACLE_POINT}" -eq 0 ]] || {
+    echo "ABORT: P0_SHARED_PREFIX cannot mix conditional oracle arms" >&2
+    exit 1
+  }
+fi
 for flag in STOP_AFTER_LEG1 WRITE_LEG1_TRACE DETERMINISTIC_PLAN_SEEDS; do
   [[ "${!flag}" =~ ^[01]$ ]] || {
     echo "ABORT: ${flag} must be 0 or 1" >&2; exit 1; }
@@ -171,7 +213,8 @@ if [[ "${ORACLE_CANDIDATE_SEED_COUNT}" -gt 1 ]]; then
     echo "ABORT: multi-seed candidates require oracle_geodesic" >&2; exit 1; }
   [[ "${DETERMINISTIC_PLAN_SEEDS}" -eq 1 ]] || {
     echo "ABORT: multi-seed candidates require deterministic seeds" >&2; exit 1; }
-  [[ "${RUN_GEOMETRY_TOP1}" -eq 0 && "${RUN_GEOMETRY_ROUTER}" -eq 0 ]] || {
+  [[ "${RUN_GEOMETRY_TOP1}" -eq 0 && "${RUN_GEOMETRY_ROUTER}" -eq 0 \
+      && "${RUN_LEARNED_RANK_GEOMETRY}" -eq 0 ]] || {
     echo "ABORT: multi-seed diagnostic currently supports native NavDP only" >&2
     exit 1
   }
@@ -213,10 +256,30 @@ if [[ "${STOP_AFTER_LEG1}" -eq 1 || "${WRITE_LEG1_TRACE}" -eq 1 ]]; then
     exit 1
   }
 fi
-(( RUN_NAVDP_NATIVE + RUN_GEOMETRY_TOP1 + RUN_GEOMETRY_ROUTER > 0 )) || {
+(( RUN_NAVDP_NATIVE + RUN_GEOMETRY_TOP1 + RUN_GEOMETRY_ROUTER \
+   + RUN_LEARNED_RANK_GEOMETRY > 0 )) || {
   echo "ABORT: at least one evaluation arm must be enabled" >&2; exit 1; }
 [[ "${RETRIEVAL_CANDIDATE_MIN_GAP}" =~ ^[1-9][0-9]*$ ]] || {
   echo "ABORT: RETRIEVAL_CANDIDATE_MIN_GAP must be positive" >&2; exit 1; }
+if [[ "${RUN_LEARNED_RANK_GEOMETRY}" -eq 1 ]]; then
+  test -r "${PHASE_B_CKPT}" || {
+    echo "ABORT: learned P0 arm requires readable PHASE_B_CKPT" >&2
+    exit 1
+  }
+  [[ "${EXPECTED_PHASE_B_CKPT_SHA}" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "ABORT: learned P0 arm requires EXPECTED_PHASE_B_CKPT_SHA" >&2
+    exit 1
+  }
+  [[ "$(sha256sum "${PHASE_B_CKPT}" | awk '{print $1}')" == \
+      "${EXPECTED_PHASE_B_CKPT_SHA}" ]] || {
+    echo "ABORT: Phase-B checkpoint SHA256 mismatch" >&2
+    exit 1
+  }
+  [[ "${RETRIEVAL_CANDIDATE_MIN_GAP}" -eq 16 ]] || {
+    echo "ABORT: learned P0 arm requires candidate gap 16" >&2
+    exit 1
+  }
+fi
 "${HAB_PY}" - "${GRAPH_SUBGOAL_SPACING_M}" \
   "${GRAPH_SUBGOAL_ARRIVAL_M}" "${ORACLE_GLOBAL_SUBGOAL_M}" <<'PY'
 import math, sys
@@ -238,7 +301,8 @@ then
     exit 1
   }
   [[ "${RUN_NAVDP_NATIVE}" -eq 1 && "${RUN_GEOMETRY_TOP1}" -eq 0 \
-      && "${RUN_GEOMETRY_ROUTER}" -eq 0 ]] || {
+      && "${RUN_GEOMETRY_ROUTER}" -eq 0 \
+      && "${RUN_LEARNED_RANK_GEOMETRY}" -eq 0 ]] || {
     echo "ABORT: oracle global subgoals require the native-only arm" >&2
     exit 1
   }
@@ -391,10 +455,13 @@ hab_python -m py_compile \
   "${ROOT}/MemNavData/terminal_uturn.py" \
   "${ROOT}/MemNavData/arrival_shadow.py" \
   "${ROOT}/MemNavData/global_subgoal_protocol.py" \
+  "${ROOT}/MemNavData/observed_frontier.py" \
   "${ROOT}/MemNavData/summarize_arrival_shadow.py" \
   "${ROOT}/MemNavData/visual_yaw_refinement.py" \
   "${ROOT}/MemNavData/summarize_terminal_uturn.py"
 "${MEMNAV_PY}" -m py_compile \
+  "${ROOT}/MemNavData/phase_b_model.py" \
+  "${ROOT}/MemNavData/phase_b_runtime.py" \
   "${ROOT}/MemNavData/deterministic_eval_protocol.py" \
   "${ROOT}/MemNavData/navdp_goal_switch.py" \
   "${MEMNAV_SERVER}" \
@@ -407,6 +474,7 @@ hab_python -m py_compile \
   cd "${ROOT}"
   hab_python -m unittest \
     "${UNIT_TEST_MODULE}" \
+    MemNavData.test_summarize_phase_b_p0 \
     MemNavData.test_router_candidates \
     MemNavData.test_reverse_memory_graph \
     MemNavData.test_terminal_uturn \
@@ -414,6 +482,7 @@ hab_python -m py_compile \
     MemNavData.test_summarize_arrival_shadow \
     MemNavData.test_conditional_c_protocol \
     MemNavData.test_global_subgoal_protocol \
+    MemNavData.test_observed_frontier \
     MemNavData.test_navdp_goal_switch \
     MemNavData.test_summarize_conditional_c_eval -v
 )
@@ -421,6 +490,8 @@ hab_python -m py_compile \
   cd "${ROOT}"
   "${MEMNAV_PY}" -m unittest \
     MemNavData.test_policy_agent_graph \
+    MemNavData.test_phase_b_policy_cache \
+    MemNavData.test_phase_b_runtime \
     MemNavData.test_deterministic_eval_protocol \
     MemNavData.test_navdp_memory_replay -v
 )
@@ -454,6 +525,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+PHASE_B_SERVER_ARGS=()
+if [[ "${RUN_LEARNED_RANK_GEOMETRY}" -eq 1 ]]; then
+  PHASE_B_SERVER_ARGS=(
+    --phase_b_checkpoint "${PHASE_B_CKPT}"
+    --phase_b_allow_unapproved
+  )
+fi
+
 (
   cd "${RUNTIME_ROOT}/memnav"
   exec env \
@@ -482,6 +561,7 @@ trap cleanup EXIT INT TERM
       --graph_subgoal_spacing_m "${GRAPH_SUBGOAL_SPACING_M}" \
       --graph_subgoal_arrival_m "${GRAPH_SUBGOAL_ARRIVAL_M}" \
       --flow_gate auto \
+      "${PHASE_B_SERVER_ARGS[@]}" \
       --buffer_root "${SCENE_ROOT}/buffer"
 ) > "${SCENE_ROOT}/logs/server_memnav.log" 2>&1 &
 MEMNAV_PID=$!
@@ -547,7 +627,6 @@ COMMON_ARGS=(
   --episode_root "${EPISODE_SCENE_ROOT}"
   --scene "${SCENE_FILE}"
   --host 127.0.0.1
-  --leg1_mode "${LEG1_MODE}"
   --success_dist 1.0
   --max_steps "${MAX_STEPS}"
   --exec_horizon 8
@@ -564,11 +643,12 @@ COMMON_ARGS=(
   --arrival_shadow "${ARRIVAL_SHADOW}"
   --episode_ids "${episode_csv}"
 )
+DEFAULT_LEG1_ARGS=(--leg1_mode "${LEG1_MODE}")
 if [[ "${STOP_AFTER_LEG1}" -eq 1 ]]; then
-  COMMON_ARGS+=(--stop_after_leg1)
+  DEFAULT_LEG1_ARGS+=(--stop_after_leg1)
 fi
 if [[ "${WRITE_LEG1_TRACE}" -eq 1 ]]; then
-  COMMON_ARGS+=(--write_leg1_trace)
+  DEFAULT_LEG1_ARGS+=(--write_leg1_trace)
 fi
 if [[ "${DETERMINISTIC_PLAN_SEEDS}" -eq 1 ]]; then
   COMMON_ARGS+=(--deterministic_plan_seeds)
@@ -579,38 +659,44 @@ if [[ "${LEG1_MODE}" == shared_trace ]]; then
     echo "ABORT: shared Goal-A trace root missing: ${SHARED_SCENE_ROOT}" >&2
     exit 1
   }
-  COMMON_ARGS+=(--shared_leg1_trace_root "${SHARED_SCENE_ROOT}")
+  DEFAULT_LEG1_ARGS+=(--shared_leg1_trace_root "${SHARED_SCENE_ROOT}")
 fi
 
 ARMS=()
-if [[ "${RUN_NAVDP_NATIVE}" -eq 1 ]]; then
+run_native_arm() {
+  local -a leg1_args=("$@")
   echo "[eval] scene=${scene} arm=navdp_native episodes=${episode_csv}"
   mkdir -p "${SCENE_ROOT}/navdp_native"
   (
     cd "${RUNTIME_ROOT}"
     hab_python -u "${EVALUATOR}" \
       "${COMMON_ARGS[@]}" \
+      "${leg1_args[@]}" \
       --port "${NAVDP_PORT}" \
       --out "${SCENE_ROOT}/navdp_native" \
       --server_backend navdp
   ) > "${SCENE_ROOT}/logs/eval_navdp_native.log" 2>&1
   ARMS+=(navdp_native)
-fi
+}
 
 run_geometry_arm() {
   local arm=$1
   local verify_top_k=$2
-  echo "[eval] scene=${scene} arm=${arm} verify_top_k=${verify_top_k} episodes=${episode_csv}"
+  local route=${3:-memory_geometry}
+  shift 3
+  local -a leg1_args=("$@")
+  echo "[eval] scene=${scene} arm=${arm} route=${route} verify_top_k=${verify_top_k} episodes=${episode_csv}"
   mkdir -p "${SCENE_ROOT}/${arm}"
   (
     cd "${RUNTIME_ROOT}"
     hab_python -u "${EVALUATOR}" \
       "${COMMON_ARGS[@]}" \
+      "${leg1_args[@]}" \
       --port "${MEMNAV_PORT}" \
       --novel_port "${NAVDP_PORT}" \
       --out "${SCENE_ROOT}/${arm}" \
       --server_backend hybrid_pose \
-      --hybrid_route memory_geometry \
+      --hybrid_route "${route}" \
       --router_visual_floor 0.88 \
       --router_min_matches 20 \
       --router_min_inliers 12 \
@@ -620,16 +706,43 @@ run_geometry_arm() {
   ) > "${SCENE_ROOT}/logs/eval_${arm}.log" 2>&1
 }
 
-# Run top-1 first so its state cannot inherit the top-K accepted anchor.  Each
-# evaluator calls the audited reset endpoint for every episode, resetting the
-# policy RNG, streaming memory, and router latch to the same episode seed.
-if [[ "${RUN_GEOMETRY_TOP1}" -eq 1 ]]; then
-  run_geometry_arm geometry_top1 1
-  ARMS+=(geometry_top1)
-fi
-if [[ "${RUN_GEOMETRY_ROUTER}" -eq 1 ]]; then
-  run_geometry_arm geometry_router 8
+if [[ "${P0_SHARED_PREFIX}" -eq 1 ]]; then
+  # Generate Goal A exactly once on this node, then replay the trace through
+  # both comparison arms while preserving each server's short-memory stream.
+  # This keeps every paired closed-loop claim within one job and one pair of
+  # long-lived policy processes.
+  run_geometry_arm geometry_router 8 memory_geometry \
+    --leg1_mode policy --write_leg1_trace
   ARMS+=(geometry_router)
+  P0_SHARED_ARGS=(
+    --leg1_mode shared_trace
+    --shared_leg1_trace_root "${SCENE_ROOT}/geometry_router"
+  )
+  run_geometry_arm learned_rank_geometry 8 learned_rank_geometry \
+    "${P0_SHARED_ARGS[@]}"
+  ARMS+=(learned_rank_geometry)
+  run_native_arm "${P0_SHARED_ARGS[@]}"
+else
+  if [[ "${RUN_NAVDP_NATIVE}" -eq 1 ]]; then
+    run_native_arm "${DEFAULT_LEG1_ARGS[@]}"
+  fi
+  # Run top-1 first so its state cannot inherit the top-K accepted anchor.
+  # Each evaluator resets policy RNG, stream memory, and the router latch.
+  if [[ "${RUN_GEOMETRY_TOP1}" -eq 1 ]]; then
+    run_geometry_arm geometry_top1 1 memory_geometry \
+      "${DEFAULT_LEG1_ARGS[@]}"
+    ARMS+=(geometry_top1)
+  fi
+  if [[ "${RUN_GEOMETRY_ROUTER}" -eq 1 ]]; then
+    run_geometry_arm geometry_router 8 memory_geometry \
+      "${DEFAULT_LEG1_ARGS[@]}"
+    ARMS+=(geometry_router)
+  fi
+  if [[ "${RUN_LEARNED_RANK_GEOMETRY}" -eq 1 ]]; then
+    run_geometry_arm learned_rank_geometry 8 learned_rank_geometry \
+      "${DEFAULT_LEG1_ARGS[@]}"
+    ARMS+=(learned_rank_geometry)
+  fi
 fi
 run_conditional_oracle_arm() {
   local arm=$1
@@ -641,6 +754,7 @@ run_conditional_oracle_arm() {
     hab_python -u "${EVALUATOR}" \
       --conditional_c_mode "${mode}" \
       "${COMMON_ARGS[@]}" \
+      "${DEFAULT_LEG1_ARGS[@]}" \
       --port "${MEMNAV_PORT}" \
       --novel_port "${NAVDP_PORT}" \
       --out "${SCENE_ROOT}/${arm}" \
@@ -675,5 +789,18 @@ for arm in "${ARMS[@]}"; do
     exit 1
   }
 done
+
+if [[ "${RUN_LEARNED_RANK_GEOMETRY}" -eq 1 ]]; then
+  hab_python - "${SCENE_ROOT}/learned_rank_geometry/summary.json" \
+      "${EXPECTED_PHASE_B_CKPT_SHA}" <<'PY'
+import json, sys
+summary = json.load(open(sys.argv[1]))
+ranker = summary.get("phase_b_ranker") or {}
+if ranker.get("checkpoint_sha256") != sys.argv[2]:
+    raise SystemExit("learned arm checkpoint identity mismatch")
+if summary.get("phase_b_p0_transport_valid") is not True:
+    raise SystemExit("learned arm had ranking fallback/activation violation")
+PY
+fi
 
 echo "[complete] scene=${scene} output=${SCENE_ROOT}"

@@ -145,6 +145,60 @@ class ExpandedBenchmarkTest(unittest.TestCase):
             evaluator,
         )
 
+    def test_phase_b_p0_arm_is_ranking_only_and_explicitly_opt_in(self):
+        runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
+        evaluator = (ROOT / "eval_2leg_habitat.py").read_text()
+        server = (
+            ROOT.parent / "NavDP/baselines/memnav/memnav_server.py"
+        ).read_text()
+        self.assertIn(
+            "RUN_LEARNED_RANK_GEOMETRY=${RUN_LEARNED_RANK_GEOMETRY:-0}",
+            runner,
+        )
+        self.assertIn("EXPECTED_PHASE_B_CKPT_SHA", runner)
+        self.assertIn("--phase_b_allow_unapproved", runner)
+        self.assertIn(
+            "run_geometry_arm learned_rank_geometry 8 "
+            "learned_rank_geometry",
+            runner,
+        )
+        self.assertIn('f"{BASE}/phase_b_rank"', evaluator)
+        self.assertIn(
+            'rank_out.get("activation_uses_model_score") is not False',
+            evaluator,
+        )
+        self.assertIn('@app.route("/phase_b_rank"', server)
+        self.assertIn(
+            '"activation_semantics": '
+            '"diagnostic_only_geometry_gate_unchanged"',
+            (ROOT / "phase_b_runtime.py").read_text(),
+        )
+
+    def test_phase_b_p0_hpc_mode_freezes_a_within_each_array_task(self):
+        runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
+        sbatch = (ROOT / "slurm_expanded_navdp_router_eval.sbatch").read_text()
+        self.assertIn("P0_SHARED_PREFIX=${P0_SHARED_PREFIX:-0}", runner)
+        self.assertIn(
+            "P0_SHARED_PREFIX requires exactly native/geometry/learned arms",
+            runner,
+        )
+        protocol = runner.index("Generate Goal A exactly once on this node")
+        geometry = runner.index(
+            "run_geometry_arm geometry_router 8 memory_geometry", protocol
+        )
+        learned = runner.index(
+            "run_geometry_arm learned_rank_geometry 8 learned_rank_geometry",
+            geometry,
+        )
+        native = runner.index('run_native_arm "${P0_SHARED_ARGS[@]}"', learned)
+        self.assertLess(geometry, learned)
+        self.assertLess(learned, native)
+        self.assertIn(
+            '--shared_leg1_trace_root "${SCENE_ROOT}/geometry_router"',
+            runner,
+        )
+        self.assertIn('P0_SHARED_PREFIX="${P0_SHARED_PREFIX}"', sbatch)
+
     def test_global_subgoal_oracle_is_explicit_and_fail_closed(self):
         runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
         self.assertIn(

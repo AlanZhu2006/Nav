@@ -15,8 +15,7 @@ import re
 from typing import Mapping, Sequence
 
 
-CHECKPOINT_SCHEMA_VERSION = 3
-FEATURE_SCHEMA_VERSION = (
+FEATURE_SCHEMA_VERSION_V3 = (
     "lingbot_native_phase_b_features_v3_external_causal_scale_quality"
 )
 CHECKPOINT_MODEL_KIND = (
@@ -51,14 +50,72 @@ EXTERNAL_SCALE_QUALITY_COLUMNS = (
     "external_scale_relative_h_iqr",
     "external_scale_clamped",
 )
-FEATURE_NAMES = (
+FEATURE_NAMES_V3 = (
     *SCALAR_INPUT_COLUMNS,
     *PREDICTED_POSE_FEATURE_NAMES,
     *(f"metric_scale_source={source}" for source in METRIC_SCALE_SOURCES),
     "metric_scale_source=other",
     *EXTERNAL_SCALE_QUALITY_COLUMNS,
 )
+
+# v4 additions (PHASE_B_FEATURE_SCHEMA_V4_PROPOSAL_20260807.md, v4a revision
+# 2026-08-08): directional cloud-overlap centers, extracted from the offset-0
+# entry of the row's hypotheses_json (they are not flat CSV columns).  The
+# originally proposed pose-dispersion trio is DEFERRED: the audited
+# train_top2_gap16 artifact collects a single center hypothesis per candidate
+# (n_hypotheses == 1 everywhere), so dispersion/f1_median are degenerate there
+# and would fail the non-constant feature audit.  Reintroduce them only with a
+# future multi-hypothesis collection (neighbor offsets >= 2).
+V4_ADDITIONAL_COLUMNS = (
+    "cloud_overlap_candidate_to_goal_center",
+    "cloud_overlap_goal_to_candidate_center",
+)
+FEATURE_NAMES_V4 = (*FEATURE_NAMES_V3, *V4_ADDITIONAL_COLUMNS)
+FEATURE_SCHEMA_VERSION_V4 = (
+    "lingbot_native_phase_b_features_v4_directional_overlap_pose_consensus"
+)
+
+# The ACTIVE version is the single deployment ABI.  Flipping to 4 is a
+# deliberate one-line change gated on the Phase-B artifact audit; both trains
+# in a v3-vs-v4 comparison must request their schema explicitly via
+# feature_schema(version) instead of relying on this default.
+ACTIVE_FEATURE_SCHEMA_NUMBER = 3
+
+FEATURE_NAMES = (
+    FEATURE_NAMES_V4 if ACTIVE_FEATURE_SCHEMA_NUMBER == 4 else FEATURE_NAMES_V3
+)
 FEATURE_DIMENSION = len(FEATURE_NAMES)
+CHECKPOINT_SCHEMA_VERSION = ACTIVE_FEATURE_SCHEMA_NUMBER
+FEATURE_SCHEMA_VERSION = (
+    FEATURE_SCHEMA_VERSION_V4
+    if ACTIVE_FEATURE_SCHEMA_NUMBER == 4
+    else FEATURE_SCHEMA_VERSION_V3
+)
+
+
+def feature_schema(version: int) -> dict:
+    """Explicit schema access for version-controlled experiments.
+
+    A v3-vs-v4 training comparison must call this with the version it means
+    instead of importing the ACTIVE module-level constants."""
+
+    if version == 3:
+        names = FEATURE_NAMES_V3
+        version_string = FEATURE_SCHEMA_VERSION_V3
+    elif version == 4:
+        names = FEATURE_NAMES_V4
+        version_string = FEATURE_SCHEMA_VERSION_V4
+    else:
+        raise ValueError(f"unsupported Phase-B feature schema version: {version}")
+    return {
+        "checkpoint_schema_version": version,
+        "feature_schema_version": version_string,
+        "feature_names": list(names),
+        "feature_dimension": len(names),
+        "feature_names_sha256": hashlib.sha256(
+            canonical_json_bytes(list(names))
+        ).hexdigest(),
+    }
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -153,6 +210,7 @@ def validate_checkpoint_metadata(
 
 
 __all__ = [
+    "ACTIVE_FEATURE_SCHEMA_NUMBER",
     "CHECKPOINT_MODEL_KIND",
     "CHECKPOINT_SCHEMA_VERSION",
     "EXTERNAL_CAUSAL_SCALE_SOURCE",
@@ -160,10 +218,16 @@ __all__ = [
     "FEATURE_DIMENSION",
     "FEATURE_NAMES",
     "FEATURE_NAMES_SHA256",
+    "FEATURE_NAMES_V3",
+    "FEATURE_NAMES_V4",
     "FEATURE_SCHEMA_VERSION",
+    "FEATURE_SCHEMA_VERSION_V3",
+    "FEATURE_SCHEMA_VERSION_V4",
     "METRIC_SCALE_SOURCES",
     "PREDICTED_POSE_FEATURE_NAMES",
     "SCALAR_INPUT_COLUMNS",
+    "V4_ADDITIONAL_COLUMNS",
     "canonical_json_bytes",
+    "feature_schema",
     "validate_checkpoint_metadata",
 ]

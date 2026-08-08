@@ -126,12 +126,19 @@ parser.add_argument(
 )
 parser.add_argument(
     "--hybrid_route",
-    choices=["phase", "memory_advantage", "memory_geometry"],
+    choices=[
+        "phase",
+        "memory_advantage",
+        "memory_geometry",
+        "learned_rank_geometry",
+    ],
     default="phase",
     help=("phase uses the known A->B boundary; memory_advantage instead routes "
           "both legs from DINO history-over-current advantage plus geometry; "
           "memory_geometry uses absolute DINO only as a prefilter and lets "
-          "two-view geometry make the final routing decision"),
+          "two-view geometry make the final routing decision; "
+          "learned_rank_geometry changes only the candidate order before the "
+          "identical memory_geometry activation gate"),
 )
 parser.add_argument(
     "--router_advantage_threshold",
@@ -258,6 +265,16 @@ parser.add_argument(
           "ImageGoal direction with a point this many metres ahead on "
           "Habitat's shortest path; 0 disables it"),
 )
+parser.add_argument(
+    "--oracle_observed_frontier",
+    choices=["off", "shadow", "always", "residual"],
+    default="off",
+    help=("privileged 3-leg Novel-B feasibility arm: build a goal-blind "
+          "frontier map from observed metric depth and evaluator pose, then "
+          "log it without control (shadow), always supply short frontier "
+          "point-goals (always), or use one only after three consecutive "
+          "native endpoints repeat observed space (residual)"),
+)
 parser.add_argument("--stuck_window", type=int, default=150)
 parser.add_argument("--stuck_dist", type=float, default=0.10)
 parser.add_argument("--agent_radius", type=float, default=0.30)
@@ -353,7 +370,10 @@ BASE = f"http://{args.host}:{args.port}"
 NOVEL_BASE = (f"http://{args.host}:{args.novel_port}"
               if args.novel_port is not None else None)
 HYBRID_BACKENDS = ("hybrid_oracle", "hybrid_pose")
-AUTO_HYBRID_ROUTES = ("memory_advantage", "memory_geometry")
+AUTO_HYBRID_ROUTES = (
+    "memory_advantage", "memory_geometry", "learned_rank_geometry")
+ABSOLUTE_GEOMETRY_ROUTES = (
+    "memory_geometry", "learned_rank_geometry")
 CAM_H = 0.5
 AUTO_ROUTER_STATE = {}
 MEMNAV_SERVER_INFO = {}
@@ -433,6 +453,26 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
                 "automatic memory routing requires MemNav server "
                 "--retrieval raw; "
                 f"server reported {memnav_info.get('retrieval')!r}")
+        if args.hybrid_route == "learned_rank_geometry":
+            ranker = memnav_info.get("phase_b_ranker")
+            if not isinstance(ranker, dict) or ranker.get("enabled") is not True:
+                raise RuntimeError(
+                    "learned_rank_geometry requires a Phase-B-enabled "
+                    "MemNav server")
+            if ranker.get("activation_semantics") != (
+                    "diagnostic_only_geometry_gate_unchanged"):
+                raise RuntimeError(
+                    "Phase-B server does not guarantee ranking-only semantics")
+            runtime_config = ranker.get("runtime_config")
+            if (not isinstance(runtime_config, dict)
+                    or runtime_config.get("candidate_top_k") != 8
+                    or runtime_config.get("candidate_min_gap") != 16):
+                raise RuntimeError(
+                    "Phase-B server runtime configuration violates the P0 "
+                    "top-8/gap-16 contract")
+            if memnav_info.get("retrieval_candidate_min_gap") != 16:
+                raise RuntimeError(
+                    "learned_rank_geometry requires server candidate gap 16")
         novel = requests.post(
             f"{NOVEL_BASE}/navigator_reset", json=navdp_payload())
         novel.raise_for_status()
@@ -565,7 +605,9 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 if not np.isfinite(candidate_score):
                     continue
                 candidate_pool.append(dict(
-                    anchor=candidate_anchor, score=candidate_score))
+                    anchor=candidate_anchor,
+                    score=candidate_score,
+                    dino_rank=len(candidate_pool) + 1))
                 if len(candidate_pool) >= args.router_verify_top_k:
                     break
             # Backward compatibility with a server that only exposes top-1.
@@ -573,16 +615,137 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 candidate_pool = [dict(
                     anchor=int(anchor),
                     score=(float(visual_score)
-                           if visual_score is not None else None))]
+                           if visual_score is not None else None),
+                    dino_rank=1)]
             if forced_anchor is not None:
                 candidate_pool = [dict(
                     anchor=int(forced_anchor),
-                    score=mem_out.get("forced_anchor_score"))]
+                    score=mem_out.get("forced_anchor_score"),
+                    dino_rank=None)]
+
+            dino_candidate_order = [
+                int(candidate["anchor"]) for candidate in candidate_pool]
+            rank_diag = dict(
+                router_ranking_mode=(
+                    "phase_b_not_requested"
+                    if args.hybrid_route == "learned_rank_geometry"
+                    else "dino"),
+                router_phase_b_requested=False,
+                router_phase_b_success=None,
+                router_phase_b_fallback=False,
+                router_phase_b_error=None,
+                router_phase_b_cached=None,
+                router_phase_b_ranking_ms=None,
+                router_phase_b_uncached_ranking_ms=None,
+                router_phase_b_checkpoint_sha256=None,
+                router_phase_b_no_match_diagnostic=None,
+                router_phase_b_activation_used=False,
+                router_candidate_order_dino=dino_candidate_order,
+                router_candidate_order_used=list(dino_candidate_order),
+            )
+            phase_b_eligible = bool(
+                args.hybrid_route == "learned_rank_geometry"
+                and not state["active"]
+                and forced_anchor is None
+                and visual_score is not None
+                and float(visual_score) >= args.router_visual_floor
+                and candidate_pool)
+            if phase_b_eligible:
+                rank_diag["router_phase_b_requested"] = True
+                try:
+                    ranking = requests.post(
+                        f"{BASE}/phase_b_rank",
+                        files={"goal": ("goal.jpg", goal_jpg)},
+                        data={"candidates": json.dumps([
+                            {
+                                "anchor": int(candidate["anchor"]),
+                                "score": float(candidate["score"]),
+                            }
+                            for candidate in candidate_pool
+                        ])},
+                    )
+                    ranking.raise_for_status()
+                    rank_out = ranking.json()
+                    if rank_out.get("ok") is not True:
+                        raise RuntimeError(
+                            rank_out.get("error") or "Phase-B ranking failed")
+                    if rank_out.get("activation_uses_model_score") is not False:
+                        raise RuntimeError(
+                            "Phase-B endpoint attempted to control activation")
+                    expected_checkpoint = (
+                        MEMNAV_SERVER_INFO.get("phase_b_ranker") or {}
+                    ).get("checkpoint_sha256")
+                    if (not expected_checkpoint
+                            or rank_out.get("checkpoint_sha256")
+                            != expected_checkpoint):
+                        raise RuntimeError(
+                            "Phase-B endpoint checkpoint identity changed")
+                    ranked_items = rank_out.get("ranked_candidates")
+                    if not isinstance(ranked_items, list):
+                        raise RuntimeError(
+                            "Phase-B endpoint returned no candidate list")
+                    original = {
+                        int(candidate["anchor"]): candidate
+                        for candidate in candidate_pool
+                    }
+                    learned_pool = []
+                    learned_anchors = []
+                    for learned_rank, item in enumerate(ranked_items, start=1):
+                        if not isinstance(item, dict):
+                            raise RuntimeError(
+                                "Phase-B ranked candidate is malformed")
+                        learned_anchor = int(item["anchor"])
+                        probability = float(item["rank_probability"])
+                        validity = float(
+                            item["candidate_validity_diagnostic"])
+                        if (learned_anchor not in original
+                                or learned_anchor in learned_anchors
+                                or not np.isfinite(probability)
+                                or not np.isfinite(validity)):
+                            raise RuntimeError(
+                                "Phase-B ranking is not a finite shortlist "
+                                "permutation")
+                        learned_anchors.append(learned_anchor)
+                        learned_pool.append(dict(
+                            original[learned_anchor],
+                            learned_rank=learned_rank,
+                            phase_b_rank_probability=probability,
+                            phase_b_candidate_validity=validity,
+                        ))
+                    if (len(learned_pool) != len(candidate_pool)
+                            or set(learned_anchors) != set(original)):
+                        raise RuntimeError(
+                            "Phase-B ranking changed shortlist membership")
+                    candidate_pool = learned_pool
+                    rank_diag.update(
+                        router_ranking_mode="phase_b",
+                        router_phase_b_success=True,
+                        router_phase_b_cached=rank_out.get("cached"),
+                        router_phase_b_ranking_ms=rank_out.get("ranking_ms"),
+                        router_phase_b_uncached_ranking_ms=rank_out.get(
+                            "uncached_ranking_ms"),
+                        router_phase_b_checkpoint_sha256=rank_out.get(
+                            "checkpoint_sha256"),
+                        router_phase_b_no_match_diagnostic=rank_out.get(
+                            "no_match_probability_diagnostic"),
+                        router_candidate_order_used=learned_anchors,
+                    )
+                except Exception as error:
+                    # Fail safe to the already-audited DINO ordering. Formal
+                    # P0 summaries count this fallback and are invalid if it
+                    # occurs; it must never silently masquerade as learned SR.
+                    rank_diag.update(
+                        router_ranking_mode="dino_fallback",
+                        router_phase_b_success=False,
+                        router_phase_b_fallback=True,
+                        router_phase_b_error=(
+                            f"{type(error).__name__}: {error}"),
+                    )
             prefilter_pass = bool(
                 visual_score is not None
                 and float(visual_score) >= args.router_visual_floor
                 and candidate_pool
-                and (args.hybrid_route == "memory_geometry"
+                and (args.hybrid_route in ABSOLUTE_GEOMETRY_ROUTES
                      or (advantage is not None
                          and advantage >= args.router_advantage_threshold)))
             overlap = dict(
@@ -591,6 +754,7 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 uncached_verification_ms=None)
             candidate_trials = []
             selected_candidate_rank = None
+            selected_candidate_dino_rank = None
             selected_anchor = (int(state["anchor"])
                                if state.get("active")
                                and state.get("anchor") is not None else None)
@@ -618,8 +782,14 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                         >= args.router_min_inlier_ratio)
                     candidate_trials.append(dict(
                         rank=rank,
+                        dino_rank=candidate.get("dino_rank"),
+                        learned_rank=candidate.get("learned_rank"),
                         anchor=int(candidate["anchor"]),
                         score=score,
+                        phase_b_rank_probability=candidate.get(
+                            "phase_b_rank_probability"),
+                        phase_b_candidate_validity=candidate.get(
+                            "phase_b_candidate_validity"),
                         passed=trial_pass,
                         matches=trial.get("matches"),
                         inliers=trial.get("inliers"),
@@ -632,6 +802,8 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                     if trial_pass:
                         selected_anchor = int(candidate["anchor"])
                         selected_candidate_rank = rank
+                        selected_candidate_dino_rank = candidate.get(
+                            "dino_rank")
                         break
             passed = bool(state["active"] or selected_anchor is not None)
             if state["active"]:
@@ -676,6 +848,8 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 router_candidate_pool_size=len(candidate_pool),
                 router_candidates_considered=len(candidate_trials),
                 router_selected_candidate_rank=selected_candidate_rank,
+                router_selected_candidate_dino_rank=(
+                    selected_candidate_dino_rank),
                 router_selected_anchor=state.get("anchor"),
                 router_candidate_min_gap=mem_out.get(
                     "visual_candidate_min_gap"),
@@ -687,6 +861,7 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 router_streak=int(state["streak"]),
                 router_active=router_active,
                 router_reason=router_reason,
+                **rank_diag,
             )
 
             if router_active:
@@ -1640,6 +1815,9 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                       "router_candidates_considered"),
                                   router_selected_candidate_rank=response.get(
                                       "router_selected_candidate_rank"),
+                                  router_selected_candidate_dino_rank=(
+                                      response.get(
+                                          "router_selected_candidate_dino_rank")),
                                   router_selected_anchor=response.get(
                                       "router_selected_anchor"),
                                   router_candidate_min_gap=response.get(
@@ -1652,6 +1830,35 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                   router_streak=response.get("router_streak"),
                                   router_active=response.get("router_active"),
                                   router_reason=response.get("router_reason"),
+                                  router_ranking_mode=response.get(
+                                      "router_ranking_mode"),
+                                  router_phase_b_requested=response.get(
+                                      "router_phase_b_requested"),
+                                  router_phase_b_success=response.get(
+                                      "router_phase_b_success"),
+                                  router_phase_b_fallback=response.get(
+                                      "router_phase_b_fallback"),
+                                  router_phase_b_error=response.get(
+                                      "router_phase_b_error"),
+                                  router_phase_b_cached=response.get(
+                                      "router_phase_b_cached"),
+                                  router_phase_b_ranking_ms=response.get(
+                                      "router_phase_b_ranking_ms"),
+                                  router_phase_b_uncached_ranking_ms=(
+                                      response.get(
+                                          "router_phase_b_uncached_ranking_ms")),
+                                  router_phase_b_checkpoint_sha256=(
+                                      response.get(
+                                          "router_phase_b_checkpoint_sha256")),
+                                  router_phase_b_no_match_diagnostic=(
+                                      response.get(
+                                          "router_phase_b_no_match_diagnostic")),
+                                  router_phase_b_activation_used=response.get(
+                                      "router_phase_b_activation_used"),
+                                  router_candidate_order_dino=response.get(
+                                      "router_candidate_order_dino"),
+                                  router_candidate_order_used=response.get(
+                                      "router_candidate_order_used"),
                                   current_goal_cos=response.get("current_goal_cos"),
                                   frame_idx=response.get("frame_idx"),
                                   **shadow_diag,
@@ -1804,9 +2011,10 @@ def spl(reached, geo, plen):
 
 def main():
     os.makedirs(args.out, exist_ok=True)
-    if args.oracle_global_subgoal_m > 0:
+    if (args.oracle_global_subgoal_m > 0
+            or args.oracle_observed_frontier != "off"):
         raise ValueError(
-            "--oracle_global_subgoal_m is defined only for "
+            "global-subgoal/frontier diagnostics are defined only for "
             "eval_3leg_habitat.py")
     if args.stop_after_leg1 and args.leg1_mode != "policy":
         raise ValueError("--stop_after_leg1 requires --leg1_mode policy")
@@ -1833,6 +2041,10 @@ def main():
         raise ValueError("--router_confirm_plans must be >= 1")
     if args.router_verify_top_k < 1:
         raise ValueError("--router_verify_top_k must be >= 1")
+    if (args.hybrid_route == "learned_rank_geometry"
+            and args.router_verify_top_k != 8):
+        raise ValueError(
+            "learned_rank_geometry requires --router_verify_top_k 8")
     if args.router_min_matches < 8:
         raise ValueError("--router_min_matches must be >= 8")
     if args.router_min_inliers < 0:
@@ -2032,6 +2244,31 @@ def main():
             "final_goal_dist_m",
             np.linalg.norm(np.asarray([pos[0], pos[2]]) - A_xz),
         ))
+        all_plans = [*legA["plans"], *legB["plans"]]
+        phase_b_requests = [
+            plan for plan in all_plans
+            if plan.get("router_phase_b_requested") is True]
+        phase_b_successes = [
+            plan for plan in phase_b_requests
+            if plan.get("router_phase_b_success") is True]
+        phase_b_uncached_successes = [
+            plan for plan in phase_b_successes
+            if plan.get("router_phase_b_cached") is False]
+        phase_b_fallbacks = [
+            plan for plan in phase_b_requests
+            if plan.get("router_phase_b_fallback") is True]
+        phase_b_activation_violations = [
+            plan for plan in all_plans
+            if plan.get("router_phase_b_activation_used") is True]
+        phase_b_order_changes = [
+            plan for plan in phase_b_uncached_successes
+            if plan.get("router_candidate_order_dino")
+            != plan.get("router_candidate_order_used")]
+        phase_b_uncached_ms = [
+            float(plan["router_phase_b_uncached_ranking_ms"])
+            for plan in phase_b_uncached_successes
+            if plan.get("router_phase_b_uncached_ranking_ms") is not None
+            and np.isfinite(plan["router_phase_b_uncached_ranking_ms"])]
         m = dict(
             episode=os.path.basename(ep_dir),
             seed=episode_seed,
@@ -2090,6 +2327,16 @@ def main():
             router_min_inlier_ratio=args.router_min_inlier_ratio,
             router_confirm_plans=args.router_confirm_plans,
             router_verify_top_k=args.router_verify_top_k,
+            phase_b_rank_request_count=len(phase_b_requests),
+            phase_b_rank_success_count=len(phase_b_successes),
+            phase_b_uncached_rank_count=len(phase_b_uncached_successes),
+            phase_b_rank_fallback_count=len(phase_b_fallbacks),
+            phase_b_activation_violation_count=len(
+                phase_b_activation_violations),
+            phase_b_order_change_count=len(phase_b_order_changes),
+            phase_b_uncached_ranking_ms=(
+                float(np.sum(phase_b_uncached_ms))
+                if phase_b_uncached_ms else 0.0),
             gate_override=args.gate_override,
             gt_covis_anchor=B.get("covis_argmax"),
             path_nearest_anchor=path_nearest_anchor,
@@ -2208,6 +2455,23 @@ def main():
         m["predicted_gate_A_plan_count"] for m in metrics)
     predicted_gate_A_false_count = sum(
         m["predicted_gate_A_false_revisit_count"] for m in metrics)
+    phase_b_rank_request_count = sum(
+        m["phase_b_rank_request_count"] for m in metrics)
+    phase_b_rank_success_count = sum(
+        m["phase_b_rank_success_count"] for m in metrics)
+    phase_b_uncached_rank_count = sum(
+        m["phase_b_uncached_rank_count"] for m in metrics)
+    phase_b_rank_fallback_count = sum(
+        m["phase_b_rank_fallback_count"] for m in metrics)
+    phase_b_activation_violation_count = sum(
+        m["phase_b_activation_violation_count"] for m in metrics)
+    phase_b_order_change_count = sum(
+        m["phase_b_order_change_count"] for m in metrics)
+    phase_b_uncached_ranking_ms = sum(
+        m["phase_b_uncached_ranking_ms"] for m in metrics)
+    phase_b_server_status = MEMNAV_SERVER_INFO.get("phase_b_ranker")
+    if not isinstance(phase_b_server_status, dict):
+        phase_b_server_status = {"enabled": False}
     summary = dict(
         episodes=n, server_backend=args.server_backend,
         novel_server_port=args.novel_port,
@@ -2220,6 +2484,7 @@ def main():
             "graph_subgoal_spacing_m"),
         graph_subgoal_arrival_m=MEMNAV_SERVER_INFO.get(
             "graph_subgoal_arrival_m"),
+        phase_b_ranker=phase_b_server_status,
         leg1_policy_backend=("navdp"
                              if args.server_backend in HYBRID_BACKENDS
                              else args.server_backend),
@@ -2259,6 +2524,22 @@ def main():
         router_min_inlier_ratio=args.router_min_inlier_ratio,
         router_confirm_plans=args.router_confirm_plans,
         router_verify_top_k=args.router_verify_top_k,
+        phase_b_rank_request_count=phase_b_rank_request_count,
+        phase_b_rank_success_count=phase_b_rank_success_count,
+        phase_b_uncached_rank_count=phase_b_uncached_rank_count,
+        phase_b_rank_fallback_count=phase_b_rank_fallback_count,
+        phase_b_activation_violation_count=(
+            phase_b_activation_violation_count),
+        phase_b_order_change_count=phase_b_order_change_count,
+        phase_b_uncached_ranking_ms=phase_b_uncached_ranking_ms,
+        phase_b_p0_rank_exercised=(
+            phase_b_rank_request_count > 0
+            if args.hybrid_route == "learned_rank_geometry" else None),
+        phase_b_p0_transport_valid=(
+            phase_b_rank_success_count == phase_b_rank_request_count
+            and phase_b_rank_fallback_count == 0
+            and phase_b_activation_violation_count == 0
+            if args.hybrid_route == "learned_rank_geometry" else None),
         gate_override=args.gate_override,
         deterministic_plan_seeds=args.deterministic_plan_seeds,
         shared_leg1_trace_root=(args.shared_leg1_trace_root or None),

@@ -7,6 +7,7 @@ import cv2
 import imageio
 import time
 import datetime
+import hashlib
 import json
 import os
 from PIL import Image, ImageDraw, ImageFont
@@ -19,6 +20,21 @@ args = parser.parse_known_args()[0]
 app = Flask(__name__)
 navdp_navigator = None
 navdp_fps_writer = None
+
+
+def memory_queue_fingerprints(navigator):
+    """Content fingerprints for fail-closed read-only resample contracts."""
+    fingerprints = []
+    for queue in navigator.memory_queue:
+        digest = hashlib.sha256()
+        digest.update(str(len(queue)).encode())
+        for item in queue:
+            array = np.ascontiguousarray(np.asarray(item))
+            digest.update(str(array.dtype).encode())
+            digest.update(np.asarray(array.shape, dtype=np.int64).tobytes())
+            digest.update(array.tobytes())
+        fingerprints.append(digest.hexdigest())
+    return fingerprints
 
 @app.route("/navigator_reset",methods=['POST'])
 def navdp_reset():
@@ -227,11 +243,13 @@ def navdp_resample_imagegoal():
     depth = depth.reshape((batch_size, -1, depth.shape[1], 1))
 
     before_lengths = [len(queue) for queue in navdp_navigator.memory_queue]
+    before_hashes = memory_queue_fingerprints(navdp_navigator)
     diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
     execute_trajectory, all_trajectory, all_values, _trajectory_mask = (
         navdp_navigator.resample_imagegoal(goal, image, depth))
     after_lengths = [len(queue) for queue in navdp_navigator.memory_queue]
-    if after_lengths != before_lengths:
+    after_hashes = memory_queue_fingerprints(navdp_navigator)
+    if after_lengths != before_lengths or after_hashes != before_hashes:
         return jsonify({"error": "resampling mutated NavDP memory"}), 500
     return jsonify({
         'trajectory': execute_trajectory.tolist(),
@@ -240,6 +258,8 @@ def navdp_resample_imagegoal():
         'diffusion_seed': diffusion_seed,
         'memory_mutated': False,
         'queue_lengths': after_lengths,
+        'queue_hashes_before': before_hashes,
+        'queue_hashes_after': after_hashes,
     })
 
 @app.route("/nogoal_step",methods=['POST'])
@@ -349,12 +369,14 @@ def navdp_resample_mixgoal():
     depth = depth.reshape((batch_size, -1, depth.shape[1], 1))
 
     before_lengths = [len(queue) for queue in navdp_navigator.memory_queue]
+    before_hashes = memory_queue_fingerprints(navdp_navigator)
     diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
     execute_trajectory, all_trajectory, all_values, _trajectory_mask = (
         navdp_navigator.resample_point_image_goal(
             point_goal, image_goal, image, depth))
     after_lengths = [len(queue) for queue in navdp_navigator.memory_queue]
-    if after_lengths != before_lengths:
+    after_hashes = memory_queue_fingerprints(navdp_navigator)
+    if after_lengths != before_lengths or after_hashes != before_hashes:
         return jsonify({"error": "mixed resampling mutated NavDP memory"}), 500
     return jsonify({
         'trajectory': execute_trajectory.tolist(),
@@ -363,6 +385,8 @@ def navdp_resample_mixgoal():
         'diffusion_seed': diffusion_seed,
         'memory_mutated': False,
         'queue_lengths': after_lengths,
+        'queue_hashes_before': before_hashes,
+        'queue_hashes_after': after_hashes,
     })
     
 

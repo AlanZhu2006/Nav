@@ -241,6 +241,7 @@ class ExpandedBenchmarkTest(unittest.TestCase):
 
     def test_xnavdp_gate_freezes_goal_a_and_keeps_base_point_attribution(self):
         runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
+        submitter = (ROOT / "submit_xnavdp_revisit_gate_hpc.sh").read_text()
         self.assertIn("XNAVDP_REVISIT_GATE=${XNAVDP_REVISIT_GATE:-0}", runner)
         mixed = runner.index(
             "run_revisit_controller_arm memory_mixed navdp_mixed")
@@ -262,6 +263,10 @@ class ExpandedBenchmarkTest(unittest.TestCase):
         self.assertLess(base, native)
         self.assertLess(xnavdp, native)
         self.assertIn("xnavdp_scene_audit.json", runner)
+        self.assertIn(
+            'common_exports="ALL,ROOT=${ROOT},EXPECTED_COMMIT=',
+            submitter,
+        )
 
 
 if __name__ == "__main__":

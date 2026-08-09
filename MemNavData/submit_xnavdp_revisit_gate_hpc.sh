@@ -47,7 +47,7 @@ expected_commit=$(git -C "${ROOT}" rev-parse HEAD)
 expected_manifest_sha=$(sha256sum "${MANIFEST}" | awk '{print $1}')
 smoke_tag=${RUN_TAG}_smoke
 full_tag=${RUN_TAG}_full
-common_exports="ALL,EXPECTED_COMMIT=${expected_commit},EXPECTED_MANIFEST_SHA=${expected_manifest_sha},XNAVDP_ASSET_ROOT=${XNAVDP_ASSET_ROOT}"
+common_exports="ALL,ROOT=${ROOT},EXPECTED_COMMIT=${expected_commit},EXPECTED_MANIFEST_SHA=${expected_manifest_sha},XNAVDP_ASSET_ROOT=${XNAVDP_ASSET_ROOT}"
 
 sbatch --test-only --array=0 \
   --export="${common_exports},RUN_TAG=${smoke_tag},EPISODE_LIMIT=1" \

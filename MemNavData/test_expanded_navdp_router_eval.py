@@ -242,6 +242,10 @@ class ExpandedBenchmarkTest(unittest.TestCase):
     def test_xnavdp_gate_freezes_goal_a_and_keeps_base_point_attribution(self):
         runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
         submitter = (ROOT / "submit_xnavdp_revisit_gate_hpc.sh").read_text()
+        # MemNav imports navdp_backbone through the lazy encoder package and does
+        # not use the optional, gitignored Long-CLIP checkout.  Requiring it here
+        # would make a clean inference deployment depend on an unrelated model.
+        self.assertNotIn("LONGCLIP_ENTRY", runner)
         self.assertIn("XNAVDP_REVISIT_GATE=${XNAVDP_REVISIT_GATE:-0}", runner)
         mixed = runner.index(
             "run_revisit_controller_arm memory_mixed navdp_mixed")

@@ -69,7 +69,6 @@ MEMNAV_SERVER=${ROOT}/NavDP/baselines/memnav/memnav_server.py
 NAVDP_SERVER=${ROOT}/NavDP/baselines/navdp/navdp_server.py
 XNAVDP_SERVER=${ROOT}/MemNavData/xnavdp_revisit_server.py
 INTERNNAV_ROOT=${ROOT}/InternNav
-LONGCLIP_ENTRY=${INTERNNAV_ROOT}/internnav/model/basemodel/LongCLIP/model/longclip.py
 LINGBOT_REPO=${LINGBOT_REPO:-/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map}
 LINGBOT_WEIGHTS=${LINGBOT_WEIGHTS:-${LINGBOT_REPO}/weights/lingbot-map-long.pt}
 EXPECTED_LINGBOT_COMMIT=${EXPECTED_LINGBOT_COMMIT:-7ff6f3ed0913d4d326f8f13bbb429c4ffc0195c2}
@@ -413,7 +412,7 @@ git -C "${ROOT}" diff --cached --quiet -- "${TASK_FILES[@]}" || {
 for required in "${HAB_PY}" "${MEMNAV_PY}" "${EVALUATOR}" "${VALIDATOR}" \
                 "${MEMNAV_SERVER}" "${NAVDP_SERVER}" "${LINGBOT_WEIGHTS}" \
                 "${MEMNAV_CKPT}" "${NAVDP_CKPT}" "${MANIFEST}" \
-                "${UNIT_TEST_PATH}" "${LONGCLIP_ENTRY}" \
+                "${UNIT_TEST_PATH}" \
                 "${HAB_REQUESTS_VENDOR}/requests/__init__.py" \
                 "${HAB_REQUESTS_VENDOR}/requests/__version__.py"; do
   test -r "${required}" || { echo "ABORT: missing dependency ${required}" >&2; exit 1; }

@@ -73,6 +73,14 @@ from navdp_goal_switch import (
     reset_navdp_short_memory,
     trajectory_selector_for_leg,
 )
+from xnavdp_revisit_contract import (
+    REVISIT_CONTROLLERS,
+    normalize_xnavdp_response,
+    pointgoal_payload,
+    validate_history_receipt,
+    validate_reset_receipt,
+    xnavdp_state_payload,
+)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--episode_root", type=str, required=True,
@@ -99,6 +107,22 @@ parser.add_argument(
     default=None,
     help=("official NavDP server port for either hybrid backend; "
           "--port remains the MemNav server port"),
+)
+parser.add_argument(
+    "--revisit_controller",
+    choices=REVISIT_CONTROLLERS,
+    default="navdp_mixed",
+    help=("local controller used only after hybrid_pose obtains a valid "
+          "geometry-memory PointGoal: the existing mixed Image/Point NavDP, "
+          "the base pure-PointGoal NavDP, or the official post-trained "
+          "X-NavDP PointGoal actor"),
+)
+parser.add_argument(
+    "--xnavdp_port",
+    type=int,
+    default=None,
+    help=("provenance-checked X-NavDP revisit server port; required only by "
+          "--revisit_controller xnavdp_point"),
 )
 parser.add_argument(
     "--leg1_mode",
@@ -369,6 +393,8 @@ if args.oracle_candidate_seed_count > 1 and not args.deterministic_plan_seeds:
 BASE = f"http://{args.host}:{args.port}"
 NOVEL_BASE = (f"http://{args.host}:{args.novel_port}"
               if args.novel_port is not None else None)
+XNAVDP_BASE = (f"http://{args.host}:{args.xnavdp_port}"
+               if args.xnavdp_port is not None else None)
 HYBRID_BACKENDS = ("hybrid_oracle", "hybrid_pose")
 AUTO_HYBRID_ROUTES = (
     "memory_advantage", "memory_geometry", "learned_rank_geometry")
@@ -377,6 +403,8 @@ ABSOLUTE_GEOMETRY_ROUTES = (
 CAM_H = 0.5
 AUTO_ROUTER_STATE = {}
 MEMNAV_SERVER_INFO = {}
+XNAVDP_SERVER_INFO = {}
+XNAVDP_CLIENT_STATE = {}
 MEMNAV_DIAGNOSTIC_KEYS = (
     "gate", "predicted_gate", "forced_gate", "match_idx",
     "retrieved_anchor", "forced_anchor", "forced_anchor_score",
@@ -413,6 +441,8 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
               camera_intrinsic=None):
     AUTO_ROUTER_STATE.clear()
     MEMNAV_SERVER_INFO.clear()
+    XNAVDP_SERVER_INFO.clear()
+    XNAVDP_CLIENT_STATE.clear()
 
     def navdp_payload():
         if camera_intrinsic is None:
@@ -476,7 +506,19 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
         novel = requests.post(
             f"{NOVEL_BASE}/navigator_reset", json=navdp_payload())
         novel.raise_for_status()
-        return f"hybrid({novel.json()['algo']}+{memnav_info['algo']})"
+        components = [novel.json()["algo"], memnav_info["algo"]]
+        if args.revisit_controller == "xnavdp_point":
+            if XNAVDP_BASE is None:
+                raise ValueError(
+                    "xnavdp_point controller requires --xnavdp_port")
+            xnav = requests.post(
+                f"{XNAVDP_BASE}/navigator_reset", json=navdp_payload())
+            xnav.raise_for_status()
+            xnav_info = validate_reset_receipt(xnav.json())
+            XNAVDP_SERVER_INFO.update(xnav_info)
+            XNAVDP_CLIENT_STATE["history_frame_count"] = 0
+            components.append(xnav_info["algo"])
+        return f"hybrid({'+'.join(components)})"
     r = requests.post(f"{BASE}/navigator_reset", json=memnav_payload)
     r.raise_for_status()
     memnav_info = r.json()
@@ -512,18 +554,52 @@ def srv_navdp_memory_replay(image_jpg):
     payload = response.json()
     if payload.get("diffusion_sampled") is not False:
         raise RuntimeError("NavDP replay endpoint sampled diffusion")
+    if args.revisit_controller == "xnavdp_point":
+        x_receipt = srv_xnavdp_memory_replay(image_jpg)
+        payload["xnavdp_history_frame_count"] = x_receipt[
+            "history_frame_count"]
+        payload["xnavdp_shadow_history"] = True
     return payload
+
+
+def srv_xnavdp_memory_replay(image_jpg):
+    """Mirror exactly one non-X controller decision frame into X-NavDP."""
+    if XNAVDP_BASE is None:
+        raise ValueError("X-NavDP history replay requires --xnavdp_port")
+    response = requests.post(
+        f"{XNAVDP_BASE}/memory_replay_step",
+        files={"image": ("image.jpg", image_jpg)},
+    )
+    response.raise_for_status()
+    expected_count = int(
+        XNAVDP_CLIENT_STATE.get("history_frame_count", -1)) + 1
+    receipt = validate_history_receipt(
+        response.json(), expected_frame_count=expected_count)
+    XNAVDP_CLIENT_STATE["history_frame_count"] = expected_count
+    return receipt
 
 
 def srv_reset_navdp_short_memory(env_id=0):
     """Clear NavDP's local observation FIFO without touching MemNav memory."""
-    return reset_navdp_short_memory(
+    result = reset_navdp_short_memory(
         requests.post,
         args.server_backend,
         BASE,
         NOVEL_BASE,
         env_id=env_id,
     )
+    if args.revisit_controller == "xnavdp_point":
+        if XNAVDP_BASE is None:
+            raise ValueError("X-NavDP reset requires --xnavdp_port")
+        response = requests.post(
+            f"{XNAVDP_BASE}/navigator_reset_env",
+            json={"env_id": int(env_id)},
+        )
+        response.raise_for_status()
+        reset_info = validate_reset_receipt(response.json())
+        XNAVDP_SERVER_INFO.update(reset_info)
+        XNAVDP_CLIENT_STATE["history_frame_count"] = 0
+    return result
 
 
 def srv_navdp_imagegoal_resample(
@@ -551,7 +627,8 @@ def srv_navdp_imagegoal_resample(
 
 
 def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
-             forced_gate=None, policy_backend=None, diffusion_seed=None):
+             forced_gate=None, policy_backend=None, diffusion_seed=None,
+             robot_position=None, robot_yaw=None):
     data = {}
     if forced_anchor is not None:
         data["forced_anchor"] = str(int(forced_anchor))
@@ -910,6 +987,9 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 data=navdp_data,
             )
             nav.raise_for_status()
+            x_receipt = None
+            if args.revisit_controller == "xnavdp_point":
+                x_receipt = srv_xnavdp_memory_replay(image_jpg)
             controller = ("navdp_image_router" if not router_active
                           else "navdp_image_fallback")
             result = attach_memnav_diagnostics(
@@ -917,28 +997,74 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 error=mem_out.get("error") if not pose_valid else None,
             )
             result.update(router_diag)
+            if x_receipt is not None:
+                result["xnavdp_history_frame_count"] = x_receipt[
+                    "history_frame_count"]
+                result["xnavdp_shadow_history"] = True
             return result
 
-        # NavDP was trained with both image-goal and point-goal tokens. Its
-        # mixed endpoint preserves visual turning cues while metric pose
-        # supplies the missing long-range direction and distance.
-        mixed_data = dict(navdp_data)
-        mixed_data["goal_data"] = json.dumps({
-            "goal_x": [float(aux_pose[0])],
-            "goal_y": [float(aux_pose[1])],
-        })
-        nav = requests.post(
-            f"{NOVEL_BASE}/navdp_step_ip_mixgoal",
-            files={
-                "image": ("image.jpg", image_jpg),
-                "image_goal": ("goal.jpg", goal_jpg),
-                "depth": ("depth.png", depth_png_bytes(depth)),
-            },
-            data=mixed_data,
-        )
+        point_data = dict(navdp_data)
+        point_data["goal_data"] = json.dumps(pointgoal_payload(aux_pose))
+        if args.revisit_controller == "navdp_mixed":
+            # Existing deployment controller: retain both the target image and
+            # the verified metric PointGoal in the frozen mixed decoder.
+            nav = requests.post(
+                f"{NOVEL_BASE}/navdp_step_ip_mixgoal",
+                files={
+                    "image": ("image.jpg", image_jpg),
+                    "image_goal": ("goal.jpg", goal_jpg),
+                    "depth": ("depth.png", depth_png_bytes(depth)),
+                },
+                data=point_data,
+            )
+            controller = "navdp_image_point_mix"
+        elif args.revisit_controller == "navdp_point":
+            # Attribution control: pure PointGoal with the original NavDP
+            # actor/critic and the same FIFO as the mixed arm.
+            nav = requests.post(
+                f"{NOVEL_BASE}/pointgoal_step",
+                files={
+                    "image": ("image.jpg", image_jpg),
+                    "depth": ("depth.png", depth_png_bytes(depth)),
+                },
+                data=point_data,
+            )
+            controller = "navdp_point_base"
+        elif args.revisit_controller == "xnavdp_point":
+            if XNAVDP_BASE is None:
+                raise ValueError(
+                    "xnavdp_point controller requires --xnavdp_port")
+            if robot_position is None or robot_yaw is None:
+                raise ValueError(
+                    "xnavdp_point controller requires the current Habitat pose")
+            x_data = dict(point_data)
+            x_data["state_data"] = json.dumps(xnavdp_state_payload(
+                robot_position, robot_yaw))
+            nav = requests.post(
+                f"{XNAVDP_BASE}/pointgoal_step",
+                files={
+                    "image": ("image.jpg", image_jpg),
+                    "depth": ("depth.png", depth_png_bytes(depth)),
+                },
+                data=x_data,
+            )
+            controller = "xnavdp_point_posttrain"
+        else:  # argparse and REVISIT_CONTROLLERS make this unreachable.
+            raise ValueError(
+                f"unsupported revisit controller {args.revisit_controller!r}")
         nav.raise_for_status()
+        nav_out = nav.json()
+        if args.revisit_controller == "xnavdp_point":
+            expected_count = int(
+                XNAVDP_CLIENT_STATE.get("history_frame_count", -1)) + 1
+            nav_out = normalize_xnavdp_response(
+                nav_out,
+                expected_seed=diffusion_seed,
+                expected_history_frame_count=expected_count,
+            )
+            XNAVDP_CLIENT_STATE["history_frame_count"] = expected_count
         result = attach_memnav_diagnostics(
-            nav.json(), mem_out, "navdp_image_point_mix")
+            nav_out, mem_out, controller)
         result.update(router_diag)
         return result
 
@@ -989,6 +1115,15 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
         f"{plan_base}/imagegoal_step", files=files, data=request_data)
     r.raise_for_status()
     out = r.json()
+    x_receipt = None
+    if args.revisit_controller == "xnavdp_point" and use_navdp:
+        # X-NavDP is shadow-only whenever native ImageGoal owns this decision.
+        # The active X PointGoal endpoint appends its own frame, so no active
+        # branch reaches this mirror and every planning frame is written once.
+        x_receipt = srv_xnavdp_memory_replay(image_jpg)
+        out["xnavdp_history_frame_count"] = x_receipt[
+            "history_frame_count"]
+        out["xnavdp_shadow_history"] = True
     if probe_out is not None:
         return attach_memnav_diagnostics(
             out, probe_out, "navdp_image_probe",
@@ -1145,6 +1280,8 @@ def replay_shared_leg1(
         "path_len_at_reach": payload.get("path_len_at_reach"),
         "step_at_reach": payload.get("step_at_reach"),
         "steps": int(payload["steps"]),
+        "termination_reason": payload.get("termination_reason"),
+        "blocked_step_count": int(payload.get("blocked_step_count", 0)),
         "plans": payload["plans"],
         "memory_trace": memory_trace,
         "rollout_trace": poses,
@@ -1184,6 +1321,8 @@ def leg1_trace_payload(
             None if leg.get("step_at_reach") is None
             else int(leg["step_at_reach"])),
         "steps": int(leg["steps"]),
+        "termination_reason": leg.get("termination_reason"),
+        "blocked_step_count": int(leg.get("blocked_step_count", 0)),
         "final_goal_dist_m": float(leg["final_goal_dist_m"]),
         "end_position": np.asarray(leg["end_pos"], dtype=float).tolist(),
         "end_yaw": float(leg["end_psi"]),
@@ -1360,6 +1499,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
         leg_index,
     )
     path_len, history, way_world, plans = 0.0, [], None, []
+    blocked_step_count = 0
     memory_trace = []
     rollout_trace = []
     reached_position = False
@@ -1399,7 +1539,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
     arrival_shadow_probe_pending = False
     arrival_shadow_probe_completed = False
 
-    def result(steps, final_response=None):
+    def result(steps, final_response=None, termination_reason=None):
         final_dist = float(np.linalg.norm(
             np.asarray([pos[0], pos[2]]) - np.asarray(goal_xz)))
         final_yaw_err = (abs(wrap_angle(float(goal_yaw) - psi))
@@ -1444,6 +1584,8 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             end_psi=psi,
             steps=benchmark_steps,
             diagnostic_steps=steps,
+            termination_reason=termination_reason,
+            blocked_step_count=int(blocked_step_count),
             plans=plans,
             memory_trace=memory_trace,
             rollout_trace=rollout_trace,
@@ -1542,7 +1684,9 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                             visual_refine_failure = (
                                 f"final visual yaw estimator error: {exc}")
                     final_response = srv_similarity(frame, goal_jpg)
-                    return result(step + 1, final_response)
+                    return result(
+                        step + 1, final_response,
+                        termination_reason="terminal_complete")
 
                 coarse_terminal_completed = not terminal.failed
                 if args.terminal_visual_refine != "off":
@@ -1638,10 +1782,14 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                 if terminal.failed:
                                     visual_refine_failure = (
                                         "visual correction navmesh step rejected")
-                                    return result(step + 1)
+                                    return result(
+                                        step + 1,
+                                        termination_reason="terminal_failure")
                                 continue
                 final_response = srv_similarity(frame, goal_jpg)
-                return result(step + 1, final_response)
+                return result(
+                    step + 1, final_response,
+                    termination_reason="terminal_complete")
             srv_memory(frame)
             pos, psi, dl = terminal.step(pos, psi, pf, float(pos[1]))
             path_len += dl
@@ -1652,12 +1800,13 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                         "visual correction navmesh step rejected")
                 else:
                     terminal_failure = "navmesh step rejected"
-                return result(step + 1)
+                return result(
+                    step + 1, termination_reason="terminal_failure")
             continue
 
         # Do not silently give the navigation policy the terminal-only budget.
         if step >= args.max_steps and not arrival_shadow_probe_pending:
-            return result(step)
+            return result(step, termination_reason="max_steps")
 
         response = None
         if step % args.exec_horizon == 0 or arrival_shadow_probe_pending:
@@ -1671,7 +1820,9 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             response = srv_plan(
                 frame, goal_jpg, depth=depth, forced_anchor=forced_anchor,
                 forced_gate=forced_gate, policy_backend=policy_backend,
-                diffusion_seed=request_seed)
+                diffusion_seed=request_seed,
+                robot_position=pos,
+                robot_yaw=psi)
             if request_seed is not None:
                 echoed_seed = response.get("diffusion_seed")
                 if echoed_seed is None or int(echoed_seed) != request_seed:
@@ -1784,6 +1935,16 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                       < success_dist),
                                   pose_controller=response.get("pose_controller"),
                                   pose_error=response.get("pose_error"),
+                                  revisit_controller=args.revisit_controller,
+                                  xnavdp_controller=response.get("controller"),
+                                  xnavdp_rtc_robot_state_used=response.get(
+                                      "rtc_robot_state_used"),
+                                  xnavdp_history_frame_count=response.get(
+                                      "history_frame_count",
+                                      response.get(
+                                          "xnavdp_history_frame_count")),
+                                  xnavdp_shadow_history=response.get(
+                                      "xnavdp_shadow_history"),
                                   router_memory_advantage=response.get(
                                       "router_memory_advantage"),
                                   router_prefilter_mode=response.get(
@@ -1896,10 +2057,13 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             # changing the benchmark path prefix or SPL.
             arrival_shadow_probe_pending = False
             arrival_shadow_probe_completed = True
-            return result(step + 1)
+            return result(
+                step + 1, termination_reason="success_post_reach_probe")
         if way_world is not None:
             pos, psi, dl = pursuit_step(pos, psi, way_world, pf)
             path_len += dl
+            if dl <= 1e-12:
+                blocked_step_count += 1
         history.append(np.array([pos[0], pos[2]]))
         if np.linalg.norm(np.array([pos[0], pos[2]]) - goal_xz) < success_dist:
             if not reached_position:
@@ -1918,7 +2082,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                     way_world = None
                     arrival_shadow_probe_pending = True
                     continue
-                return result(step + 1)
+                return result(step + 1, termination_reason="success")
 
             if not terminal_attempted:
                 terminal_attempted = True
@@ -1943,7 +2107,8 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
 
                 if terminal_goal_xz is None or terminal_goal_yaw is None:
                     terminal_failure = "LingBot goal pose unavailable"
-                    return result(step + 1)
+                    return result(
+                        step + 1, termination_reason="terminal_failure")
 
                 terminal_info.update(
                     target_pos_err_m=float(np.linalg.norm(
@@ -1987,7 +2152,8 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                     )
                 if maneuver is None:
                     terminal_failure = "no collision-free forward-only path"
-                    return result(step + 1)
+                    return result(
+                        step + 1, termination_reason="terminal_failure")
                 terminal_info.update(
                     mode=maneuver.mode,
                     length_m=maneuver.length_m,
@@ -1998,11 +2164,13 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 terminal_phase = "coarse"
         if len(history) > args.stuck_window and \
            np.linalg.norm(history[-1] - history[-args.stuck_window]) < args.stuck_dist:
-            return result(step + 1)
+            return result(step + 1, termination_reason="stuck")
     if visual_refine_executed and not visual_refine_completed \
             and visual_refine_failure is None:
         visual_refine_failure = "terminal budget exhausted during visual correction"
-    return result(total_budget)
+    final_reason = ("max_steps" if terminal_mode == "off"
+                    else "budget_exhausted")
+    return result(total_budget, termination_reason=final_reason)
 
 
 def spl(reached, geo, plen):
@@ -2033,6 +2201,34 @@ def main():
     if args.server_backend in HYBRID_BACKENDS and args.novel_port is None:
         raise ValueError(
             f"--server_backend {args.server_backend} requires --novel_port")
+    if (args.revisit_controller != "navdp_mixed"
+            and args.server_backend != "hybrid_pose"):
+        raise ValueError(
+            "non-default revisit controllers require "
+            "--server_backend hybrid_pose")
+    if args.revisit_controller == "xnavdp_point":
+        if args.xnavdp_port is None:
+            raise ValueError(
+                "xnavdp_point controller requires --xnavdp_port")
+        if not args.deterministic_plan_seeds:
+            raise ValueError(
+                "xnavdp_point controller requires --deterministic_plan_seeds")
+        if args.leg1_mode == "replay":
+            raise ValueError(
+                "xnavdp_point requires policy or shared_trace Goal-A so its "
+                "eight-frame history can be mirrored exactly")
+        if args.navdp_goal_switch_reset != "carry":
+            raise ValueError(
+                "xnavdp_point requires carried short memory across Goal A/B")
+        if (args.trajectory_selector != "server"
+                or args.trajectory_selector_scope != "all"
+                or args.oracle_candidate_seed_count != 1):
+            raise ValueError(
+                "xnavdp_point formal controller requires the single-seed "
+                "server trajectory selector")
+    elif args.xnavdp_port is not None:
+        raise ValueError(
+            "--xnavdp_port is valid only for xnavdp_point controller")
     if (args.hybrid_route in AUTO_HYBRID_ROUTES
             and args.server_backend != "hybrid_pose"):
         raise ValueError(
@@ -2245,6 +2441,18 @@ def main():
             np.linalg.norm(np.asarray([pos[0], pos[2]]) - A_xz),
         ))
         all_plans = [*legA["plans"], *legB["plans"]]
+        xnavdp_expected_history_frame_count = None
+        xnavdp_final_history_frame_count = None
+        if args.revisit_controller == "xnavdp_point":
+            xnavdp_expected_history_frame_count = len(all_plans)
+            xnavdp_final_history_frame_count = int(
+                XNAVDP_CLIENT_STATE.get("history_frame_count", -1))
+            if (xnavdp_final_history_frame_count
+                    != xnavdp_expected_history_frame_count):
+                raise RuntimeError(
+                    "X-NavDP history contract violated: final frame count "
+                    f"{xnavdp_final_history_frame_count}, expected one for "
+                    f"each of {xnavdp_expected_history_frame_count} plans")
         phase_b_requests = [
             plan for plan in all_plans
             if plan.get("router_phase_b_requested") is True]
@@ -2269,11 +2477,40 @@ def main():
             for plan in phase_b_uncached_successes
             if plan.get("router_phase_b_uncached_ranking_ms") is not None
             and np.isfinite(plan["router_phase_b_uncached_ranking_ms"])]
+        xnavdp_checkpoint_audit = XNAVDP_SERVER_INFO.get(
+            "checkpoint_load_audit")
+        if not isinstance(xnavdp_checkpoint_audit, dict):
+            xnavdp_checkpoint_audit = {}
         m = dict(
             episode=os.path.basename(ep_dir),
             seed=episode_seed,
             server_backend=args.server_backend,
             novel_server_port=args.novel_port,
+            revisit_controller=args.revisit_controller,
+            xnavdp_server_port=args.xnavdp_port,
+            xnavdp_official_commit=XNAVDP_SERVER_INFO.get(
+                "official_commit"),
+            xnavdp_checkpoint_sha256=XNAVDP_SERVER_INFO.get(
+                "checkpoint_sha256"),
+            xnavdp_checkpoint_load_audited=xnavdp_checkpoint_audit.get(
+                "audited"),
+            xnavdp_model_tensor_count=xnavdp_checkpoint_audit.get(
+                "model_tensor_count"),
+            xnavdp_checkpoint_tensor_count=xnavdp_checkpoint_audit.get(
+                "checkpoint_tensor_count"),
+            xnavdp_checkpoint_missing_count=xnavdp_checkpoint_audit.get(
+                "missing_count"),
+            xnavdp_checkpoint_unexpected_count=xnavdp_checkpoint_audit.get(
+                "unexpected_count"),
+            xnavdp_checkpoint_shape_mismatch_count=(
+                xnavdp_checkpoint_audit.get("shape_mismatch_count")),
+            xnavdp_expected_history_frame_count=(
+                xnavdp_expected_history_frame_count),
+            xnavdp_final_history_frame_count=xnavdp_final_history_frame_count,
+            xnavdp_history_contract_valid=(
+                xnavdp_final_history_frame_count
+                == xnavdp_expected_history_frame_count
+                if args.revisit_controller == "xnavdp_point" else None),
             memnav_checkpoint=MEMNAV_SERVER_INFO.get("checkpoint"),
             memnav_retrieval=MEMNAV_SERVER_INFO.get("retrieval"),
             memnav_exclude_recent=MEMNAV_SERVER_INFO.get("exclude_recent"),
@@ -2288,9 +2525,9 @@ def main():
                                  else args.server_backend),
             leg2_policy_backend=(
                 "memnav" if args.server_backend == "hybrid_oracle"
-                else ("navdp_auto_router"
+                else (f"{args.revisit_controller}_auto_router"
                       if args.hybrid_route in AUTO_HYBRID_ROUTES
-                      else "navdp_image_point_mix")
+                      else args.revisit_controller)
                 if args.server_backend == "hybrid_pose"
                 else args.server_backend),
             leg1_goal_source=args.leg1_goal_source,
@@ -2316,6 +2553,13 @@ def main():
             steps_A=legA["steps"], steps_B=legB["steps"],
             steps_B_diagnostic=legB.get("diagnostic_steps"),
             steps_B_at_reach=legB.get("step_at_reach"),
+            termination_reason_A=legA.get("termination_reason"),
+            termination_reason_B=legB.get("termination_reason"),
+            blocked_steps_A=int(legA.get("blocked_step_count", 0)),
+            blocked_steps_B=int(legB.get("blocked_step_count", 0)),
+            blocked_step_rate_B=(
+                float(legB.get("blocked_step_count", 0))
+                / max(int(legB["steps"]), 1)),
             covis=B.get("covis"), recall_gap=B.get("recall_gap"),
             retrieval_override=args.retrieval_override,
             probe_leg1_memory=args.probe_leg1_memory,
@@ -2475,6 +2719,17 @@ def main():
     summary = dict(
         episodes=n, server_backend=args.server_backend,
         novel_server_port=args.novel_port,
+        revisit_controller=args.revisit_controller,
+        xnavdp_server_port=args.xnavdp_port,
+        xnavdp_server=(dict(XNAVDP_SERVER_INFO)
+                       if XNAVDP_SERVER_INFO else None),
+        xnavdp_history_contract_valid=(
+            all(m.get("xnavdp_history_contract_valid") is True
+                for m in metrics)
+            if args.revisit_controller == "xnavdp_point" else None),
+        xnavdp_final_history_frame_counts=(
+            [m.get("xnavdp_final_history_frame_count") for m in metrics]
+            if args.revisit_controller == "xnavdp_point" else None),
         memnav_checkpoint=MEMNAV_SERVER_INFO.get("checkpoint"),
         memnav_retrieval=MEMNAV_SERVER_INFO.get("retrieval"),
         memnav_exclude_recent=MEMNAV_SERVER_INFO.get("exclude_recent"),
@@ -2490,9 +2745,9 @@ def main():
                              else args.server_backend),
         leg2_policy_backend=(
             "memnav" if args.server_backend == "hybrid_oracle"
-            else ("navdp_auto_router"
+            else (f"{args.revisit_controller}_auto_router"
                   if args.hybrid_route in AUTO_HYBRID_ROUTES
-                  else "navdp_image_point_mix")
+                  else args.revisit_controller)
             if args.server_backend == "hybrid_pose"
             else args.server_backend),
         leg1_mode=args.leg1_mode, stop_after_leg1=args.stop_after_leg1,
@@ -2544,6 +2799,12 @@ def main():
         deterministic_plan_seeds=args.deterministic_plan_seeds,
         shared_leg1_trace_root=(args.shared_leg1_trace_root or None),
         write_leg1_trace=args.write_leg1_trace,
+        stuck_termination_count_B=sum(
+            m.get("termination_reason_B") == "stuck" for m in metrics),
+        blocked_step_count_B=sum(m.get("blocked_steps_B", 0) for m in metrics),
+        blocked_step_rate_B=(
+            sum(m.get("blocked_steps_B", 0) for m in metrics)
+            / max(sum(m.get("steps_B", 0) for m in metrics), 1)),
         SR_A=(nA / n) if n and args.leg1_mode in ("policy", "shared_trace") else None,
         mean_spl_A=(float(np.nanmean([m["spl_A"] for m in metrics]))
                     if n and args.leg1_mode in ("policy", "shared_trace")

@@ -221,6 +221,48 @@ class ExpandedBenchmarkTest(unittest.TestCase):
         self.assertIn(
             'args.trajectory_selector == "server"', evaluator)
 
+    def test_xnavdp_revisit_controller_is_opt_in_and_history_audited(self):
+        evaluator = (ROOT / "eval_2leg_habitat.py").read_text()
+        contract = (ROOT / "xnavdp_revisit_contract.py").read_text()
+        server = (ROOT / "xnavdp_revisit_server.py").read_text()
+        self.assertIn('default="navdp_mixed"', evaluator)
+        self.assertIn('f"{NOVEL_BASE}/navdp_step_ip_mixgoal"', evaluator)
+        self.assertIn('f"{NOVEL_BASE}/pointgoal_step"', evaluator)
+        self.assertIn('f"{XNAVDP_BASE}/pointgoal_step"', evaluator)
+        self.assertIn('xnavdp_state_payload(', evaluator)
+        self.assertIn(
+            '"X-NavDP history contract violated: final frame count "',
+            evaluator,
+        )
+        self.assertIn(
+            'args.navdp_goal_switch_reset != "carry"', evaluator)
+        self.assertIn("OFFICIAL_XNAVDP_COMMIT", contract)
+        self.assertIn("_assert_clean_official_checkout", server)
+
+    def test_xnavdp_gate_freezes_goal_a_and_keeps_base_point_attribution(self):
+        runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
+        self.assertIn("XNAVDP_REVISIT_GATE=${XNAVDP_REVISIT_GATE:-0}", runner)
+        mixed = runner.index(
+            "run_revisit_controller_arm memory_mixed navdp_mixed")
+        shared = runner.index(
+            '--shared_leg1_trace_root "${SCENE_ROOT}/memory_mixed"', mixed)
+        base = runner.index(
+            "run_revisit_controller_arm memory_base_point navdp_point",
+            shared,
+        )
+        xnavdp = runner.index(
+            "run_revisit_controller_arm memory_xnavdp_point xnavdp_point",
+            shared,
+        )
+        native = runner.index(
+            'run_native_arm "${XNAVDP_SHARED_ARGS[@]}"', shared)
+        self.assertLess(mixed, shared)
+        self.assertLess(shared, base)
+        self.assertLess(shared, xnavdp)
+        self.assertLess(base, native)
+        self.assertLess(xnavdp, native)
+        self.assertIn("xnavdp_scene_audit.json", runner)
+
 
 if __name__ == "__main__":
     unittest.main()

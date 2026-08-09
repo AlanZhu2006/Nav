@@ -33,6 +33,12 @@ RUN_GEOMETRY_TOP1=${RUN_GEOMETRY_TOP1:-1}
 RUN_GEOMETRY_ROUTER=${RUN_GEOMETRY_ROUTER:-1}
 RUN_LEARNED_RANK_GEOMETRY=${RUN_LEARNED_RANK_GEOMETRY:-0}
 P0_SHARED_PREFIX=${P0_SHARED_PREFIX:-0}
+XNAVDP_REVISIT_GATE=${XNAVDP_REVISIT_GATE:-0}
+XNAVDP_PY=${XNAVDP_PY:-${MEMNAV_PY}}
+XNAVDP_OFFICIAL_ROOT=${XNAVDP_OFFICIAL_ROOT:-${ROOT}/.diagnostics/xnavdp_official_878740a2011856d0/NavDP}
+XNAVDP_CKPT=${XNAVDP_CKPT:-${ROOT}/.diagnostics/xnavdp_official_878740a2011856d0/x-navdp_posttrain.ckpt}
+EXPECTED_XNAVDP_COMMIT=${EXPECTED_XNAVDP_COMMIT:-878740a2011856d0e3782dd6ccd880fd2eccd70f}
+EXPECTED_XNAVDP_CKPT_SHA=${EXPECTED_XNAVDP_CKPT_SHA:-267089a81bbbe7a913debda6603f3f1b66a79520370ce953b2d888d793b89f24}
 RETRIEVAL_CANDIDATE_MIN_GAP=${RETRIEVAL_CANDIDATE_MIN_GAP:-16}
 GRAPH_SUBGOAL_SPACING_M=${GRAPH_SUBGOAL_SPACING_M:-0.0}
 GRAPH_SUBGOAL_ARRIVAL_M=${GRAPH_SUBGOAL_ARRIVAL_M:-0.60}
@@ -61,6 +67,7 @@ EVALUATOR=${EVALUATOR:-${ROOT}/MemNavData/eval_2leg_habitat.py}
 VALIDATOR=${VALIDATOR:-${ROOT}/MemNavData/validate_expanded_navdp_router_eval.py}
 MEMNAV_SERVER=${ROOT}/NavDP/baselines/memnav/memnav_server.py
 NAVDP_SERVER=${ROOT}/NavDP/baselines/navdp/navdp_server.py
+XNAVDP_SERVER=${ROOT}/MemNavData/xnavdp_revisit_server.py
 INTERNNAV_ROOT=${ROOT}/InternNav
 LONGCLIP_ENTRY=${INTERNNAV_ROOT}/internnav/model/basemodel/LongCLIP/model/longclip.py
 LINGBOT_REPO=${LINGBOT_REPO:-/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map}
@@ -108,6 +115,16 @@ TASK_FILES=(
   MemNavData/test_observed_frontier.py
   MemNavData/test_deterministic_eval_protocol.py
   MemNavData/test_navdp_memory_replay.py
+  MemNavData/xnavdp_revisit_contract.py
+  MemNavData/xnavdp_revisit_server.py
+  MemNavData/test_xnavdp_revisit_contract.py
+  MemNavData/test_xnavdp_revisit_server.py
+  MemNavData/summarize_xnavdp_revisit_gate.py
+  MemNavData/test_summarize_xnavdp_revisit_gate.py
+  MemNavData/XNAVDP_REVISIT_CONTROLLER_PROTOCOL_20260809.md
+  MemNavData/slurm_xnavdp_revisit_gate.sbatch
+  MemNavData/slurm_xnavdp_revisit_summary.sbatch
+  MemNavData/submit_xnavdp_revisit_gate_hpc.sh
   MemNavData/conditional_c_protocol.py
   MemNavData/test_conditional_c_protocol.py
   MemNavData/summarize_conditional_c_eval.py
@@ -145,10 +162,15 @@ for flag in RUN_CONDITIONAL_ORACLES RUN_CONDITIONAL_ORACLE_ANCHOR \
     echo "ABORT: ${flag} must be 0 or 1" >&2; exit 1; }
 done
 for flag in RUN_NAVDP_NATIVE RUN_GEOMETRY_TOP1 RUN_GEOMETRY_ROUTER \
-            RUN_LEARNED_RANK_GEOMETRY P0_SHARED_PREFIX; do
+            RUN_LEARNED_RANK_GEOMETRY P0_SHARED_PREFIX \
+            XNAVDP_REVISIT_GATE; do
   [[ "${!flag}" =~ ^[01]$ ]] || {
     echo "ABORT: ${flag} must be 0 or 1" >&2; exit 1; }
 done
+if [[ "${P0_SHARED_PREFIX}" -eq 1 && "${XNAVDP_REVISIT_GATE}" -eq 1 ]]; then
+  echo "ABORT: P0_SHARED_PREFIX and XNAVDP_REVISIT_GATE are exclusive" >&2
+  exit 1
+fi
 if [[ "${P0_SHARED_PREFIX}" -eq 1 ]]; then
   [[ "${RUN_NAVDP_NATIVE}" -eq 1 \
       && "${RUN_GEOMETRY_TOP1}" -eq 0 \
@@ -172,6 +194,33 @@ if [[ "${P0_SHARED_PREFIX}" -eq 1 ]]; then
   [[ "${RUN_CONDITIONAL_ORACLE_ANCHOR}" -eq 0 \
       && "${RUN_CONDITIONAL_ORACLE_POINT}" -eq 0 ]] || {
     echo "ABORT: P0_SHARED_PREFIX cannot mix conditional oracle arms" >&2
+    exit 1
+  }
+fi
+if [[ "${XNAVDP_REVISIT_GATE}" -eq 1 ]]; then
+  [[ "${RUN_NAVDP_NATIVE}" -eq 1 \
+      && "${RUN_GEOMETRY_TOP1}" -eq 0 \
+      && "${RUN_GEOMETRY_ROUTER}" -eq 1 \
+      && "${RUN_LEARNED_RANK_GEOMETRY}" -eq 0 ]] || {
+    echo "ABORT: XNAVDP_REVISIT_GATE requires native + mixed geometry only" >&2
+    exit 1
+  }
+  [[ "${LEG1_MODE}" == policy && "${STOP_AFTER_LEG1}" -eq 0 \
+      && "${WRITE_LEG1_TRACE}" -eq 0 && -z "${SHARED_LEG1_ROOT}" ]] || {
+    echo "ABORT: XNAVDP_REVISIT_GATE owns the shared Goal-A trace" >&2
+    exit 1
+  }
+  [[ "${DETERMINISTIC_PLAN_SEEDS}" -eq 1 \
+      && "${NAVDP_GOAL_SWITCH_RESET}" == carry \
+      && "${TRAJECTORY_SELECTOR}" == server \
+      && "${TRAJECTORY_SELECTOR_SCOPE}" == all \
+      && "${ORACLE_CANDIDATE_SEED_COUNT}" -eq 1 ]] || {
+    echo "ABORT: XNAVDP_REVISIT_GATE requires deterministic carried server control" >&2
+    exit 1
+  }
+  [[ "${RUN_CONDITIONAL_ORACLE_ANCHOR}" -eq 0 \
+      && "${RUN_CONDITIONAL_ORACLE_POINT}" -eq 0 ]] || {
+    echo "ABORT: XNAVDP_REVISIT_GATE cannot mix conditional oracles" >&2
     exit 1
   }
 fi
@@ -369,6 +418,29 @@ for required in "${HAB_PY}" "${MEMNAV_PY}" "${EVALUATOR}" "${VALIDATOR}" \
                 "${HAB_REQUESTS_VENDOR}/requests/__version__.py"; do
   test -r "${required}" || { echo "ABORT: missing dependency ${required}" >&2; exit 1; }
 done
+if [[ "${XNAVDP_REVISIT_GATE}" -eq 1 ]]; then
+  for required in "${XNAVDP_PY}" "${XNAVDP_SERVER}" \
+                  "${XNAVDP_OFFICIAL_ROOT}" "${XNAVDP_CKPT}"; do
+    test -r "${required}" || {
+      echo "ABORT: missing X-NavDP dependency ${required}" >&2; exit 1; }
+  done
+  actual_xnavdp_commit=$(git -c safe.directory="${XNAVDP_OFFICIAL_ROOT}" \
+    -C "${XNAVDP_OFFICIAL_ROOT}" rev-parse HEAD)
+  [[ "${actual_xnavdp_commit}" == "${EXPECTED_XNAVDP_COMMIT}" ]] || {
+    echo "ABORT: X-NavDP commit ${actual_xnavdp_commit} != ${EXPECTED_XNAVDP_COMMIT}" >&2
+    exit 1
+  }
+  [[ -z "$(git -c safe.directory="${XNAVDP_OFFICIAL_ROOT}" \
+      -C "${XNAVDP_OFFICIAL_ROOT}" status --porcelain --untracked-files=no)" ]] || {
+    echo "ABORT: official X-NavDP checkout has tracked changes" >&2
+    exit 1
+  }
+  [[ "$(sha256sum "${XNAVDP_CKPT}" | awk '{print $1}')" == \
+      "${EXPECTED_XNAVDP_CKPT_SHA}" ]] || {
+    echo "ABORT: X-NavDP checkpoint SHA256 mismatch" >&2
+    exit 1
+  }
+fi
 actual_lingbot_commit=$(git -c safe.directory="${LINGBOT_REPO}" \
   -C "${LINGBOT_REPO}" rev-parse HEAD)
 [[ "${actual_lingbot_commit}" == "${EXPECTED_LINGBOT_COMMIT}" ]] || {
@@ -456,6 +528,8 @@ hab_python -m py_compile \
   "${ROOT}/MemNavData/arrival_shadow.py" \
   "${ROOT}/MemNavData/global_subgoal_protocol.py" \
   "${ROOT}/MemNavData/observed_frontier.py" \
+  "${ROOT}/MemNavData/xnavdp_revisit_contract.py" \
+  "${ROOT}/MemNavData/summarize_xnavdp_revisit_gate.py" \
   "${ROOT}/MemNavData/summarize_arrival_shadow.py" \
   "${ROOT}/MemNavData/visual_yaw_refinement.py" \
   "${ROOT}/MemNavData/summarize_terminal_uturn.py"
@@ -483,9 +557,23 @@ hab_python -m py_compile \
     MemNavData.test_conditional_c_protocol \
     MemNavData.test_global_subgoal_protocol \
     MemNavData.test_observed_frontier \
+    MemNavData.test_summarize_xnavdp_revisit_gate \
     MemNavData.test_navdp_goal_switch \
     MemNavData.test_summarize_conditional_c_eval -v
 )
+if [[ "${XNAVDP_REVISIT_GATE}" -eq 1 ]]; then
+  "${XNAVDP_PY}" -m py_compile \
+    "${ROOT}/MemNavData/xnavdp_revisit_contract.py" \
+    "${XNAVDP_SERVER}"
+  (
+    cd "${ROOT}"
+    "${XNAVDP_PY}" -m unittest \
+      MemNavData.test_xnavdp_revisit_contract \
+      MemNavData.test_xnavdp_revisit_server -v
+  )
+  "${XNAVDP_PY}" -c \
+    'import torch,cv2,flask,PIL,scipy; assert torch.cuda.is_available(); print("X-NavDP dependencies OK", torch.__version__)'
+fi
 (
   cd "${ROOT}"
   "${MEMNAV_PY}" -m unittest \
@@ -504,7 +592,12 @@ hab_python -c \
 port_key=$(( (${SLURM_JOB_ID:-1000} + SCENE_INDEX * 37) % 15000 ))
 MEMNAV_PORT=${MEMNAV_PORT:-$((20000 + port_key * 2))}
 NAVDP_PORT=${NAVDP_PORT:-$((MEMNAV_PORT + 1))}
-for port in "${MEMNAV_PORT}" "${NAVDP_PORT}"; do
+XNAVDP_PORT=${XNAVDP_PORT:-$((MEMNAV_PORT + 2))}
+PORTS=("${MEMNAV_PORT}" "${NAVDP_PORT}")
+if [[ "${XNAVDP_REVISIT_GATE}" -eq 1 ]]; then
+  PORTS+=("${XNAVDP_PORT}")
+fi
+for port in "${PORTS[@]}"; do
   if ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${port}$"; then
     echo "ABORT: port ${port} is already in use" >&2
     exit 1
@@ -512,11 +605,13 @@ for port in "${MEMNAV_PORT}" "${NAVDP_PORT}"; do
 done
 
 RUNTIME_ROOT=${SLURM_TMPDIR:-/tmp}/memnav_expanded_${SLURM_JOB_ID:-local}_${SCENE_INDEX}
-mkdir -p "${RUNTIME_ROOT}/memnav" "${RUNTIME_ROOT}/navdp"
+mkdir -p "${RUNTIME_ROOT}/memnav" "${RUNTIME_ROOT}/navdp" \
+  "${RUNTIME_ROOT}/xnavdp"
 MEMNAV_PID=
 NAVDP_PID=
+XNAVDP_PID=
 cleanup() {
-  for pid in "${NAVDP_PID}" "${MEMNAV_PID}"; do
+  for pid in "${XNAVDP_PID}" "${NAVDP_PID}" "${MEMNAV_PID}"; do
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
       kill "${pid}" 2>/dev/null || true
       wait "${pid}" 2>/dev/null || true
@@ -574,9 +669,32 @@ MEMNAV_PID=$!
 ) > "${SCENE_ROOT}/logs/server_navdp.log" 2>&1 &
 NAVDP_PID=$!
 
-for spec in \
-    "memnav:${MEMNAV_PID}:${MEMNAV_PORT}:${SCENE_ROOT}/logs/server_memnav.log" \
-    "navdp:${NAVDP_PID}:${NAVDP_PORT}:${SCENE_ROOT}/logs/server_navdp.log"; do
+if [[ "${XNAVDP_REVISIT_GATE}" -eq 1 ]]; then
+  (
+    cd "${RUNTIME_ROOT}/xnavdp"
+    exec env PYTHONUNBUFFERED=1 \
+      PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+      "${XNAVDP_PY}" -u "${XNAVDP_SERVER}" \
+        --official-root "${XNAVDP_OFFICIAL_ROOT}" \
+        --checkpoint "${XNAVDP_CKPT}" \
+        --device cuda:0 \
+        --embodiment wheeled \
+        --actor-mode posttrain \
+        --host 127.0.0.1 \
+        --port "${XNAVDP_PORT}"
+  ) > "${SCENE_ROOT}/logs/server_xnavdp.log" 2>&1 &
+  XNAVDP_PID=$!
+fi
+
+SERVER_SPECS=(
+  "memnav:${MEMNAV_PID}:${MEMNAV_PORT}:${SCENE_ROOT}/logs/server_memnav.log"
+  "navdp:${NAVDP_PID}:${NAVDP_PORT}:${SCENE_ROOT}/logs/server_navdp.log"
+)
+if [[ "${XNAVDP_REVISIT_GATE}" -eq 1 ]]; then
+  SERVER_SPECS+=(
+    "xnavdp:${XNAVDP_PID}:${XNAVDP_PORT}:${SCENE_ROOT}/logs/server_xnavdp.log")
+fi
+for spec in "${SERVER_SPECS[@]}"; do
   IFS=: read -r label pid port log <<<"${spec}"
   ready=0
   for _ in $(seq 1 240); do
@@ -706,7 +824,67 @@ run_geometry_arm() {
   ) > "${SCENE_ROOT}/logs/eval_${arm}.log" 2>&1
 }
 
-if [[ "${P0_SHARED_PREFIX}" -eq 1 ]]; then
+run_revisit_controller_arm() {
+  local arm=$1
+  local controller=$2
+  shift 2
+  local -a leg1_args=("$@")
+  local -a xnavdp_args=()
+  if [[ "${controller}" == xnavdp_point ]]; then
+    xnavdp_args=(--xnavdp_port "${XNAVDP_PORT}")
+  fi
+  echo "[eval] scene=${scene} arm=${arm} controller=${controller} episodes=${episode_csv}"
+  mkdir -p "${SCENE_ROOT}/${arm}"
+  (
+    cd "${RUNTIME_ROOT}"
+    hab_python -u "${EVALUATOR}" \
+      "${COMMON_ARGS[@]}" \
+      "${leg1_args[@]}" \
+      --port "${MEMNAV_PORT}" \
+      --novel_port "${NAVDP_PORT}" \
+      "${xnavdp_args[@]}" \
+      --out "${SCENE_ROOT}/${arm}" \
+      --server_backend hybrid_pose \
+      --revisit_controller "${controller}" \
+      --hybrid_route memory_geometry \
+      --router_visual_floor 0.88 \
+      --router_min_matches 20 \
+      --router_min_inliers 12 \
+      --router_min_inlier_ratio 0.50 \
+      --router_confirm_plans 2 \
+      --router_verify_top_k 8
+  ) > "${SCENE_ROOT}/logs/eval_${arm}.log" 2>&1
+}
+
+if [[ "${XNAVDP_REVISIT_GATE}" -eq 1 ]]; then
+  # The mixed arm materializes Goal A exactly once.  Every other controller
+  # replays its byte-checked trace, so controller attribution begins only at B.
+  run_revisit_controller_arm memory_mixed navdp_mixed \
+    --leg1_mode policy --write_leg1_trace
+  ARMS+=(memory_mixed)
+  XNAVDP_SHARED_ARGS=(
+    --leg1_mode shared_trace
+    --shared_leg1_trace_root "${SCENE_ROOT}/memory_mixed"
+  )
+  # Alternate the two PointGoal controllers across scenes to expose any
+  # process-order artifact without changing the frozen mixed trace source.
+  if (( SCENE_INDEX % 2 == 0 )); then
+    run_revisit_controller_arm memory_base_point navdp_point \
+      "${XNAVDP_SHARED_ARGS[@]}"
+    ARMS+=(memory_base_point)
+    run_revisit_controller_arm memory_xnavdp_point xnavdp_point \
+      "${XNAVDP_SHARED_ARGS[@]}"
+    ARMS+=(memory_xnavdp_point)
+  else
+    run_revisit_controller_arm memory_xnavdp_point xnavdp_point \
+      "${XNAVDP_SHARED_ARGS[@]}"
+    ARMS+=(memory_xnavdp_point)
+    run_revisit_controller_arm memory_base_point navdp_point \
+      "${XNAVDP_SHARED_ARGS[@]}"
+    ARMS+=(memory_base_point)
+  fi
+  run_native_arm "${XNAVDP_SHARED_ARGS[@]}"
+elif [[ "${P0_SHARED_PREFIX}" -eq 1 ]]; then
   # Generate Goal A exactly once on this node, then replay the trace through
   # both comparison arms while preserving each server's short-memory stream.
   # This keeps every paired closed-loop claim within one job and one pair of
@@ -789,6 +967,43 @@ for arm in "${ARMS[@]}"; do
     exit 1
   }
 done
+
+if [[ "${XNAVDP_REVISIT_GATE}" -eq 1 ]]; then
+  hab_python - "${ROOT}" "${SCENE_ROOT}" "${scene}" "${episode_csv}" \
+      > "${SCENE_ROOT}/xnavdp_scene_audit.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from MemNavData.summarize_xnavdp_revisit_gate import (
+    ARMS, _validate_pair, load_gate_arm, require)
+
+scene_root = Path(sys.argv[2])
+scene = sys.argv[3]
+episodes = [value for value in sys.argv[4].split(",") if value]
+expected = {(scene, episode) for episode in episodes}
+rows = {arm: load_gate_arm(scene_root, arm, scene) for arm in ARMS}
+for arm in ARMS:
+    require(set(rows[arm]) == expected, f"{arm} scene result keys differ")
+for arm in ARMS:
+    if arm == "memory_mixed":
+        continue
+    for key in sorted(expected):
+        _validate_pair(
+            "memory_mixed", arm,
+            rows["memory_mixed"][key], rows[arm][key], key)
+print(json.dumps({
+    "status": "ok",
+    "scene": scene,
+    "episodes": episodes,
+    "arms": list(ARMS),
+    "shared_goal_a_trace_match": True,
+    "xnavdp_history_contract_valid": True,
+    "xnavdp_checkpoint_coverage_valid": True,
+}, indent=2, sort_keys=True))
+PY
+fi
 
 if [[ "${RUN_LEARNED_RANK_GEOMETRY}" -eq 1 ]]; then
   hab_python - "${SCENE_ROOT}/learned_rank_geometry/summary.json" \

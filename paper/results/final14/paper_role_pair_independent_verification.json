@@ -1,0 +1,57 @@
+{
+  "analysis_histories": 21,
+  "analysis_histories_by_protocol": {
+    "hard_support": 21,
+    "natural_direction": 21
+  },
+  "checked_contrasts": [
+    "natural_direction:certified_minus_native:all",
+    "natural_direction:certified_minus_native:novel",
+    "natural_direction:certified_minus_native:revisit",
+    "natural_direction:certified_minus_raw_fixed_bearing:all",
+    "natural_direction:certified_minus_raw_fixed_bearing:novel",
+    "natural_direction:certified_minus_raw_fixed_bearing:revisit",
+    "natural_direction:certified_minus_geometry_fixed:all",
+    "natural_direction:certified_minus_geometry_fixed:novel",
+    "natural_direction:certified_minus_geometry_fixed:revisit",
+    "natural_direction:learned_pi3x_spatial_minus_native:all",
+    "natural_direction:learned_pi3x_spatial_minus_native:novel",
+    "natural_direction:learned_pi3x_spatial_minus_native:revisit",
+    "natural_direction:learned_pi3x_spatial_minus_certified:all",
+    "natural_direction:learned_pi3x_spatial_minus_certified:novel",
+    "natural_direction:learned_pi3x_spatial_minus_certified:revisit",
+    "hard_support:certified_minus_native:all",
+    "hard_support:certified_minus_native:novel",
+    "hard_support:certified_minus_native:revisit",
+    "hard_support:certified_minus_raw_fixed_bearing:all",
+    "hard_support:certified_minus_raw_fixed_bearing:novel",
+    "hard_support:certified_minus_raw_fixed_bearing:revisit",
+    "hard_support:certified_minus_geometry_fixed:all",
+    "hard_support:certified_minus_geometry_fixed:novel",
+    "hard_support:certified_minus_geometry_fixed:revisit",
+    "hard_support:learned_pi3x_spatial_minus_native:all",
+    "hard_support:learned_pi3x_spatial_minus_native:novel",
+    "hard_support:learned_pi3x_spatial_minus_native:revisit",
+    "hard_support:learned_pi3x_spatial_minus_certified:all",
+    "hard_support:learned_pi3x_spatial_minus_certified:novel",
+    "hard_support:learned_pi3x_spatial_minus_certified:revisit"
+  ],
+  "excluded_scenes": [],
+  "histories": 21,
+  "include_learned_pi3x": true,
+  "learned_gate_checks": {
+    "L1": true,
+    "L2": false,
+    "L3": false
+  },
+  "population_receipt_sha256": "17061389af55efbb4c1b81db283158ede20c1e2d62e94d14a443b4b950383c73",
+  "queries_by_protocol": {
+    "hard_support": 42,
+    "natural_direction": 42
+  },
+  "queries_per_protocol": 42,
+  "schema_version": "paper_role_pair_independent_verification_v2_learned_20260817",
+  "source_reader": "raw metric.csv, plan payloads, rollout traces, episode contracts and completion receipts; no summarizer import",
+  "summary_sha256": "ab704752abcf624aebd9a598c80659995a8b443d6e7fb0e7944554b8ae320f07",
+  "verified": true
+}

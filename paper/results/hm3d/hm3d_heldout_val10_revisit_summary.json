@@ -1,0 +1,674 @@
+{
+  "actual_online_goal_a_trace": true,
+  "arms": {
+    "certified_relocalization": {
+      "episodes": 36,
+      "goal_a_sr": 0.5833333333333334,
+      "goal_a_successes": 21,
+      "goal_b_eligible": 21,
+      "goal_b_sr_given_a": 0.9047619047619048,
+      "goal_b_successes_given_a": 19,
+      "joint_sr": 0.5277777777777778,
+      "joint_successes": 19,
+      "mean_goal_b_steps_given_a": 133.47619047619048
+    },
+    "geometry_router": {
+      "episodes": 36,
+      "goal_a_sr": 0.5833333333333334,
+      "goal_a_successes": 21,
+      "goal_b_eligible": 21,
+      "goal_b_sr_given_a": 0.8095238095238095,
+      "goal_b_successes_given_a": 17,
+      "joint_sr": 0.4722222222222222,
+      "joint_successes": 17,
+      "mean_goal_b_steps_given_a": 182.61904761904762
+    },
+    "native": {
+      "episodes": 36,
+      "goal_a_sr": 0.5833333333333334,
+      "goal_a_successes": 21,
+      "goal_b_eligible": 21,
+      "goal_b_sr_given_a": 0.3333333333333333,
+      "goal_b_successes_given_a": 7,
+      "joint_sr": 0.19444444444444445,
+      "joint_successes": 7,
+      "mean_goal_b_steps_given_a": 347.5238095238095
+    },
+    "raw_fixed_oracle_role": {
+      "episodes": 36,
+      "goal_a_sr": 0.5833333333333334,
+      "goal_a_successes": 21,
+      "goal_b_eligible": 21,
+      "goal_b_sr_given_a": 0.8571428571428571,
+      "goal_b_successes_given_a": 18,
+      "joint_sr": 0.5,
+      "joint_successes": 18,
+      "mean_goal_b_steps_given_a": 132.85714285714286
+    }
+  },
+  "certificate_audit": {
+    "abstained_plans": 33,
+    "accepted_plans": 325,
+    "exact_native_fallback_episodes": 1,
+    "fallback_behavior_mismatch_count": 0,
+    "fallback_episodes": 1,
+    "goal_a_eligible_episodes": 21,
+    "pnp_inliers": {
+      "median": 234.0,
+      "n": 21
+    },
+    "requests": 358,
+    "runtime_failures": 0,
+    "selected_dino_rank": {
+      "maximum": 8,
+      "median": 2.0,
+      "n": 21
+    },
+    "takeover_coverage_given_a": 0.9523809523809523,
+    "takeover_episodes": 20,
+    "uncached_latency_ms": {
+      "median": 5829.16213106364,
+      "n": 21,
+      "p95": 25829.13137972355
+    }
+  },
+  "constructible_scene_count": 9,
+  "construction_attrition": {
+    "constructible_episode_count": 36,
+    "constructible_scene_count": 9,
+    "evaluation_scene_indices": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      9
+    ],
+    "navigation_outcomes_read": false,
+    "receipts": [
+      {
+        "generation_summary_path": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_heldout_val10_revisit_20260816/hm3d_heldout_val10_20260816T0448Z/data/hm3d_2leg/q3hn1WQ12rz/generation_summary.json",
+        "generation_summary_sha256": "672055791985b4199a6c60e6ce639bfa0e45d4abdbdd840f66e5207e40fc39b7",
+        "scene": "q3hn1WQ12rz",
+        "scene_index": 8,
+        "summary": {
+          "acceptance_per_outer_attempt": 0.0,
+          "complete": false,
+          "generated_episodes": 0,
+          "n_legs": 2,
+          "outer_attempt_budget": 240,
+          "outer_attempts_used": 240,
+          "protocol": "multileg_v2_symmetric_20260807",
+          "rejection_counts": {
+            "episode.a_clearance": 13685,
+            "episode.b_geodesic": 267,
+            "episode.revisit_b_sampling": 363,
+            "episode.trajectory_turn_spike": 85,
+            "episode_candidate_attempt": 14400,
+            "make_episode.exhausted": 240,
+            "revisit_b.accepted": 352,
+            "revisit_b.anchor_covis_or_heading": 19,
+            "revisit_b.clearance_or_floor": 20459,
+            "revisit_b.sampling_exhausted": 363,
+            "revisit_b.stride_covis": 6
+          },
+          "requested_episodes": 4
+        }
+      }
+    ],
+    "target_episode_count": 40,
+    "target_met": false,
+    "target_scene_count": 10,
+    "underpowered": true
+  },
+  "contrasts": {
+    "certified_minus_geometry": {
+      "conditional_b": {
+        "both_success": 17,
+        "eligible": 21,
+        "estimand": "goal_b_success_given_shared_goal_a_success",
+        "gains": [
+          {
+            "episode": "episode_0000",
+            "scene": "HaxA7YrQdEC"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "tQ5s4ShP627"
+          }
+        ],
+        "left": "geometry_router",
+        "left_only_loss": 0,
+        "left_successes": 17,
+        "losses": [],
+        "mcnemar_exact_two_sided_p": 0.5,
+        "neither_success": 2,
+        "right": "certified_relocalization",
+        "right_only_gain": 2,
+        "right_successes": 19,
+        "risk_difference_right_minus_left": 0.09523809523809523,
+        "scene_cluster_bootstrap_risk_difference_95": [
+          0.0,
+          0.2222222222222222
+        ]
+      },
+      "joint": {
+        "both_success": 17,
+        "eligible": 36,
+        "estimand": "joint_goal_b_success",
+        "gains": [
+          {
+            "episode": "episode_0000",
+            "scene": "HaxA7YrQdEC"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "tQ5s4ShP627"
+          }
+        ],
+        "left": "geometry_router",
+        "left_only_loss": 0,
+        "left_successes": 17,
+        "losses": [],
+        "mcnemar_exact_two_sided_p": 0.5,
+        "neither_success": 17,
+        "right": "certified_relocalization",
+        "right_only_gain": 2,
+        "right_successes": 19,
+        "risk_difference_right_minus_left": 0.05555555555555555,
+        "scene_cluster_bootstrap_risk_difference_95": [
+          0.0,
+          0.1388888888888889
+        ]
+      }
+    },
+    "certified_minus_native": {
+      "conditional_b": {
+        "both_success": 7,
+        "eligible": 21,
+        "estimand": "goal_b_success_given_shared_goal_a_success",
+        "gains": [
+          {
+            "episode": "episode_0001",
+            "scene": "BHXhpBwSMLh"
+          },
+          {
+            "episode": "episode_0000",
+            "scene": "HaxA7YrQdEC"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "Qpor2mEya8F"
+          },
+          {
+            "episode": "episode_0002",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0000",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "rsggHU7g7dh"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "tQ5s4ShP627"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "tQ5s4ShP627"
+          }
+        ],
+        "left": "native",
+        "left_only_loss": 0,
+        "left_successes": 7,
+        "losses": [],
+        "mcnemar_exact_two_sided_p": 0.00048828125,
+        "neither_success": 2,
+        "right": "certified_relocalization",
+        "right_only_gain": 12,
+        "right_successes": 19,
+        "risk_difference_right_minus_left": 0.5714285714285714,
+        "scene_cluster_bootstrap_risk_difference_95": [
+          0.36363636363636365,
+          0.7894736842105263
+        ]
+      },
+      "joint": {
+        "both_success": 7,
+        "eligible": 36,
+        "estimand": "joint_goal_b_success",
+        "gains": [
+          {
+            "episode": "episode_0001",
+            "scene": "BHXhpBwSMLh"
+          },
+          {
+            "episode": "episode_0000",
+            "scene": "HaxA7YrQdEC"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "Qpor2mEya8F"
+          },
+          {
+            "episode": "episode_0002",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0000",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "rsggHU7g7dh"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "tQ5s4ShP627"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "tQ5s4ShP627"
+          }
+        ],
+        "left": "native",
+        "left_only_loss": 0,
+        "left_successes": 7,
+        "losses": [],
+        "mcnemar_exact_two_sided_p": 0.00048828125,
+        "neither_success": 17,
+        "right": "certified_relocalization",
+        "right_only_gain": 12,
+        "right_successes": 19,
+        "risk_difference_right_minus_left": 0.3333333333333333,
+        "scene_cluster_bootstrap_risk_difference_95": [
+          0.2222222222222222,
+          0.4444444444444444
+        ]
+      }
+    },
+    "certified_minus_raw_fixed_oracle_role": {
+      "conditional_b": {
+        "both_success": 18,
+        "eligible": 21,
+        "estimand": "goal_b_success_given_shared_goal_a_success",
+        "gains": [
+          {
+            "episode": "episode_0001",
+            "scene": "7UrtFsADwob"
+          }
+        ],
+        "left": "raw_fixed_oracle_role",
+        "left_only_loss": 0,
+        "left_successes": 18,
+        "losses": [],
+        "mcnemar_exact_two_sided_p": 1.0,
+        "neither_success": 2,
+        "right": "certified_relocalization",
+        "right_only_gain": 1,
+        "right_successes": 19,
+        "risk_difference_right_minus_left": 0.047619047619047616,
+        "scene_cluster_bootstrap_risk_difference_95": [
+          0.0,
+          0.14285714285714285
+        ]
+      },
+      "joint": {
+        "both_success": 18,
+        "eligible": 36,
+        "estimand": "joint_goal_b_success",
+        "gains": [
+          {
+            "episode": "episode_0001",
+            "scene": "7UrtFsADwob"
+          }
+        ],
+        "left": "raw_fixed_oracle_role",
+        "left_only_loss": 0,
+        "left_successes": 18,
+        "losses": [],
+        "mcnemar_exact_two_sided_p": 1.0,
+        "neither_success": 17,
+        "right": "certified_relocalization",
+        "right_only_gain": 1,
+        "right_successes": 19,
+        "risk_difference_right_minus_left": 0.027777777777777776,
+        "scene_cluster_bootstrap_risk_difference_95": [
+          0.0,
+          0.08333333333333333
+        ]
+      }
+    },
+    "geometry_minus_native": {
+      "conditional_b": {
+        "both_success": 7,
+        "eligible": 21,
+        "estimand": "goal_b_success_given_shared_goal_a_success",
+        "gains": [
+          {
+            "episode": "episode_0001",
+            "scene": "BHXhpBwSMLh"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "Qpor2mEya8F"
+          },
+          {
+            "episode": "episode_0002",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0000",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "rsggHU7g7dh"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "tQ5s4ShP627"
+          }
+        ],
+        "left": "native",
+        "left_only_loss": 0,
+        "left_successes": 7,
+        "losses": [],
+        "mcnemar_exact_two_sided_p": 0.001953125,
+        "neither_success": 4,
+        "right": "geometry_router",
+        "right_only_gain": 10,
+        "right_successes": 17,
+        "risk_difference_right_minus_left": 0.47619047619047616,
+        "scene_cluster_bootstrap_risk_difference_95": [
+          0.2608695652173913,
+          0.7222222222222222
+        ]
+      },
+      "joint": {
+        "both_success": 7,
+        "eligible": 36,
+        "estimand": "joint_goal_b_success",
+        "gains": [
+          {
+            "episode": "episode_0001",
+            "scene": "BHXhpBwSMLh"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "Qpor2mEya8F"
+          },
+          {
+            "episode": "episode_0002",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0000",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "rsggHU7g7dh"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "tQ5s4ShP627"
+          }
+        ],
+        "left": "native",
+        "left_only_loss": 0,
+        "left_successes": 7,
+        "losses": [],
+        "mcnemar_exact_two_sided_p": 0.001953125,
+        "neither_success": 19,
+        "right": "geometry_router",
+        "right_only_gain": 10,
+        "right_successes": 17,
+        "risk_difference_right_minus_left": 0.2777777777777778,
+        "scene_cluster_bootstrap_risk_difference_95": [
+          0.16666666666666666,
+          0.3888888888888889
+        ]
+      }
+    },
+    "raw_fixed_oracle_role_minus_native": {
+      "conditional_b": {
+        "both_success": 6,
+        "eligible": 21,
+        "estimand": "goal_b_success_given_shared_goal_a_success",
+        "gains": [
+          {
+            "episode": "episode_0001",
+            "scene": "BHXhpBwSMLh"
+          },
+          {
+            "episode": "episode_0000",
+            "scene": "HaxA7YrQdEC"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "Qpor2mEya8F"
+          },
+          {
+            "episode": "episode_0002",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0000",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "rsggHU7g7dh"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "tQ5s4ShP627"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "tQ5s4ShP627"
+          }
+        ],
+        "left": "native",
+        "left_only_loss": 1,
+        "left_successes": 7,
+        "losses": [
+          {
+            "episode": "episode_0001",
+            "scene": "7UrtFsADwob"
+          }
+        ],
+        "mcnemar_exact_two_sided_p": 0.00341796875,
+        "neither_success": 2,
+        "right": "raw_fixed_oracle_role",
+        "right_only_gain": 12,
+        "right_successes": 18,
+        "risk_difference_right_minus_left": 0.5238095238095238,
+        "scene_cluster_bootstrap_risk_difference_95": [
+          0.22727272727272727,
+          0.7894736842105263
+        ]
+      },
+      "joint": {
+        "both_success": 6,
+        "eligible": 36,
+        "estimand": "joint_goal_b_success",
+        "gains": [
+          {
+            "episode": "episode_0001",
+            "scene": "BHXhpBwSMLh"
+          },
+          {
+            "episode": "episode_0000",
+            "scene": "HaxA7YrQdEC"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "Qpor2mEya8F"
+          },
+          {
+            "episode": "episode_0002",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "SUHsP6z2gcJ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "X4qjx5vquwH"
+          },
+          {
+            "episode": "episode_0000",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "mma8eWq3nNQ"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "rsggHU7g7dh"
+          },
+          {
+            "episode": "episode_0001",
+            "scene": "tQ5s4ShP627"
+          },
+          {
+            "episode": "episode_0003",
+            "scene": "tQ5s4ShP627"
+          }
+        ],
+        "left": "native",
+        "left_only_loss": 1,
+        "left_successes": 7,
+        "losses": [
+          {
+            "episode": "episode_0001",
+            "scene": "7UrtFsADwob"
+          }
+        ],
+        "mcnemar_exact_two_sided_p": 0.00341796875,
+        "neither_success": 17,
+        "right": "raw_fixed_oracle_role",
+        "right_only_gain": 12,
+        "right_successes": 18,
+        "risk_difference_right_minus_left": 0.3055555555555556,
+        "scene_cluster_bootstrap_risk_difference_95": [
+          0.1388888888888889,
+          0.4444444444444444
+        ]
+      }
+    }
+  },
+  "episode_count": 36,
+  "estimand": "closed-loop utility of certified history bearing under a frozen NavDP controller, with raw fixed bearing as an explicitly role-oracle upper comparator",
+  "intention_to_treat": true,
+  "interpretation_guards": {
+    "all_goal_a_failures_retained": true,
+    "no_novel_open_set_safety_claim_from_this_revisit_only_protocol": true,
+    "no_outcome_filtered_scene_or_episode": true,
+    "no_threshold_tuning_on_hm3d_heldout_val10": true,
+    "original_scene_indices_and_arm_orders_preserved": true,
+    "pre_navigation_construction_attrition_reported": true,
+    "raw_fixed_oracle_role_is_not_deployable": true
+  },
+  "manifest": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_heldout_val10_runtime_repair_20260816/hm3d_heldout_val10_rt_20260816T1345Z/data_manifest.json",
+  "manifest_sha256": "62bc6299203da709e65787c735a531974905f2ab8e940f72e91318914d949c89",
+  "no_mp3d_evaluation": true,
+  "scene_count": 9,
+  "schema_version": "hm3d_heldout_val10_revisit_summary_v2_20260816",
+  "scope": "frozen causal-visual Revisit transfer on the constructible population from ten selected outcome-disjoint HM3D v0.2 val scenes; not MP3D, not an official GOAT/MemoNav score",
+  "selected_scene_count": 10
+}

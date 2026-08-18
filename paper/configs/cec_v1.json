@@ -1,0 +1,46 @@
+{
+  "schema_version": "cec_paper_contract_v1_20260818",
+  "method": "certified_episodic_compass",
+  "task": "monocular_sequential_imagegoal_with_episodic_revisits",
+  "runtime_role_visibility": "none",
+  "proposal": {
+    "descriptor": "frozen_dino_cls",
+    "top_k": 8,
+    "minimum_temporal_gap_frames": 4,
+    "minimum_anchor_frame": 8,
+    "ordering": "fundamental_geometry_lexicographic"
+  },
+  "correspondence": {
+    "features": "superpoint",
+    "matcher": "lightglue",
+    "maximum_keypoints": 2048,
+    "epipolar_model": "fundamental_usac_magsac",
+    "epipolar_threshold_px": 1.5
+  },
+  "pose": {
+    "reference_depth": "lingbot_historical_monocular_depth",
+    "solver": "pnp",
+    "metric_translation_exposed_to_controller": false
+  },
+  "certificate": {
+    "minimum_pnp_inliers": 16,
+    "minimum_query_hull_coverage": 0.05,
+    "minimum_reference_hull_coverage": 0.05,
+    "maximum_reprojection_rmse_px": 2.0
+  },
+  "controller_interface": {
+    "adapter": "verified_bearing_v1",
+    "output": "scale_free_bearing",
+    "fixed_residual_radius_m": 2.5,
+    "controller": "frozen_navdp",
+    "fallback": "exact_native_imagegoal"
+  },
+  "disabled": {
+    "graph_rescue": true,
+    "cdec_rescue": true,
+    "phase_b_activation": true,
+    "pi3x_learned_proof": true,
+    "x_navdp_controller": true,
+    "oracle_or_frontier_bearing": true
+  }
+}

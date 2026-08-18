@@ -1,0 +1,991 @@
+{
+  "actual_graph_plan_count": 92,
+  "all_shared_prefixes_equal": true,
+  "all_treatment_prefixes_equal": true,
+  "arms": {
+    "certified": {
+      "SR_C_given_frozen_online_AB": 0.8421052631578947,
+      "episodes": 19,
+      "successes": 16,
+      "termination_distribution": {
+        "stuck": 3,
+        "success": 16
+      }
+    },
+    "certified_budget": {
+      "SR_C_given_frozen_online_AB": 0.8421052631578947,
+      "episodes": 19,
+      "successes": 16,
+      "termination_distribution": {
+        "max_steps": 2,
+        "stuck": 1,
+        "success": 16
+      }
+    },
+    "certified_graph": {
+      "SR_C_given_frozen_online_AB": 0.8421052631578947,
+      "episodes": 19,
+      "successes": 16,
+      "termination_distribution": {
+        "max_steps": 3,
+        "success": 16
+      }
+    },
+    "known_direct": {
+      "SR_C_given_frozen_online_AB": 0.7368421052631579,
+      "episodes": 19,
+      "successes": 14,
+      "termination_distribution": {
+        "max_steps": 2,
+        "stuck": 3,
+        "success": 14
+      }
+    },
+    "native": {
+      "SR_C_given_frozen_online_AB": 0.2631578947368421,
+      "episodes": 19,
+      "successes": 5,
+      "termination_distribution": {
+        "max_steps": 6,
+        "stuck": 8,
+        "success": 5
+      }
+    }
+  },
+  "benchmark_manifest_sha256": "0a02214276a9e29247572e5c7a3a8e11fcfd6186083aa3d5f146438f3af01122",
+  "constructible_population_size": 19,
+  "construction_rejections": [
+    {
+      "episode": "episode_0000",
+      "reason": "no online-A-supported, endpoint-negative C exists: {\"cheap_candidates\": 384, \"distance_band_candidates\": 0, \"maximum_b_to_c_geodesic_after_audit_m\": 1.0207984447479248, \"minimum_b_to_c_geodesic_after_audit_m\": 0.4372798502445221, \"minimum_online_b_endpoint_covis_after_distance_gate\": null, \"minimum_online_b_max_covis_after_distance_gate\": null, \"online_a_audited_candidates\": 32, \"online_a_steps\": 58, \"online_b_endpoint_hard_negative_candidates\": 0, \"online_b_steps\": 217, \"source_frames\": [39]}",
+      "scene": "e9zR4mvMWw7",
+      "source_population_index": 2,
+      "status": "rejected"
+    },
+    {
+      "episode": "episode_0004",
+      "reason": "no online-A-supported, endpoint-negative C exists: {\"cheap_candidates\": 1535, \"distance_band_candidates\": 0, \"maximum_b_to_c_geodesic_after_audit_m\": 1.86847984790802, \"minimum_b_to_c_geodesic_after_audit_m\": 1.1552765369415283, \"minimum_online_b_endpoint_covis_after_distance_gate\": null, \"minimum_online_b_max_covis_after_distance_gate\": null, \"online_a_audited_candidates\": 127, \"online_a_steps\": 68, \"online_b_endpoint_hard_negative_candidates\": 0, \"online_b_steps\": 126, \"source_frames\": [39, 43, 47, 51]}",
+      "scene": "e9zR4mvMWw7",
+      "source_population_index": 5,
+      "status": "rejected"
+    },
+    {
+      "episode": "episode_0002",
+      "reason": "no online-A-supported, endpoint-negative C exists: {\"cheap_candidates\": 1907, \"distance_band_candidates\": 0, \"maximum_b_to_c_geodesic_after_audit_m\": 1.7647091150283813, \"minimum_b_to_c_geodesic_after_audit_m\": 0.6218609809875488, \"minimum_online_b_endpoint_covis_after_distance_gate\": null, \"minimum_online_b_max_covis_after_distance_gate\": null, \"online_a_audited_candidates\": 152, \"online_a_steps\": 74, \"online_b_endpoint_hard_negative_candidates\": 0, \"online_b_steps\": 179, \"source_frames\": [39, 43, 47, 51, 55]}",
+      "scene": "jtcxE69GiFV",
+      "source_population_index": 19,
+      "status": "rejected"
+    }
+  ],
+  "contrasts": {
+    "certified_graph_minus_certified_budget": {
+      "exact_mcnemar_two_sided_p": 1.0,
+      "gain_indices": [],
+      "gains": 0,
+      "loss_indices": [],
+      "losses": 0,
+      "risk_difference_pp": 0.0,
+      "scene_cluster_bootstrap_95ci_pp": [
+        0.0,
+        0.0
+      ]
+    },
+    "certified_graph_minus_native": {
+      "exact_mcnemar_two_sided_p": 0.0009765625,
+      "gain_indices": [
+        0,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        14,
+        16,
+        18
+      ],
+      "gains": 11,
+      "loss_indices": [],
+      "losses": 0,
+      "risk_difference_pp": 57.89473684210526,
+      "scene_cluster_bootstrap_95ci_pp": [
+        27.77777777777778,
+        85.71428571428571
+      ]
+    },
+    "certified_minus_native": {
+      "exact_mcnemar_two_sided_p": 0.0009765625,
+      "gain_indices": [
+        0,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        14,
+        16,
+        18
+      ],
+      "gains": 11,
+      "loss_indices": [],
+      "losses": 0,
+      "risk_difference_pp": 57.89473684210526,
+      "scene_cluster_bootstrap_95ci_pp": [
+        27.77777777777778,
+        85.71428571428571
+      ]
+    },
+    "known_direct_minus_native": {
+      "exact_mcnemar_two_sided_p": 0.01171875,
+      "gain_indices": [
+        0,
+        6,
+        7,
+        9,
+        10,
+        12,
+        13,
+        14,
+        16,
+        18
+      ],
+      "gains": 10,
+      "loss_indices": [
+        2
+      ],
+      "losses": 1,
+      "risk_difference_pp": 47.36842105263158,
+      "scene_cluster_bootstrap_95ci_pp": [
+        12.0,
+        76.47058823529412
+      ]
+    }
+  },
+  "intervention_episodes": 3,
+  "records": [
+    {
+      "arm_order": [
+        "native",
+        "known_direct",
+        "certified",
+        "certified_budget",
+        "certified_graph"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0003",
+      "final_distance_m": {
+        "certified": 0.9757789749303503,
+        "certified_budget": 0.9757789749303503,
+        "certified_graph": 0.9757789749303503,
+        "known_direct": 0.9763706464704226,
+        "native": 23.68612330494967
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "db90315d0d9d4d9a579016b4e431913fdfbabfee4c4e15555794c0c0f4365039",
+        "34f582444ae7c4ca745edf137acb48035c71f1fa54582b0058dc4ea9ee08a446"
+      ],
+      "scene": "dhjEzFoUFzH",
+      "selection_index": 0,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "max_steps"
+      }
+    },
+    {
+      "arm_order": [
+        "known_direct",
+        "certified",
+        "certified_budget",
+        "certified_graph",
+        "native"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 50,
+        "intervened": true,
+        "intervention_step": 199,
+        "prefix_equal": true
+      },
+      "episode": "episode_0005",
+      "final_distance_m": {
+        "certified": 5.738715480244084,
+        "certified_budget": 5.738714374242321,
+        "certified_graph": 2.4976777787143476,
+        "known_direct": 5.7455629281390515,
+        "native": 20.14499874795859
+      },
+      "outcomes": {
+        "certified": 0,
+        "certified_budget": 0,
+        "certified_graph": 0,
+        "known_direct": 0,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "a252a934ef14cc96104e44a094214cb4594dba99415d794a2b5b92406a957969",
+        "cd88794ca78e3c41e766914f2c39560bc25ec9abfe2cc3a37ef9c8729f2491e9"
+      ],
+      "scene": "dhjEzFoUFzH",
+      "selection_index": 1,
+      "termination": {
+        "certified": "stuck",
+        "certified_budget": "stuck",
+        "certified_graph": "max_steps",
+        "known_direct": "stuck",
+        "native": "max_steps"
+      }
+    },
+    {
+      "arm_order": [
+        "certified",
+        "certified_budget",
+        "certified_graph",
+        "native",
+        "known_direct"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0001",
+      "final_distance_m": {
+        "certified": 0.9963589566910157,
+        "certified_budget": 0.9963589566910157,
+        "certified_graph": 0.9963589566910157,
+        "known_direct": 3.0136712365366063,
+        "native": 0.974013284506559
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 0,
+        "native": 1
+      },
+      "prefix_trace_sha256": [
+        "0488410b678c31cab220aa7144bf23072427d2e6974df74eaf2aafc029a34a80",
+        "44af44e03076d32ddd9b9895b894654e248a9b071e106e18779524a0acae92fe"
+      ],
+      "scene": "e9zR4mvMWw7",
+      "selection_index": 2,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "max_steps",
+        "native": "success"
+      }
+    },
+    {
+      "arm_order": [
+        "certified_budget",
+        "certified_graph",
+        "native",
+        "known_direct",
+        "certified"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0003",
+      "final_distance_m": {
+        "certified": 0.9937659878860982,
+        "certified_budget": 0.9937659878860982,
+        "certified_graph": 0.9937659878860982,
+        "known_direct": 0.9918437284327152,
+        "native": 0.9985247375899958
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 1
+      },
+      "prefix_trace_sha256": [
+        "c9de043590e3e02747d65dda7e6675e9344da370217c65ffb3b2e565a3f3fc23",
+        "aeb12d68f15f02d812b2781a5639415f559ad931d7b0636adac7d554e0f816c7"
+      ],
+      "scene": "e9zR4mvMWw7",
+      "selection_index": 3,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "success"
+      }
+    },
+    {
+      "arm_order": [
+        "certified_graph",
+        "native",
+        "known_direct",
+        "certified",
+        "certified_budget"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0006",
+      "final_distance_m": {
+        "certified": 0.9733455308361209,
+        "certified_budget": 0.9733455308361209,
+        "certified_graph": 0.9733455308361209,
+        "known_direct": 0.9644427994897569,
+        "native": 0.9669423415589339
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 1
+      },
+      "prefix_trace_sha256": [
+        "f7d1d5fba8281fb39f4c82ebee5ffca5845f28673d4ce7936ef6626e816c7956",
+        "7c4719df3b09b4b63d56ff86de4aba5cb366eb9a343d1bfebc5e20faa196de9f"
+      ],
+      "scene": "e9zR4mvMWw7",
+      "selection_index": 4,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "success"
+      }
+    },
+    {
+      "arm_order": [
+        "native",
+        "known_direct",
+        "certified",
+        "certified_budget",
+        "certified_graph"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0007",
+      "final_distance_m": {
+        "certified": 0.9884043908096519,
+        "certified_budget": 0.9884043908096519,
+        "certified_graph": 0.9884043908096519,
+        "known_direct": 0.9688140889483902,
+        "native": 0.9800621898038795
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 1
+      },
+      "prefix_trace_sha256": [
+        "38de27898c25348056f62b5162f71541af257380db9b452cc22a8a1792bad755",
+        "708a975b952642d50ab2ee6801ebd461a731ef70440bd89c6573f8b9d3c69736"
+      ],
+      "scene": "e9zR4mvMWw7",
+      "selection_index": 5,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "success"
+      }
+    },
+    {
+      "arm_order": [
+        "known_direct",
+        "certified",
+        "certified_budget",
+        "certified_graph",
+        "native"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0001",
+      "final_distance_m": {
+        "certified": 0.9686245042393841,
+        "certified_budget": 0.9686245042393841,
+        "certified_graph": 0.9686245042393841,
+        "known_direct": 0.9965548074587789,
+        "native": 9.961527470477547
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "5127795ee72bda9bc6c70c433efb75ff82e617af58ff323ea5c7e08240b3a323",
+        "999af104b10e6c562d3ccaf16a926950c61501e78590d7f5748337525115ea54"
+      ],
+      "scene": "fzynW3qQPVF",
+      "selection_index": 6,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "stuck"
+      }
+    },
+    {
+      "arm_order": [
+        "certified",
+        "certified_budget",
+        "certified_graph",
+        "native",
+        "known_direct"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0008",
+      "final_distance_m": {
+        "certified": 0.9858475716485544,
+        "certified_budget": 0.9858475716485544,
+        "certified_graph": 0.9858475716485544,
+        "known_direct": 0.981945641694872,
+        "native": 9.959352074710008
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "a55adb2b50cc2f381b99438e6cd9d135e3e6c68a17c9c9590a6852c9d4b70e4d",
+        "15475bd30ad90d42c61f0aefa74fdb1652275976baf73d9b472d5034a05963d2"
+      ],
+      "scene": "fzynW3qQPVF",
+      "selection_index": 7,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "stuck"
+      }
+    },
+    {
+      "arm_order": [
+        "certified_budget",
+        "certified_graph",
+        "native",
+        "known_direct",
+        "certified"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0000",
+      "final_distance_m": {
+        "certified": 0.9719767076935032,
+        "certified_budget": 0.9719767076935032,
+        "certified_graph": 0.9719767076935032,
+        "known_direct": 1.438287282657758,
+        "native": 8.339697857199013
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 0,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "cb2ecbd949a14244f4128663e2d41d40fa649b8eec5ded92a93263bbe49b8dd4",
+        "6abcda5603652cbb6cc6037818b1d8d4cf18c37e57279484dc08efb6fd357e15"
+      ],
+      "scene": "gTV8FGcVJC9",
+      "selection_index": 8,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "max_steps",
+        "native": "stuck"
+      }
+    },
+    {
+      "arm_order": [
+        "certified_graph",
+        "native",
+        "known_direct",
+        "certified",
+        "certified_budget"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0001",
+      "final_distance_m": {
+        "certified": 0.9899736774601418,
+        "certified_budget": 0.9899736774601418,
+        "certified_graph": 0.9899736774601418,
+        "known_direct": 0.9907945684380008,
+        "native": 5.637433650266001
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "69b90f2a9a7742d37f618f260640e59427493f2f15722d51b99728bc170b07f0",
+        "352c16429595654dee049661cb051f47dc5a7acb6a27e9b8dba8eb05b1e127d1"
+      ],
+      "scene": "gTV8FGcVJC9",
+      "selection_index": 9,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "stuck"
+      }
+    },
+    {
+      "arm_order": [
+        "native",
+        "known_direct",
+        "certified",
+        "certified_budget",
+        "certified_graph"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0003",
+      "final_distance_m": {
+        "certified": 0.9915833780847357,
+        "certified_budget": 0.9915833780847357,
+        "certified_graph": 0.9915833780847357,
+        "known_direct": 0.9814756780316888,
+        "native": 7.856159163693111
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "fb5557d4a4342d168874ce8cd954048e40076782e7e7c6ba8ec4775fa55a9610",
+        "cb52bd91bb46f99ffffdf29cc83690e09b8b9045834c087f27d595de903f4b2f"
+      ],
+      "scene": "gTV8FGcVJC9",
+      "selection_index": 10,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "stuck"
+      }
+    },
+    {
+      "arm_order": [
+        "known_direct",
+        "certified",
+        "certified_budget",
+        "certified_graph",
+        "native"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0001",
+      "final_distance_m": {
+        "certified": 0.97969857038785,
+        "certified_budget": 0.97969857038785,
+        "certified_graph": 0.97969857038785,
+        "known_direct": 5.886005761779585,
+        "native": 19.829156814120054
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 0,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "f66b03e69fdb4c743a9a05b0e0749fdbb846fb130c932abee160bc51642711aa",
+        "8788cc07f1e6f2ff27be0961223c4f080ab3bd61ffa1577d8f5711fcaad500ff"
+      ],
+      "scene": "gYvKGZ5eRqb",
+      "selection_index": 11,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "stuck",
+        "native": "max_steps"
+      }
+    },
+    {
+      "arm_order": [
+        "certified",
+        "certified_budget",
+        "certified_graph",
+        "native",
+        "known_direct"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0002",
+      "final_distance_m": {
+        "certified": 0.9851930701186069,
+        "certified_budget": 0.9851930701186069,
+        "certified_graph": 0.9851930701186069,
+        "known_direct": 0.9894063334312214,
+        "native": 21.168457520214176
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "ebbb23ad8d12b6801bfc9d371c3b5730993327887ec3fd565bf21cac0f39fee8",
+        "9adc5cee3a4b090f803fc071711ab2692786b7975e50e722c11fe97b4a9a622b"
+      ],
+      "scene": "gYvKGZ5eRqb",
+      "selection_index": 12,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "max_steps"
+      }
+    },
+    {
+      "arm_order": [
+        "certified_budget",
+        "certified_graph",
+        "native",
+        "known_direct",
+        "certified"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 35,
+        "intervened": true,
+        "intervention_step": 313,
+        "prefix_equal": true
+      },
+      "episode": "episode_0003",
+      "final_distance_m": {
+        "certified": 3.0644021575556493,
+        "certified_budget": 3.50201203229088,
+        "certified_graph": 3.480452057026777,
+        "known_direct": 0.9844046372992676,
+        "native": 5.218384357570427
+      },
+      "outcomes": {
+        "certified": 0,
+        "certified_budget": 0,
+        "certified_graph": 0,
+        "known_direct": 1,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "79879b1142ad1ae50155243b7b9c336595f6357016fd1f4f7bf183c4b926fce5",
+        "f7044fcf9c0f4cb80e9b5eb19b3cfd60c3053ef55d5a7148c752daf50f66f1ee"
+      ],
+      "scene": "gYvKGZ5eRqb",
+      "selection_index": 13,
+      "termination": {
+        "certified": "stuck",
+        "certified_budget": "max_steps",
+        "certified_graph": "max_steps",
+        "known_direct": "success",
+        "native": "max_steps"
+      }
+    },
+    {
+      "arm_order": [
+        "certified_graph",
+        "native",
+        "known_direct",
+        "certified",
+        "certified_budget"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0004",
+      "final_distance_m": {
+        "certified": 0.9635129890064191,
+        "certified_budget": 0.9635129890064191,
+        "certified_graph": 0.9635129890064191,
+        "known_direct": 0.9981471858949017,
+        "native": 9.22728234545164
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "9b3a839dd797b7cf2e117ec878ee539fcf5a61251ee1b2ddd2c0516aa3805b70",
+        "2f5f5a32b7cfb46ee54b0e9f8ed5bbd11f42b66647f55cd7ce4438fbb7f77fab"
+      ],
+      "scene": "gYvKGZ5eRqb",
+      "selection_index": 14,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "stuck"
+      }
+    },
+    {
+      "arm_order": [
+        "native",
+        "known_direct",
+        "certified",
+        "certified_budget",
+        "certified_graph"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0001",
+      "final_distance_m": {
+        "certified": 0.9928250541267888,
+        "certified_budget": 0.9928250541267888,
+        "certified_graph": 0.9928250541267888,
+        "known_direct": 0.9935969158760132,
+        "native": 0.9830375838991344
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 1
+      },
+      "prefix_trace_sha256": [
+        "e9e1d8466157fcea3881f2e46f4137b22c9816558258a52034c2315af01ff642",
+        "f512450ada49a4c59d38eea3550e2ff037d19e136d780456ca2fce1ae4e7f7b1"
+      ],
+      "scene": "gxdoqLR6rwA",
+      "selection_index": 15,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "success"
+      }
+    },
+    {
+      "arm_order": [
+        "known_direct",
+        "certified",
+        "certified_budget",
+        "certified_graph",
+        "native"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0004",
+      "final_distance_m": {
+        "certified": 0.9794487492721627,
+        "certified_budget": 0.9794487492721627,
+        "certified_graph": 0.9794487492721627,
+        "known_direct": 0.9881206031046752,
+        "native": 14.182160985849539
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "3c611617c9da2a0e73f278d1ff8e6c3b34e2719b14a9a90bd79d52ae711022f2",
+        "4acaf1c6495934461279fa4e37c6756c0fa7b30986c52cd052a3bb5194549b2a"
+      ],
+      "scene": "gxdoqLR6rwA",
+      "selection_index": 16,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "max_steps"
+      }
+    },
+    {
+      "arm_order": [
+        "certified",
+        "certified_budget",
+        "certified_graph",
+        "native",
+        "known_direct"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 7,
+        "intervened": true,
+        "intervention_step": 541,
+        "prefix_equal": true
+      },
+      "episode": "episode_0004",
+      "final_distance_m": {
+        "certified": 5.053738089380588,
+        "certified_budget": 6.033094085629937,
+        "certified_graph": 4.068272748929512,
+        "known_direct": 3.328348352077101,
+        "native": 13.71465739809547
+      },
+      "outcomes": {
+        "certified": 0,
+        "certified_budget": 0,
+        "certified_graph": 0,
+        "known_direct": 0,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "6e989b27fd6f1a0fb1a21fcd4b9b409dfe75bb0d95fdadaac9e4a93753160389",
+        "d6cf40fe73e23f0fab1816ed7f66cd2053fd2099684e7c259439e999dad213a9"
+      ],
+      "scene": "jtcxE69GiFV",
+      "selection_index": 17,
+      "termination": {
+        "certified": "stuck",
+        "certified_budget": "max_steps",
+        "certified_graph": "max_steps",
+        "known_direct": "stuck",
+        "native": "stuck"
+      }
+    },
+    {
+      "arm_order": [
+        "certified_budget",
+        "certified_graph",
+        "native",
+        "known_direct",
+        "certified"
+      ],
+      "certified_branch": {
+        "actual_graph_plans": 0,
+        "intervened": false,
+        "intervention_step": null,
+        "prefix_equal": true
+      },
+      "episode": "episode_0003",
+      "final_distance_m": {
+        "certified": 0.9762799778484453,
+        "certified_budget": 0.9762799778484453,
+        "certified_graph": 0.9762799778484453,
+        "known_direct": 0.997618580058705,
+        "native": 8.24279184115268
+      },
+      "outcomes": {
+        "certified": 1,
+        "certified_budget": 1,
+        "certified_graph": 1,
+        "known_direct": 1,
+        "native": 0
+      },
+      "prefix_trace_sha256": [
+        "227dbae2f5f537ca7763813a20b1eaa72adbf83e9b03ff002da93ec03a6f798a",
+        "c84e8a7d68fce0929b6734ac077860d37bc8466bb7bde4684eacbed5cf0e41ff"
+      ],
+      "scene": "mJXqzFtmKg4",
+      "selection_index": 18,
+      "termination": {
+        "certified": "success",
+        "certified_budget": "success",
+        "certified_graph": "success",
+        "known_direct": "success",
+        "native": "stuck"
+      }
+    }
+  ],
+  "scene_clusters": 8,
+  "schema_version": "shared_online_novel_revisit_paired_report_v1_20260814",
+  "scope": "internal retest on an already consumed strict-v4 source pool; not scene-disjoint paper confirmation",
+  "source_population_size": 22
+}

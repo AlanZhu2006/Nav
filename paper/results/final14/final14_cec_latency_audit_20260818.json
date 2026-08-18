@@ -1,0 +1,273 @@
+{
+  "protocols": {
+    "hard_support": {
+      "cache_lifecycle_valid": true,
+      "cached_update_ms": {
+        "maximum": 0.5960329435765743,
+        "mean": 0.22467873859927426,
+        "median": 0.15790574252605438,
+        "n": 1419,
+        "p95": 0.47401427291333675
+      },
+      "first_query_by_accept": {
+        "false": {
+          "maximum": 45949.028354138136,
+          "mean": 4697.004882607698,
+          "median": 347.4981738254428,
+          "n": 21,
+          "p95": 20871.82485824451
+        },
+        "true": {
+          "maximum": 32428.106592968106,
+          "mean": 8764.957282137835,
+          "median": 5636.733591090888,
+          "n": 21,
+          "p95": 16274.885717080906
+        }
+      },
+      "first_query_by_role": {
+        "novel": {
+          "maximum": 45949.028354138136,
+          "mean": 4882.237785484731,
+          "median": 358.7973997928202,
+          "n": 21,
+          "p95": 20871.82485824451
+        },
+        "revisit": {
+          "maximum": 32428.106592968106,
+          "mean": 8579.724379260802,
+          "median": 5636.733591090888,
+          "n": 21,
+          "p95": 16274.885717080906
+        }
+      },
+      "first_query_uncached_ms": {
+        "maximum": 45949.028354138136,
+        "mean": 6730.981082372767,
+        "median": 3053.918098565191,
+        "n": 42,
+        "p95": 20829.39742438029
+      },
+      "legacy_carried_uncached_ms": {
+        "maximum": 45949.028354138136,
+        "mean": 5217.243979120542,
+        "median": 933.1362219527364,
+        "n": 1461,
+        "p95": 20871.82485824451
+      },
+      "legacy_to_true_sample_ratio": 34.785714285714285,
+      "plan_files": 42,
+      "selected_anchor_latency_pearson": 0.6638249266342418,
+      "slowest_first_queries": [
+        {
+          "accepted": false,
+          "cached_update_count": 43,
+          "first_query_ms": 45949.028354138136,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/hard_support/007_S9hNv5qa7GM_episode_0005/certified/episode_0005_pair_00_novel_plans.json",
+          "request_count": 44,
+          "role": "novel",
+          "selected_anchor": 307
+        },
+        {
+          "accepted": true,
+          "cached_update_count": 19,
+          "first_query_ms": 32428.106592968106,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/hard_support/000_8WUmhLawc2A_episode_0000/certified/episode_0000_pair_00_revisit_plans.json",
+          "request_count": 20,
+          "role": "revisit",
+          "selected_anchor": 196
+        },
+        {
+          "accepted": false,
+          "cached_update_count": 17,
+          "first_query_ms": 20871.82485824451,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/hard_support/002_E9uDoFAP3SH_episode_0003/certified/episode_0003_pair_00_novel_plans.json",
+          "request_count": 18,
+          "role": "novel",
+          "selected_anchor": 151
+        },
+        {
+          "accepted": false,
+          "cached_update_count": 34,
+          "first_query_ms": 20023.276180960238,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/hard_support/016_V2XKFyX4ASd_episode_0004/certified/episode_0004_pair_00_novel_plans.json",
+          "request_count": 35,
+          "role": "novel",
+          "selected_anchor": 145
+        },
+        {
+          "accepted": true,
+          "cached_update_count": 11,
+          "first_query_ms": 16274.885717080906,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/hard_support/016_V2XKFyX4ASd_episode_0004/certified/episode_0004_pair_00_revisit_plans.json",
+          "request_count": 12,
+          "role": "revisit",
+          "selected_anchor": 122
+        },
+        {
+          "accepted": true,
+          "cached_update_count": 16,
+          "first_query_ms": 15394.569926895201,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/hard_support/003_E9uDoFAP3SH_episode_0006/certified/episode_0006_pair_00_revisit_plans.json",
+          "request_count": 17,
+          "role": "revisit",
+          "selected_anchor": 115
+        },
+        {
+          "accepted": true,
+          "cached_update_count": 21,
+          "first_query_ms": 15051.469347905368,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/hard_support/002_E9uDoFAP3SH_episode_0003/certified/episode_0003_pair_00_revisit_plans.json",
+          "request_count": 22,
+          "role": "revisit",
+          "selected_anchor": 114
+        },
+        {
+          "accepted": true,
+          "cached_update_count": 24,
+          "first_query_ms": 13684.388351859525,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/hard_support/019_Z6MFQCViBuw_episode_0003/certified/episode_0003_pair_00_revisit_plans.json",
+          "request_count": 25,
+          "role": "revisit",
+          "selected_anchor": 105
+        }
+      ]
+    },
+    "natural_direction": {
+      "cache_lifecycle_valid": true,
+      "cached_update_ms": {
+        "maximum": 0.539097934961319,
+        "mean": 0.21746808062425163,
+        "median": 0.15153083950281143,
+        "n": 1346,
+        "p95": 0.427809776738286
+      },
+      "first_query_by_accept": {
+        "false": {
+          "maximum": 45218.84074900299,
+          "mean": 4914.038625888918,
+          "median": 546.7245848849416,
+          "n": 19,
+          "p95": 22390.71730957361
+        },
+        "true": {
+          "maximum": 40061.36727426201,
+          "mean": 10220.572185338191,
+          "median": 7817.205030005425,
+          "n": 23,
+          "p95": 25969.176206411783
+        }
+      },
+      "first_query_by_role": {
+        "novel": {
+          "maximum": 45218.84074900299,
+          "mean": 4684.238223758127,
+          "median": 816.5244339033961,
+          "n": 21,
+          "p95": 19854.259149637073
+        },
+        "revisit": {
+          "maximum": 40061.36727426201,
+          "mean": 10955.756735987961,
+          "median": 10639.337540138513,
+          "n": 21,
+          "p95": 26689.805497881025
+        }
+      },
+      "first_query_uncached_ms": {
+        "maximum": 45218.84074900299,
+        "mean": 7819.9974798730445,
+        "median": 3404.0850831661373,
+        "n": 42,
+        "p95": 26348.0281804688
+      },
+      "legacy_carried_uncached_ms": {
+        "maximum": 45218.84074900299,
+        "mean": 5906.7496014087965,
+        "median": 1461.1890008673072,
+        "n": 1388,
+        "p95": 26689.805497881025
+      },
+      "legacy_to_true_sample_ratio": 33.04761904761905,
+      "plan_files": 42,
+      "selected_anchor_latency_pearson": 0.8172546986435079,
+      "slowest_first_queries": [
+        {
+          "accepted": false,
+          "cached_update_count": 43,
+          "first_query_ms": 45218.84074900299,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/natural_direction/007_S9hNv5qa7GM_episode_0005/certified/episode_0005_pair_00_novel_plans.json",
+          "request_count": 44,
+          "role": "novel",
+          "selected_anchor": 307
+        },
+        {
+          "accepted": true,
+          "cached_update_count": 19,
+          "first_query_ms": 40061.36727426201,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/natural_direction/007_S9hNv5qa7GM_episode_0005/certified/episode_0005_pair_00_revisit_plans.json",
+          "request_count": 20,
+          "role": "revisit",
+          "selected_anchor": 274
+        },
+        {
+          "accepted": true,
+          "cached_update_count": 18,
+          "first_query_ms": 26689.805497881025,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/natural_direction/017_WYY7iVyf5p8_episode_0004/certified/episode_0004_pair_00_revisit_plans.json",
+          "request_count": 19,
+          "role": "revisit",
+          "selected_anchor": 283
+        },
+        {
+          "accepted": false,
+          "cached_update_count": 34,
+          "first_query_ms": 19854.259149637073,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/natural_direction/016_V2XKFyX4ASd_episode_0004/certified/episode_0004_pair_00_novel_plans.json",
+          "request_count": 35,
+          "role": "novel",
+          "selected_anchor": 145
+        },
+        {
+          "accepted": true,
+          "cached_update_count": 25,
+          "first_query_ms": 19483.512583188713,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/natural_direction/015_V2XKFyX4ASd_episode_0003/certified/episode_0003_pair_00_revisit_plans.json",
+          "request_count": 26,
+          "role": "revisit",
+          "selected_anchor": 143
+        },
+        {
+          "accepted": true,
+          "cached_update_count": 29,
+          "first_query_ms": 17059.43413777277,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/natural_direction/009_SN83YJsR3w2_episode_0005/certified/episode_0005_pair_00_revisit_plans.json",
+          "request_count": 30,
+          "role": "revisit",
+          "selected_anchor": 126
+        },
+        {
+          "accepted": true,
+          "cached_update_count": 20,
+          "first_query_ms": 13858.68833726272,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/natural_direction/000_8WUmhLawc2A_episode_0000/certified/episode_0000_pair_00_revisit_plans.json",
+          "request_count": 21,
+          "role": "revisit",
+          "selected_anchor": 146
+        },
+        {
+          "accepted": false,
+          "cached_update_count": 17,
+          "first_query_ms": 13550.06228107959,
+          "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/evaluation/natural_direction/002_E9uDoFAP3SH_episode_0003/certified/episode_0003_pair_00_novel_plans.json",
+          "request_count": 18,
+          "role": "novel",
+          "selected_anchor": 151
+        }
+      ]
+    }
+  },
+  "schema_version": "final14_cec_latency_audit_v1_20260818",
+  "scientific_outcomes_modified": false,
+  "source_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff"
+}

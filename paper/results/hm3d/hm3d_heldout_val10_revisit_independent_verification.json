@@ -1,0 +1,167 @@
+{
+  "arms": {
+    "certified_relocalization": {
+      "episodes": 36,
+      "goal_a_successes": 21,
+      "goal_b_eligible": 21,
+      "goal_b_successes_given_a": 19,
+      "joint_successes": 19
+    },
+    "geometry_router": {
+      "episodes": 36,
+      "goal_a_successes": 21,
+      "goal_b_eligible": 21,
+      "goal_b_successes_given_a": 17,
+      "joint_successes": 17
+    },
+    "native": {
+      "episodes": 36,
+      "goal_a_successes": 21,
+      "goal_b_eligible": 21,
+      "goal_b_successes_given_a": 7,
+      "joint_successes": 7
+    },
+    "raw_fixed_oracle_role": {
+      "episodes": 36,
+      "goal_a_successes": 21,
+      "goal_b_eligible": 21,
+      "goal_b_successes_given_a": 18,
+      "joint_successes": 18
+    }
+  },
+  "certificate": {
+    "abstained_plans": 33,
+    "accepted_plans": 325,
+    "exact_native_fallback_episodes": 1,
+    "fallback_behavior_mismatch_count": 0,
+    "fallback_episodes": 1,
+    "goal_a_eligible_episodes": 21,
+    "requests": 358,
+    "runtime_failures": 0,
+    "takeover_episodes": 20
+  },
+  "constructible_scene_count": 9,
+  "construction_attrition_verified": true,
+  "contrasts": {
+    "certified_minus_geometry": {
+      "conditional_b": {
+        "both_success": 17,
+        "eligible": 21,
+        "left_only_loss": 0,
+        "left_successes": 17,
+        "mcnemar_exact_two_sided_p": 0.5,
+        "neither_success": 2,
+        "right_only_gain": 2,
+        "right_successes": 19
+      },
+      "joint": {
+        "both_success": 17,
+        "eligible": 36,
+        "left_only_loss": 0,
+        "left_successes": 17,
+        "mcnemar_exact_two_sided_p": 0.5,
+        "neither_success": 17,
+        "right_only_gain": 2,
+        "right_successes": 19
+      }
+    },
+    "certified_minus_native": {
+      "conditional_b": {
+        "both_success": 7,
+        "eligible": 21,
+        "left_only_loss": 0,
+        "left_successes": 7,
+        "mcnemar_exact_two_sided_p": 0.00048828125,
+        "neither_success": 2,
+        "right_only_gain": 12,
+        "right_successes": 19
+      },
+      "joint": {
+        "both_success": 7,
+        "eligible": 36,
+        "left_only_loss": 0,
+        "left_successes": 7,
+        "mcnemar_exact_two_sided_p": 0.00048828125,
+        "neither_success": 17,
+        "right_only_gain": 12,
+        "right_successes": 19
+      }
+    },
+    "certified_minus_raw_fixed_oracle_role": {
+      "conditional_b": {
+        "both_success": 18,
+        "eligible": 21,
+        "left_only_loss": 0,
+        "left_successes": 18,
+        "mcnemar_exact_two_sided_p": 1.0,
+        "neither_success": 2,
+        "right_only_gain": 1,
+        "right_successes": 19
+      },
+      "joint": {
+        "both_success": 18,
+        "eligible": 36,
+        "left_only_loss": 0,
+        "left_successes": 18,
+        "mcnemar_exact_two_sided_p": 1.0,
+        "neither_success": 17,
+        "right_only_gain": 1,
+        "right_successes": 19
+      }
+    },
+    "geometry_minus_native": {
+      "conditional_b": {
+        "both_success": 7,
+        "eligible": 21,
+        "left_only_loss": 0,
+        "left_successes": 7,
+        "mcnemar_exact_two_sided_p": 0.001953125,
+        "neither_success": 4,
+        "right_only_gain": 10,
+        "right_successes": 17
+      },
+      "joint": {
+        "both_success": 7,
+        "eligible": 36,
+        "left_only_loss": 0,
+        "left_successes": 7,
+        "mcnemar_exact_two_sided_p": 0.001953125,
+        "neither_success": 19,
+        "right_only_gain": 10,
+        "right_successes": 17
+      }
+    },
+    "raw_fixed_oracle_role_minus_native": {
+      "conditional_b": {
+        "both_success": 6,
+        "eligible": 21,
+        "left_only_loss": 1,
+        "left_successes": 7,
+        "mcnemar_exact_two_sided_p": 0.00341796875,
+        "neither_success": 2,
+        "right_only_gain": 12,
+        "right_successes": 18
+      },
+      "joint": {
+        "both_success": 6,
+        "eligible": 36,
+        "left_only_loss": 1,
+        "left_successes": 7,
+        "mcnemar_exact_two_sided_p": 0.00341796875,
+        "neither_success": 17,
+        "right_only_gain": 12,
+        "right_successes": 18
+      }
+    }
+  },
+  "episode_count": 36,
+  "fallback_mismatches": [],
+  "manifest_sha256": "62bc6299203da709e65787c735a531974905f2ab8e940f72e91318914d949c89",
+  "no_mp3d_evaluation": true,
+  "report_sha256": "4e9946a3580c3eff0ffa35567c30527eb96dbbbfc822de11f982630183e8bd34",
+  "scene_count": 9,
+  "schema_version": "hm3d_heldout_val10_revisit_independent_verification_v2_20260816",
+  "scope": "independent raw-file recount; no bootstrap reimplementation",
+  "selected_scene_count": 10,
+  "verified": true
+}

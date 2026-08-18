@@ -1,33 +1,24 @@
-"""Genuine two-leg (start -> A -> B) episode generator in Habitat.
+"""Generate causal two- or three-leg ImageGoal episodes in Habitat.
 
-Prototype target: apartment_1 test scene (no MP3D license needed). Same code will
-point at MP3D `<id>.glb` once the license clears.
+Two-leg data keeps the historical ``initial_imagegoal -> revisit`` contract.
+Three-leg data supports two explicit contracts.  The default role-paired
+contract is:
 
-Why two legs: the manufactured memnav "seen" case reverses leg A exactly (robot goes
-to A, turns 180, retraces). Real returns differ. Here leg B = an INDEPENDENT geodesic
-A->B, so the return path genuinely diverges from reversing leg A.
+``initial_imagegoal A -> novel B -> long-term revisit C``.
 
-Per episode:
-  1. sample A (navigable), start (navigable, geodesic start->A in [dA_min, dA_max]).
-  2. geodesic start->A = path_A.
-  3. sample B ON the start->A corridor (point of path_A at ~b_frac arc-length, snapped
-     to navmesh), require geodesic(A,B) >= b_min so leg B is a real backtrack.
-  4. geodesic A->B = path_B  (independent; not the reverse of path_A).
-  5. roll out start->A then A->B (densify polylines to ~step_m, heading=tangent with
-     turn-in-place at corners); render RGB+D at d435i intrinsics each frame.
-  6. FoV check: B must project into >= min_seen leg-A frames, unoccluded (the "seen"
-     premise). Reject episode otherwise.
-  7. write InternData-N1 layout + goal image (B viewed at the heading robot passed it)
-     + meta (switch_idx, b_idx, b_seen_frames, geo dists).
+The opt-in double-Revisit diagnostic is:
 
-Frames: we compute/render entirely in Habitat's native Y-up frame. Poses are written to
-the parquet in a Z-up camera-to-world convention (M_W below) to mirror InternData-N1's
-layout. Exact axis-sign match to InternData-N1 is finalized during MP3D render-validation;
-here we self-verify geometry (project B back into frames; leg-B != reversed leg-A).
+``initial_imagegoal A -> revisit B -> distinct long-term revisit C``.
 
-Run (habitat env):
-  python gen_twoleg.py --scene .../apartment_1.glb --navmesh .../apartment_1.navmesh \
-     --n 5 --out /home/asus/Research/Nav/memnav_viz/twoleg_proto --seed 0 --debug
+For the A/B role comparison, both goals use the same geodesic band, their
+per-episode distances are matched within a fixed tolerance, the first yaw is
+not path-prealigned, and both goal images are exact expert-arrival frames.
+Goal C is anchored on leg A and must remain below the negative co-visibility
+threshold throughout leg B, so the recent leg-B window cannot satisfy the
+nominal long-term revisit by itself.
+
+All rendering is performed in Habitat's Y-up frame.  Camera poses are written
+in the InternData-N1-compatible Z-up convention defined by ``M_W`` below.
 """
 import argparse, os, json
 import numpy as np
@@ -41,6 +32,59 @@ HFOV_DEG = float(np.degrees(2 * np.arctan(CX / FX)))  # ~68.0
 
 # Habitat(Y-up) -> stored data(Z-up) rotation:  (x,y,z)_hab -> (x,-z,y)_data  (det=+1)
 M_W = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], float)
+
+MULTILEG_ROLE_SYMMETRIC_PROTOCOL = "multileg_v4_role_paired_20260812"
+MULTILEG_DOUBLE_REVISIT_PROTOCOL = "multileg_v5_double_revisit_20260812"
+GOAL_A_SOURCE_PROTOCOL = "goal_a_source_carrier_v1_20260814"
+MAX_ROLE_DISTANCE_MATCH_TOLERANCE_M = 0.50
+INITIAL_YAW_MODES = ("auto", "path_aligned", "uniform")
+THREE_LEG_ROLE_MODES = ("novel_revisit", "double_revisit")
+
+
+def multileg_protocol(n_legs, three_leg_roles):
+    if int(n_legs) < 3:
+        return "multileg_v2_symmetric_20260807"
+    if three_leg_roles == "novel_revisit":
+        return MULTILEG_ROLE_SYMMETRIC_PROTOCOL
+    if three_leg_roles == "double_revisit":
+        return MULTILEG_DOUBLE_REVISIT_PROTOCOL
+    raise ValueError(f"unknown three-leg role mode: {three_leg_roles!r}")
+
+
+def _bump(counters, key):
+    if counters is not None:
+        counters[key] = int(counters.get(key, 0)) + 1
+
+
+def resolve_initial_yaw_mode(mode, n_legs):
+    """Resolve the first-leg yaw contract without perturbing 2-leg Revisit.
+
+    The historical generator pre-aligned the first camera with its shortest
+    path, while every later goal inherited an arbitrary arrival heading.  That
+    makes first-vs-later ImageGoal success incomparable.  Three-leg data now
+    defaults to a uniform initial yaw; two-leg Revisit data keeps its historical
+    path-aligned start unless explicitly overridden.
+    """
+    if mode not in INITIAL_YAW_MODES:
+        raise ValueError(f"unknown initial yaw mode: {mode!r}")
+    if mode == "auto":
+        return "uniform" if int(n_legs) >= 3 else "path_aligned"
+    return mode
+
+
+def wrap_degrees(value):
+    return (float(value) + 180.0) % 360.0 - 180.0
+
+
+def first_path_yaw(points, origin, min_baseline=0.30):
+    """Habitat yaw of the first non-trivial shortest-path segment."""
+    origin_xz = np.asarray(origin, dtype=float)[[0, 2]]
+    for point in points[1:]:
+        delta = np.asarray(point, dtype=float)[[0, 2]] - origin_xz
+        if float(np.linalg.norm(delta)) >= float(min_baseline):
+            return float(yaw_facing(delta))
+    delta = np.asarray(points[-1], dtype=float)[[0, 2]] - origin_xz
+    return float(yaw_facing(delta))
 
 
 def make_sim(glb, navmesh, agent_radius=0.30, agent_height=1.5):
@@ -432,18 +476,24 @@ def _render_leg(sim, frames):
 
 
 def sample_revisit(sim, pf, hist_frames, hist_poses, hist_depths, n_anchor, rng, args, ch,
-                   floor_y, source=None, min_geo=0.0):
+                   floor_y, source=None, min_geo=0.0, diagnostics=None,
+                   diagnostic_prefix="revisit"):
     """A perturbed REVISIT goal, ANCHOR-CENTRIC (same parameterisation as revisit_sweep_gen).
     hist_frames/poses/depths cover the FULL history the retrieval head sees at this goal's step
-    (leg1 for B; leg1+leg2 for C); n_anchor = #leading frames that ARE the revisit target (leg1),
-    so leg2 frames become hard NEGATIVES for C but are never sampled as the anchor.
+    (leg1 for B; leg1+leg2 for C); n_anchor = #leading frames that ARE the revisit target (leg1).
+    When a non-anchor tail exists, every tail frame must stay below ``covis_pos_lo``;
+    this makes leg2 a verified hard-negative segment rather than merely calling it one.
       1. pick a random anchor frame X from the target leg ([anchor_margin, n_anchor));
       2. sample B position in a UNIFORM DISK of radius goal_jitter_pos around X, snapped to navmesh;
       3. sample B heading in a +/- head_max_deg CONE around X's heading;
       4. cheap stride gate on covis in [covis_lo, covis_hi]; on pass, compute the stride-1 covisibility
          curve over EVERY history frame -> argmax = GT relocalization anchor, curve = multi-positive label.
     Returns (pos, goal_yaw, covis, matched_frame, head_off_deg, covis_curve) or None."""
-    lo = min(args.anchor_margin, max(0, n_anchor - 1))
+    if int(n_anchor) <= int(args.anchor_margin):
+        _bump(diagnostics, f"{diagnostic_prefix}.anchor_window_too_short")
+        _bump(diagnostics, f"{diagnostic_prefix}.sampling_exhausted")
+        return None
+    lo = int(args.anchor_margin)
     # long-term (implicit-memory) vs recent (in-view): for a fraction of revisits, force the matched
     # frame OUTSIDE the current window. current frame = last history frame (len(hist)-1); gap = current-X.
     hi = n_anchor
@@ -460,52 +510,82 @@ def sample_revisit(sim, pf, hist_frames, hist_poses, hist_depths, n_anchor, rng,
         r = R * np.sqrt(rng.uniform()); th = rng.uniform(0, 2 * np.pi)      # uniform in the disk
         p = np.array(pf.snap_point([float(Xp[0] + r * np.cos(th)), floor_y, float(Xp[2] + r * np.sin(th))]), float)
         if not _clear(pf, p, args.r_min) or not _on_floor(p, floor_y, args.floor_tol):
+            _bump(diagnostics, f"{diagnostic_prefix}.clearance_or_floor")
             continue
         if source is not None:
             ok, gd, _ = geodesic(pf, source, p)
             if not ok or gd < min_geo:
+                _bump(diagnostics, f"{diagnostic_prefix}.source_geodesic")
                 continue
         gyaw = Xyaw + np.deg2rad(rng.uniform(-args.head_max_deg, args.head_max_deg))   # cone around X
         gpts = _goal_world_pts(sim, p, gyaw, ch)
         cov, _ = max_covis(gpts, hist_poses, hist_depths, stride=args.covis_stride, tol=args.covis_tol)
         if not (args.covis_lo <= cov <= args.covis_hi):          # cheap subsampled GATE (reject fast)
+            _bump(diagnostics, f"{diagnostic_prefix}.stride_covis")
             continue
         # On accept, the true label is the FULL stride-1 covisibility curve over every history frame:
         # position jitter means the sampling anchor X is not necessarily the best match, so the GT
         # matched frame is the curve argmax (relocalization anchor) and the curve is the retrieval label.
         curve = covis_curve(gpts, hist_poses, hist_depths, tol=args.covis_tol)
-        # the relocalization anchor must be goal_append-able (>= anchor_margin: window disjoint from scale);
-        # restrict the argmax to the valid range so we never store a match LingBot can't reconstruct.
-        # frames < anchor_margin are ignore for retrieval (loader masks them; anchor_margin recorded in meta).
-        vlo = min(args.anchor_margin, len(curve) - 1)
-        ai = vlo + int(curve[vlo:].argmax()); cov = float(curve[ai])
+        # The relocalization anchor must be goal_append-able and must belong to
+        # the designated anchor leg.  The old code searched ``curve[vlo:]`` and
+        # could silently select a recent leg-2 frame for nominal A-revisits.
+        valid_hi = min(int(n_anchor), len(curve))
+        vlo = int(args.anchor_margin)
+        if valid_hi <= vlo:
+            _bump(diagnostics, f"{diagnostic_prefix}.anchor_window_too_short")
+            continue
+        ai = vlo + int(curve[vlo:valid_hi].argmax())
+        cov = float(curve[ai])
+        non_anchor_max = (
+            float(curve[valid_hi:].max()) if valid_hi < len(curve) else 0.0)
+        if non_anchor_max > float(args.covis_pos_lo):
+            _bump(diagnostics, f"{diagnostic_prefix}.non_anchor_not_negative")
+            continue
         head_off = abs((gyaw - hist_frames[ai][1] + np.pi) % (2 * np.pi) - np.pi)       # vs GT matched frame
         if (args.covis_lo <= cov <= args.covis_hi) and head_off <= np.deg2rad(args.head_max_deg):
+            _bump(diagnostics, f"{diagnostic_prefix}.accepted")
             return p, float(gyaw), float(cov), int(ai), float(np.degrees(head_off)), curve
+        _bump(diagnostics, f"{diagnostic_prefix}.anchor_covis_or_heading")
+    _bump(diagnostics, f"{diagnostic_prefix}.sampling_exhausted")
     return None
 
 
-def sample_novel(sim, pf, A, hist_poses, hist_depths, rng, args, ch, floor_y):
+def sample_novel(sim, pf, A, hist_poses, hist_depths, rng, args, ch, floor_y,
+                 desired_geo_m=None, distance_match_tolerance_m=None,
+                 diagnostics=None, diagnostic_prefix="novel"):
     """A NOVEL goal: on THIS floor, navigable, clearance>=r_min, geodesic(A,.)>min_dist_AB, and
     max co-visibility with history < novel_covis (retrieval target = null -> all frames negative).
     Returns (pos_floor, goal_yaw, covis, covis_curve) or None."""
     for _ in range(args.goal_tries):
         p = np.array(pf.get_random_navigable_point(), float)
         if not _clear(pf, p, args.r_min) or not _on_floor(p, floor_y, args.floor_tol):
+            _bump(diagnostics, f"{diagnostic_prefix}.clearance_or_floor")
             continue
         ok, gd, _ = geodesic(pf, A, p)
-        if not ok or gd < args.min_dist_AB:
+        if not ok or gd < args.min_dist_AB or gd > args.max_dist_AB:
+            _bump(diagnostics, f"{diagnostic_prefix}.distance_band")
+            continue
+        if (desired_geo_m is not None
+                and distance_match_tolerance_m is not None
+                and abs(float(gd) - float(desired_geo_m))
+                > float(distance_match_tolerance_m)):
+            _bump(diagnostics, f"{diagnostic_prefix}.role_distance_match")
             continue
         gyaw = yaw_facing((p - np.asarray(A, float))[[0, 2]])   # view along the approach
         gpts = _goal_world_pts(sim, p, gyaw, ch)
         cov, _ai = max_covis(gpts, hist_poses, hist_depths, stride=args.covis_stride, tol=args.covis_tol)
         if cov >= args.novel_covis:                              # cheap subsampled reject
+            _bump(diagnostics, f"{diagnostic_prefix}.stride_covis")
             continue
         # confirm genuinely unseen over EVERY frame: the stride gate can SKIP the one frame that
         # observed p and wrongly call it novel. The full curve doubles as the (all-negative) label.
         curve = covis_curve(gpts, hist_poses, hist_depths, tol=args.covis_tol)
         if float(curve.max()) < args.novel_covis:
+            _bump(diagnostics, f"{diagnostic_prefix}.accepted")
             return p, float(gyaw), float(curve.max()), curve
+        _bump(diagnostics, f"{diagnostic_prefix}.full_covis")
+    _bump(diagnostics, f"{diagnostic_prefix}.sampling_exhausted")
     return None
 
 
@@ -536,19 +616,20 @@ def _get_esdf(cache, pf, floor_y, args):
     return cache[key]
 
 
-def make_episode(sim, rng, args, ep_idx, esdf_cache):
+def make_episode(sim, rng, args, ep_idx, esdf_cache, diagnostics=None):
     pf = sim.pathfinder
     ftol = args.floor_tol
     eb = dict(iters=args.eb_iters, kc=args.eb_kc, kr=args.eb_kr, rho0=args.eb_rho0,
               step=args.eb_step, res=args.esdf_res)
     ch = np.array([0, args.cam_h, 0])
     for _attempt in range(args.max_attempts):
+        _bump(diagnostics, "episode_candidate_attempt")
         # --- A defines the episode's FLOOR (any navigable point); everything else stays on it ---
         A = pf.get_random_navigable_point()
         if not _clear(pf, A, args.r_min):
+            _bump(diagnostics, "episode.a_clearance")
             continue
         floor_y = float(A[1])
-        E = _get_esdf(esdf_cache, pf, floor_y, args)
         cp = dict(v_max=args.v, L=args.lookahead, r_min=args.r_min, v_min_frac=args.v_min_frac,
                   max_turn_deg=args.max_turn_deg, cam_h=args.cam_h, floor_y=floor_y)  # pure-pursuit controller parameters,
         # --- start on A's floor, geodesic start->A stays on floor ---
@@ -562,56 +643,251 @@ def make_episode(sim, rng, args, ep_idx, esdf_cache):
                 start, gdA, g1 = s, gd, pts
                 break
         if start is None:
+            _bump(diagnostics, "episode.a_start_sampling")
             continue
-        leg1, ok = roll_leg(g1, pf, E, eb, cp, None, None)          # A = fresh forward goal
+        # ESDF construction is the expensive, memory-heavy per-floor step.
+        # Defer it until the floor has a valid 3--9 m start/goal pair; the old
+        # order cached large grids even for floors rejected immediately after.
+        E = _get_esdf(esdf_cache, pf, floor_y, args)
+        initial_yaw_mode = resolve_initial_yaw_mode(
+            args.initial_yaw_mode, args.n_legs)
+        requested_initial_yaw = (
+            float(rng.uniform(-np.pi, np.pi))
+            if initial_yaw_mode == "uniform" else None)
+        leg1, ok = roll_leg(
+            g1, pf, E, eb, cp,
+            start if requested_initial_yaw is not None else None,
+            requested_initial_yaw,
+        )
         if not ok:
+            _bump(diagnostics, "episode.a_rollout")
             continue
         p1, d1, r1 = _render_leg(sim, leg1)
+        sampled_A = np.asarray(A, dtype=float).copy()
+        dataset_start = np.asarray(leg1[0][0], dtype=float) - ch
+        start_for_metadata = np.asarray(start, dtype=float)
+        start_path_points = g1
+        if args.n_legs >= 3:
+            # The evaluator uses the final expert frame as Goal A.  Bind the
+            # target position to that exact frame and the episode start to the
+            # first *stored* expert frame.  The historical metadata measured
+            # from the unrecorded pre-step pose, creating a ~4 cm hidden length
+            # offset and occasionally admitting an evaluated A below dA_min.
+            A = np.asarray(leg1[-1][0], dtype=float) - ch
+            start_for_metadata = dataset_start
+            okA, gdA, start_path_points = geodesic(
+                pf, start_for_metadata, A)
+            if (not okA or not args.dA_min <= gdA <= args.dA_max
+                    or not _on_floor(A, floor_y, ftol)):
+                _bump(diagnostics, "episode.a_terminal_reanchor")
+                continue
+        start_path_yaw = first_path_yaw(
+            start_path_points, start_for_metadata)
+        actual_start_yaw = float(leg1[0][1])
+        start_heading_offset_deg = wrap_degrees(np.degrees(
+            actual_start_yaw - start_path_yaw))
 
-        # --- B: 2-leg -> REVISIT on leg A ; 3-leg -> NOVEL (off leg A) ---
+        # Paper role-pair construction needs only a frozen start pose and a
+        # native Goal-A image.  Requiring a subsequently generated Revisit-B
+        # here is unrelated to that source contract and causes severe,
+        # outcome-blind attrition in compact datasets such as Replica.  This
+        # opt-in carrier keeps every Goal-A sampling, rollout, rendering, and
+        # safety condition above unchanged.  The placeholder second goal only
+        # satisfies the historical two-leg file schema; callers must use this
+        # mode exclusively with eval_2leg_habitat --stop_after_leg1.
+        if getattr(args, "goal_a_source_only", False):
+            allframes = list(leg1)
+            fy = float(allframes[0][0][1] - args.cam_h)
+            xyt = np.array([[frame[0][0], frame[0][2]] for frame in allframes])
+            seg = np.diff(xyt, axis=0)
+            tang = np.unwrap(np.arctan2(seg[:, 1], seg[:, 0]))
+            if (len(tang) > 1
+                    and float(np.abs(np.degrees(np.diff(tang))).max())
+                    > args.max_frame_turn):
+                _bump(diagnostics, "episode.trajectory_turn_spike")
+                continue
+
+            def _goal_a_nav_ok(x, z):
+                q = pf.snap_point([x, fy, z])
+                return (pf.is_navigable(q)
+                        and abs(q[0] - x) < 0.06
+                        and abs(q[2] - z) < 0.06)
+
+            if any(
+                    not _goal_a_nav_ok(
+                        xyt[i - 1, 0] * (1 - t) + xyt[i, 0] * t,
+                        xyt[i - 1, 1] * (1 - t) + xyt[i, 1] * t,
+                    )
+                    for i in range(1, len(xyt))
+                    for t in (0.25, 0.5, 0.75)):
+                _bump(diagnostics, "episode.trajectory_collision")
+                continue
+
+            def _d(p):
+                return (M_W @ np.asarray(p, float)).tolist()
+
+            switch = int(len(leg1))
+            placeholder_yaw = float(leg1[-1][1])
+            meta = dict(
+                scene=os.path.basename(args.scene),
+                ep_idx=ep_idx,
+                generation_seed=int(args.seed),
+                n_frames=switch,
+                n_legs=2,
+                switch_idx=switch,
+                switches=[switch],
+                start=_d(start_for_metadata),
+                A=_d(A),
+                goals=[dict(
+                    name="B",
+                    kind="source_only_placeholder",
+                    pos=_d(A),
+                    yaw_habitat=placeholder_yaw,
+                    covis=1.0,
+                    covis_argmax=switch - 1,
+                    head_off_deg=0.0,
+                    anchor_frame_limit=switch,
+                    non_anchor_max_covis=0.0,
+                    recall_gap=0,
+                    covis_curve=[0.0] * max(0, switch - 1) + [1.0],
+                )],
+                geo_startA=float(gdA),
+                geo_AB=0.0,
+                geo_BC=None,
+                gen_protocol=GOAL_A_SOURCE_PROTOCOL,
+                role_sequence=[
+                    "initial_imagegoal", "source_only_placeholder"],
+                source_only_goal_a=True,
+                source_only_usage="eval_2leg_habitat --stop_after_leg1",
+                query_goal_present=False,
+                initial_yaw_mode=initial_yaw_mode,
+                start_yaw_habitat=actual_start_yaw,
+                start_path_yaw_habitat=float(start_path_yaw),
+                start_heading_offset_deg=float(start_heading_offset_deg),
+                initial_distance_band_m=[
+                    float(args.dA_min), float(args.dA_max)],
+                initial_goal_pose_source="legacy_sampled_target",
+                initial_start_pose_source="legacy_unrecorded_pre_step",
+                covis_band=[args.covis_lo, args.covis_hi],
+                novel_covis=args.novel_covis,
+                covis_pos_hi=args.covis_pos_hi,
+                covis_pos_lo=args.covis_pos_lo,
+                window=args.window,
+                num_scale=args.num_scale,
+                anchor_margin=args.anchor_margin,
+                camera_height_m=float(args.cam_h),
+                frame_convention=(
+                    "positions+parquet in data(Zup,M_W); "
+                    "yaw_habitat in render frame"),
+            )
+            _bump(diagnostics, "episode.accepted")
+            return r1, d1, p1, meta, [r1[-1]]
+
+        # --- B: 2-leg -> REVISIT on leg A.  Three-leg defaults to NOVEL,
+        #     while the explicit double-Revisit diagnostic makes B a Revisit. ---
         # history at B's step = leg1 (n_anchor = all of leg1: the revisit target).
-        if args.n_legs == 2:
-            rv = sample_revisit(sim, pf, leg1, p1, d1, len(leg1), rng, args, ch, floor_y)
+        double_revisit = (
+            args.n_legs >= 3
+            and args.three_leg_roles == "double_revisit"
+        )
+        if args.n_legs == 2 or double_revisit:
+            rv = sample_revisit(
+                sim, pf, leg1, p1, d1, len(leg1), rng, args, ch,
+                floor_y, diagnostics=diagnostics,
+                diagnostic_prefix="revisit_b")
             if rv is None:
+                _bump(diagnostics, "episode.revisit_b_sampling")
                 continue
             B, yaw_B, covB, aiB, hoB, curveB = rv; kindB = "revisit"; arriveB = True
         else:
-            nv = sample_novel(sim, pf, A, p1, d1, rng, args, ch, floor_y)
+            nv = sample_novel(
+                sim, pf, A, p1, d1, rng, args, ch, floor_y,
+                desired_geo_m=float(gdA),
+                distance_match_tolerance_m=float(
+                    args.role_distance_match_tol_m),
+                diagnostics=diagnostics,
+                diagnostic_prefix="novel_b",
+            )
             if nv is None:
+                _bump(diagnostics, "episode.novel_b_sampling")
                 continue
+            # NOTE: roll_leg's goal_yaw/arrive are signature-compat no-ops; the goal-image
+            # symmetry fix happens AFTER the leg is rolled (see the arrival-yaw re-anchor below).
             B, yaw_B, covB, curveB = nv; aiB = -1; hoB = None; kindB = "novel"; arriveB = False
+            sampled_B = np.asarray(B, dtype=float).copy()
         okB, gdB, g2 = geodesic(pf, A, B)
         if not okB or gdB < args.b_min or not _geo_on_floor(g2, floor_y, ftol):
+            _bump(diagnostics, "episode.b_geodesic")
             continue
         leg2, ok = roll_leg(g2, pf, E, eb, cp, leg1[-1][0], leg1[-1][1],
                             goal=B, goal_yaw=yaw_B, arrive=arriveB)
         if not ok:
+            _bump(diagnostics, "episode.b_rollout")
             continue
         p2, d2, r2 = _render_leg(sim, leg2)
+        if args.n_legs >= 3 and kindB == "novel":
+            # v4 exact symmetry: Goal B is the expert's actual terminal pose
+            # and exact terminal RGB, just as Goal A is its expert terminal
+            # frame.  Re-check distance and novelty after re-anchoring.
+            B = np.asarray(leg2[-1][0], dtype=float) - ch
+            yaw_B = float(leg2[-1][1])
+            okB, gdB, _ = geodesic(pf, A, B)
+            if (not okB or not args.min_dist_AB <= gdB <= args.max_dist_AB
+                    or abs(float(gdB) - float(gdA))
+                    > float(args.role_distance_match_tol_m)
+                    or not _on_floor(B, floor_y, ftol)):
+                _bump(diagnostics, "episode.b_terminal_reanchor")
+                continue
+            curveB = covis_curve(_goal_world_pts(sim, B, yaw_B, ch), p1, d1,
+                                 tol=args.covis_tol)
+            covB = float(curveB.max())
+            if covB >= args.novel_covis:
+                _bump(diagnostics, "episode.b_terminal_covis")
+                continue
         legs = [leg1, leg2]; R = [(p1, d1, r1), (p2, d2, r2)]
-        goals = [dict(name="B", pos=B, yaw=yaw_B, kind=kindB, covis=covB, covis_argmax=aiB,
-                      head_off_deg=hoB, covis_curve=curveB)]
+        goals = [dict(
+            name="B", pos=B, yaw=yaw_B, kind=kindB, covis=covB,
+            covis_argmax=aiB, head_off_deg=hoB, covis_curve=curveB,
+            anchor_frame_limit=(len(leg1) if kindB == "revisit" else None),
+            non_anchor_max_covis=0.0,
+        )]
 
         # --- 3-leg: C REVISITS leg A (leg1), reached from B. History at C's step = leg1+leg2, so leg2
         #     frames are hard NEGATIVES; anchor is still sampled from leg1 (n_anchor = len(leg1)). ---
         if args.n_legs >= 3:
             hist_fr = leg1 + leg2; hist_p = p1 + p2; hist_d = d1 + d2
             rv = sample_revisit(sim, pf, hist_fr, hist_p, hist_d, len(leg1), rng, args, ch, floor_y,
-                                source=B, min_geo=args.c_min)
+                                source=B, min_geo=args.c_min,
+                                diagnostics=diagnostics,
+                                diagnostic_prefix="revisit_c")
             if rv is None:
+                _bump(diagnostics, "episode.revisit_c_sampling")
                 continue
             C, yaw_C, covC, aiC, hoC, curveC = rv
+            if (double_revisit
+                    and abs(int(aiC) - int(aiB))
+                    < int(args.double_revisit_min_anchor_gap)):
+                _bump(diagnostics, "revisit_c.anchor_too_close_to_b")
+                continue
             okC, gdC, g3 = geodesic(pf, B, C)
             if not okC or gdC < args.c_min or not _geo_on_floor(g3, floor_y, ftol):
+                _bump(diagnostics, "episode.c_geodesic")
                 continue
             leg3, ok = roll_leg(g3, pf, E, eb, cp, leg2[-1][0], leg2[-1][1],
                                 goal=C, goal_yaw=yaw_C, arrive=True)
             if not ok:
+                _bump(diagnostics, "episode.c_rollout")
                 continue
             p3, d3, r3 = _render_leg(sim, leg3)
             legs.append(leg3); R.append((p3, d3, r3))
-            goals.append(dict(name="C", pos=C, yaw=yaw_C, kind="revisit", covis=covC, covis_argmax=aiC,
-                              head_off_deg=hoC, covis_curve=curveC))
+            goals.append(dict(
+                name="C", pos=C, yaw=yaw_C, kind="revisit",
+                covis=covC, covis_argmax=aiC, head_off_deg=hoC,
+                covis_curve=curveC, anchor_frame_limit=len(leg1),
+                non_anchor_max_covis=(
+                    float(curveC[len(leg1):].max())
+                    if len(curveC) > len(leg1) else 0.0),
+            ))
 
         # --- assemble (already rendered per leg) ---
         rgbs = [x for (_p, _d, rr) in R for x in rr]
@@ -630,6 +906,7 @@ def make_episode(sim, rng, args, ep_idx, esdf_cache):
         seg = np.diff(xyt, axis=0)
         tang = np.unwrap(np.arctan2(seg[:, 1], seg[:, 0]))
         if len(tang) > 1 and float(np.abs(np.degrees(np.diff(tang))).max()) > args.max_frame_turn:
+            _bump(diagnostics, "episode.trajectory_turn_spike")
             continue
         # (2) collision: sample densely along every inter-frame segment; all must stay on the navmesh
         #     (a straight hop between two navigable frames can still clip an obstacle corner).
@@ -638,19 +915,36 @@ def make_episode(sim, rng, args, ep_idx, esdf_cache):
             return pf.is_navigable(q) and abs(q[0] - x) < 0.06 and abs(q[2] - z) < 0.06
         if any(not _gnav(xyt[i - 1, 0] * (1 - t) + xyt[i, 0] * t, xyt[i - 1, 1] * (1 - t) + xyt[i, 1] * t)
                for i in range(1, len(xyt)) for t in (0.25, 0.5, 0.75)):
+            _bump(diagnostics, "episode.trajectory_collision")
             continue
 
-        goal_rgbs = [render(sim, np.asarray(g["pos"], float) + ch, g["yaw"])[0] for g in goals]
+        goal_rgbs = []
+        for goal in goals:
+            if (args.n_legs >= 3 and goal["name"] == "B"
+                    and goal["kind"] == "novel"):
+                # Saving the same RGB array with the same JPEG settings makes
+                # goal_1.jpg byte-identical to expert frame switch_b-1.
+                goal_rgbs.append(r2[-1])
+            else:
+                goal_rgbs.append(render(
+                    sim, np.asarray(goal["pos"], float) + ch,
+                    goal["yaw"])[0])
 
         def _d(p):
             return (M_W @ np.asarray(p, float)).tolist()
-        meta = dict(scene=os.path.basename(args.scene), ep_idx=ep_idx, n_frames=len(rgbs),
+        gen_protocol = multileg_protocol(
+            args.n_legs, args.three_leg_roles)
+        meta = dict(scene=os.path.basename(args.scene), ep_idx=ep_idx,
+                    generation_seed=int(args.seed), n_frames=len(rgbs),
                     n_legs=len(legs), switch_idx=int(switches[0]), switches=switches,
-                    start=_d(start), A=_d(A),
+                    start=_d(start_for_metadata), A=_d(A),
                     goals=[dict(name=g["name"], kind=g["kind"], pos=_d(g["pos"]),
                                 yaw_habitat=g["yaw"], covis=round(float(g["covis"]), 4),
                                 covis_argmax=int(g["covis_argmax"]),
                                 head_off_deg=(round(g["head_off_deg"], 1) if g.get("head_off_deg") is not None else None),
+                                anchor_frame_limit=g.get("anchor_frame_limit"),
+                                non_anchor_max_covis=round(
+                                    float(g.get("non_anchor_max_covis", 0.0)), 4),
                                 # recall gap = current(=len history-1) - matched frame; large => long-term memory.
                                 recall_gap=(len(g["covis_curve"]) - 1 - int(g["covis_argmax"])
                                             if int(g["covis_argmax"]) >= 0 else None),
@@ -659,6 +953,57 @@ def make_episode(sim, rng, args, ep_idx, esdf_cache):
                                 covis_curve=[round(float(c), 4) for c in g["covis_curve"]])
                            for g in goals],
                     geo_startA=float(gdA),
+                    geo_AB=(float(gdB) if args.n_legs >= 3 else None),
+                    geo_BC=(float(gdC) if args.n_legs >= 3 else None),
+                    gen_protocol=gen_protocol,
+                    role_sequence=(
+                        (["initial_imagegoal", "revisit", "revisit"]
+                         if double_revisit else
+                         ["initial_imagegoal", "novel", "revisit"])
+                        if args.n_legs >= 3
+                        else ["initial_imagegoal", "revisit"]),
+                    initial_yaw_mode=initial_yaw_mode,
+                    start_yaw_habitat=actual_start_yaw,
+                    start_path_yaw_habitat=float(start_path_yaw),
+                    start_heading_offset_deg=float(start_heading_offset_deg),
+                    initial_distance_band_m=[float(args.dA_min), float(args.dA_max)],
+                    novel_distance_band_m=[float(args.min_dist_AB), float(args.max_dist_AB)],
+                    initial_goal_pose_source=(
+                        "expert_arrival_frame_exact"
+                        if args.n_legs >= 3 else "legacy_sampled_target"),
+                    initial_start_pose_source=(
+                        "first_stored_expert_frame_exact"
+                        if args.n_legs >= 3 else "legacy_unrecorded_pre_step"),
+                    novel_b_max_dist=float(args.max_dist_AB),
+                    novel_b_goal_yaw=(
+                        "expert_arrival_heading" if kindB == "novel" else None),
+                    novel_b_goal_image_source=(
+                        "expert_arrival_frame_exact"
+                        if args.n_legs >= 3 and kindB == "novel" else None),
+                    role_pairing=(
+                        "same_episode_geodesic"
+                        if args.n_legs >= 3 and kindB == "novel" else None),
+                    role_distance_match_tolerance_m=(
+                        float(args.role_distance_match_tol_m)
+                        if args.n_legs >= 3 and kindB == "novel" else None),
+                    role_distance_error_m=(
+                        abs(float(gdA) - float(gdB))
+                        if args.n_legs >= 3 and kindB == "novel" else None),
+                    sampled_target_error_m=(
+                        {"A": float(np.linalg.norm(A - sampled_A)),
+                         "B": float(np.linalg.norm(B - sampled_B))}
+                        if args.n_legs >= 3 and kindB == "novel" else None),
+                    double_revisit_min_anchor_gap=(
+                        int(args.double_revisit_min_anchor_gap)
+                        if double_revisit else None),
+                    double_revisit_anchor_gap=(
+                        abs(int(aiC) - int(aiB))
+                        if double_revisit else None),
+                    double_revisit_goal_image_source=(
+                        "metadata_pose_render" if double_revisit else None),
+                    double_revisit_distance_min_m=(
+                        {"B": float(args.b_min), "C": float(args.c_min)}
+                        if double_revisit else None),
                     covis_band=[args.covis_lo, args.covis_hi], novel_covis=args.novel_covis,
                     covis_pos_hi=args.covis_pos_hi, covis_pos_lo=args.covis_pos_lo,
                     # LingBot streaming: valid match range = [anchor_margin, step); loader masks [0,anchor_margin)
@@ -666,7 +1011,9 @@ def make_episode(sim, rng, args, ep_idx, esdf_cache):
                     window=args.window, num_scale=args.num_scale, anchor_margin=args.anchor_margin,
                     camera_height_m=float(args.cam_h),
                     frame_convention="positions+parquet in data(Zup,M_W); yaw_habitat in render frame")
+        _bump(diagnostics, "episode.accepted")
         return rgbs, depths, poses, meta, goal_rgbs
+    _bump(diagnostics, "make_episode.exhausted")
     return None
 
 
@@ -693,10 +1040,22 @@ def run_legs(sim, args, rng, esdf_cache, n_legs, n, out_dir):
     args.n_legs = n_legs
     os.makedirs(out_dir, exist_ok=True)
     made = 0
-    for ep in range(n * 6):
+    diagnostics = {}
+    # Episode validity is intentionally strict (same-floor geodesic, revisit
+    # visibility, smooth tracking, and collision checks).  Small MP3D scenes can
+    # therefore need many more rejected candidates than the historical fixed
+    # six calls per requested episode.  Keep the acceptance distribution and RNG
+    # stream unchanged, but make the label-blind sampling budget explicit so a
+    # confirmation run can fail closed or allocate more attempts without relaxing
+    # any episode criterion.
+    attempt_budget = n * args.episode_attempt_multiplier
+    attempts_used = 0
+    for attempt_index in range(attempt_budget):
         if made >= n:
             break
-        res = make_episode(sim, rng, args, made, esdf_cache)
+        attempts_used = attempt_index + 1
+        res = make_episode(
+            sim, rng, args, made, esdf_cache, diagnostics=diagnostics)
         if res is None:
             continue
         rgbs, depths, poses, meta, goal_rgbs = res
@@ -706,10 +1065,38 @@ def run_legs(sim, args, rng, esdf_cache, n_legs, n, out_dir):
                         + (f"/head{g['head_off_deg']:.0f}deg" if g.get('head_off_deg') is not None else "")
                         + (f"/gap{g['recall_gap']}" if g.get('recall_gap') is not None else "")
                         for g in meta["goals"])
-        print(f"[{n_legs}leg ep {made}] frames={meta['n_frames']} switches={meta['switches']} "
+        print(f"[{n_legs}leg ep {made}] sample_attempt={attempts_used}/{attempt_budget} "
+              f"frames={meta['n_frames']} switches={meta['switches']} "
               f"geo start->A={meta['geo_startA']:.1f} goals: {gsum}")
         made += 1
-    print(f"DONE: {made}/{n} n_legs={n_legs} -> {out_dir}")
+    print(f"DONE: {made}/{n} attempts={attempts_used}/{attempt_budget} "
+          f"n_legs={n_legs} -> {out_dir}")
+    generation_summary = {
+        "protocol": (
+            GOAL_A_SOURCE_PROTOCOL
+            if getattr(args, "goal_a_source_only", False) else
+            multileg_protocol(n_legs, args.three_leg_roles)),
+        "n_legs": int(n_legs),
+        "requested_episodes": int(n),
+        "generated_episodes": int(made),
+        "complete": bool(made >= n),
+        "outer_attempts_used": int(attempts_used),
+        "outer_attempt_budget": int(attempt_budget),
+        "acceptance_per_outer_attempt": (
+            float(made / attempts_used) if attempts_used else None),
+        "rejection_counts": dict(sorted(diagnostics.items())),
+    }
+    with open(os.path.join(out_dir, "generation_summary.json"), "w") as handle:
+        json.dump(generation_summary, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    ranked_rejections = sorted(
+        ((count, name) for name, count in diagnostics.items()
+         if not name.endswith(".accepted")),
+        reverse=True,
+    )[:8]
+    if ranked_rejections:
+        print("[generation diagnostics] " + ", ".join(
+            f"{name}={count}" for count, name in ranked_rejections))
     return made
 
 
@@ -723,11 +1110,50 @@ def main():
     ap.add_argument("--n2", type=int, default=None, help="dual-leg: #2-leg episodes for this scene")
     ap.add_argument("--n3", type=int, default=None, help="dual-leg: #3-leg episodes for this scene")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--initial_yaw_mode",
+        choices=INITIAL_YAW_MODES,
+        default="auto",
+        help=("first-leg camera yaw: auto keeps historical path alignment for "
+              "2-leg Revisit but uses a uniform yaw for 3-leg role-symmetric "
+              "evaluation; path_aligned reproduces the legacy bias"),
+    )
+    ap.add_argument("--episode_attempt_multiplier", type=int, default=6,
+                    help="maximum make_episode calls per requested episode; changes only the "
+                         "sampling budget, never episode acceptance criteria")
+    ap.add_argument(
+        "--allow_incomplete",
+        action="store_true",
+        help=("diagnostic only: return success when the attempt budget produces "
+              "fewer episodes than requested; formal generation fails closed"),
+    )
     ap.add_argument("--dA_min", type=float, default=3.0); ap.add_argument("--dA_max", type=float, default=9.0)
-    ap.add_argument("--b_frac", type=float, nargs=2, default=(0.40, 0.60))
-    ap.add_argument("--b_min", type=float, default=2.0); ap.add_argument("--b_jitter", type=float, default=0.3)
+    ap.add_argument("--b_min", type=float, default=2.0)
     ap.add_argument("--n_legs", type=int, default=2, choices=[2, 3],
                     help="2: start->A->B (B revisit on leg A) ; 3: ->C (B novel off leg A, C revisit on leg A)")
+    ap.add_argument(
+        "--goal_a_source_only",
+        action="store_true",
+        help=("construct only the unchanged first ImageGoal leg and emit a "
+              "two-leg-schema carrier for --stop_after_leg1 source collection; "
+              "no Revisit query is generated or valid in this mode"),
+    )
+    ap.add_argument(
+        "--three_leg_roles",
+        choices=THREE_LEG_ROLE_MODES,
+        default="novel_revisit",
+        help=("3-leg role sequence: novel_revisit keeps the strict v4 "
+              "A->Novel-B->Revisit-C benchmark; double_revisit samples "
+              "two distinct leg-A revisits and makes leg B a hard negative "
+              "for C"),
+    )
+    ap.add_argument(
+        "--double_revisit_min_anchor_gap",
+        type=int,
+        default=32,
+        help=("double_revisit only: minimum frame separation between the "
+              "B and C leg-A relocalization anchors"),
+    )
     ap.add_argument("--c_min", type=float, default=2.0, help="min geodesic B->C for the 3rd leg")
     # revisit / novel definition (co-visibility) + goal perturbation
     ap.add_argument("--covis_lo", type=float, default=0.20, help="revisit: min max-covisibility with history")
@@ -740,9 +1166,17 @@ def main():
                     help="revisit: max |goal yaw - matched frame yaw| (relocalizability envelope)")
     ap.add_argument("--novel_covis", type=float, default=0.10, help="novel B: max covisibility with history must be <")
     ap.add_argument("--min_dist_AB", type=float, default=3.0, help="novel B: min geodesic A->B (3-leg)")
+    ap.add_argument("--max_dist_AB", type=float, default=9.0,
+                    help="novel B: max geodesic A->B; v4 requires it to equal --dA_max")
+    ap.add_argument(
+        "--role_distance_match_tol_m",
+        type=float,
+        default=MAX_ROLE_DISTANCE_MATCH_TOLERANCE_M,
+        help=("3-leg only: maximum within-episode |geo(start,A)-geo(A,B)|; "
+              "the v4 formal contract permits at most 0.50 m"),
+    )
     ap.add_argument("--goal_jitter_pos", type=float, default=1.50,
                     help="revisit: uniform-disk RADIUS (m) around the anchor frame X; covis+heading gates cap realized offset")
-    ap.add_argument("--goal_jitter_yaw", type=float, default=45.0, help="(unused; heading cone = head_max_deg)")
     # LingBot goal_append recomputes a FIXED W-frame window [m-W+1..m] around the match and injects it
     # at RoPE pos total_frames=m-W+1. For that window to have W real frames AND be disjoint from the
     # scale block [0,num_scale) (else RoPE position collision), need m-W+1 >= num_scale => m >= num_scale+W-1.
@@ -761,11 +1195,6 @@ def main():
     ap.add_argument("--covis_tol", type=float, default=0.30, help="depth-consistency tol for covisibility (m)")
     # multi-floor handling (MP3D)
     ap.add_argument("--floor_tol", type=float, default=0.80, help="max |y-floor_y| to count as same floor (m)")
-    ap.add_argument("--floor_gap", type=float, default=1.00, help="min height gap between distinct floors (m)")
-    ap.add_argument("--clearance_A", type=float, default=0.5, help="min obstacle clearance at A (U-turn room)")
-    ap.add_argument("--clearance_B", type=float, default=0.3, help="min obstacle clearance at B (goal)")
-    ap.add_argument("--step_m", type=float, default=0.10, help="corridor densify res for B sampling")
-    ap.add_argument("--min_seen", type=int, default=4)
     ap.add_argument("--cam_h", type=float, default=0.5, help="camera height above floor navmesh (m)")
     ap.add_argument("--max_turn_deg", type=float, default=4.5, help="max heading change per frame")
     # pure-pursuit controller (measured from InternData-N1)
@@ -786,6 +1215,27 @@ def main():
     ap.add_argument("--eb_rho0", type=float, default=0.6, help="clearance influence radius (m)")
     ap.add_argument("--eb_step", type=float, default=0.04)
     args = ap.parse_args()
+    if args.goal_a_source_only and (
+            args.n_legs != 2 or args.n2 is not None or args.n3 is not None):
+        ap.error(
+            "--goal_a_source_only requires single-output --n_legs 2 mode")
+    if args.episode_attempt_multiplier < 1:
+        ap.error("--episode_attempt_multiplier must be >= 1")
+    generates_three_leg = (
+        int(args.n_legs) == 3 or args.n3 is not None)
+    if args.double_revisit_min_anchor_gap < 1:
+        ap.error("--double_revisit_min_anchor_gap must be >= 1")
+    if generates_three_leg and args.three_leg_roles == "novel_revisit":
+        if (abs(float(args.dA_min) - float(args.min_dist_AB)) > 1e-9
+                or abs(float(args.dA_max) - float(args.max_dist_AB)) > 1e-9):
+            ap.error(
+                "3-leg role-paired generation requires identical A/B "
+                "distance bands")
+        if not (0.0 < float(args.role_distance_match_tol_m)
+                <= MAX_ROLE_DISTANCE_MATCH_TOLERANCE_M):
+            ap.error(
+                "--role_distance_match_tol_m must be in (0, 0.50] for "
+                "the v4 formal contract")
     if args.anchor_margin is None:
         args.anchor_margin = args.num_scale + args.window - 1     # goal_append window disjoint from scale block
     if args.min_recall_gap is None:
@@ -795,13 +1245,22 @@ def main():
 
     sim = make_sim(args.scene, args.navmesh, agent_radius=args.agent_radius)
     assert sim.pathfinder.is_loaded, "navmesh not loaded"
+    # Habitat's navigable-point sampler owns RNG state separately from NumPy.
+    # Seed both sources so a confirmation manifest can be regenerated from
+    # its recorded per-scene seed.
+    sim.seed(args.seed)
+    sim.pathfinder.seed(args.seed)
     lo, hi = sim.pathfinder.get_bounds()
-    print(f"[main] navmesh height span {hi[1]-lo[1]:.1f} m (multi-floor if large); "
-          f"each episode is confined to its A's floor (per-floor ESDF cached).")
+    print(
+        f"[main] scene navmesh height span={hi[1]-lo[1]:.1f} m; "
+        "the scene may contain multiple floors, but every episode is "
+        "strictly single-floor (all three geodesics are floor-gated; "
+        "ESDF is cached per floor).")
     esdf_cache = {}                                          # floor bucket -> ESDF (built on demand)
     rng = np.random.default_rng(args.seed)
     scene_id = os.path.splitext(os.path.basename(args.scene))[0]
 
+    completed = []
     if args.n2 is not None or args.n3 is not None:
         # dual-leg: one loaded scene -> both leg types, sharing sim + ESDF cache (built once per floor).
         # nests as <out>/mp3d_{2,3}leg/<scene_id>/episode_XXXX ; the SLURM array does the scene loop.
@@ -811,11 +1270,25 @@ def main():
         if args.n3 is not None:
             plan.append((3, args.n3, os.path.join(args.out, "mp3d_3leg", scene_id)))
         for n_legs, n, out_dir in plan:
-            run_legs(sim, args, rng, esdf_cache, n_legs, n, out_dir)
+            completed.append((
+                run_legs(sim, args, rng, esdf_cache, n_legs, n, out_dir),
+                n, out_dir))
     else:
         os.makedirs(args.out, exist_ok=True)
-        run_legs(sim, args, rng, esdf_cache, args.n_legs, args.n, args.out)
+        completed.append((
+            run_legs(sim, args, rng, esdf_cache, args.n_legs, args.n, args.out),
+            args.n, args.out))
     sim.close()
+    incomplete = [
+        (made, requested, out_dir)
+        for made, requested, out_dir in completed if made < requested]
+    if incomplete and not args.allow_incomplete:
+        details = "; ".join(
+            f"{made}/{requested} at {out_dir}"
+            for made, requested, out_dir in incomplete)
+        raise SystemExit(
+            "generation incomplete after the configured attempt budget: "
+            + details)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,12 @@ Endpoints (NavDP wire-contract style):
   POST /retrieval_verify     files: goal (jpg), form: anchor
                              -> CPU two-view geometric overlap diagnostics;
                              does not mutate streaming model state.
+  POST /phase_b_rank         files: goal (jpg), form: candidates (JSON)
+                             -> learned ordering of the frozen DINO shortlist;
+                             no activation decision and no stream mutation.
+  POST /learned_relocalize   files: goal (jpg), form: candidates (JSON)
+                             -> frozen Pi3X spatial-proof decision/bearing;
+                             no frame append and fail-closed on every error.
   POST /imagegoal_similarity files: image (jpg), goal (jpg)
                              -> {"current_goal_cos": float}
                              stateless visual check; does not mutate memory.
@@ -39,13 +45,16 @@ Usage:
 """
 
 import argparse
+import json
 import os
+import sys
 
 # must precede any torch import (policy_agent): reduces fragmentation OOMs from
 # the large KV-cache alloc/free cycle each plan() runs.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 from flask import Flask, jsonify, request
+import torch
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--port", type=int, default=18888)
@@ -80,6 +89,90 @@ parser.add_argument(
 parser.add_argument("--flow_gate", type=str, default="auto",
                     help="auto = training length tier; off = dense; or fixed px threshold")
 parser.add_argument("--buffer_root", type=str, default="/tmp/memnav_server_buffer")
+parser.add_argument(
+    "--phase_b_checkpoint",
+    type=str,
+    default="",
+    help=("experimental Phase-B checkpoint used only to rank a fixed DINO "
+          "shortlist; empty disables the learned ranker"),
+)
+parser.add_argument(
+    "--phase_b_allow_unapproved",
+    action="store_true",
+    help=("explicitly permit a deployment_approved=false checkpoint for the "
+          "audited P0 closed-loop experiment"),
+)
+parser.add_argument(
+    "--certified_relocalization",
+    action="store_true",
+    help=("enable the frozen SuperPoint+LightGlue + LingBot-depth PnP v2 "
+          "endpoint; disabled leaves all historical routes unchanged"),
+)
+parser.add_argument(
+    "--certified_counterfactual_audit",
+    action="store_true",
+    help=("diagnostic only: run the unchanged PnP certificate in canonical "
+          "DINO order, stopping at the first accepted hypothesis, in addition "
+          "to the deployed geometry proposal; extra attempts never change "
+          "the action"),
+)
+parser.add_argument(
+    "--lightglue_repo", type=str, default="",
+    help="pinned official LightGlue checkout (required when enabled)",
+)
+parser.add_argument(
+    "--lightglue_dependency_root", type=str, default="",
+    help="optional directory containing pinned kornia dependencies",
+)
+parser.add_argument(
+    "--lightglue_max_keypoints", type=int, default=2048,
+    help="frozen SuperPoint keypoint budget for certified relocalization",
+)
+parser.add_argument(
+    "--cdec_pairwise_artifact", type=str, default="",
+    help=("optional factorized learned anchor proposal; it is consulted only "
+          "after the geometry proposal fails the unchanged certificate"),
+)
+parser.add_argument(
+    "--cdec_pairwise_allow_unapproved",
+    action="store_true",
+    help=("explicit research-only override for a deployment_approved=false "
+          "CDEC artifact"),
+)
+parser.add_argument(
+    "--pi3x_learned_relocalizer",
+    action="store_true",
+    help=("enable the frozen DINO-top8/Pi3X-b16 learned spatial-proof "
+          "endpoint; independent of LightGlue/PnP certificate support"),
+)
+parser.add_argument(
+    "--pi3x_root", type=str, default="",
+    help="pinned official Pi3 source checkout (required when enabled)",
+)
+parser.add_argument(
+    "--pi3x_snapshot", type=str, default="",
+    help="local Pi3X model snapshot containing model.safetensors",
+)
+parser.add_argument(
+    "--pi3x_model_sha256", type=str, default="",
+    help="required SHA256 of the frozen Pi3X model.safetensors",
+)
+parser.add_argument(
+    "--pi3x_spatial_proof_manifest", type=str, default="",
+    help="frozen four-member learned spatial-proof deployment manifest",
+)
+parser.add_argument(
+    "--pi3x_inference_dtype",
+    choices=["auto", "bfloat16", "float16", "float32"],
+    default="auto",
+)
+parser.add_argument(
+    "--synchronize_cuda_http_handoff",
+    action="store_true",
+    help=("finish this server's queued CUDA work before returning an HTTP "
+          "response to a client that may immediately use another CUDA/EGL "
+          "context on the same GPU; scheduling only, never a model input"),
+)
 args = parser.parse_args()
 
 # The server changes directory below because LingBot historically resolves a
@@ -90,10 +183,107 @@ args = parser.parse_args()
 args.checkpoint = os.path.abspath(args.checkpoint)
 args.internnav_root = os.path.abspath(args.internnav_root)
 args.buffer_root = os.path.abspath(args.buffer_root)
+args.phase_b_checkpoint = (
+    os.path.abspath(args.phase_b_checkpoint)
+    if args.phase_b_checkpoint else ""
+)
+args.lightglue_repo = (
+    os.path.abspath(args.lightglue_repo) if args.lightglue_repo else "")
+args.lightglue_dependency_root = (
+    os.path.abspath(args.lightglue_dependency_root)
+    if args.lightglue_dependency_root else "")
+args.cdec_pairwise_artifact = (
+    os.path.abspath(args.cdec_pairwise_artifact)
+    if args.cdec_pairwise_artifact else "")
+args.pi3x_root = (
+    os.path.abspath(args.pi3x_root) if args.pi3x_root else "")
+args.pi3x_snapshot = (
+    os.path.abspath(args.pi3x_snapshot) if args.pi3x_snapshot else "")
+args.pi3x_spatial_proof_manifest = (
+    os.path.abspath(args.pi3x_spatial_proof_manifest)
+    if args.pi3x_spatial_proof_manifest else "")
 if not os.path.isfile(args.checkpoint):
     raise FileNotFoundError(f"MemNav checkpoint not found: {args.checkpoint}")
 if not os.path.isdir(args.internnav_root):
     raise FileNotFoundError(f"InternNav root not found: {args.internnav_root}")
+if args.phase_b_allow_unapproved and not args.phase_b_checkpoint:
+    parser.error("--phase_b_allow_unapproved requires --phase_b_checkpoint")
+if args.phase_b_checkpoint and not os.path.isfile(args.phase_b_checkpoint):
+    raise FileNotFoundError(
+        f"Phase-B checkpoint not found: {args.phase_b_checkpoint}")
+if args.certified_relocalization:
+    if not args.lightglue_repo or not os.path.isdir(args.lightglue_repo):
+        parser.error(
+            "--certified_relocalization requires --lightglue_repo")
+    if (args.lightglue_dependency_root
+            and not os.path.isdir(args.lightglue_dependency_root)):
+        parser.error("--lightglue_dependency_root is not a directory")
+    if args.lightglue_max_keypoints != 2048:
+        parser.error("the frozen certificate requires 2048 keypoints")
+if args.certified_counterfactual_audit and not args.certified_relocalization:
+    parser.error(
+        "--certified_counterfactual_audit requires "
+        "--certified_relocalization")
+if args.cdec_pairwise_allow_unapproved and not args.cdec_pairwise_artifact:
+    parser.error(
+        "--cdec_pairwise_allow_unapproved requires --cdec_pairwise_artifact")
+if args.cdec_pairwise_artifact:
+    if not args.certified_relocalization:
+        parser.error(
+            "--cdec_pairwise_artifact requires --certified_relocalization")
+    if not os.path.isfile(args.cdec_pairwise_artifact):
+        raise FileNotFoundError(
+            f"CDEC pairwise artifact not found: {args.cdec_pairwise_artifact}")
+if args.pi3x_learned_relocalizer:
+    if not args.pi3x_root or not os.path.isdir(args.pi3x_root):
+        parser.error("--pi3x_learned_relocalizer requires --pi3x_root")
+    if not args.pi3x_snapshot or not os.path.isdir(args.pi3x_snapshot):
+        parser.error("--pi3x_learned_relocalizer requires --pi3x_snapshot")
+    if not os.path.isfile(os.path.join(
+            args.pi3x_snapshot, "model.safetensors")):
+        parser.error("--pi3x_snapshot must contain model.safetensors")
+    if (len(args.pi3x_model_sha256) != 64
+            or any(character not in "0123456789abcdef"
+                   for character in args.pi3x_model_sha256.lower())):
+        parser.error("--pi3x_model_sha256 must be a 64-character SHA256")
+    if (not args.pi3x_spatial_proof_manifest
+            or not os.path.isfile(args.pi3x_spatial_proof_manifest)):
+        parser.error(
+            "--pi3x_learned_relocalizer requires "
+            "--pi3x_spatial_proof_manifest")
+
+repo_root = os.path.abspath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+phase_b_ranker = None
+if args.phase_b_checkpoint:
+    from MemNavData.phase_b_runtime import PhaseBEnsembleRanker
+    phase_b_ranker = PhaseBEnsembleRanker(
+        args.phase_b_checkpoint,
+        allow_unapproved=args.phase_b_allow_unapproved,
+    )
+
+certified_relocalization_matcher = None
+if args.certified_relocalization:
+    from pathlib import Path
+    from MemNavData.lingbot_pnp_localization import LightGluePointMatcher
+
+    certified_relocalization_matcher = LightGluePointMatcher(
+        Path(args.lightglue_repo),
+        dependency_root=(Path(args.lightglue_dependency_root)
+                         if args.lightglue_dependency_root else None),
+        device=args.device,
+        max_keypoints=args.lightglue_max_keypoints,
+    )
+
+cdec_pairwise_ranker = None
+if args.cdec_pairwise_artifact:
+    from MemNavData.cdec_pairwise_runtime import CDECPairwiseRanker
+    cdec_pairwise_ranker = CDECPairwiseRanker(
+        args.cdec_pairwise_artifact,
+        allow_unapproved=args.cdec_pairwise_allow_unapproved,
+    )
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 from policy_agent import MemNavAgent  # noqa: E402  (after chdir so lingbot paths resolve)
@@ -113,9 +303,36 @@ agent = MemNavAgent(
     graph_subgoal_spacing_m=args.graph_subgoal_spacing_m,
     graph_subgoal_arrival_m=args.graph_subgoal_arrival_m,
     flow_gate=args.flow_gate,
+    phase_b_ranker=phase_b_ranker,
+    certified_relocalization_matcher=certified_relocalization_matcher,
+    certified_counterfactual_audit=args.certified_counterfactual_audit,
+    cdec_pairwise_ranker=cdec_pairwise_ranker,
 )
 
+if args.pi3x_learned_relocalizer:
+    from pathlib import Path
+    from MemNavData.pi3x_online_relocalizer import Pi3XOnlineRelocalizer
+
+    # Load after MemNav/LingBot so co-residency failures are explicit at server
+    # startup rather than appearing halfway through an episode.
+    agent.pi3x_online_relocalizer = Pi3XOnlineRelocalizer(
+        pi3_root=Path(args.pi3x_root),
+        snapshot=Path(args.pi3x_snapshot),
+        expected_model_sha256=args.pi3x_model_sha256.lower(),
+        proof_manifest=Path(args.pi3x_spatial_proof_manifest),
+        device=args.device,
+        inference_dtype=args.pi3x_inference_dtype,
+    )
+
 app = Flask(__name__)
+
+
+@app.after_request
+def synchronize_cuda_http_handoff(response):
+    """Make the cross-process GPU ownership boundary explicit when requested."""
+    if args.synchronize_cuda_http_handoff and torch.cuda.is_available():
+        torch.cuda.synchronize(agent.device)
+    return response
 
 
 @app.route("/navigator_reset", methods=["POST"])
@@ -139,6 +356,13 @@ def navigator_reset():
         "retrieval_candidate_min_gap": agent.retrieval_candidate_min_gap,
         "graph_subgoal_spacing_m": agent.graph_subgoal_spacing_m,
         "graph_subgoal_arrival_m": agent.graph_subgoal_arrival_m,
+        "synchronize_cuda_http_handoff": bool(
+            args.synchronize_cuda_http_handoff),
+        "phase_b_ranker": agent.phase_b_status(),
+        "certified_relocalization": agent.certified_relocalization_status(),
+        "learned_pi3x_relocalization": (
+            agent.learned_pi3x_relocalization_status()),
+        "certified_arrival": agent.certified_arrival_status(),
     })
 
 
@@ -157,6 +381,38 @@ def memory_step():
     return jsonify({"frame_idx": idx})
 
 
+@app.route("/arrival_query", methods=["POST"])
+def arrival_query():
+    """Return read-only LingBot/PnP evidence for the latest streamed frame.
+
+    This endpoint cannot emit or authorize GOAT ``SUBTASK_STOP`` because it
+    does not receive the native-zero trigger.  Authorization remains a pure
+    client-side conjunction under the frozen contract.
+    """
+
+    if "goal" not in request.files:
+        return jsonify({"error": "goal image is required"}), 400
+    raw_goal_intrinsic = request.form.get("goal_camera_intrinsic")
+    goal_camera_intrinsic = None
+    if raw_goal_intrinsic not in (None, ""):
+        try:
+            goal_camera_intrinsic = json.loads(raw_goal_intrinsic)
+        except json.JSONDecodeError as error:
+            return jsonify({
+                "status": "invalid_goal_camera_intrinsic_json",
+                "error": str(error),
+            }), 400
+    result = agent.certify_current_image_goal_arrival(
+        request.files["goal"].read(),
+        goal_camera_intrinsic=goal_camera_intrinsic)
+    return jsonify(result)
+
+
+def candidate_ceiling_override():
+    value = request.form.get("candidate_ceiling_override")
+    return int(value) if value is not None else None
+
+
 @app.route("/imagegoal_step", methods=["POST"])
 def imagegoal_step():
     agent.add_frame(request.files["image"].read())
@@ -166,6 +422,7 @@ def imagegoal_step():
         request.files["goal"].read(),
         forced_anchor=(int(forced_anchor) if forced_anchor is not None else None),
         forced_gate=(float(forced_gate) if forced_gate is not None else None),
+        candidate_ceiling_override=candidate_ceiling_override(),
     )
     return jsonify(out)
 
@@ -181,6 +438,7 @@ def posegoal_step():
         forced_anchor=(int(forced_anchor) if forced_anchor is not None else None),
         forced_gate=(float(forced_gate) if forced_gate is not None else None),
         pose_only=True,
+        candidate_ceiling_override=candidate_ceiling_override(),
     )
     return jsonify(out)
 
@@ -195,6 +453,7 @@ def posegoal_query():
         forced_anchor=(int(forced_anchor) if forced_anchor is not None else None),
         forced_gate=(float(forced_gate) if forced_gate is not None else None),
         pose_only=True,
+        candidate_ceiling_override=candidate_ceiling_override(),
     )
     return jsonify(out)
 
@@ -210,6 +469,7 @@ def retrieval_probe_step():
         forced_anchor=(int(forced_anchor) if forced_anchor is not None else None),
         forced_gate=(float(forced_gate) if forced_gate is not None else None),
         retrieval_only=True,
+        candidate_ceiling_override=candidate_ceiling_override(),
     )
     return jsonify(out)
 
@@ -224,6 +484,128 @@ def retrieval_verify():
     out = agent.verify_retrieval_overlap(
         request.files["goal"].read(), int(anchor))
     return jsonify(out)
+
+
+@app.route("/phase_b_rank", methods=["POST"])
+def phase_b_rank():
+    """Rank a causal DINO shortlist; never decide memory activation."""
+    raw_candidates = request.form.get("candidates")
+    if raw_candidates is None:
+        return jsonify({"ok": False, "error": "candidates is required"}), 400
+    try:
+        candidates = json.loads(raw_candidates)
+    except json.JSONDecodeError as error:
+        return jsonify({
+            "ok": False,
+            "error": f"candidates is invalid JSON: {error}",
+        }), 400
+    goal = request.files.get("goal")
+    if goal is None:
+        return jsonify({"ok": False, "error": "goal is required"}), 400
+    return jsonify(agent.rank_retrieval_candidates(goal.read(), candidates))
+
+
+@app.route("/certified_relocalize", methods=["POST"])
+def certified_relocalize():
+    """Localize one already-probed goal without appending another frame."""
+    raw_candidates = request.form.get("candidates")
+    if raw_candidates is None:
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "candidates_required",
+        }), 400
+    try:
+        candidates = json.loads(raw_candidates)
+    except json.JSONDecodeError as error:
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "invalid_candidate_json", "error": str(error),
+        }), 400
+    goal = request.files.get("goal")
+    if goal is None:
+        return jsonify({
+            "ok": False, "accepted": False, "reason": "goal_required",
+        }), 400
+    raw_route_start = request.form.get("route_start_anchor")
+    try:
+        route_start_anchor = (
+            None if raw_route_start in (None, "") else int(raw_route_start))
+    except (TypeError, ValueError, OverflowError):
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "invalid_route_start_anchor",
+        }), 400
+    raw_graph_rescue = request.form.get("graph_rescue", "0")
+    if raw_graph_rescue not in ("0", "1"):
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "invalid_graph_rescue",
+        }), 400
+    raw_learned_rescue = request.form.get("learned_rescue", "0")
+    if raw_learned_rescue not in ("0", "1"):
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "invalid_learned_rescue",
+        }), 400
+    proposal_order = request.form.get("proposal_order", "geometry_first")
+    if proposal_order not in ("geometry_first", "dino_first_certified"):
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "invalid_proposal_order",
+        }), 400
+    raw_goal_intrinsic = request.form.get("goal_camera_intrinsic")
+    goal_camera_intrinsic = None
+    if raw_goal_intrinsic not in (None, ""):
+        try:
+            goal_camera_intrinsic = json.loads(raw_goal_intrinsic)
+        except json.JSONDecodeError as error:
+            return jsonify({
+                "ok": False, "accepted": False,
+                "reason": "invalid_goal_camera_intrinsic_json",
+                "error": str(error),
+            }), 400
+    # Runtime/model failures are represented as fail-closed JSON decisions;
+    # candidate-contract errors remain visible rather than becoming a 500 that
+    # could accidentally skip the native fallback.
+    return jsonify(agent.certified_relocalize(
+        goal.read(), candidates,
+        route_start_anchor=route_start_anchor,
+        graph_rescue=(raw_graph_rescue == "1"),
+        allow_learned_rescue=(raw_learned_rescue == "1"),
+        proposal_order=proposal_order,
+        goal_camera_intrinsic=goal_camera_intrinsic,
+    ))
+
+
+@app.route("/learned_relocalize", methods=["POST"])
+def learned_relocalize():
+    """Run learned relocalization after an already-appended causal probe."""
+    raw_candidates = request.form.get("candidates")
+    if raw_candidates is None:
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "candidates_required",
+        }), 400
+    try:
+        candidates = json.loads(raw_candidates)
+    except json.JSONDecodeError as error:
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "invalid_candidate_json", "error": str(error),
+        }), 400
+    goal = request.files.get("goal")
+    if goal is None:
+        return jsonify({
+            "ok": False, "accepted": False, "reason": "goal_required",
+        }), 400
+    result = agent.learned_pi3x_relocalize(goal.read(), candidates)
+    # Evaluation telemetry only.  This is appended after the relocalization
+    # decision and is never read by the controller.
+    result["peak_gpu_memory_allocated_bytes"] = (
+        int(torch.cuda.max_memory_allocated())
+        if torch.cuda.is_available() else None
+    )
+    return jsonify(result)
 
 
 @app.route("/imagegoal_similarity", methods=["POST"])
@@ -242,5 +624,12 @@ if __name__ == "__main__":
           f"candidate_gap={agent.retrieval_candidate_min_gap}, "
           f"graph_spacing_m={agent.graph_subgoal_spacing_m}, "
           f"graph_arrival_m={agent.graph_subgoal_arrival_m}, "
+          f"phase_b_ranker={agent.phase_b_status().get('enabled')}, "
+          f"certified_relocalization="
+          f"{agent.certified_relocalization_status().get('enabled')}, "
+          f"learned_pi3x_relocalization="
+          f"{agent.learned_pi3x_relocalization_status().get('enabled')}, "
+          f"cuda_http_handoff_sync="
+          f"{args.synchronize_cuda_http_handoff}, "
           f"checkpoint={os.path.basename(args.checkpoint)})")
     app.run(host="0.0.0.0", port=args.port, threaded=False)

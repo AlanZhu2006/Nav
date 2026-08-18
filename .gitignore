@@ -112,3 +112,13 @@ NavDP/checkpoints/
 /memnav_viz/
 /eval_terminal_ab/
 /.diagnostics/
+/.worktrees/
+
+# Local one-off visual probes (never paper artifacts)
+/goal.jpg
+/image.jpg
+/input_image.jpg
+
+# Compact, verified paper summaries are intentionally versioned.
+!/paper/results/
+!/paper/results/**

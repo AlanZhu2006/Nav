@@ -1,0 +1,63 @@
+{
+  "schema_version": "cec_mainline_manifest_v1_20260818",
+  "primary_method": "certified_episodic_compass",
+  "primary_runtime": [
+    "NavDP/baselines/memnav/memnav_server.py",
+    "NavDP/baselines/memnav/policy_agent.py",
+    "NavDP/baselines/memnav/reverse_memory_graph.py",
+    "NavDP/baselines/navdp/navdp_server.py",
+    "NavDP/baselines/navdp/policy_agent.py",
+    "NavDP/baselines/navdp/policy_network.py",
+    "MemNavData/certified_relocalization_runtime.py",
+    "MemNavData/lingbot_pnp_localization.py",
+    "MemNavData/lingbot_colored_registration.py",
+    "MemNavData/revisit_bearing_adapter.py"
+  ],
+  "closed_loop_contract": [
+    "MemNavData/eval_2leg_habitat.py",
+    "MemNavData/eval_3leg_habitat.py",
+    "MemNavData/generate_twoleg.py",
+    "MemNavData/deterministic_eval_protocol.py",
+    "MemNavData/navdp_goal_switch.py",
+    "MemNavData/revisit_action_shadow.py",
+    "MemNavData/shared_online_double_revisit_runtime.py",
+    "MemNavData/goat_terminal_alignment.py"
+  ],
+  "final14_population_and_analysis": [
+    "MemNavData/final14_role_pair_contract.py",
+    "MemNavData/shared_online_role_pair_contract.py",
+    "MemNavData/freeze_final14_source_manifest.py",
+    "MemNavData/build_final14_role_pair_scene.py",
+    "MemNavData/audit_final14_role_pairs.py",
+    "MemNavData/audit_shared_online_double_revisit.py",
+    "MemNavData/finalize_final14_role_pairs.py",
+    "MemNavData/materialize_online_a_traces.py",
+    "MemNavData/eval_shared_online_role_pairs.py",
+    "MemNavData/summarize_paper_role_pair_eval.py",
+    "MemNavData/independent_verify_paper_role_pair_eval.py"
+  ],
+  "hm3d_analysis": [
+    "MemNavData/build_hm3d_heldout_val10_revisit_manifest.py",
+    "MemNavData/summarize_hm3d_heldout_val10_revisit.py",
+    "MemNavData/verify_hm3d_heldout_val10_revisit.py",
+    "MemNavData/hm3d_heldout_val10_revisit_protocol_20260816.json"
+  ],
+  "secondary_learned_route": [
+    "MemNavData/pi3x_online_relocalizer.py",
+    "MemNavData/pi3x_spatial_reliability_model.py",
+    "MemNavData/pi3x_spatial_proof_runtime.py",
+    "MemNavData/train_pi3x_spatial_reliability_crossfit_oof.py",
+    "MemNavData/fit_pi3x_spatial_reliability_deployment.py",
+    "MemNavData/compare_pi3x_spatial_proof_to_certificate.py"
+  ],
+  "disabled_in_primary": [
+    "graph_rescue",
+    "cdec_learned_rescue",
+    "phase_b_learned_activation",
+    "pi3x_learned_proof",
+    "x_navdp_controller",
+    "oracle_or_frontier_novel_bearing",
+    "active_glance",
+    "goat_arrival_adapter"
+  ]
+}

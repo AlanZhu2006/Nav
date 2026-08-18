@@ -1,0 +1,2035 @@
+{
+  "all_required_outputs_complete": true,
+  "arms": [
+    "native",
+    "raw_fixed_bearing",
+    "geometry_fixed",
+    "certified",
+    "learned_pi3x_spatial"
+  ],
+  "benchmark_files_receipt_sha256": "bf110a3c4832006a62d2d6e5466270c93543d050c24dd000013a5af50b8cfd41",
+  "bootstrap_resamples": 100000,
+  "completion_receipt_aggregate_sha256": "905d6e4e84e34299558e6798b04588cf3747ae7ae7e05f19c4c842bfb5328b6c",
+  "include_learned_pi3x": true,
+  "learned_pi3x_artifacts": {
+    "model_sha256": "69972d6e1c4492cb4d737a84fe940e357087d81c52f5c9b7c160b49c1f41669a",
+    "proof_manifest_sha256": "1a05aaa7cf75296cb68e32f9ea57fba6bcce2b9f57313a8cede05b7c7b0cffdd"
+  },
+  "learned_pi3x_qualification": {
+    "L1_useful_revisit_control": {
+      "pass": true,
+      "positive_net_gain": true,
+      "scene_cluster_ci_lower_above_zero": true
+    },
+    "L2_noninferior_to_cec": {
+      "margin_pp": -10.0,
+      "pass": false,
+      "point_estimate_floor_pp": -5.0
+    },
+    "L3_novel_safety_and_exact_fallback": {
+      "all_fully_abstained_queries_exact": true,
+      "novel_net_nonnegative": true,
+      "pass": false
+    },
+    "all_primary_gates_pass": false,
+    "eligible_for_primary_method_promotion": false,
+    "evaluation_protocol": "natural_direction",
+    "population_target_met": false
+  },
+  "population": {
+    "all_protocol_targets_met": false,
+    "by_protocol": {
+      "hard_support": {
+        "analysis_roles": [
+          "revisit"
+        ],
+        "full_histories": 21,
+        "full_scenes": 10,
+        "histories": 21,
+        "scenes": 10,
+        "target_histories": 16,
+        "target_met": true,
+        "target_scenes": 8,
+        "underpowered_if_target_not_met": false
+      },
+      "natural_direction": {
+        "analysis_roles": [
+          "novel",
+          "revisit"
+        ],
+        "full_histories": 21,
+        "full_scenes": 10,
+        "histories": 21,
+        "scenes": 10,
+        "target_histories": 28,
+        "target_met": false,
+        "target_scenes": 10,
+        "underpowered_if_target_not_met": true
+      }
+    },
+    "excluded_scenes": [],
+    "full_histories": 21,
+    "full_scenes": 10,
+    "histories": 21,
+    "layout": "final14_standard_natural_plus_hard_subset",
+    "primary_protocol": "natural_direction",
+    "scenes": 10,
+    "target_histories": 28,
+    "target_met": false,
+    "target_scenes": 10,
+    "underpowered_if_target_not_met": true
+  },
+  "population_receipt_sha256": "17061389af55efbb4c1b81db283158ede20c1e2d62e94d14a443b4b950383c73",
+  "protocols": {
+    "hard_support": {
+      "analysis_roles": [
+        "revisit"
+      ],
+      "certificate_safety": {
+        "fully_rejected_exact_native_queries": 19,
+        "fully_rejected_novel_queries": 19,
+        "novel_accept_episodes": 2,
+        "novel_queries": 21,
+        "novel_takeover_episodes": 2,
+        "rejection_reasons": {
+          "minimum_inliers": 169,
+          "minimum_query_coverage": 31,
+          "minimum_reference_coverage": 93,
+          "precheck_fundamental_inliers": 422,
+          "precheck_fundamental_query_hull_coverage": 150,
+          "precheck_fundamental_reference_hull_coverage": 92,
+          "status_ok": 44
+        },
+        "revisit_activation_queries": 19,
+        "runtime_failure_plans": 0
+      },
+      "contrasts": {
+        "certified_minus_geometry_fixed": {
+          "all": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [
+              [
+                "S9hNv5qa7GM",
+                "episode_0005",
+                "revisit"
+              ]
+            ],
+            "gains": 1,
+            "left": "geometry_fixed",
+            "left_successes": 25,
+            "loss_identities": [
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "novel"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0003",
+                "revisit"
+              ]
+            ],
+            "losses": 2,
+            "n": 42,
+            "right": "certified",
+            "right_successes": 24,
+            "risk_difference_pp": -2.380952380952381,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -9.090909090909092,
+              6.666666666666667
+            ],
+            "scene_count": 10
+          },
+          "novel": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [],
+            "gains": 0,
+            "left": "geometry_fixed",
+            "left_successes": 6,
+            "loss_identities": [
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "novel"
+              ]
+            ],
+            "losses": 1,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 5,
+            "risk_difference_pp": -4.761904761904762,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -14.285714285714285,
+              0.0
+            ],
+            "scene_count": 10
+          },
+          "revisit": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [
+              [
+                "S9hNv5qa7GM",
+                "episode_0005",
+                "revisit"
+              ]
+            ],
+            "gains": 1,
+            "left": "geometry_fixed",
+            "left_successes": 19,
+            "loss_identities": [
+              [
+                "Z6MFQCViBuw",
+                "episode_0003",
+                "revisit"
+              ]
+            ],
+            "losses": 1,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 19,
+            "risk_difference_pp": 0.0,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -12.0,
+              16.666666666666664
+            ],
+            "scene_count": 10
+          }
+        },
+        "certified_minus_native": {
+          "all": {
+            "exact_mcnemar_two_sided_p": 1.52587890625e-05,
+            "gain_identities": [
+              [
+                "8WUmhLawc2A",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "S9hNv5qa7GM",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0007",
+                "revisit"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "UwV83HsGsw3",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0006",
+                "revisit"
+              ]
+            ],
+            "gains": 17,
+            "left": "native",
+            "left_successes": 7,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 42,
+            "right": "certified",
+            "right_successes": 24,
+            "risk_difference_pp": 40.476190476190474,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              30.952380952380953,
+              50.0
+            ],
+            "scene_count": 10
+          },
+          "novel": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ]
+            ],
+            "gains": 1,
+            "left": "native",
+            "left_successes": 4,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 5,
+            "risk_difference_pp": 4.761904761904762,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              0.0,
+              14.285714285714285
+            ],
+            "scene_count": 10
+          },
+          "revisit": {
+            "exact_mcnemar_two_sided_p": 3.0517578125e-05,
+            "gain_identities": [
+              [
+                "8WUmhLawc2A",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "S9hNv5qa7GM",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0007",
+                "revisit"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "UwV83HsGsw3",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0006",
+                "revisit"
+              ]
+            ],
+            "gains": 16,
+            "left": "native",
+            "left_successes": 3,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 19,
+            "risk_difference_pp": 76.19047619047619,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              61.111111111111114,
+              90.0
+            ],
+            "scene_count": 10
+          }
+        },
+        "certified_minus_raw_fixed_bearing": {
+          "all": {
+            "exact_mcnemar_two_sided_p": 0.375,
+            "gain_identities": [
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "novel"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "novel"
+              ],
+              [
+                "WYY7iVyf5p8",
+                "episode_0004",
+                "novel"
+              ]
+            ],
+            "gains": 4,
+            "left": "raw_fixed_bearing",
+            "left_successes": 21,
+            "loss_identities": [
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "novel"
+              ]
+            ],
+            "losses": 1,
+            "n": 42,
+            "right": "certified",
+            "right_successes": 24,
+            "risk_difference_pp": 7.142857142857143,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -2.380952380952381,
+              17.5
+            ],
+            "scene_count": 10
+          },
+          "novel": {
+            "exact_mcnemar_two_sided_p": 0.375,
+            "gain_identities": [
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "novel"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "novel"
+              ],
+              [
+                "WYY7iVyf5p8",
+                "episode_0004",
+                "novel"
+              ]
+            ],
+            "gains": 4,
+            "left": "raw_fixed_bearing",
+            "left_successes": 2,
+            "loss_identities": [
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "novel"
+              ]
+            ],
+            "losses": 1,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 5,
+            "risk_difference_pp": 14.285714285714286,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -4.761904761904762,
+              35.0
+            ],
+            "scene_count": 10
+          },
+          "revisit": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [],
+            "gains": 0,
+            "left": "raw_fixed_bearing",
+            "left_successes": 19,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 19,
+            "risk_difference_pp": 0.0,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              0.0,
+              0.0
+            ],
+            "scene_count": 10
+          }
+        },
+        "learned_pi3x_spatial_minus_certified": {
+          "all": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [
+              [
+                "Z6MFQCViBuw",
+                "episode_0003",
+                "revisit"
+              ]
+            ],
+            "gains": 1,
+            "left": "certified",
+            "left_successes": 24,
+            "loss_identities": [
+              [
+                "PuKPg4mmafe",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "S9hNv5qa7GM",
+                "episode_0005",
+                "revisit"
+              ]
+            ],
+            "losses": 2,
+            "n": 42,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 23,
+            "risk_difference_pp": -2.380952380952381,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -11.363636363636363,
+              5.0
+            ],
+            "scene_count": 10
+          },
+          "novel": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [],
+            "gains": 0,
+            "left": "certified",
+            "left_successes": 5,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 5,
+            "risk_difference_pp": 0.0,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              0.0,
+              0.0
+            ],
+            "scene_count": 10
+          },
+          "revisit": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [
+              [
+                "Z6MFQCViBuw",
+                "episode_0003",
+                "revisit"
+              ]
+            ],
+            "gains": 1,
+            "left": "certified",
+            "left_successes": 19,
+            "loss_identities": [
+              [
+                "PuKPg4mmafe",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "S9hNv5qa7GM",
+                "episode_0005",
+                "revisit"
+              ]
+            ],
+            "losses": 2,
+            "n": 21,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 18,
+            "risk_difference_pp": -4.761904761904762,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -22.727272727272727,
+              10.0
+            ],
+            "scene_count": 10
+          }
+        },
+        "learned_pi3x_spatial_minus_native": {
+          "all": {
+            "exact_mcnemar_two_sided_p": 3.0517578125e-05,
+            "gain_identities": [
+              [
+                "8WUmhLawc2A",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0007",
+                "revisit"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "UwV83HsGsw3",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0006",
+                "revisit"
+              ]
+            ],
+            "gains": 16,
+            "left": "native",
+            "left_successes": 7,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 42,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 23,
+            "risk_difference_pp": 38.095238095238095,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              28.125,
+              45.65217391304348
+            ],
+            "scene_count": 10
+          },
+          "novel": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ]
+            ],
+            "gains": 1,
+            "left": "native",
+            "left_successes": 4,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 5,
+            "risk_difference_pp": 4.761904761904762,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              0.0,
+              14.285714285714285
+            ],
+            "scene_count": 10
+          },
+          "revisit": {
+            "exact_mcnemar_two_sided_p": 6.103515625e-05,
+            "gain_identities": [
+              [
+                "8WUmhLawc2A",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0007",
+                "revisit"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "UwV83HsGsw3",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0006",
+                "revisit"
+              ]
+            ],
+            "gains": 15,
+            "left": "native",
+            "left_successes": 3,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 18,
+            "risk_difference_pp": 71.42857142857143,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              52.94117647058824,
+              86.36363636363636
+            ],
+            "scene_count": 10
+          }
+        }
+      },
+      "duplicated_novel_is_instrumentation_only": true,
+      "latency": {
+        "certificate_cached_ms": {
+          "maximum": 45949.028354138136,
+          "mean": 193.71664927428375,
+          "median": 0.15966733917593956,
+          "n": 1461,
+          "p95": 0.49176905304193497
+        },
+        "certificate_uncached_ms": {
+          "maximum": 45949.028354138136,
+          "mean": 5217.243979120542,
+          "median": 933.1362219527364,
+          "n": 1461,
+          "p95": 20871.82485824451
+        },
+        "episode_wall_seconds": {
+          "maximum": 438.578064048,
+          "mean": 186.80445425778092,
+          "median": 185.203821308,
+          "n": 105,
+          "p95": 323.2369067866
+        },
+        "geometry_verification_ms": {
+          "maximum": 447.5362626835704,
+          "mean": 3.480769533723486,
+          "median": 0.0,
+          "n": 1534,
+          "p95": 1.6156438156031065
+        },
+        "learned_first_query_ms": {
+          "maximum": 3445.0886682607234,
+          "mean": 2685.674190803963,
+          "median": 2635.096123907715,
+          "n": 42,
+          "p95": 3239.5991078112274
+        },
+        "learned_one_anchor_update_ms": {
+          "maximum": 1310.9941417351365,
+          "mean": 371.37848996457853,
+          "median": 349.97454984113574,
+          "n": 487,
+          "p95": 495.18283871002495
+        },
+        "learned_peak_gpu_memory_allocated_bytes": {
+          "maximum": 28531717120.0,
+          "mean": 27925815498.920464,
+          "median": 27759977984.0,
+          "n": 1471,
+          "p95": 28520806912.0
+        },
+        "learned_stored_online_history_frames": {
+          "maximum": 364.0,
+          "mean": 182.28571428571428,
+          "median": 166.0,
+          "n": 42,
+          "p95": 361.0
+        }
+      },
+      "learned_pi3x_safety": {
+        "accept_takeover_mismatch_queries": 0,
+        "accepted_bearing_error": {
+          "maximum": 179.42645043336867,
+          "mean": 32.18966337788171,
+          "median": 8.996686951284119,
+          "n": 510,
+          "p95": 132.28214459994473
+        },
+        "accepted_bearing_errors_over_90_deg": 79,
+        "fully_abstained_exact_native_queries": 19,
+        "fully_abstained_queries": 19,
+        "initial_inference_contract_violations": 0,
+        "novel_accept_queries": 2,
+        "novel_queries": 21,
+        "novel_takeover_identities": [
+          [
+            "PuKPg4mmafe",
+            "episode_0004",
+            "novel"
+          ],
+          [
+            "SN83YJsR3w2",
+            "episode_0007",
+            "novel"
+          ]
+        ],
+        "novel_takeover_queries": 2,
+        "post_accept_abstention_plans": 28,
+        "queries": 42,
+        "revisit_activation_queries": 21,
+        "revisit_queries": 21,
+        "runtime_failure_plans": 0,
+        "sticky_rejection_violations": 0,
+        "successful_fallback_queries": 3,
+        "successful_takeover_queries": 20
+      },
+      "metrics": {
+        "certified": {
+          "all": {
+            "SPL": 0.40069725911816484,
+            "SR": 0.5714285714285714,
+            "n": 42,
+            "successes": 24
+          },
+          "novel": {
+            "SPL": 0.19224548558518445,
+            "SR": 0.23809523809523808,
+            "n": 21,
+            "successes": 5
+          },
+          "revisit": {
+            "SPL": 0.6091490326511451,
+            "SR": 0.9047619047619048,
+            "n": 21,
+            "successes": 19
+          }
+        },
+        "geometry_fixed": {
+          "all": {
+            "SPL": 0.3825995036506352,
+            "SR": 0.5952380952380952,
+            "n": 42,
+            "successes": 25
+          },
+          "novel": {
+            "SPL": 0.23599687787487061,
+            "SR": 0.2857142857142857,
+            "n": 21,
+            "successes": 6
+          },
+          "revisit": {
+            "SPL": 0.5292021294263995,
+            "SR": 0.9047619047619048,
+            "n": 21,
+            "successes": 19
+          }
+        },
+        "learned_pi3x_spatial": {
+          "all": {
+            "SPL": 0.4005786655638837,
+            "SR": 0.5476190476190477,
+            "n": 42,
+            "successes": 23
+          },
+          "novel": {
+            "SPL": 0.1960632605363848,
+            "SR": 0.23809523809523808,
+            "n": 21,
+            "successes": 5
+          },
+          "revisit": {
+            "SPL": 0.6050940705913829,
+            "SR": 0.8571428571428571,
+            "n": 21,
+            "successes": 18
+          }
+        },
+        "native": {
+          "all": {
+            "SPL": 0.08918928032732826,
+            "SR": 0.16666666666666666,
+            "n": 42,
+            "successes": 7
+          },
+          "novel": {
+            "SPL": 0.1387673327429248,
+            "SR": 0.19047619047619047,
+            "n": 21,
+            "successes": 4
+          },
+          "revisit": {
+            "SPL": 0.03961122791173169,
+            "SR": 0.14285714285714285,
+            "n": 21,
+            "successes": 3
+          }
+        },
+        "raw_fixed_bearing": {
+          "all": {
+            "SPL": 0.3695335479725521,
+            "SR": 0.5,
+            "n": 42,
+            "successes": 21
+          },
+          "novel": {
+            "SPL": 0.09282906608712868,
+            "SR": 0.09523809523809523,
+            "n": 21,
+            "successes": 2
+          },
+          "revisit": {
+            "SPL": 0.6462380298579756,
+            "SR": 0.9047619047619048,
+            "n": 21,
+            "successes": 19
+          }
+        }
+      },
+      "records": 42,
+      "scenes": 10
+    },
+    "natural_direction": {
+      "analysis_roles": [
+        "novel",
+        "revisit"
+      ],
+      "certificate_safety": {
+        "fully_rejected_exact_native_queries": 19,
+        "fully_rejected_novel_queries": 19,
+        "novel_accept_episodes": 2,
+        "novel_queries": 21,
+        "novel_takeover_episodes": 2,
+        "rejection_reasons": {
+          "minimum_inliers": 242,
+          "minimum_query_coverage": 32,
+          "minimum_reference_coverage": 93,
+          "precheck_fundamental_inliers": 393,
+          "precheck_fundamental_query_hull_coverage": 75,
+          "precheck_fundamental_reference_hull_coverage": 60,
+          "status_ok": 44
+        },
+        "revisit_activation_queries": 21,
+        "runtime_failure_plans": 0
+      },
+      "contrasts": {
+        "certified_minus_geometry_fixed": {
+          "all": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [
+              [
+                "8WUmhLawc2A",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "revisit"
+              ]
+            ],
+            "gains": 2,
+            "left": "geometry_fixed",
+            "left_successes": 27,
+            "loss_identities": [
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "novel"
+              ]
+            ],
+            "losses": 1,
+            "n": 42,
+            "right": "certified",
+            "right_successes": 28,
+            "risk_difference_pp": 2.380952380952381,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -5.0,
+              12.5
+            ],
+            "scene_count": 10
+          },
+          "novel": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [],
+            "gains": 0,
+            "left": "geometry_fixed",
+            "left_successes": 9,
+            "loss_identities": [
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "novel"
+              ]
+            ],
+            "losses": 1,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 8,
+            "risk_difference_pp": -4.761904761904762,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -14.285714285714285,
+              0.0
+            ],
+            "scene_count": 10
+          },
+          "revisit": {
+            "exact_mcnemar_two_sided_p": 0.5,
+            "gain_identities": [
+              [
+                "8WUmhLawc2A",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "revisit"
+              ]
+            ],
+            "gains": 2,
+            "left": "geometry_fixed",
+            "left_successes": 18,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 20,
+            "risk_difference_pp": 9.523809523809524,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              0.0,
+              26.31578947368421
+            ],
+            "scene_count": 10
+          }
+        },
+        "certified_minus_native": {
+          "all": {
+            "exact_mcnemar_two_sided_p": 1.52587890625e-05,
+            "gain_identities": [
+              [
+                "8WUmhLawc2A",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0006",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "S9hNv5qa7GM",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "UwV83HsGsw3",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0006",
+                "revisit"
+              ]
+            ],
+            "gains": 17,
+            "left": "native",
+            "left_successes": 11,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 42,
+            "right": "certified",
+            "right_successes": 28,
+            "risk_difference_pp": 40.476190476190474,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              28.125,
+              52.17391304347826
+            ],
+            "scene_count": 10
+          },
+          "novel": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ]
+            ],
+            "gains": 1,
+            "left": "native",
+            "left_successes": 7,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 8,
+            "risk_difference_pp": 4.761904761904762,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              0.0,
+              14.285714285714285
+            ],
+            "scene_count": 10
+          },
+          "revisit": {
+            "exact_mcnemar_two_sided_p": 3.0517578125e-05,
+            "gain_identities": [
+              [
+                "8WUmhLawc2A",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0006",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "S9hNv5qa7GM",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "UwV83HsGsw3",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0006",
+                "revisit"
+              ]
+            ],
+            "gains": 16,
+            "left": "native",
+            "left_successes": 4,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 20,
+            "risk_difference_pp": 76.19047619047619,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              55.55555555555556,
+              94.73684210526315
+            ],
+            "scene_count": 10
+          }
+        },
+        "certified_minus_raw_fixed_bearing": {
+          "all": {
+            "exact_mcnemar_two_sided_p": 0.0390625,
+            "gain_identities": [
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "novel"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0006",
+                "novel"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "novel"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "UwV83HsGsw3",
+                "episode_0005",
+                "novel"
+              ],
+              [
+                "WYY7iVyf5p8",
+                "episode_0004",
+                "novel"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0003",
+                "novel"
+              ]
+            ],
+            "gains": 8,
+            "left": "raw_fixed_bearing",
+            "left_successes": 21,
+            "loss_identities": [
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "novel"
+              ]
+            ],
+            "losses": 1,
+            "n": 42,
+            "right": "certified",
+            "right_successes": 28,
+            "risk_difference_pp": 16.666666666666668,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              2.7777777777777777,
+              31.25
+            ],
+            "scene_count": 10
+          },
+          "novel": {
+            "exact_mcnemar_two_sided_p": 0.0703125,
+            "gain_identities": [
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "novel"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0006",
+                "novel"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "novel"
+              ],
+              [
+                "UwV83HsGsw3",
+                "episode_0005",
+                "novel"
+              ],
+              [
+                "WYY7iVyf5p8",
+                "episode_0004",
+                "novel"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0003",
+                "novel"
+              ]
+            ],
+            "gains": 7,
+            "left": "raw_fixed_bearing",
+            "left_successes": 2,
+            "loss_identities": [
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "novel"
+              ]
+            ],
+            "losses": 1,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 8,
+            "risk_difference_pp": 28.571428571428573,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              4.3478260869565215,
+              53.333333333333336
+            ],
+            "scene_count": 10
+          },
+          "revisit": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "revisit"
+              ]
+            ],
+            "gains": 1,
+            "left": "raw_fixed_bearing",
+            "left_successes": 19,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "certified",
+            "right_successes": 20,
+            "risk_difference_pp": 4.761904761904762,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              0.0,
+              15.789473684210526
+            ],
+            "scene_count": 10
+          }
+        },
+        "learned_pi3x_spatial_minus_certified": {
+          "all": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [],
+            "gains": 0,
+            "left": "certified",
+            "left_successes": 28,
+            "loss_identities": [
+              [
+                "8WUmhLawc2A",
+                "episode_0000",
+                "revisit"
+              ]
+            ],
+            "losses": 1,
+            "n": 42,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 27,
+            "risk_difference_pp": -2.380952380952381,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -9.090909090909092,
+              0.0
+            ],
+            "scene_count": 10
+          },
+          "novel": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [],
+            "gains": 0,
+            "left": "certified",
+            "left_successes": 8,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 8,
+            "risk_difference_pp": 0.0,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              0.0,
+              0.0
+            ],
+            "scene_count": 10
+          },
+          "revisit": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [],
+            "gains": 0,
+            "left": "certified",
+            "left_successes": 20,
+            "loss_identities": [
+              [
+                "8WUmhLawc2A",
+                "episode_0000",
+                "revisit"
+              ]
+            ],
+            "losses": 1,
+            "n": 21,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 19,
+            "risk_difference_pp": -4.761904761904762,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              -18.181818181818183,
+              0.0
+            ],
+            "scene_count": 10
+          }
+        },
+        "learned_pi3x_spatial_minus_native": {
+          "all": {
+            "exact_mcnemar_two_sided_p": 3.0517578125e-05,
+            "gain_identities": [
+              [
+                "E9uDoFAP3SH",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0006",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "S9hNv5qa7GM",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "UwV83HsGsw3",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0006",
+                "revisit"
+              ]
+            ],
+            "gains": 16,
+            "left": "native",
+            "left_successes": 11,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 42,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 27,
+            "risk_difference_pp": 38.095238095238095,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              25.0,
+              50.0
+            ],
+            "scene_count": 10
+          },
+          "novel": {
+            "exact_mcnemar_two_sided_p": 1.0,
+            "gain_identities": [
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "novel"
+              ]
+            ],
+            "gains": 1,
+            "left": "native",
+            "left_successes": 7,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 8,
+            "risk_difference_pp": 4.761904761904762,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              0.0,
+              14.285714285714285
+            ],
+            "scene_count": 10
+          },
+          "revisit": {
+            "exact_mcnemar_two_sided_p": 6.103515625e-05,
+            "gain_identities": [
+              [
+                "E9uDoFAP3SH",
+                "episode_0002",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "E9uDoFAP3SH",
+                "episode_0006",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "PuKPg4mmafe",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "S9hNv5qa7GM",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "SN83YJsR3w2",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "ULsKaCPVFJR",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "UwV83HsGsw3",
+                "episode_0005",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0001",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0003",
+                "revisit"
+              ],
+              [
+                "V2XKFyX4ASd",
+                "episode_0004",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0000",
+                "revisit"
+              ],
+              [
+                "Z6MFQCViBuw",
+                "episode_0006",
+                "revisit"
+              ]
+            ],
+            "gains": 15,
+            "left": "native",
+            "left_successes": 4,
+            "loss_identities": [],
+            "losses": 0,
+            "n": 21,
+            "right": "learned_pi3x_spatial",
+            "right_successes": 19,
+            "risk_difference_pp": 71.42857142857143,
+            "scene_cluster_bootstrap_risk_difference_95": [
+              47.82091097308496,
+              90.47619047619048
+            ],
+            "scene_count": 10
+          }
+        }
+      },
+      "duplicated_novel_is_instrumentation_only": false,
+      "latency": {
+        "certificate_cached_ms": {
+          "maximum": 45218.84074900299,
+          "mean": 236.83905345186463,
+          "median": 0.1528342254459858,
+          "n": 1388,
+          "p95": 0.4492381820455191
+        },
+        "certificate_uncached_ms": {
+          "maximum": 45218.84074900299,
+          "mean": 5906.7496014087965,
+          "median": 1461.1890008673072,
+          "n": 1388,
+          "p95": 26689.805497881025
+        },
+        "episode_wall_seconds": {
+          "maximum": 440.696251994,
+          "mean": 179.59052667050474,
+          "median": 181.604917508,
+          "n": 105,
+          "p95": 304.755774315
+        },
+        "geometry_verification_ms": {
+          "maximum": 499.59730030968785,
+          "mean": 3.1935607885919177,
+          "median": 0.0,
+          "n": 1478,
+          "p95": 1.1927391635253972
+        },
+        "learned_first_query_ms": {
+          "maximum": 4318.407061044127,
+          "mean": 2774.048908003828,
+          "median": 2693.533989135176,
+          "n": 42,
+          "p95": 3393.2186180725694
+        },
+        "learned_one_anchor_update_ms": {
+          "maximum": 624.9864990822971,
+          "mean": 366.99802162158386,
+          "median": 349.1318670567125,
+          "n": 456,
+          "p95": 500.32220128923655
+        },
+        "learned_peak_gpu_memory_allocated_bytes": {
+          "maximum": 28561865216.0,
+          "mean": 28021726849.066666,
+          "median": 28024864256.0,
+          "n": 1440,
+          "p95": 28561865216.0
+        },
+        "learned_stored_online_history_frames": {
+          "maximum": 364.0,
+          "mean": 182.28571428571428,
+          "median": 166.0,
+          "n": 42,
+          "p95": 361.0
+        }
+      },
+      "learned_pi3x_safety": {
+        "accept_takeover_mismatch_queries": 0,
+        "accepted_bearing_error": {
+          "maximum": 179.29778196410496,
+          "mean": 31.13832763646523,
+          "median": 8.048595929256114,
+          "n": 479,
+          "p95": 149.51909864328428
+        },
+        "accepted_bearing_errors_over_90_deg": 69,
+        "fully_abstained_exact_native_queries": 19,
+        "fully_abstained_queries": 19,
+        "initial_inference_contract_violations": 0,
+        "novel_accept_queries": 2,
+        "novel_queries": 21,
+        "novel_takeover_identities": [
+          [
+            "PuKPg4mmafe",
+            "episode_0004",
+            "novel"
+          ],
+          [
+            "SN83YJsR3w2",
+            "episode_0007",
+            "novel"
+          ]
+        ],
+        "novel_takeover_queries": 2,
+        "post_accept_abstention_plans": 22,
+        "queries": 42,
+        "revisit_activation_queries": 21,
+        "revisit_queries": 21,
+        "runtime_failure_plans": 0,
+        "sticky_rejection_violations": 0,
+        "successful_fallback_queries": 6,
+        "successful_takeover_queries": 21
+      },
+      "metrics": {
+        "certified": {
+          "all": {
+            "SPL": 0.43996475049713313,
+            "SR": 0.6666666666666666,
+            "n": 42,
+            "successes": 28
+          },
+          "novel": {
+            "SPL": 0.2470722468012117,
+            "SR": 0.38095238095238093,
+            "n": 21,
+            "successes": 8
+          },
+          "revisit": {
+            "SPL": 0.6328572541930546,
+            "SR": 0.9523809523809523,
+            "n": 21,
+            "successes": 20
+          }
+        },
+        "geometry_fixed": {
+          "all": {
+            "SPL": 0.41448708905243936,
+            "SR": 0.6428571428571429,
+            "n": 42,
+            "successes": 27
+          },
+          "novel": {
+            "SPL": 0.2900483841561646,
+            "SR": 0.42857142857142855,
+            "n": 21,
+            "successes": 9
+          },
+          "revisit": {
+            "SPL": 0.5389257939487141,
+            "SR": 0.8571428571428571,
+            "n": 21,
+            "successes": 18
+          }
+        },
+        "learned_pi3x_spatial": {
+          "all": {
+            "SPL": 0.4248964887197963,
+            "SR": 0.6428571428571429,
+            "n": 42,
+            "successes": 27
+          },
+          "novel": {
+            "SPL": 0.23211625182055215,
+            "SR": 0.38095238095238093,
+            "n": 21,
+            "successes": 8
+          },
+          "revisit": {
+            "SPL": 0.6176767256190404,
+            "SR": 0.9047619047619048,
+            "n": 21,
+            "successes": 19
+          }
+        },
+        "native": {
+          "all": {
+            "SPL": 0.12166305432272653,
+            "SR": 0.2619047619047619,
+            "n": 42,
+            "successes": 11
+          },
+          "novel": {
+            "SPL": 0.18970442582910618,
+            "SR": 0.3333333333333333,
+            "n": 21,
+            "successes": 7
+          },
+          "revisit": {
+            "SPL": 0.053621682816346855,
+            "SR": 0.19047619047619047,
+            "n": 21,
+            "successes": 4
+          }
+        },
+        "raw_fixed_bearing": {
+          "all": {
+            "SPL": 0.3509327612165426,
+            "SR": 0.5,
+            "n": 42,
+            "successes": 21
+          },
+          "novel": {
+            "SPL": 0.09282906608712868,
+            "SR": 0.09523809523809523,
+            "n": 21,
+            "successes": 2
+          },
+          "revisit": {
+            "SPL": 0.6090364563459565,
+            "SR": 0.9047619047619048,
+            "n": 21,
+            "successes": 19
+          }
+        }
+      },
+      "records": 42,
+      "scenes": 10
+    }
+  },
+  "runtime_role_visibility": "none",
+  "schema_version": "paper_role_pair_evaluation_summary_v2_learned_20260817",
+  "statistical_unit": "paired query; scene-cluster uncertainty"
+}

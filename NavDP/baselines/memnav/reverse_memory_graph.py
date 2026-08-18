@@ -17,15 +17,17 @@ from dataclasses import dataclass
 import numpy as np
 
 
-def reverse_metric_nodes(
-        translations: np.ndarray, *, start_index: int, anchor_index: int,
+def metric_nodes_between(
+        translations: np.ndarray, *, start_index: int, target_index: int,
         metric_scale: float, spacing_m: float) -> tuple[int, ...]:
-    """Return temporally ordered nodes from ``start`` back to ``anchor``.
+    """Resample the recorded pose chain from ``start`` to ``target``.
 
     Consecutive LingBot translations are accumulated along the recorded path,
-    rather than replacing the path with one long Euclidean chord.  The anchor
-    is always the last node, including when the remaining path is shorter than
-    ``spacing_m``.
+    rather than replacing the path with one long Euclidean chord.  Time may
+    increase or decrease: this matters after a goal switch, where the robot is
+    localized near the previous goal's memory anchor and the next Revisit can
+    lie on either side of it.  The target is always the last node, including
+    when the residual path is shorter than ``spacing_m``.
     """
     translations = np.asarray(translations, dtype=np.float64)
     if translations.ndim != 2 or translations.shape[1] < 3:
@@ -36,10 +38,11 @@ def reverse_metric_nodes(
         raise ValueError("metric_scale must be finite and positive")
     if not np.isfinite(spacing_m) or spacing_m <= 0.0:
         raise ValueError("spacing_m must be finite and positive")
-    if not 0 <= anchor_index <= start_index < len(translations):
-        raise ValueError(
-            "indices must satisfy 0 <= anchor_index <= start_index < frames")
-    if anchor_index == start_index:
+    if not 0 <= start_index < len(translations):
+        raise ValueError("start_index is outside translations")
+    if not 0 <= target_index < len(translations):
+        raise ValueError("target_index is outside translations")
+    if target_index == start_index:
         return ()
 
     # LingBot's planar motion lives in native x-z.  Metric scale converts the
@@ -48,16 +51,40 @@ def reverse_metric_nodes(
     nodes: list[int] = []
     accumulated_m = 0.0
     previous = int(start_index)
-    for index in range(start_index - 1, anchor_index - 1, -1):
+    direction = 1 if target_index > start_index else -1
+    for index in range(
+            start_index + direction, target_index + direction, direction):
         accumulated_m += float(metric_scale) * float(np.linalg.norm(
             planar[previous] - planar[index]))
         previous = index
-        if accumulated_m >= spacing_m or index == anchor_index:
+        if accumulated_m >= spacing_m or index == target_index:
             nodes.append(index)
             accumulated_m = 0.0
-    if not nodes or nodes[-1] != anchor_index:
-        nodes.append(anchor_index)
+    if not nodes or nodes[-1] != target_index:
+        nodes.append(target_index)
     return tuple(nodes)
+
+
+def reverse_metric_nodes(
+        translations: np.ndarray, *, start_index: int, anchor_index: int,
+        metric_scale: float, spacing_m: float) -> tuple[int, ...]:
+    """Backward-compatible reverse-only wrapper.
+
+    The original two-leg controller always starts at the end of the recorded
+    stream and returns to an earlier anchor.  Preserve its strict input
+    contract while sharing the bidirectional resampling implementation used by
+    actual-online multi-goal navigation.
+    """
+    if not 0 <= anchor_index <= start_index < len(translations):
+        raise ValueError(
+            "indices must satisfy 0 <= anchor_index <= start_index < frames")
+    return metric_nodes_between(
+        translations,
+        start_index=start_index,
+        target_index=anchor_index,
+        metric_scale=metric_scale,
+        spacing_m=spacing_m,
+    )
 
 
 @dataclass

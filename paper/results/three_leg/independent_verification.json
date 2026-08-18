@@ -1,0 +1,37 @@
+{
+  "all_graph_gains_have_historical_subgoals": true,
+  "all_shared_A_B_records_equal": true,
+  "arm_successes": {
+    "certified": 16,
+    "certified_budget": 16,
+    "certified_graph": 16,
+    "known_direct": 14,
+    "native": 5
+  },
+  "benchmark_manifest_sha256": "0a02214276a9e29247572e5c7a3a8e11fcfd6186083aa3d5f146438f3af01122",
+  "contrasts": {
+    "certified_graph_minus_certified_budget": {
+      "gains": 0,
+      "losses": 0,
+      "p": 1.0
+    },
+    "certified_graph_minus_native": {
+      "gains": 11,
+      "losses": 0,
+      "p": 0.0009765625
+    },
+    "certified_minus_native": {
+      "gains": 11,
+      "losses": 0,
+      "p": 0.0009765625
+    },
+    "known_direct_minus_native": {
+      "gains": 10,
+      "losses": 1,
+      "p": 0.01171875
+    }
+  },
+  "episodes": 19,
+  "report_sha256": "1e2c0b2e7dfa83aa8c1688bcde2bb2f0bae60c503f71c618ac58f2dfd68ef966",
+  "schema_version": "independent_shared_online_nnr_verification_v1_20260814"
+}

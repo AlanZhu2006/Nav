@@ -13,6 +13,15 @@ EPISODE_SEED_STRIDE = 100_000
 LEG_SEED_STRIDE = 10_000
 MAX_PLANS_PER_LEG = LEG_SEED_STRIDE
 MAX_RESAMPLES_PER_PLAN = 99
+APPROVED_SHARED_TRACE_ROUTES = frozenset({
+    "phase",
+    "memory_advantage",
+    "memory_geometry",
+    "learned_rank_geometry",
+})
+NATIVE_OBSERVATION_REPLAY_CONTRACT = (
+    "frozen_native_navdp_observation_only_memory_replay_v1"
+)
 
 
 def diffusion_plan_seed(
@@ -60,6 +69,35 @@ def file_sha256(path: Path) -> str:
 
 def bytes_sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def validate_shared_trace_source(payload: dict) -> None:
+    """Accept native-phase or automatic-router traces from the hybrid server."""
+    backend = payload.get("source_backend")
+    route = payload.get("source_hybrid_route")
+    if backend == "hybrid_pose":
+        if route not in APPROVED_SHARED_TRACE_ROUTES:
+            raise ValueError("shared trace source route is not approved")
+        return
+    if backend == "navdp":
+        if route != "phase":
+            raise ValueError("native shared trace must use the phase label")
+        if payload.get("source_control_contract") != (
+                NATIVE_OBSERVATION_REPLAY_CONTRACT):
+            raise ValueError(
+                "native shared trace lacks the observation-only replay seal"
+            )
+        checkpoint_sha = payload.get("source_navdp_checkpoint_sha256")
+        if (not isinstance(checkpoint_sha, str) or len(checkpoint_sha) != 64
+                or any(char not in "0123456789abcdef"
+                       for char in checkpoint_sha)):
+            raise ValueError("native shared trace checkpoint hash is invalid")
+        if payload.get("source_memory_observer_present") is not False:
+            raise ValueError(
+                "native trace must disclose that memory was absent during control"
+            )
+        return
+    raise ValueError("shared trace source backend is unsupported")
 
 
 def write_leg1_trace(path: Path, payload: dict) -> str:

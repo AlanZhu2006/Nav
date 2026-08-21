@@ -16,10 +16,18 @@ TASK_RECEIPT=${TASK_RECEIPT:?set task bundle receipt}
 EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA:?set task receipt sha}
 BASE_RECEIPT=${BASE_RECEIPT:?set verified base receipt}
 EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA:?set base receipt sha}
+RUNTIME_ATTEMPT=${RUNTIME_ATTEMPT:-}
+RESUME_INCOMPLETE=${RESUME_INCOMPLETE:-0}
 
 [[ "${MODE}" == collect || "${MODE}" == smoke || "${MODE}" == eval ]] || {
   echo "invalid MODE=${MODE}" >&2; exit 2; }
 [[ "${SCENE_INDEX}" =~ ^[0-9]+$ ]] || { echo "bad scene index" >&2; exit 2; }
+[[ "${RESUME_INCOMPLETE}" =~ ^[01]$ ]] || {
+  echo "RESUME_INCOMPLETE must be 0 or 1" >&2; exit 2; }
+if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
+  [[ "${RUNTIME_ATTEMPT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
+    echo "invalid runtime attempt" >&2; exit 2; }
+fi
 scene_count=$(${MEMNAV_PY} - "${PROTOCOL}" <<'PY'
 import json,sys
 print(len(json.load(open(sys.argv[1]))["dataset"]["scenes"]))
@@ -55,6 +63,9 @@ done
 [[ "$(sha256sum "${LINGBOT_WEIGHTS}" | awk '{print $1}')" == "${EXPECTED_LINGBOT_SHA}" ]]
 
 task_label=${MODE}_${SCENE_INDEX}
+if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
+  task_label=${task_label}_${RUNTIME_ATTEMPT}
+fi
 task_run=${RUN_ROOT}/runtime/${task_label}
 [[ ! -e "${task_run}" ]] || { echo "runtime output exists ${task_run}" >&2; exit 2; }
 mkdir -p "${task_run}/logs" "${task_run}/buffer"
@@ -150,12 +161,16 @@ done
 echo "mode=${MODE} scene_index=${SCENE_INDEX} host=$(hostname)"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 if [[ "${MODE}" == collect ]]; then
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
-    "${HAB_PY}" -u "${TASK_ROOT}/MemNavData/collect_hm3d_fullmono_goal_a.py" \
+  collector=("${TASK_ROOT}/MemNavData/collect_hm3d_fullmono_goal_a.py"
       --source-root "${BASE_SOURCE_ROOT}" --run-root "${RUN_ROOT}" \
       --protocol "${PROTOCOL}" --parent-manifest "${PARENT_MANIFEST}" \
       --scene-index "${SCENE_INDEX}" --hab-python "${HAB_PY}" \
-      --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}" \
+      --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}")
+  if [[ "${RESUME_INCOMPLETE}" == 1 ]]; then
+    collector+=(--resume-incomplete --repair-tag "${RUNTIME_ATTEMPT}")
+  fi
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
+    "${HAB_PY}" -u "${collector[@]}" \
       >"${task_run}/logs/collector.log" 2>&1
 else
   BENCH_ROOT=${BENCH_ROOT:?set sealed natural-direction benchmark}

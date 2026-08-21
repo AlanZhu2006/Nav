@@ -16,11 +16,37 @@ DEPENDENCY_RECEIPT=${DEPENDENCY_RECEIPT:-/scratch/yz11502/Research/Nav-axis-utur
 EXPECTED_DEPENDENCY_RECEIPT_SHA=${EXPECTED_DEPENDENCY_RECEIPT_SHA:-4eb0ca6479a26f8e04f85a31d906cee4e68b1785f66cfd3ac23bf65424d36e5e}
 MEMNAV_PY=${MEMNAV_PY:-/home/asus/miniconda3/envs/memnav/bin/python}
 HAB_PY=${HAB_PY:-/home/asus/miniconda3/envs/habitat/bin/python}
-EVAL_CONCURRENCY=${EVAL_CONCURRENCY:-4}
+EVAL_CONCURRENCY=${EVAL_CONCURRENCY:-2}
 DRY_RUN=${DRY_RUN:-0}
+SSH_CONTROL_PATH=${SSH_CONTROL_PATH:-$(
+  ssh -G "${REMOTE_HOST}" 2>/dev/null |
+    awk '$1=="controlpath"{value=$2} END{print value}'
+)}
 
-remote() { ssh -o BatchMode=yes "${REMOTE_HOST}" "$@"; }
+# NavDP imports the vendored Depth-Anything-V2 DINOv2 implementation from
+# policy_backbone.py.  These are runtime source files (not model assets) and
+# must travel with every content-addressed task bundle.
+navdp_runtime_support=(
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/dinov2.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/dpt.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/dinov2_layers/__init__.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/dinov2_layers/attention.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/dinov2_layers/block.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/dinov2_layers/drop_path.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/dinov2_layers/layer_scale.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/dinov2_layers/mlp.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/dinov2_layers/patch_embed.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/dinov2_layers/swiglu_ffn.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/util/blocks.py
+  NavDP/baselines/navdp/depth_anything/depth_anything_v2/util/transform.py
+)
+
+remote() {
+  ssh -o BatchMode=yes -o ControlMaster=no -S "${SSH_CONTROL_PATH}" \
+    "${REMOTE_HOST}" "$@"
+}
 fail() { echo "ABORT: $*" >&2; exit 2; }
+[[ -S "${SSH_CONTROL_PATH}" ]] || fail "authoritative SSH master missing"
 [[ "${RUN_TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || fail "invalid run tag"
 [[ "${EVAL_CONCURRENCY}" =~ ^[1-9][0-9]*$ ]] || fail "invalid eval concurrency"
 [[ "${DRY_RUN}" =~ ^[01]$ ]] || fail "DRY_RUN must be 0 or 1"
@@ -38,6 +64,7 @@ required=(
   MemNavData/generate_twoleg.py
   MemNavData/independent_verify_shared_online_lifelong_nnr.py
   MemNavData/run_cec_controller_portability_smoke_local.sh
+  MemNavData/LIFELONG_NNR_RUNTIME_REPAIR_20260821.md
   MemNavData/slurm_lifelong_factual_b_support.sbatch
   MemNavData/slurm_lifelong_nnr_paired_eval.sbatch
   MemNavData/slurm_lifelong_nnr_aggregate.sbatch
@@ -46,6 +73,7 @@ required=(
   NavDP/baselines/memnav/policy_agent.py
   NavDP/baselines/navdp/navdp_server.py
   NavDP/baselines/navdp/policy_agent.py
+  "${navdp_runtime_support[@]}"
 )
 for relative in "${required[@]}"; do
   [[ -f "${LOCAL_ROOT}/${relative}" && ! -L "${LOCAL_ROOT}/${relative}" ]] || \
@@ -82,6 +110,7 @@ while IFS= read -r -d '' path; do
 done < <(find "${LOCAL_ROOT}/MemNavData" -maxdepth 1 -type f -name '*.py' -print0)
 for name in \
   LIFELONG_5LEG_PROTOCOL_20260821.md \
+  LIFELONG_NNR_RUNTIME_REPAIR_20260821.md \
   run_cec_controller_portability_smoke_local.sh \
   slurm_lifelong_factual_b_support.sbatch \
   slurm_lifelong_nnr_paired_eval.sbatch \
@@ -97,6 +126,26 @@ for component in memnav navdp; do
   done < <(find "${LOCAL_ROOT}/NavDP/baselines/${component}" \
     -maxdepth 1 -type f -name '*.py' -print0)
 done
+for relative in "${navdp_runtime_support[@]}"; do
+  mkdir -p "${STAGING}/$(dirname "${relative}")"
+  cp --preserve=mode,timestamps "${LOCAL_ROOT}/${relative}" \
+    "${STAGING}/${relative}"
+done
+
+# Exercise the import from the staged bundle, not the working tree.  This is
+# deliberately before hashing/upload/submission so a missing transitive source
+# dependency cannot consume an HPC allocation again.
+(
+  cd "${STAGING}/NavDP/baselines/navdp"
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${STAGING}" \
+    "${MEMNAV_PY}" - <<'PY'
+from depth_anything.depth_anything_v2.dpt import DepthAnythingV2
+import policy_backbone
+
+assert policy_backbone.DepthAnythingV2 is DepthAnythingV2
+print("staged NavDP runtime import: ok")
+PY
+)
 
 LOCAL_HEAD=$(git -C "${LOCAL_ROOT}" rev-parse HEAD)
 "${MEMNAV_PY}" - "${STAGING}" "${LOCAL_HEAD}" "${NNR_ROOT}" <<'PY'
@@ -108,11 +157,16 @@ for path in sorted(root.rglob("*")):
     if path.is_file() and path.name not in {"source_bundle_manifest.json","SOURCE_BUNDLE.sha256"}:
         files[path.relative_to(root).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
 payload={
- "schema":"lifelong_nnr_task_bundle_v1_20260821",
+ "schema":"lifelong_nnr_task_bundle_v2_20260821",
  "local_git_head_context":sys.argv[2],
  "source_nnr_root":sys.argv[3],
  "selection":"result-blind factual-B max co-visibility >= 0.20",
  "paired_arms":["all_prior","initial_leg_only"],
+ "repair_provenance":{
+   "supersedes_bundle_omission":"lifelong_nnr_51adf5128b500d60",
+   "change":"include vendored Depth-Anything-V2 DINOv2 runtime sources and staged import preflight",
+   "method_or_threshold_change":False,
+ },
  "claim_scope":"internal lifelong memory accumulation mechanism; consumed NNR scenes",
  "files":files,
 }
@@ -144,6 +198,7 @@ if remote "test -d '${REMOTE_BUNDLE}' && test \"\$(sha256sum '${REMOTE_BUNDLE}/S
 else
   remote "test ! -e '${REMOTE_BUNDLE}' && mkdir -p '${REMOTE_STAGING}'"
   rsync -a --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
+    -e "ssh -o BatchMode=yes -o ControlMaster=no -S ${SSH_CONTROL_PATH}" \
     "${STAGING}/" "${REMOTE_HOST}:${REMOTE_STAGING}/"
   remote "test ! -e '${REMOTE_BUNDLE}' && cd '${REMOTE_STAGING}' && sha256sum -c SOURCE_BUNDLE.sha256 >/dev/null && chmod -R a-w '${REMOTE_STAGING}' && mv '${REMOTE_STAGING}' '${REMOTE_BUNDLE}'"
 fi

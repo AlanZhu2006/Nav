@@ -1,0 +1,33 @@
+{
+  "array": {
+    "maximum_source_population": 19,
+    "submitted_concurrency": 2
+  },
+  "jobs": {
+    "aggregate": 16126345,
+    "independent_verification": 16126347,
+    "paired_evaluation_array": 16126310,
+    "support_audit": 16126258
+  },
+  "repair_of_jobs": [
+    16121506,
+    16121515,
+    16121524
+  ],
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/lifelong_nnr_20260821/lifelong_nnr_runtime_repair_20260821T083000Z",
+  "runtime_evidence_at_receipt_write": {
+    "array_task_0_first_arm_completed": true,
+    "array_tasks_0_and_1_crossed_server_startup": true,
+    "module_not_found_reproduced_after_repair": false,
+    "support_audit_state": "COMPLETED"
+  },
+  "schema_version": "lifelong_nnr_runtime_repair_submission_v1_20260821",
+  "scientific_guards": {
+    "method_or_threshold_changed": false,
+    "paired_arms_changed": false,
+    "population_or_selection_changed": false,
+    "query_outcomes_used_for_repair": false
+  },
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/lifelong_nnr_15b2e9c4d2ab9ed6",
+  "source_receipt_sha256": "3be9f426dd7d34cc7cd3a51959ec2dc4436b81a323645fe51ea3468fd3c21266"
+}

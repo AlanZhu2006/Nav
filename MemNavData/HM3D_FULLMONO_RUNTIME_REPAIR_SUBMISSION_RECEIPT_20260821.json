@@ -1,0 +1,39 @@
+{
+  "concurrency": 2,
+  "jobs": {
+    "collection_barrier": 16126612,
+    "construction_array": 16126613,
+    "goal_a_repair_array": 16126593,
+    "independent_verification": 16126683,
+    "population_finalize": 16126639,
+    "query_evaluation_array": 16126671,
+    "query_smoke": 16126661,
+    "summary": 16126680
+  },
+  "original_collection_array": 16120334,
+  "pre_repair_inventory": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6/repair/pre_repair_inventory.json",
+  "repair_indices": [
+    29,
+    46,
+    47,
+    53
+  ],
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+  "schema_version": "hm3d_fullmono_runtime_repair_submission_v1_20260821",
+  "scientific_guards": {
+    "completed_episode_overwrite_allowed": false,
+    "method_or_threshold_changed": false,
+    "query_outcomes_read_before_repair": false
+  },
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6_smoke",
+  "superseded_downstream_jobs": [
+    16120335,
+    16120336,
+    16120337,
+    16120338,
+    16120339,
+    16120340
+  ],
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_runtime_repair_f4735603db209db2",
+  "task_receipt_sha256": "83c80a18fa9552b68c0ea774e6135713768644d8ccad2be71e527d18170d32a3"
+}

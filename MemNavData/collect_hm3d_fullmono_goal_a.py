@@ -8,6 +8,7 @@ import csv
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 from typing import Any
 
@@ -22,6 +23,7 @@ from MemNavData.materialize_online_a_traces import native_control_audit
 
 
 SCHEMA = "hm3d_fullmono_goal_a_scene_v1_20260820"
+SAFE_TAG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 def sha256(path: Path) -> str:
@@ -49,6 +51,87 @@ def run(command: list[str], log: Path) -> None:
             f"Goal-A evaluator failed ({result.returncode}); see {log}")
 
 
+def collection_actions(
+    scene_root: Path,
+    episodes: list[str],
+    resume_incomplete: bool,
+) -> list[tuple[str, str]]:
+    """Plan a fail-closed fresh collection or an additive repair.
+
+    A repair may audit an already complete episode or create a missing one.  It
+    never overwrites an episode directory and never reopens a completed scene.
+    """
+
+    if scene_root.exists():
+        require(resume_incomplete,
+                f"Goal-A output exists: {scene_root}")
+        require(not (scene_root / "completion.json").exists(),
+                f"completed Goal-A scene cannot be resumed: {scene_root}")
+        require(not (scene_root / "completion.json.sha256").exists(),
+                f"orphan completion hash blocks resume: {scene_root}")
+    else:
+        scene_root.mkdir(parents=True)
+    (scene_root / "logs").mkdir(exist_ok=True)
+    actions = []
+    for episode in episodes:
+        output = scene_root / episode
+        if not output.exists():
+            action = "run"
+        else:
+            require(output.is_dir() and not output.is_symlink(),
+                    f"invalid episode output: {output}")
+            # A failed evaluator can leave its freshly-created output
+            # directory empty.  Filling that directory is additive; a
+            # non-empty directory is never touched and must pass raw audit.
+            action = "audit" if any(output.iterdir()) else "run"
+        actions.append((episode, action))
+    return actions
+
+
+def audit_episode(
+    output: Path,
+    *,
+    scene: str,
+    scene_index: int,
+    episode: str,
+    episode_rank: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Recompute one Goal-A record only from its raw frozen receipts."""
+
+    trace_path = output / f"{episode}_leg1_trace.json"
+    plans_path = output / f"{episode}_plans.json"
+    require(trace_path.is_file() and plans_path.is_file(),
+            f"{scene}/{episode}: Goal-A receipts missing")
+    trace = json.loads(trace_path.read_text())
+    validate_leg1_trace(trace)
+    require(trace["source_scene"] == scene,
+            f"{scene}/{episode}: stable scene identity changed")
+    require(trace["source_hybrid_route"] == "native_sidecar",
+            f"{scene}/{episode}: Goal-A route changed")
+    control = native_control_audit(trace)
+    require(control["ok"], f"{scene}/{episode}: Goal-A was not native")
+    depth_audit = audit_goal_a_plans(trace["plans"])
+    row = metric_row(output, episode)
+    reached = int(float(row["reached_A"]))
+    require(reached == int(bool(trace["reached"])),
+            f"{scene}/{episode}: trace/metric A outcome changed")
+    return {
+        "scene": scene,
+        "scene_index": scene_index,
+        "episode": episode,
+        "episode_rank": episode_rank,
+        "seed": seed,
+        "reached_a": reached,
+        "steps": int(trace["steps"]),
+        "final_goal_dist_m": float(trace["final_goal_dist_m"]),
+        "trace_sha256": sha256(trace_path),
+        "trace_path": str(trace_path),
+        "native_control_audit": control,
+        "depth_audit": depth_audit,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
@@ -59,7 +142,10 @@ def main() -> None:
     parser.add_argument("--hab-python", required=True)
     parser.add_argument("--memnav-port", type=int, required=True)
     parser.add_argument("--navdp-port", type=int, required=True)
+    parser.add_argument("--resume-incomplete", action="store_true")
+    parser.add_argument("--repair-tag", default="repair")
     args = parser.parse_args()
+    require(bool(SAFE_TAG.fullmatch(args.repair_tag)), "invalid repair tag")
 
     protocol = json.loads(args.protocol.read_text())
     parent, expected_parent_sha = bind_parent_manifest(
@@ -88,80 +174,67 @@ def main() -> None:
         args.run_root / "goal_a" / "scenes" /
         f"{args.scene_index:02d}_{scene}"
     )
-    require(not scene_root.exists(), f"Goal-A output exists: {scene_root}")
-    (scene_root / "logs").mkdir(parents=True)
+    episodes = [str(source["episode"]) for source in source_rows]
+    actions = dict(collection_actions(
+        scene_root, episodes, args.resume_incomplete))
 
     base_seed = int(protocol["goal_a"]["base_seed"])
     records: list[dict[str, Any]] = []
+    existing_episode_count = executed_episode_count = 0
     for episode_rank, source in enumerate(source_rows):
         episode = str(source["episode"])
         seed = base_seed + 100 * args.scene_index + episode_rank
         output = scene_root / episode
-        command = [
-            args.hab_python, "-u",
-            str(args.source_root / "MemNavData/eval_2leg_habitat.py"),
-            "--episode_root", str(episode_root),
-            "--episode_ids", episode,
-            "--scene", str(scene_file),
-            "--scene_identity", scene,
-            "--host", "127.0.0.1",
-            "--port", str(args.memnav_port),
-            "--novel_port", str(args.navdp_port),
-            "--server_backend", "hybrid_pose",
-            "--success_dist", str(protocol["goal_a"]["success_radius_m"]),
-            "--max_steps", str(protocol["goal_a"]["maximum_steps"]),
-            "--exec_horizon", str(protocol["goal_a"]["execution_horizon"]),
-            "--trajectory_selector", "server",
-            "--trajectory_selector_scope", "all",
-            "--leg1_mode", "policy",
-            "--leg1_goal_source", "own",
-            "--write_leg1_trace",
-            "--stop_after_leg1",
-            "--seed", str(seed),
-            "--terminal_uturn", "off",
-            "--terminal_visual_refine", "off",
-            "--deterministic_plan_seeds",
-            "--retrieval_override", "off",
-            "--certified_cdec_rescue", "off",
-            "--certified_stagnation_graph", "off",
-            "--revisit_controller", "navdp_mixed",
-            "--hybrid_route", "native_sidecar",
-            "--revisit_adapter", "legacy_metric",
-            "--navdp_depth_source", "monocular_sidecar",
-            "--out", str(output),
-        ]
-        run(command, scene_root / "logs" / f"{episode}.log")
-        trace_path = output / f"{episode}_leg1_trace.json"
-        plans_path = output / f"{episode}_plans.json"
-        require(trace_path.is_file() and plans_path.is_file(),
-                f"{scene}/{episode}: Goal-A receipts missing")
-        trace = json.loads(trace_path.read_text())
-        validate_leg1_trace(trace)
-        require(trace["source_scene"] == scene,
-                f"{scene}/{episode}: stable scene identity changed")
-        require(trace["source_hybrid_route"] == "native_sidecar",
-                f"{scene}/{episode}: Goal-A route changed")
-        control = native_control_audit(trace)
-        require(control["ok"], f"{scene}/{episode}: Goal-A was not native")
-        depth_audit = audit_goal_a_plans(trace["plans"])
-        row = metric_row(output, episode)
-        reached = int(float(row["reached_A"]))
-        require(reached == int(bool(trace["reached"])),
-                f"{scene}/{episode}: trace/metric A outcome changed")
-        records.append({
-            "scene": scene,
-            "scene_index": args.scene_index,
-            "episode": episode,
-            "episode_rank": episode_rank,
-            "seed": seed,
-            "reached_a": reached,
-            "steps": int(trace["steps"]),
-            "final_goal_dist_m": float(trace["final_goal_dist_m"]),
-            "trace_sha256": sha256(trace_path),
-            "trace_path": str(trace_path),
-            "native_control_audit": control,
-            "depth_audit": depth_audit,
-        })
+        if actions[episode] == "run":
+            command = [
+                args.hab_python, "-u",
+                str(args.source_root / "MemNavData/eval_2leg_habitat.py"),
+                "--episode_root", str(episode_root),
+                "--episode_ids", episode,
+                "--scene", str(scene_file),
+                "--scene_identity", scene,
+                "--host", "127.0.0.1",
+                "--port", str(args.memnav_port),
+                "--novel_port", str(args.navdp_port),
+                "--server_backend", "hybrid_pose",
+                "--success_dist", str(protocol["goal_a"]["success_radius_m"]),
+                "--max_steps", str(protocol["goal_a"]["maximum_steps"]),
+                "--exec_horizon", str(protocol["goal_a"]["execution_horizon"]),
+                "--trajectory_selector", "server",
+                "--trajectory_selector_scope", "all",
+                "--leg1_mode", "policy",
+                "--leg1_goal_source", "own",
+                "--write_leg1_trace",
+                "--stop_after_leg1",
+                "--seed", str(seed),
+                "--terminal_uturn", "off",
+                "--terminal_visual_refine", "off",
+                "--deterministic_plan_seeds",
+                "--retrieval_override", "off",
+                "--certified_cdec_rescue", "off",
+                "--certified_stagnation_graph", "off",
+                "--revisit_controller", "navdp_mixed",
+                "--hybrid_route", "native_sidecar",
+                "--revisit_adapter", "legacy_metric",
+                "--navdp_depth_source", "monocular_sidecar",
+                "--out", str(output),
+            ]
+            log_name = (
+                f"{episode}.{args.repair_tag}.log"
+                if args.resume_incomplete else f"{episode}.log"
+            )
+            run(command, scene_root / "logs" / log_name)
+            executed_episode_count += 1
+        else:
+            existing_episode_count += 1
+        records.append(audit_episode(
+            output,
+            scene=scene,
+            scene_index=args.scene_index,
+            episode=episode,
+            episode_rank=episode_rank,
+            seed=seed,
+        ))
 
     completion = {
         "schema_version": SCHEMA,
@@ -177,6 +250,11 @@ def main() -> None:
         "source_generation_constructible": bool(source_rows),
         "all_sources_retained": len(records) == len(source_rows),
         "query_outcomes_read": False,
+        "additive_resume": bool(args.resume_incomplete),
+        "existing_episode_count": existing_episode_count,
+        "executed_episode_count": executed_episode_count,
+        "repair_tag": args.repair_tag if args.resume_incomplete else None,
+        "preexisting_episode_outputs_overwritten": False,
         "records": records,
     }
     encoded = (json.dumps(completion, indent=2, sort_keys=True) + "\n").encode()

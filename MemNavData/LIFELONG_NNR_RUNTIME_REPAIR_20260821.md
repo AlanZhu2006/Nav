@@ -41,3 +41,28 @@ limited to two GPUs to respect the observed account QoS.
 - checkpoints, seeds, scene/episode identities, budgets, and success criteria
   remain unchanged;
 - the repair may not read rollout outcomes from the failed attempt.
+
+## QoS-cancelled pair amendment
+
+In repaired array `16126310`, task 5 was started on `gh012` and cancelled by
+Slurm root after `00:02:03` with reason `QOSGrpGRES`.  It produced neither a
+pair directory nor an arm result.  The remaining array was throttled to one GPU
+and continued normally.  Because an `afterok` dependency can never release
+from an array containing a cancelled element, the additive amendment is:
+
+1. wait for the complete original array with `afterany:16126310`;
+2. rerun only frozen population index 5 using the identical immutable bundle;
+3. require the pair output to be absent before allocation;
+4. run a replacement aggregate that itself requires all 19 frozen pairs;
+5. run the unchanged independent raw-file verifier.
+
+The repair decision is based only on Slurm state and missing output, not on any
+navigation outcome.  Submission is performed by
+`submit_lifelong_nnr_task5_repair_hpc.sh` and recorded in
+`LIFELONG_NNR_TASK5_REPAIR_SUBMISSION_RECEIPT_20260821.json`.
+
+The submitted additive jobs are task-5 repair `16130123`, replacement
+aggregate `16130126`, and replacement independent verifier `16130140`.  The
+repair waits on `afterany:16126310`; this preserves the running original array
+and prevents the duplicate task from competing with it before all surviving
+frozen pairs terminate.

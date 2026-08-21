@@ -1,0 +1,28 @@
+{
+  "jobs": {
+    "collection_barrier": 16130521,
+    "construction_array": 16130525,
+    "goal_a_transaction_repair": 16130514,
+    "independent_verification": 16130541,
+    "population_finalize": 16130526,
+    "query_evaluation_array": 16130535,
+    "query_smoke": 16130528,
+    "summary": 16130538
+  },
+  "pre_transaction_inventory": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6/transaction_repair/pre_transaction_inventory.json",
+  "repair_indices": [
+    29
+  ],
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+  "schema_version": "hm3d_fullmono_transaction_repair_submission_v2_20260821",
+  "scientific_guards": {
+    "completed_episode_overwrite_allowed": false,
+    "method_threshold_checkpoint_seed_budget_or_population_changed": false,
+    "model_or_depth_output_changed": false,
+    "query_outcomes_read_before_repair": false,
+    "transport_is_sha_frame_and_depth_bound": true
+  },
+  "superseded_repair_array": 16126593,
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_transaction_repair_67e1132783ce2cb1",
+  "task_receipt_sha256": "05ce401aac8c2e7e31e8a8d820613d30b3a03856a35c8750085b93d5a1539a97"
+}

@@ -125,7 +125,7 @@ trap cleanup EXIT INT TERM
     MEMNAV_GROUND_SCALE_MAX=6.0 MEMNAV_GATE_FUSION=complementary \
     MEMNAV_AUX_POSE_CALIBRATION=empirical MEMNAV_COLLISION_SELECT=1 \
     MEMNAV_REPORT_TO=none "${MEMNAV_PY}" -u \
-    "${BASE_SOURCE_ROOT}/NavDP/baselines/memnav/memnav_server.py" \
+    "${TASK_ROOT}/NavDP/baselines/memnav/memnav_server.py" \
       --port "${MEMNAV_PORT}" --checkpoint "${MEMNAV_CKPT}" \
       --internnav_root "${INTERNNAV_ROOT}" --num_samples 16 \
       --exclude_recent 32 --retrieval raw --retrieval_candidate_top_k 32 \
@@ -139,10 +139,11 @@ MEMNAV_PID=$!
   cd "${runtime_tmp}/navdp"
   exec env NAVDP_DISABLE_VIDEO=1 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${PYTHONPATH_VALUE}" "${MEMNAV_PY}" -u \
-    "${BASE_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py" \
+    "${TASK_ROOT}/NavDP/baselines/navdp/navdp_server.py" \
       --port "${NAVDP_PORT}" --checkpoint "${NAVDP_CKPT}" \
       --depth_source metric_request --allow_depth_source_override \
-      --monocular_depth_url "http://127.0.0.1:${MEMNAV_PORT}/monocular_depth_query"
+      --monocular_depth_url "http://127.0.0.1:${MEMNAV_PORT}/monocular_depth_query" \
+      --require_monocular_depth_transaction
 ) >"${task_run}/logs/server_navdp.log" 2>&1 &
 NAVDP_PID=$!
 for spec in "memnav:${MEMNAV_PID}:${MEMNAV_PORT}" "navdp:${NAVDP_PID}:${NAVDP_PORT}"; do
@@ -163,6 +164,7 @@ nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 if [[ "${MODE}" == collect ]]; then
   collector=("${TASK_ROOT}/MemNavData/collect_hm3d_fullmono_goal_a.py"
       --source-root "${BASE_SOURCE_ROOT}" --run-root "${RUN_ROOT}" \
+      --evaluator-source-root "${TASK_ROOT}" \
       --protocol "${PROTOCOL}" --parent-manifest "${PARENT_MANIFEST}" \
       --scene-index "${SCENE_INDEX}" --hab-python "${HAB_PY}" \
       --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}")
@@ -191,6 +193,7 @@ else
     for history_index in ${indices}; do
       runner=("${TASK_ROOT}/MemNavData/run_hm3d_fullmono_query_history.py"
         --source-root "${BASE_SOURCE_ROOT}" --run-root "${RUN_ROOT}"
+        --evaluator-source-root "${TASK_ROOT}"
         --bench-root "${BENCH_ROOT}"
         --expected-manifest-sha256 "${expected_manifest_sha}"
         --history-index "${history_index}" --hab-python "${HAB_PY}"

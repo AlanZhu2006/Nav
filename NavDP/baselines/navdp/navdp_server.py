@@ -35,6 +35,12 @@ parser.add_argument(
     help="MemNav/CEC sidecar /monocular_depth_query URL",
 )
 parser.add_argument("--monocular_depth_timeout_s", type=float, default=60.0)
+parser.add_argument(
+    "--require_monocular_depth_transaction",
+    action="store_true",
+    help=("require a SHA/frame-bound token when a current monocular depth "
+          "payload is not already in NavDP's verified one-frame cache"),
+)
 args = parser.parse_known_args()[0]
 
 app = Flask(__name__)
@@ -53,7 +59,15 @@ def _decode_request_depth(depth_file, batch_size):
     return depth.reshape((batch_size, -1, depth.shape[1], 1))
 
 
-def _resolve_observation_depth(image_bytes, image_bgr, depth_file, batch_size):
+def _resolve_observation_depth(
+    image_bytes,
+    image_bgr,
+    depth_file,
+    batch_size,
+    *,
+    transaction_token=None,
+    expected_frame_index=None,
+):
     """Resolve exactly one configured depth arm and return an audit receipt."""
 
     global monocular_depth_cache
@@ -83,22 +97,56 @@ def _resolve_observation_depth(image_bytes, image_bgr, depth_file, batch_size):
     if cached is None:
         if not args.monocular_depth_url:
             raise RuntimeError("monocular depth URL is not configured")
+        if args.require_monocular_depth_transaction and not transaction_token:
+            raise RuntimeError(
+                "monocular depth transaction token is required for this frame"
+            )
+        sidecar_data = {"expected_image_sha256": image_digest}
+        if transaction_token:
+            sidecar_data["monocular_depth_transaction_token"] = (
+                str(transaction_token)
+            )
+        if expected_frame_index is not None:
+            sidecar_data["expected_frame_index"] = str(
+                int(expected_frame_index)
+            )
         response = requests.post(
             args.monocular_depth_url,
-            data={"expected_image_sha256": image_digest},
+            data=sidecar_data,
             timeout=float(args.monocular_depth_timeout_s),
         )
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(
+                "monocular depth sidecar rejected the bound frame: "
+                f"HTTP {response.status_code} {response.text[:4096]}"
+            )
         payload = response.json()
         from MemNavData.monocular_depth_runtime import (
             decode_monocular_depth_payload,
+            validate_monocular_depth_transaction,
         )
 
+        if transaction_token:
+            validate_monocular_depth_transaction(
+                payload,
+                expected_token=str(transaction_token),
+                expected_image_sha256=image_digest,
+                expected_frame_index=(
+                    None if expected_frame_index is None
+                    else int(expected_frame_index)
+                ),
+            )
         depth_2d, metadata = decode_monocular_depth_payload(
             payload, expected_image_sha256=image_digest
         )
         cached = (depth_2d, metadata)
         monocular_depth_cache = {image_digest: cached}
+    elif transaction_token and cached[1].get(
+        "monocular_depth_transaction_token"
+    ) != str(transaction_token):
+        raise RuntimeError(
+            "cached monocular depth belongs to a different transaction"
+        )
     depth_2d, metadata = cached
     depth = depth_2d[None, :, :, None].astype(np.float32, copy=False)
     return depth, {
@@ -240,6 +288,9 @@ def navdp_reset():
         ),
         "depth_source_override_enabled": bool(args.allow_depth_source_override),
         "monocular_depth_url_configured": bool(args.monocular_depth_url),
+        "monocular_depth_transaction_required": bool(
+            args.require_monocular_depth_transaction
+        ),
     })
 
 @app.route("/navigator_reset_env",methods=['POST'])
@@ -378,7 +429,12 @@ def navdp_step_image():
     
     depth, depth_receipt = _resolve_observation_depth(
         image_bytes, current_image_bgr,
-        depth_file, batch_size)
+        depth_file, batch_size,
+        transaction_token=request.form.get(
+            "monocular_depth_transaction_token"),
+        expected_frame_index=request.form.get(
+            "monocular_depth_frame_index"),
+    )
     
     phase2_time = time.time()
     diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
@@ -418,7 +474,12 @@ def navdp_resample_imagegoal():
 
     depth, depth_receipt = _resolve_observation_depth(
         image_bytes, current_image_bgr,
-        request.files.get('depth'), batch_size)
+        request.files.get('depth'), batch_size,
+        transaction_token=request.form.get(
+            "monocular_depth_transaction_token"),
+        expected_frame_index=request.form.get(
+            "monocular_depth_frame_index"),
+    )
 
     before_lengths = [len(queue) for queue in navdp_navigator.memory_queue]
     before_hashes = memory_queue_fingerprints(navdp_navigator)
@@ -507,7 +568,12 @@ def navdp_step_ip_mixgoal():
     image = image.reshape((batch_size, -1, image.shape[1], 3))
     
     depth, depth_receipt = _resolve_observation_depth(
-        image_bytes, current_image_bgr, depth_file, batch_size)
+        image_bytes, current_image_bgr, depth_file, batch_size,
+        transaction_token=request.form.get(
+            "monocular_depth_transaction_token"),
+        expected_frame_index=request.form.get(
+            "monocular_depth_frame_index"),
+    )
     
     phase2_time = time.time()
     diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
@@ -558,7 +624,12 @@ def navdp_resample_mixgoal():
         control_goal = control_goal.reshape(
             (batch_size, -1, control_goal.shape[1], 3))
     depth, depth_receipt = _resolve_observation_depth(
-        image_bytes, current_image_bgr, request.files.get('depth'), batch_size)
+        image_bytes, current_image_bgr, request.files.get('depth'), batch_size,
+        transaction_token=request.form.get(
+            "monocular_depth_transaction_token"),
+        expected_frame_index=request.form.get(
+            "monocular_depth_frame_index"),
+    )
 
     try:
         score_goal_contrast = _form_boolean("score_goal_contrast", False)

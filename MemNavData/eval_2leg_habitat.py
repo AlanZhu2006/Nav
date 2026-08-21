@@ -915,6 +915,36 @@ def srv_memory(image_jpg):
     return r.json()
 
 
+def bind_navdp_monocular_transaction(navdp_data, append_receipt, image_jpg):
+    """Attach only a byte- and frame-verified sidecar transaction receipt."""
+
+    bound = dict(navdp_data)
+    if args.navdp_depth_source != "monocular_sidecar":
+        return bound
+    if not isinstance(append_receipt, dict):
+        raise RuntimeError("monocular planning append omitted its receipt")
+    expected_digest = bytes_sha256(image_jpg)
+    if append_receipt.get("image_sha256") != expected_digest:
+        raise RuntimeError(
+            "MemNav planning append received different JPEG bytes"
+        )
+    token = append_receipt.get("monocular_depth_transaction_token")
+    frame_index = append_receipt.get("monocular_depth_frame_index")
+    if (not isinstance(token, str)
+            or re.fullmatch(r"[0-9a-f]{64}", token) is None
+            or isinstance(frame_index, bool)
+            or not isinstance(frame_index, int)
+            or frame_index != append_receipt.get("frame_idx")):
+        raise RuntimeError(
+            "MemNav planning append returned an invalid depth transaction"
+        )
+    bound.update({
+        "monocular_depth_transaction_token": token,
+        "monocular_depth_frame_index": str(frame_index),
+    })
+    return bound
+
+
 def srv_navdp_memory_replay(image_jpg):
     """Restore one frozen decision image without consuming DDPM noise."""
     if args.server_backend in ("navdp", "cec_portability"):
@@ -980,7 +1010,9 @@ def srv_reset_navdp_short_memory(env_id=0):
 
 
 def srv_navdp_imagegoal_resample(
-        image_jpg, goal_jpg, depth, diffusion_seed):
+        image_jpg, goal_jpg, depth, diffusion_seed,
+        monocular_depth_transaction_token=None,
+        monocular_depth_frame_index=None):
     """Sample another native-NavDP candidate set without advancing its FIFO."""
     if args.server_backend == "navdp":
         navdp_base = BASE
@@ -991,6 +1023,15 @@ def srv_navdp_imagegoal_resample(
         navdp_base = NOVEL_BASE
     else:
         raise ValueError("ImageGoal resampling requires a NavDP controller")
+    request_data = {"diffusion_seed": str(int(diffusion_seed))}
+    if monocular_depth_transaction_token is not None:
+        request_data["monocular_depth_transaction_token"] = str(
+            monocular_depth_transaction_token
+        )
+    if monocular_depth_frame_index is not None:
+        request_data["monocular_depth_frame_index"] = str(
+            int(monocular_depth_frame_index)
+        )
     response = requests.post(
         f"{navdp_base}/imagegoal_resample",
         files={
@@ -998,7 +1039,7 @@ def srv_navdp_imagegoal_resample(
             "goal": ("goal.jpg", goal_jpg),
             "depth": ("depth.png", depth_png_bytes(depth)),
         },
-        data={"diffusion_seed": str(int(diffusion_seed))},
+        data=request_data,
     )
     response.raise_for_status()
     payload = response.json()
@@ -1033,6 +1074,9 @@ def srv_plan_certified_relocalization(
     )
     probe.raise_for_status()
     probe_out = probe.json()
+    navdp_data = bind_navdp_monocular_transaction(
+        navdp_data, probe_out, image_jpg
+    )
     candidates = probe_out.get("certified_visual_candidates")
     if not isinstance(candidates, list):
         candidates = []
@@ -1242,6 +1286,9 @@ def srv_plan_learned_pi3x_relocalization(
     )
     probe.raise_for_status()
     probe_out = probe.json()
+    navdp_data = bind_navdp_monocular_transaction(
+        navdp_data, probe_out, image_jpg
+    )
     candidates = probe_out.get("visual_relocalization_candidates")
     if not isinstance(candidates, list):
         candidates = probe_out.get("certified_visual_candidates")
@@ -1425,6 +1472,8 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
         data["route_start_anchor"] = str(
             int(certified_route_start_anchor))
     data["graph_rescue"] = "1" if certified_graph_rescue else "0"
+    if args.navdp_depth_source == "monocular_sidecar":
+        data["materialize_monocular_depth"] = "1"
 
     navdp_data = {}
     if diffusion_seed is not None:
@@ -1459,6 +1508,9 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
             )
             probe.raise_for_status()
             mem_out = probe.json()
+            navdp_data = bind_navdp_monocular_transaction(
+                navdp_data, mem_out, image_jpg
+            )
             visual_score = mem_out.get("visual_score")
             current_score = mem_out.get("current_goal_cos")
             advantage = None
@@ -1772,6 +1824,12 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
             mem_out = pose.json()
             router_active = True
 
+        if (args.navdp_depth_source == "monocular_sidecar"
+                and "monocular_depth_transaction_token" not in navdp_data):
+            navdp_data = bind_navdp_monocular_transaction(
+                navdp_data, mem_out, image_jpg
+            )
+
         aux_pose_raw = mem_out.get("aux_pose")
         try:
             aux_pose = (np.asarray(aux_pose_raw, dtype=float)
@@ -1882,6 +1940,10 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
                 goal_jpg,
                 depth,
                 diffusion_seed=diffusion_seed,
+                monocular_depth_transaction_token=navdp_data.get(
+                    "monocular_depth_transaction_token"),
+                monocular_depth_frame_index=navdp_data.get(
+                    "monocular_depth_frame_index"),
             )
             nav_out.update(paired_action_shadow_diagnostics(
                 nav_out,
@@ -1935,6 +1997,9 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
         )
         probe.raise_for_status()
         probe_out = probe.json()
+        navdp_data = bind_navdp_monocular_transaction(
+            navdp_data, probe_out, image_jpg
+        )
         memory_frame_idx = probe_out.get("frame_idx")
         plan_base = NOVEL_BASE
     elif args.server_backend in HYBRID_BACKENDS and policy_backend == "navdp":
@@ -1944,9 +2009,17 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
         streamed = requests.post(
             f"{BASE}/memory_step",
             files={"image": ("image.jpg", image_jpg)},
+            data={
+                "materialize_monocular_depth": "1"
+                if args.navdp_depth_source == "monocular_sidecar" else "0"
+            },
         )
         streamed.raise_for_status()
-        memory_frame_idx = streamed.json().get("frame_idx")
+        streamed_out = streamed.json()
+        memory_frame_idx = streamed_out.get("frame_idx")
+        navdp_data = bind_navdp_monocular_transaction(
+            navdp_data, streamed_out, image_jpg
+        )
         plan_base = NOVEL_BASE
     else:
         plan_base = BASE

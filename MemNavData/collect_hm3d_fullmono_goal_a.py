@@ -135,6 +135,7 @@ def audit_episode(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument("--evaluator-source-root", type=Path)
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--protocol", type=Path, required=True)
     parser.add_argument("--parent-manifest", type=Path, required=True)
@@ -145,6 +146,7 @@ def main() -> None:
     parser.add_argument("--resume-incomplete", action="store_true")
     parser.add_argument("--repair-tag", default="repair")
     args = parser.parse_args()
+    evaluator_source_root = args.evaluator_source_root or args.source_root
     require(bool(SAFE_TAG.fullmatch(args.repair_tag)), "invalid repair tag")
 
     protocol = json.loads(args.protocol.read_text())
@@ -188,7 +190,7 @@ def main() -> None:
         if actions[episode] == "run":
             command = [
                 args.hab_python, "-u",
-                str(args.source_root / "MemNavData/eval_2leg_habitat.py"),
+                str(evaluator_source_root / "MemNavData/eval_2leg_habitat.py"),
                 "--episode_root", str(episode_root),
                 "--episode_ids", episode,
                 "--scene", str(scene_file),

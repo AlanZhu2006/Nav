@@ -42,6 +42,7 @@ def sha256(path: Path) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument("--evaluator-source-root", type=Path)
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--bench-root", type=Path, required=True)
     parser.add_argument("--expected-manifest-sha256", required=True)
@@ -52,6 +53,7 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=600)
     parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args()
+    evaluator_source_root = args.evaluator_source_root or args.source_root
 
     manifest_path = args.bench_root / "manifest.json"
     require(sha256(manifest_path) == args.expected_manifest_sha256,
@@ -119,7 +121,8 @@ def main() -> None:
 
     common = [
         args.hab_python, "-u",
-        str(args.source_root / "MemNavData/eval_shared_online_role_pairs.py"),
+        str(evaluator_source_root /
+            "MemNavData/eval_shared_online_role_pairs.py"),
         "--episode_root", str(args.bench_root / scene),
         "--episode_ids", episode,
         "--scene", str(scene_file),

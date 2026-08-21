@@ -52,6 +52,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -343,6 +344,7 @@ if args.pi3x_learned_relocalizer:
     )
 
 app = Flask(__name__)
+monocular_depth_transactions = {}
 
 
 @app.after_request
@@ -355,6 +357,7 @@ def synchronize_cuda_http_handoff(response):
 
 @app.route("/navigator_reset", methods=["POST"])
 def navigator_reset():
+    global monocular_depth_transactions
     payload = request.get_json(silent=True) or {}
     cam_h = float(payload.get("camera_height", 0.5))
     seed = payload.get("seed")
@@ -365,6 +368,7 @@ def navigator_reset():
         episode_len=episode_len,
         camera_intrinsic=payload.get("camera_intrinsic"),
     )
+    monocular_depth_transactions = {}
     return jsonify({
         "algo": "memnav",
         "flow_threshold": agent.flow_threshold,
@@ -387,20 +391,72 @@ def navigator_reset():
 
 @app.route("/navigator_reset_env", methods=["POST"])
 def navigator_reset_env():
+    global monocular_depth_transactions
     # single-env server: same as a full reset (used by the cold/reset-memory arm)
     agent.reset(camera_height=agent.camera_height, seed=agent._last_seed,
                 episode_len=agent._last_episode_len,
                 camera_intrinsic=agent.camera_intrinsic)
+    monocular_depth_transactions = {}
     return jsonify({"algo": "memnav"})
+
+
+def append_request_frame():
+    """Append the uploaded RGB and optionally bind its current depth."""
+
+    global monocular_depth_transactions
+    materialize = request.form.get("materialize_monocular_depth", "0")
+    if materialize not in {"0", "1"}:
+        raise ValueError("materialize_monocular_depth must be 0 or 1")
+    image_bytes = request.files["image"].read()
+    image_digest = hashlib.sha256(image_bytes).hexdigest()
+    idx = agent.add_frame(image_bytes)
+    response = {
+        "frame_idx": idx,
+        "image_sha256": image_digest,
+        "monocular_depth": agent.monocular_depth_status(),
+    }
+    # Every append invalidates an older token.  A planning append may
+    # materialize the exact current depth in the same HTTP transaction; the
+    # NavDP process can then read only this SHA/frame-bound payload.
+    monocular_depth_transactions = {}
+    if materialize == "1":
+        from MemNavData.monocular_depth_runtime import (
+            bind_monocular_depth_transaction,
+            validate_monocular_depth_transaction,
+        )
+
+        payload = bind_monocular_depth_transaction(
+            agent.monocular_depth_observation()
+        )
+        token = payload["monocular_depth_transaction_token"]
+        validate_monocular_depth_transaction(
+            payload,
+            expected_token=token,
+            expected_image_sha256=image_digest,
+            expected_frame_index=idx,
+        )
+        monocular_depth_transactions = {token: payload}
+        response.update({
+            "monocular_depth_transaction_schema": payload[
+                "monocular_depth_transaction_schema"
+            ],
+            "monocular_depth_transaction_token": token,
+            "monocular_depth_frame_index": int(payload["frame_index"]),
+            "monocular_depth_png_sha256": payload["depth_png_sha256"],
+        })
+    return response
 
 
 @app.route("/memory_step", methods=["POST"])
 def memory_step():
-    idx = agent.add_frame(request.files["image"].read())
-    return jsonify({
-        "frame_idx": idx,
-        "monocular_depth": agent.monocular_depth_status(),
-    })
+    try:
+        response = append_request_frame()
+    except ValueError as error:
+        return jsonify({
+            "error": str(error),
+            "metric_depth_sensor_consumed": False,
+        }), 400
+    return jsonify(response)
 
 
 @app.route("/monocular_depth_query", methods=["POST"])
@@ -413,21 +469,56 @@ def monocular_depth_query():
             "error": "expected_image_sha256 is required",
             "metric_depth_sensor_consumed": False,
         }), 400
+    transaction_token = request.form.get("monocular_depth_transaction_token")
+    expected_frame_raw = request.form.get("expected_frame_index")
     try:
-        payload = agent.monocular_depth_observation()
+        if transaction_token is None:
+            payload = agent.monocular_depth_observation()
+        else:
+            from MemNavData.monocular_depth_runtime import (
+                validate_monocular_depth_transaction,
+            )
+
+            payload = monocular_depth_transactions.get(transaction_token)
+            if payload is None:
+                raise ValueError(
+                    "monocular depth transaction is absent or superseded"
+                )
+            expected_frame = (
+                None if expected_frame_raw is None else int(expected_frame_raw)
+            )
+            validate_monocular_depth_transaction(
+                payload,
+                expected_token=transaction_token,
+                expected_image_sha256=expected,
+                expected_frame_index=expected_frame,
+            )
+    except (TypeError, ValueError, OverflowError) as error:
+        return jsonify({
+            "error": f"{type(error).__name__}: {error}",
+            "expected_image_sha256": expected,
+            "expected_frame_index": expected_frame_raw,
+            "monocular_depth_transaction_token": transaction_token,
+            "latest_frame_index": agent.monocular_depth_status().get(
+                "latest_frame_index"
+            ),
+            "metric_depth_sensor_consumed": False,
+        }), 409
     except Exception as error:
         return jsonify({
             "error": f"{type(error).__name__}: {error}",
             "metric_depth_sensor_consumed": False,
         }), 500
     if payload.get("image_sha256") != expected:
-        return jsonify({
+        mismatch = {
             "error": "latest sidecar frame does not match current NavDP JPEG",
             "expected_image_sha256": expected,
             "latest_image_sha256": payload.get("image_sha256"),
             "frame_index": payload.get("frame_index"),
             "metric_depth_sensor_consumed": False,
-        }), 409
+        }
+        app.logger.error("monocular depth SHA mismatch: %s", mismatch)
+        return jsonify(mismatch), 409
     return jsonify(payload)
 
 
@@ -486,7 +577,7 @@ def imagegoal_step():
 @app.route("/posegoal_step", methods=["POST"])
 def posegoal_step():
     """Append a decision frame and recover the retrieved metric point-goal."""
-    agent.add_frame(request.files["image"].read())
+    append_receipt = append_request_frame()
     forced_anchor = request.form.get("forced_anchor")
     forced_gate = request.form.get("forced_gate")
     out = agent.plan(
@@ -496,7 +587,9 @@ def posegoal_step():
         pose_only=True,
         candidate_ceiling_override=candidate_ceiling_override(),
     )
-    return jsonify(with_goal_session_receipt(out))
+    out = with_goal_session_receipt(out)
+    out.update(append_receipt)
+    return jsonify(out)
 
 
 @app.route("/posegoal_query", methods=["POST"])
@@ -517,7 +610,7 @@ def posegoal_query():
 @app.route("/retrieval_probe_step", methods=["POST"])
 def retrieval_probe_step():
     """Append a frame and return scores without allocating a goal-pose cache."""
-    agent.add_frame(request.files["image"].read())
+    append_receipt = append_request_frame()
     forced_anchor = request.form.get("forced_anchor")
     forced_gate = request.form.get("forced_gate")
     out = agent.plan(
@@ -527,7 +620,9 @@ def retrieval_probe_step():
         retrieval_only=True,
         candidate_ceiling_override=candidate_ceiling_override(),
     )
-    return jsonify(with_goal_session_receipt(out))
+    out = with_goal_session_receipt(out)
+    out.update(append_receipt)
+    return jsonify(out)
 
 
 @app.route("/retrieval_verify", methods=["POST"])

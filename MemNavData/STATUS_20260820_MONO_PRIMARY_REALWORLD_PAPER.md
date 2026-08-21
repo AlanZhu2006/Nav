@@ -1,5 +1,10 @@
 # 2026-08-20：Mono-primary 架构、实机 release 与论文重构
 
+> **2026-08-21 addendum：** Full-Mono 真机代码已同步到独立发布仓库
+> `AlanZhu2006/Memnav_Realworld@da92b76` 与 Jetson checkout；详细版本、哈希、
+> 测试和剩余物理门见 `REALWORLD_DUAL_MACHINE_SYNC_20260821.md`。软件同步完成
+> 不等于真机闭环完成，camera height 与静态验收仍是启动门。
+
 本文接续 `STATUS_20260820_FULLMONO_AND_FRESH_CONFIRMATION.md`，记录 23:00 后的架构
 决策。正式实验数字仍以各 protocol/result/independent verifier 为准。
 

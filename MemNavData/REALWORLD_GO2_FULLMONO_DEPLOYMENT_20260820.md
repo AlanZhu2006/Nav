@@ -1,5 +1,11 @@
 # CEC + Mono NavDP：Unitree Go2 双机部署（2026-08-20）
 
+> **2026-08-21 同步更新：** protocol-v2 Full-Mono 已进入独立
+> `AlanZhu2006/Memnav_Realworld@da92b76`，Jetson checkout 已安全
+> fast-forward 到同一提交，live overlay 哈希不变且工作树干净。完整三方对账见
+> `REALWORLD_DUAL_MACHINE_SYNC_20260821.md`。本次仍未启动相机、ROS、Go2
+> bridge 或运动。
+
 ## 1. 当前冻结架构
 
 实机方法已经从“RGB-D NavDP + CEC”切到与 Full-Mono 仿真实验一致的主架构：

@@ -1,0 +1,63 @@
+{
+  "schema": "memnav_realworld_three_way_sync_v1",
+  "created_at": "2026-08-21T17:51:09+08:00",
+  "status": "source_repository_and_jetson_checkout_synchronized_no_motion",
+  "research_source": {
+    "path": "/home/asus/Research/Nav-graph-blind",
+    "commit": "70387b63db65fedf1eb74bbe995631139d7b8e18"
+  },
+  "standalone_repository": {
+    "github": "AlanZhu2006/Memnav_Realworld",
+    "commit": "da92b76",
+    "branches_pushed": [
+      "main",
+      "sync/fullmono-cec-20260821"
+    ],
+    "local_path": "/home/asus/Research/Memnav_Realworld"
+  },
+  "jetson": {
+    "ssh_alias": "tegra-ubuntu",
+    "checkout": "/home/nvidia/twork/NavDP",
+    "branch": "master",
+    "tracking": "memnav-realworld/main",
+    "commit": "da92b76",
+    "working_tree_clean": true,
+    "pre_sync_stash": "pre-da92b76-device-overlay-20260821",
+    "live_overlay": "/home/nvidia/twork/NavDP/deployment/go2/offboard",
+    "immutable_release": "cec_mono_20260820_d656b9d9ae30de73",
+    "rollback": "rollback_pre_mono_20260820_d656b9d9ae30de73",
+    "payload_tree_sha256": "d656b9d9ae30de73f1d70a52b0150318f3dda238d6631dbae42f0a98dec973c2",
+    "payload_sha256": {
+      "preflight_offboard.sh": "770fe4eb205b6054d6ab50b9bff7fd12b5b587f8eefd1d7fe9bad6e3db8b1d0d",
+      "run_offboard_stack.sh": "ad4c3329a67f6b9ce1d5ab0f205f04b97c6758a41fd97ffb0fdcc603fb99a694",
+      "run_policy_tunnel.sh": "eb65fb3c88c0976b17ddc87ee99e6481e6d4d0c718cc7121630446f76006c2c3",
+      "stop_offboard_stack.sh": "e6b239f1cd2c51d59bd09c57348e037697a7bd4de47c0c9316860c608ed798c3"
+    }
+  },
+  "navigation_contract": {
+    "protocol_version": 2,
+    "sensor_contract": "causal_monocular_rgb_v1",
+    "navdp_depth_source": "monocular_sidecar",
+    "metric_depth_sensor_consumed_by_policy": false,
+    "robot_local_depth_role": "collision_safety_only"
+  },
+  "verification": {
+    "standalone_tests": "26 passed",
+    "research_tests": "10 passed",
+    "python_compile": true,
+    "shell_syntax": true,
+    "json_and_svg": true,
+    "public_baseline_verifier_failures": 0,
+    "jetson_tmux_sessions": 0,
+    "jetson_policy_ports_listening": 0,
+    "navigation_processes_running": 0,
+    "camera_started": false,
+    "ros_adapter_started": false,
+    "go2_bridge_started": false,
+    "motion_command_sent": false
+  },
+  "deployment_gate": {
+    "camera_optical_center_height_m": null,
+    "status": "blocked_until_measured"
+  }
+}

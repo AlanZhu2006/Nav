@@ -81,3 +81,78 @@ The submitted chain is repair `16130514`, barrier `16130521`, construction
 `16130535`, summary `16130538`, and independent verification `16130541`.
 At submission the repair is pending on `QOSGrpGRES`, not failed or cancelled;
 the already-running throttled Lifelong NNR task owns the available group GPU.
+
+## v2 scheduler cancellation and latent dependency-closure finding
+
+The v2 repair `16130514_29` was allocated on `gh014` at 07:13 EDT and was
+cancelled by Slurm root after `00:02:02`; accounting records the reason as
+`QOSGrpGRES`.  It created no runtime directory, episode artifact, or Slurm log.
+The downstream `afterok` chain `16130521--16130541` was consequently cancelled.
+This was a scheduler cancellation, not evidence that the atomic transport
+repair failed.
+
+Before resubmission, an exact reconstruction of the formal launch
+`PYTHONPATH` exposed a second, previously latent infrastructure defect.  The v2
+task bundle contained its updated NavDP `policy_backbone.py`, but not the
+vendored `depth_anything.depth_anything_v2` sources imported by that file.  The
+sources existed below the immutable base bundle's
+`NavDP/baselines/navdp/` directory, which was not itself on the top-level
+module search path.  The exact remote import therefore reproduced:
+
+```text
+ModuleNotFoundError: No module named 'depth_anything'
+```
+
+The QoS cancellation happened before this missing transitive dependency could
+appear in a task log.  Reusing the v2 bundle unchanged would therefore have
+turned a scheduler repair into a later environment failure.
+
+## v3 dependency-closed, serialized retry
+
+The v3 bundle adds only the twelve vendored DINOv2 Python sources already
+required by the frozen NavDP backbone.  It adds no model weights and does not
+enable a new depth predictor.  A new outcome-blind exact-runtime preflight now
+runs with the same Singularity image, MemNav Python 3.10, Habitat Python 3.9,
+base bundle, task bundle, LightGlue path, and import ordering as the formal
+job.  It fails unless:
+
+- NavDP `policy_agent`, `policy_backbone`, and `depth_anything_v2.dpt` resolve
+  inside the new task bundle;
+- MemNav policy modules resolve inside the task bundle;
+- the certificate runtime resolves inside one of the two verified source
+  roots;
+- the three Habitat entry points compile under the pinned Python 3.9 without
+  writing into either immutable bundle.
+
+The remote receipt reports `verified=true` and records every resolved module
+path.  Its SHA-256 is
+`19bbfc6477c7daa34b909bae37ed43fe91fcc8b38f2ee719740cdf217716d567`.
+
+New immutable bundle:
+
+```text
+/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/
+  hm3d_fullmono_transaction_repair_27132081e26acfb9
+```
+
+Bundle receipt SHA-256:
+`deea747eb7c8aad79a3dd76ab6fab6542ad987d1b768d4b7453e30032200da2e`.
+
+The retry is deliberately serialized behind Lifelong task-5 repair
+`16130123`; it cannot request a GPU while that frozen repair is still waiting
+or running.  The submitted chain is:
+
+| stage | job |
+|---|---:|
+| Goal-A index-29 repair | `16131068` |
+| artifact barrier | `16131071` |
+| role-pair construction | `16131072` |
+| population finalizer | `16131074` |
+| 80-step query smoke | `16131081` |
+| formal paired query | `16131090` |
+| summary | `16131095` |
+| independent verifier | `16131098` |
+
+At submission every job is pending by deliberate dependency.  No query arm
+has run and no new SR exists.  The retry still changes no method parameter,
+model/depth output, frozen population, seed, budget, or success criterion.

@@ -1,0 +1,19 @@
+{
+  "byte_identical_source_bundle_reused": true,
+  "completed_construction_scenes_rerun": false,
+  "goal_a_rerun": false,
+  "jobs": {
+    "construction_scene_0": 16066767,
+    "independent_verification": 16066810,
+    "population_finalize": 16066777,
+    "query_evaluation_array": 16066794,
+    "query_smoke": 16066788,
+    "summary": 16066801
+  },
+  "original_cancelled_array_element": "16032656_0",
+  "query_outcomes_read_before_repair": false,
+  "repair_scope": "externally_cancelled_construction_scene_0_only",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_mixed_role_20260820/formal_20260819T182657Z_0e587874",
+  "schema_version": "hm3d_fullmono_mixed_role_construction_repair_submission_v1_20260820",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_mixed_role_0e587874d5b89531"
+}

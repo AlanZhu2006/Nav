@@ -236,3 +236,74 @@ Before training either component, the formal ten-scene development set should
 repeat the server and B-only oracle arms. The primary metrics are Goal-B SR,
 candidate progress fraction, heading diversity, minimum geodesic reached, and
 paired changes under identical Goal-A traces and diffusion seeds.
+
+## Goal-blind observed-frontier residual (2026-08-07)
+
+The metric-target upper bound motivates a deployable question: can persistent
+observed geometry supply a useful Novel-goal direction without receiving the
+unknown goal coordinate? A local diagnostic now builds a sparse two-dimensional
+map from only the depth images and poses available along the executed rollout.
+It ray-carves free space, marks occupied endpoints, extracts free/unknown
+boundaries, and ranks connected frontiers by boundary size, travel distance,
+and distance from already visited cells. No goal coordinate is accepted by the
+frontier API.
+
+This implementation is nevertheless privileged. It projects depth with the
+Habitat evaluator pose and uses the Habitat navmesh to reject unreachable
+frontiers and produce a 1.25 m subgoal along the route to the selected
+frontier. It is a feasibility intervention, not a deployable LingBot result.
+
+An always-on arm established both sides of the intervention. It rescued one
+`17D` failure, but it also destroyed both previously successful `1L` Goal-B
+runs. Therefore unconditional coverage is rejected: a Novel ImageGoal is not
+equivalent to generic exploration.
+
+A shadow run then measured the distance from every native ImageGoal trajectory
+endpoint to the visited trace. In the five Goal-B episodes whose Goal A was
+reached, the three native successes never proposed an endpoint closer than
+approximately 0.89 m to the visited trace. The two failures spent 35% and 39%
+of their plans below 0.60 m, with consecutive runs of 16 and 10 plans. This is
+a useful stagnation signal, but it is not yet evidence that an arbitrary
+frontier is the correct recovery direction.
+
+The residual arm therefore preserves the native ImageGoal proposal by default.
+Only after three consecutive native endpoints are less than 0.60 m from the
+visited trace does it latch a frontier target. The 0.60 m threshold is twice
+the fixed 0.30 m agent radius and is also the map's pre-existing minimum
+frontier novelty; it was not selected from Goal-B coordinates. At an active
+plan, the evaluator first runs the normal ImageGoal request, advancing NavDP's
+eight-frame FIFO exactly once, and then uses a read-only mixed image/point-goal
+resampling endpoint with the identical diffusion seed. Unit tests verify that
+this second proposal does not change FIFO length or contents.
+
+The final comparison was rerun sequentially against one live NavDP process.
+This constraint is important because fresh CUDA processes produced different
+closed-loop outcomes even with request-level diffusion seeds. Goal-A path,
+steps, success and final distance are exactly equal for every paired episode.
+
+| Scene / episode | Native ImageGoal | Coverage residual | Interpretation |
+|---|---:|---:|---|
+| `17D/ep0` | success, 5.033 m | success, 5.033 m | no trigger; bit-exact |
+| `17D/ep1` | success, 8.494 m | failure, 20.037 m; final 8.830 m | harmful frontier |
+| `17D/ep2` | failure, 14.365 m; final 9.729 m | success, 12.211 m | rescued by frontier |
+| `1L/ep0` | success, 16.722 m | success, 16.722 m | no trigger; bit-exact |
+| `1L/ep1` | success, 8.268 m | success, 8.268 m | no trigger; bit-exact |
+| `1L/ep2` | Goal A failed | Goal A failed | excluded from B-given-A |
+
+Thus both arms obtain Goal-B `4/5`. The residual swaps which difficult episode
+succeeds and provides no net SR improvement. It is a **No-Go for promotion or
+large-scale training** in its current form. The negative result is still
+diagnostic: repeated-space endpoint novelty can detect a class of native
+ImageGoal failures, while a goal-blind coverage score cannot determine which
+branch is relevant to the requested image.
+
+The next justified component is not another fixed trigger threshold. It is an
+ImageGoal-conditioned frontier or graph-subgoal ranker. Its inputs should be
+the goal image, persistent LingBot keyframe/patch features, candidate frontier
+geometry, pose uncertainty, and the native waypoint; its supervised target can
+be geodesic progress during training, but evaluation must remove the Habitat
+goal coordinate and pathfinder. Native ImageGoal remains the default, and a
+ranked subgoal is accepted only when both native repetition and a calibrated
+goal-conditioned advantage are present. In parallel, replacing evaluator pose
+with aligned LingBot pose/depth will measure how much of the privileged-map
+upper bound survives real long-term memory noise.

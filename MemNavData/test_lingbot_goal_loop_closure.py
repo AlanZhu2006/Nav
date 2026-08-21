@@ -10,7 +10,9 @@ from MemNavData.diag_lingbot_goal_loop_closure import (
     CandidateSeed,
     CollectionCheckpoint,
     _HABITAT_TO_DATA_ROTATION,
+    adaptive_neighbor_offsets,
     feature_episode_root,
+    interleave_dual_proposals,
     lingbot_relative_prediction,
     navdp_ground_truth_relative,
     raw_rgb_dir,
@@ -18,7 +20,10 @@ from MemNavData.diag_lingbot_goal_loop_closure import (
     resolve_routed_feature_cache_pairs,
     seed_manifest_sha256,
     select_deployment_seeds,
+    select_cdec_oof_ranked_seeds,
+    select_lightglue_ranked_seeds,
     select_train_augmented_seeds,
+    validate_cdec_training_binding,
     validate_scene_role,
 )
 
@@ -82,6 +87,40 @@ class LingBotGoalLoopClosureTest(unittest.TestCase):
                 seeds, {"development": ["scene_a", "scene_b"]},
                 "development")
 
+    def test_adaptive_neighbors_use_symmetric_clip_interior(self):
+        self.assertEqual(
+            adaptive_neighbor_offsets(
+                20, 8, 40, radius=4, count=3),
+            (-4, 0, 4),
+        )
+
+    def test_adaptive_neighbors_preserve_three_views_at_boundaries(self):
+        self.assertEqual(
+            adaptive_neighbor_offsets(
+                8, 8, 40, radius=4, count=3),
+            (0, 2, 4),
+        )
+        self.assertEqual(
+            adaptive_neighbor_offsets(
+                40, 8, 40, radius=4, count=3),
+            (-4, -2, 0),
+        )
+
+    def test_adaptive_neighbors_fail_closed_when_three_views_are_impossible(self):
+        self.assertEqual(
+            adaptive_neighbor_offsets(
+                8, 8, 9, radius=4, count=3),
+            (0, 1),
+        )
+        self.assertEqual(
+            adaptive_neighbor_offsets(
+                7, 8, 40, radius=4, count=3),
+            (),
+        )
+        with self.assertRaisesRegex(ValueError, "count must be positive"):
+            adaptive_neighbor_offsets(
+                8, 8, 40, radius=4, count=0)
+
     def test_train_augmentation_exposes_missed_positive_without_replacing_topk(self):
         matched = "scene_a/episode_0000/matched"
         no_match = "scene_b/episode_0000/no_match"
@@ -113,6 +152,123 @@ class LingBotGoalLoopClosureTest(unittest.TestCase):
             [seed.candidate_frame for seed in by_session[no_match]], [8, 20])
         self.assertTrue(all(
             seed.session_is_strict_no_match for seed in by_session[no_match]))
+
+    def test_lightglue_ranked_selection_is_geometric_and_label_blind(self):
+        session = "scene_a/episode_0000/matched"
+        teacher = pd.DataFrame([
+            self.teacher_row(session, 8, 0.99, 0.90),
+            self.teacher_row(session, 20, 0.80, 0.05),
+        ])
+        evidence = teacher[[
+            "session_id", "query_path", "candidate_path",
+            "candidate_frame", "dino_cosine",
+        ]].copy()
+        # Geometry deliberately prefers the teacher-negative candidate.  The
+        # selector must not peek at co-visibility to reverse that choice.
+        evidence["fundamental_inliers"] = [20, 80]
+        evidence["fundamental_query_grid_coverage"] = [0.25, 0.75]
+        evidence["fundamental_query_hull_coverage"] = [0.10, 0.50]
+        evidence["lightglue_score_median"] = [0.7, 0.6]
+        evidence["session_max_covis"] = 0.9
+        seeds = select_lightglue_ranked_seeds(
+            teacher, evidence, kind="cross_episode_train", sessions=(),
+            max_sessions=0, minimum_gap=4, positive_threshold=0.5,
+            negative_threshold=0.2, minimum_anchor=8)
+        self.assertEqual(len(seeds), 1)
+        self.assertEqual(seeds[0].candidate_frame, 20)
+        self.assertEqual(seeds[0].label, 0)
+        self.assertTrue(seeds[0].session_has_positive)
+        self.assertEqual(
+            seeds[0].selection_origin,
+            "lightglue_fundamental_rank_v1")
+
+    def test_lightglue_ranked_selection_rejects_unbound_candidate(self):
+        session = "scene_a/episode_0000/matched"
+        teacher = pd.DataFrame([self.teacher_row(session, 8, 0.9, 0.8)])
+        evidence = teacher[[
+            "session_id", "query_path", "candidate_path",
+            "candidate_frame", "dino_cosine",
+        ]].copy()
+        evidence.loc[0, "candidate_path"] = "/different/8.jpg"
+        evidence["fundamental_inliers"] = 80
+        evidence["fundamental_query_grid_coverage"] = 1.0
+        evidence["fundamental_query_hull_coverage"] = 0.5
+        evidence["lightglue_score_median"] = 0.8
+        evidence["session_max_covis"] = 0.8
+        with self.assertRaisesRegex(RuntimeError, "does not map uniquely"):
+            select_lightglue_ranked_seeds(
+                teacher, evidence, kind="cross_episode_train", sessions=(),
+                max_sessions=0, minimum_gap=4, positive_threshold=0.5,
+                negative_threshold=0.2, minimum_anchor=8)
+
+    def test_cdec_oof_selection_uses_score_before_teacher_audit(self):
+        session = "scene_a/episode_0000/matched"
+        teacher = pd.DataFrame([
+            self.teacher_row(session, 8, 0.99, 0.90),
+            self.teacher_row(session, 20, 0.80, 0.05),
+        ])
+        evidence = teacher[[
+            "session_id", "query_path", "candidate_path",
+            "candidate_frame", "dino_cosine",
+        ]].copy()
+        # The held-out model deliberately chooses the teacher-negative row;
+        # post-selection labels must never reverse its decision.
+        evidence["cdec_oof_score"] = [-2.0, 3.0]
+        evidence["cdec_outer_fold"] = 0
+        evidence["cdec_inner_selected_c"] = 1.0
+        seeds = select_cdec_oof_ranked_seeds(
+            teacher, evidence, kind="cross_episode_train", sessions=(),
+            max_sessions=0, minimum_gap=4, positive_threshold=0.5,
+            negative_threshold=0.2, minimum_anchor=8)
+        self.assertEqual(len(seeds), 1)
+        self.assertEqual(seeds[0].candidate_frame, 20)
+        self.assertEqual(seeds[0].label, 0)
+        self.assertTrue(seeds[0].session_has_positive)
+        self.assertEqual(
+            seeds[0].selection_origin,
+            "cdec_scene_oof_pairwise_rank_v1")
+
+    def test_cdec_training_binding_checks_static_and_raw_teacher(self):
+        session = "scene_a/episode_0000/matched"
+        teacher = pd.DataFrame([
+            self.teacher_row(session, 8, 0.99, 0.90),
+            self.teacher_row(session, 20, 0.80, 0.05),
+        ])
+        training = teacher[[
+            "session_id", "scene", "episode", "kind", "query_path",
+            "candidate_path", "candidate_frame", "dino_cosine",
+        ]].copy()
+        training["candidate_rank"] = [0, 1]
+        evidence = training.copy()
+        evidence["cdec_oof_score"] = [1.0, -1.0]
+        validate_cdec_training_binding(
+            teacher, training, evidence, kind="cross_episode_train",
+            minimum_anchor=8)
+        corrupted = evidence.copy()
+        corrupted.loc[1, "candidate_path"] = "/wrong/20.jpg"
+        with self.assertRaisesRegex(RuntimeError, "differs from training rows"):
+            validate_cdec_training_binding(
+                teacher, training, corrupted, kind="cross_episode_train",
+                minimum_anchor=8)
+
+    def test_dual_proposals_are_geometry_first_per_session(self):
+        def seed(session, frame, origin):
+            return CandidateSeed(
+                session_id=session, scene="s", episode="e", kind="k",
+                query_path=Path("/q.jpg"),
+                candidate_path=Path(f"/{frame}.jpg"),
+                candidate_frame=frame, dino_cosine=0.9,
+                teacher_covis=0.8, label=1, session_has_positive=True,
+                session_is_strict_no_match=False, session_max_covis=0.8,
+                selection_origin=origin)
+        geometry = [seed("b", 1, "lightglue_fundamental_rank_v1"),
+                    seed("a", 2, "lightglue_fundamental_rank_v1")]
+        learned = [seed("a", 3, "cdec_scene_oof_pairwise_rank_v1"),
+                   seed("b", 4, "cdec_scene_oof_pairwise_rank_v1")]
+        result = interleave_dual_proposals(geometry, learned)
+        self.assertEqual(
+            [(row.session_id, row.candidate_frame) for row in result],
+            [("a", 2), ("a", 3), ("b", 1), ("b", 4)])
 
     def test_selection_and_resume_hash_preserve_explicit_causal_sample(self):
         session = "scene_a/episode_0000/matched"

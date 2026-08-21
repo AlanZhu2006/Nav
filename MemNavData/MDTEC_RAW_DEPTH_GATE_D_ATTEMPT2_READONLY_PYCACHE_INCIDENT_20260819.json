@@ -1,0 +1,30 @@
+{
+  "schema": "mdtec_raw_depth_gate_d_incident_v1_20260819",
+  "attempt": 2,
+  "array_job": "15960619",
+  "dependent_summary_job": "15960624",
+  "status": "infrastructure_failure_no_formal_outcome_consumed",
+  "observed": {
+    "failed_tasks": [
+      0,
+      2
+    ],
+    "elapsed_seconds_range": [
+      36,
+      48
+    ],
+    "exit_code": "1:0",
+    "error": "post-test py_compile attempted to create MemNavData/__pycache__ inside the intentionally read-only immutable source bundle"
+  },
+  "evaluator_started": false,
+  "formal_sr_read": false,
+  "action": {
+    "remaining_array_and_summary_cancelled": true,
+    "repair": [
+      "remove redundant on-node py_compile because staged bundle compilation already passed before upload",
+      "set PYTHONDONTWRITEBYTECODE=1 for on-node tests, both servers, evaluator, summarizer and verifier"
+    ],
+    "population_thresholds_and_analysis_unchanged": true,
+    "new_content_addressed_bundle_required": true
+  }
+}

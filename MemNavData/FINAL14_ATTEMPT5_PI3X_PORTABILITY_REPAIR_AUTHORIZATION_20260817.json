@@ -1,0 +1,27 @@
+{
+  "schema_version": "final14_attempt5_pi3x_portability_repair_authorization_v1_20260817",
+  "parent_incident": "MemNavData/FINAL14_ATTEMPT4_PI3X_PORTABILITY_INCIDENT_20260817.json",
+  "repair_type": "outcome_blind_infrastructure_only",
+  "allowed_changes": [
+    "portable relative paths in pi3x_deployment/OUTPUTS.sha256",
+    "portable nested-checksum verifier and tests",
+    "CPU-only dependency preflight",
+    "one formal task as an outcome-blind scheduler gate before releasing the remaining array"
+  ],
+  "forbidden_changes": [
+    "Pi3X model bytes",
+    "four proof checkpoint bytes",
+    "proof deployment manifest or thresholds",
+    "2-of-4 consensus",
+    "Final14 scenes, episodes, queries, protocols, or benchmark bytes",
+    "DINO ordering, b16 bridge, 2.5 m residual, controller, fallback, or success criterion",
+    "reading the gate task policy outcome before releasing dependent work"
+  ],
+  "required_pre_submission_gates": [
+    "local unit tests",
+    "validation after copying the nested deployment to a random directory",
+    "remote outer and nested receipt verification",
+    "remote exact Python-environment checkpoint load",
+    "formal task zero must exit successfully before tasks 1-83 are eligible"
+  ]
+}

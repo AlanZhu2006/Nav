@@ -1,0 +1,44 @@
+{
+  "schema_version": "final14_overlay_repair_receipt_v1_20260817",
+  "parent_incident": "MemNavData/FINAL14_ATTEMPT2_OVERLAY_INCIDENT_20260817.json",
+  "repair_class": "result-blind immutable data-mount correction",
+  "valid_policy_records_from_failed_attempt": 0,
+  "query_policy_outcomes_observed_before_repair": false,
+  "changes": [
+    "mount pre-existing PT1 squashfs read-only during Final14 source-manifest freeze",
+    "record /mp3d_revisit_v0/vln_n1/traj_data/mp3d_2leg as the manifest episode root",
+    "mount the same PT1 squashfs read-only in every Goal-A collection task"
+  ],
+  "unchanged": [
+    "all 14 frozen scene identities and ledger order",
+    "lexicographic first-eight available episode rule",
+    "per-scene cap and all Natural/standard/hard query construction",
+    "all five policy arms, checkpoints, thresholds and deterministic seeds",
+    "success criterion, budgets, statistics and reporting denominators"
+  ],
+  "result_blind_aggregate_audit": {
+    "pt1_final14_scene_directories": 14,
+    "pt1_final14_scenes_with_at_least_eight_two_leg_episodes": 10,
+    "pt1_final14_two_leg_episode_directories": 150,
+    "expected_frozen_first-eight_source_count": 80,
+    "expected_asset_shortage_scenes": 4,
+    "scene_identities_printed": false
+  },
+  "replacement_execution_bundle": {
+    "local_path": ".diagnostics/learned_relocalizer_20260817/final14_learned_complete_fda260dc86164ab9",
+    "remote_path": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_learned_complete_fda260dc86164ab9",
+    "source_receipt_sha256": "fda260dc86164ab9d6b41ceffb1d2020f2fa62ff564c02200f67fa979d93a28c",
+    "regular_files": 4001,
+    "manifest_entries": 4000,
+    "writable_entries": 0,
+    "local_and_remote_hash_verification": true
+  },
+  "tests": {
+    "learned_source_summary_runtime": "21 passed",
+    "final14_construction": "7 passed",
+    "overlay_root_override": true,
+    "collection_overlay_mount_present": true,
+    "shell_syntax": true
+  },
+  "scientific_interpretation": "attempt3 remains the first attempt capable of producing any Goal-A or query policy outcome; attempt2 is infrastructure-only with zero valid records"
+}

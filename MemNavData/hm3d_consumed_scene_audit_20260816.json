@@ -1,0 +1,87 @@
+{
+  "schema_version": "hm3d_consumed_scene_audit_v1_20260816",
+  "scope": "outcome-blind scene exclusion before non-MP3D external transfer",
+  "archive": {
+    "name": "hm3d-val-habitat-v0.2.tar",
+    "scene_count": 100,
+    "member_list_sha256": "087eb023ae868c7a67cde44badf88d2bdd0f8ed9f016846dd169a981a8adbc61"
+  },
+  "consumption_sources": [
+    {
+      "path": "MemNavData/goat_navdp_runtime_pilot_manifest.json",
+      "sha256": "652cbe0f731c3b817e9c1e0f5e516ae4f386d74380a7ed06c4910651357b5db5"
+    },
+    {
+      "path": "MemNavData/goat_certified_arrival_manifest.json",
+      "sha256": "3120625b8b6e86d9d517f08dd4d3b366c0d417cfdb738b50dc01834186458b79"
+    },
+    {
+      "path": "MemNavData/goat_sequential_revisit_formal_manifest_20260815.json",
+      "sha256": "aaedc6fb0c6d3787b5c8c61eed2c2d943320f595f9b1783f881febc544121397"
+    },
+    {
+      "path": "MemNavData/goat_sequential_revisit_smoke_manifest_20260815.json",
+      "sha256": "7e23655af2578c39c8435981584dbe65b2de8eb2025478f3cfd50921d07628ab"
+    },
+    {
+      "path": "MemNavData/goat_certified_arrival_smoke_manifest.json",
+      "sha256": "324d4947a95830ddfd86ccee2a63e8f29f223c77dae0d39e33b6e54e5141a862"
+    }
+  ],
+  "consumed_scene_count": 36,
+  "consumed_scene_ids": [
+    "4ok3usBNeis",
+    "5cdEh9F2hJL",
+    "6s7QHgap2fW",
+    "7MXmsvcQjpJ",
+    "BAbdmeyTvMZ",
+    "CrMo8WxCyVb",
+    "DYehNKdT76V",
+    "Dd4bFSTQ8gi",
+    "GLAQ4DNUx5U",
+    "HY1NcmCgn3n",
+    "LT9Jq6dN3Ea",
+    "MHPLjHsuG27",
+    "Nfvxx8J5NCo",
+    "QaLdnwvtxbs",
+    "TEEsavR23oF",
+    "VBzV5z6i1WS",
+    "XB4GS9ShBRE",
+    "a8BtkwhxdRV",
+    "bCPU9suPUw9",
+    "bxsVRursffK",
+    "cvZr5TUy5C5",
+    "eF36g7L6Z9M",
+    "h1zeeAwLh9Z",
+    "k1cupFYWXJ6",
+    "mL8ThkuaVTM",
+    "mv2HUxq3B53",
+    "p53SfW6mjZe",
+    "q3zU7Yy5E5s",
+    "q5QZSEeHe5g",
+    "qyAac8rV8Zk",
+    "svBbv1Pavdk",
+    "wcojb4TFT35",
+    "y9hTuugGdiq",
+    "yr17PDCnDDW",
+    "ziup5kvtCCR",
+    "zt1RVoi7PcG"
+  ],
+  "unconsumed_scene_count": 64,
+  "selection_rule": "ascending five-digit archive index after subtracting the 36-scene consumed union; take the first ten; no navigation outcome read",
+  "selected_scenes": [
+    {"index": 0, "directory": "00801-HaxA7YrQdEC", "scene_id": "HaxA7YrQdEC"},
+    {"index": 1, "directory": "00804-BHXhpBwSMLh", "scene_id": "BHXhpBwSMLh"},
+    {"index": 2, "directory": "00805-SUHsP6z2gcJ", "scene_id": "SUHsP6z2gcJ"},
+    {"index": 3, "directory": "00806-tQ5s4ShP627", "scene_id": "tQ5s4ShP627"},
+    {"index": 4, "directory": "00807-rsggHU7g7dh", "scene_id": "rsggHU7g7dh"},
+    {"index": 5, "directory": "00809-Qpor2mEya8F", "scene_id": "Qpor2mEya8F"},
+    {"index": 6, "directory": "00811-7UrtFsADwob", "scene_id": "7UrtFsADwob"},
+    {"index": 7, "directory": "00812-mma8eWq3nNQ", "scene_id": "mma8eWq3nNQ"},
+    {"index": 8, "directory": "00816-q3hn1WQ12rz", "scene_id": "q3hn1WQ12rz"},
+    {"index": 9, "directory": "00817-X4qjx5vquwH", "scene_id": "X4qjx5vquwH"}
+  ],
+  "selected_overlap_with_consumed": [],
+  "outcome_fields_read_for_selection": false,
+  "status": "ok"
+}

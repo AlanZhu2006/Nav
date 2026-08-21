@@ -1,0 +1,17 @@
+{
+  "attempt": "replica_formal_10scene_20260814_attempt1",
+  "failure": {
+    "exception": "PermissionError",
+    "message": "py_compile attempted to create MemNavData/__pycache__ inside the intentionally read-only source bundle",
+    "stage": "immutable_bundle_preflight_compile"
+  },
+  "freeze_manifest_sha256": "68f91d844a37b6c81ee8d0e39672a4118254681fbdbb7f2a327160acba3286b5",
+  "navigation_outcomes_read": false,
+  "pipeline_pid": 1216263,
+  "policy_query_outcomes_read": false,
+  "remediation": "redirect PYTHONPYCACHEPREFIX to the writable run root; retain the identical frozen population, seeds, arms, thresholds and analysis",
+  "source_bundle": "/home/asus/Research/Nav-graph-blind/.diagnostics/source_bundles/replica_formal_85b6058d30dbd889",
+  "source_generation_started": false,
+  "source_receipt_sha256": "3d8c984399fa05a2ccad668d1d6107cf2aae86bff9add14a14938933ee011b3c",
+  "status": "failed_before_data_or_policy_execution"
+}

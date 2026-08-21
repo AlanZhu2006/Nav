@@ -13,7 +13,7 @@ from typing import Callable
 import numpy as np
 
 
-RESET_MODES = ("carry", "before_b", "every_goal")
+RESET_MODES = ("carry", "before_b", "before_c", "every_goal")
 TRAJECTORY_SELECTOR_SCOPES = ("all", "leg_a", "leg_b", "leg_c")
 
 
@@ -22,13 +22,19 @@ def should_reset_before_leg(mode: str, leg_index: int) -> bool:
 
     Leg indices are zero based: A=0, B=1, C=2.  ``before_b`` deliberately
     isolates the Novel A->B transition; ``every_goal`` is the broader follow-up
-    ablation and resets before both B and C.
+    ablation and resets before both B and C.  ``before_c`` is the minimal
+    double-Revisit intervention: B remains natural, while C cannot consume
+    the intervening B rollout through NavDP's bounded local FIFO.
     """
     if mode not in RESET_MODES:
         raise ValueError(f"unknown NavDP goal-switch mode: {mode!r}")
     if leg_index < 1:
         return False
-    return mode == "every_goal" or (mode == "before_b" and leg_index == 1)
+    return (
+        mode == "every_goal"
+        or (mode == "before_b" and leg_index == 1)
+        or (mode == "before_c" and leg_index == 2)
+    )
 
 
 def trajectory_selector_for_leg(
@@ -142,7 +148,7 @@ def navdp_server_base(
     novel_base_url: str | None,
 ) -> str:
     """Select the server that owns the frozen NavDP local controller."""
-    if server_backend == "navdp":
+    if server_backend in ("navdp", "cec_portability"):
         return base_url
     if server_backend in ("hybrid_oracle", "hybrid_pose"):
         if novel_base_url is None:
@@ -168,9 +174,12 @@ def reset_navdp_short_memory(
     )
     response.raise_for_status()
     payload = response.json()
-    if payload.get("algo") != "navdp":
+    expected_algo = (
+        "cec_controller_portability"
+        if server_backend == "cec_portability" else "navdp")
+    if payload.get("algo") != expected_algo:
         raise RuntimeError(
-            "short-memory reset reached a non-NavDP server: "
+            "short-memory reset reached a non-NavDP/wrong controller server: "
             f"{payload.get('algo')!r}"
         )
     return payload

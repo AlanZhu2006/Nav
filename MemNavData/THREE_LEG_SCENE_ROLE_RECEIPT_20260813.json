@@ -1,0 +1,37 @@
+{
+  "counts": {
+    "intersection_consumed20": 19,
+    "intersection_development10": 0,
+    "intersection_final_reserved4": 0,
+    "intersection_train40": 1,
+    "remaining_after_consumed_train_development_final": 16,
+    "remaining_intersection_blind16": 16,
+    "remaining_outside_blind": 0,
+    "three_leg_episodes": 526,
+    "three_leg_nonempty_scene_clusters": 36
+  },
+  "decision": "stop_before_blind_confirmation",
+  "episode_target_or_outcome_read": false,
+  "interpretation": [
+    "The nominal pool size is an episode count, not an independent scene-cluster count.",
+    "No episode file, target, policy outcome, or blind result was read.",
+    "A held-out confirmation requires an explicit one-shot authorization."
+  ],
+  "inventory_scope": {
+    "fields_read": [
+      "3-leg episode-directory names and counts",
+      "consumed data_manifest.scenes",
+      "frozen split scene-role lists"
+    ],
+    "three_leg_episode_root": "/scratch/lg154/Research/datasets/mp3d_revisit_v0/vln_n1/traj_data/mp3d_3leg"
+  },
+  "schema_version": "three_leg_scene_role_receipt_v1_20260813",
+  "source_receipts": {
+    "consumed20_manifest_sha256": "8013fa2a768d84638a9f9ecc50df46dda67ebb79250d14ad0a8087ac52fd33e5",
+    "consumed20_scene_name_digest": "e11c06f0c00f8c1b260b56730ae2c1874c56f2d2bc30755290cde8738dc1780f",
+    "frozen_blind_role_manifest_sha256": "b90a03cd6c3456f7741c09c2d8aa4d8f15da1512b9fa6329d31f42b7a03c5fc9",
+    "frozen_role_split_sha256": "97309c183e25cb3dd65472908748d55a94798a636db6157ab6fe120fca05cf7a",
+    "three_leg_pool_scene_episode_count_digest": "960366e83c7fb1946e2cb7b0c025edae32c5902e07de140ccc427472cf98227d",
+    "three_leg_pool_scene_name_digest": "8dc994fe2bc188f0fd0e7459e1bb9ebc9d79dd677ff581222903e926693fc0f9"
+  }
+}

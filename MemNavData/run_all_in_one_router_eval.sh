@@ -37,6 +37,8 @@ TASK_FILES=(
   MemNavData/validate_expanded_navdp_router_eval.py
   MemNavData/expanded_navdp_router_eval_20260805.json
   MemNavData/eval_3leg_habitat.py
+  MemNavData/observed_frontier.py
+  MemNavData/test_observed_frontier.py
   MemNavData/navdp_goal_switch.py
   MemNavData/test_navdp_goal_switch.py
   MemNavData/validate_expanded_3leg_router_eval.py

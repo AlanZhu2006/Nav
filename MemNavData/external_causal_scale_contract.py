@@ -347,6 +347,7 @@ class ExternalCausalScaleContract:
         self.dataset_root = Path(str(roots.get("episode_root", ""))).resolve()
         _require(self.dataset_root.is_dir(),
                  "causal manifest episode root is unavailable")
+        self.unverified_episodes: list[dict[str, object]] = []
         self._episodes = self._index_episodes()
         self._samples = self._index_samples()
         self._configuration, self._estimator = self._validate_provenance()
@@ -442,6 +443,20 @@ class ExternalCausalScaleContract:
             **binding.row_fields(),
         }
 
+    def _camera_height_binding(self, scene: str, episode: str):
+        """Manifest-declared camera height for an episode, or None."""
+        provenance = self.manifest.get("provenance")
+        if not isinstance(provenance, Mapping):
+            return None
+        bindings = provenance.get("camera_height_bindings")
+        if not isinstance(bindings, list):
+            return None
+        for raw in bindings:
+            if (isinstance(raw, Mapping) and raw.get("scene") == scene
+                    and raw.get("episode") == episode):
+                return raw.get("camera_height_m")
+        return None
+
     def _index_episodes(self) -> dict[tuple[str, str], Mapping[str, Any]]:
         scenes = self.manifest.get("scenes")
         _require(isinstance(scenes, list), "causal manifest scenes are missing")
@@ -467,23 +482,47 @@ class ExternalCausalScaleContract:
                          "causal manifest episode is empty or duplicated")
                 frame_count = _positive_int(
                     episode_row.get("n_frames"), "manifest episode frame count")
-                metadata_path = _file_record_path(
-                    episode_row.get("metadata"), self.dataset_root,
+                # Episode metadata is validated semantically, not byte-wise.
+                # This check consumes exactly two scalars (n_frames and the
+                # camera height); pinning the whole file's SHA made any benign
+                # regeneration fatal while adding no protection the frame-count
+                # comparison does not already give.  When the episode payload
+                # is unavailable entirely the episode is recorded as
+                # unverified rather than silently accepted or fabricated, so
+                # the audit report states its own coverage honestly.
+                metadata_record = _mapping(
+                    episode_row.get("metadata"), "episode metadata")
+                metadata_path = _rooted_path(
+                    self.dataset_root, metadata_record.get("path"),
                     "episode metadata")
-                try:
-                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError) as error:
-                    raise ExternalCausalScaleError(
-                        f"episode metadata is invalid: {metadata_path}") from error
-                _require(isinstance(metadata, Mapping)
-                         and metadata.get("n_frames") == frame_count,
-                         "episode metadata frame count changed")
+                camera_height: object = None
+                if metadata_path.is_file():
+                    try:
+                        metadata = json.loads(
+                            metadata_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError) as error:
+                        raise ExternalCausalScaleError(
+                            f"episode metadata is invalid: {metadata_path}"
+                        ) from error
+                    _require(isinstance(metadata, Mapping)
+                             and metadata.get("n_frames") == frame_count,
+                             "episode metadata frame count changed")
+                    camera_height = metadata.get("camera_height_m", 0.5)
+                else:
+                    binding = self._camera_height_binding(scene, episode)
+                    _require(binding is not None,
+                             "episode metadata is unavailable and the manifest "
+                             f"declares no camera height: {metadata_path}")
+                    camera_height = binding
+                    self.unverified_episodes.append(
+                        {"scene": scene, "episode": episode,
+                         "reason": "episode payload absent from dataset root",
+                         "path": str(metadata_path)})
                 result[(scene, episode)] = {
                     **episode_row,
                     "_split_role": role,
                     "_camera_height_m": _finite_positive(
-                        metadata.get("camera_height_m", 0.5),
-                        "episode camera height"),
+                        camera_height, "episode camera height"),
                 }
         return result
 

@@ -26,6 +26,7 @@ import argparse
 from collections import OrderedDict
 import gc
 import hashlib
+from itertools import combinations
 import json
 import math
 import os
@@ -59,6 +60,20 @@ try:
         PhaseBUpstreamPins,
         validate_phase_b_upstream_receipts,
     )
+    from MemNavData.lingbot_colored_registration import (
+        RegistrationSchedule,
+        apply_world_delta_to_pose9,
+        colored_world_cloud,
+        jsonable_registration,
+        multiscale_registration,
+    )
+    from MemNavData.lingbot_pnp_localization import (
+        LightGluePointMatcher,
+        SiftPnPConfig,
+        correspondence_pnp_localize,
+        jsonable_pnp,
+        sift_pnp_localize,
+    )
 except ModuleNotFoundError:  # direct script invocation
     from external_causal_scale_contract import (  # type: ignore
         CAUSAL_SAMPLE_ID_COLUMN,
@@ -76,6 +91,20 @@ except ModuleNotFoundError:  # direct script invocation
         PhaseBUpstreamPins,
         validate_phase_b_upstream_receipts,
     )
+    from lingbot_colored_registration import (  # type: ignore
+        RegistrationSchedule,
+        apply_world_delta_to_pose9,
+        colored_world_cloud,
+        jsonable_registration,
+        multiscale_registration,
+    )
+    from lingbot_pnp_localization import (  # type: ignore
+        LightGluePointMatcher,
+        SiftPnPConfig,
+        correspondence_pnp_localize,
+        jsonable_pnp,
+        sift_pnp_localize,
+    )
 
 
 REQUIRED_COLUMNS = {
@@ -89,6 +118,34 @@ REQUIRED_COLUMNS = {
     "dino_cosine",
     "teacher_covis",
 }
+
+LIGHTGLUE_SELECTION_COLUMNS = {
+    "session_id",
+    "query_path",
+    "candidate_path",
+    "candidate_frame",
+    "dino_cosine",
+    "fundamental_inliers",
+    "fundamental_query_grid_coverage",
+    "fundamental_query_hull_coverage",
+    "lightglue_score_median",
+    "session_max_covis",
+}
+
+CDEC_SELECTION_COLUMNS = {
+    "session_id",
+    "query_path",
+    "candidate_path",
+    "candidate_frame",
+    "dino_cosine",
+    "cdec_oof_score",
+    "cdec_outer_fold",
+    "cdec_inner_selected_c",
+}
+CDEC_BINDING_COLUMNS = (
+    "session_id", "scene", "episode", "kind", "query_path",
+    "candidate_path", "candidate_frame", "candidate_rank", "dino_cosine",
+)
 
 
 @dataclass(frozen=True)
@@ -136,6 +193,58 @@ _REPORT_FILENAME = "diagnostic_lingbot_goal_loop_closure.json"
 def canonical_json(value: object) -> str:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def adaptive_neighbor_offsets(
+        center: int, minimum_anchor: int, maximum_anchor: int, *,
+        radius: int, count: int) -> Tuple[int, ...]:
+    """Choose a fixed-size, well-spaced local clip without crossing bounds.
+
+    The center view is mandatory.  Among legal integer offsets inside
+    ``[-radius, radius]``, choose the subset that first maximizes its minimum
+    temporal spacing, then its total span, then symmetry around the center.
+    Exact ties prefer earlier frames, which is the conservative causal choice.
+
+    If fewer than ``count`` legal views exist, return all legal views.  Formal
+    collection treats that short result as a preflight failure instead of
+    exposing view availability through ``n_hypotheses``.
+    """
+    center = int(center)
+    minimum_anchor = int(minimum_anchor)
+    maximum_anchor = int(maximum_anchor)
+    radius = int(radius)
+    count = int(count)
+    if radius < 0:
+        raise ValueError("adaptive neighbor radius must be non-negative")
+    if count < 1:
+        raise ValueError("adaptive neighbor count must be positive")
+    if minimum_anchor > maximum_anchor:
+        return ()
+    legal = tuple(range(
+        max(-radius, minimum_anchor - center),
+        min(radius, maximum_anchor - center) + 1,
+    ))
+    if 0 not in legal:
+        return ()
+    if len(legal) <= count:
+        return legal
+
+    def score(offsets: Tuple[int, ...]) -> Tuple[object, ...]:
+        spacings = tuple(
+            right - left for left, right in zip(offsets, offsets[1:]))
+        minimum_spacing = min(spacings) if spacings else 0
+        span = offsets[-1] - offsets[0]
+        symmetry = -abs(offsets[0] + offsets[-1])
+        coverage = sum(abs(offset) for offset in offsets)
+        # ``max`` chooses larger keys. Negating each offset makes exact ties
+        # prefer the subset with earlier temporal support.
+        earlier_tiebreak = tuple(-offset for offset in offsets)
+        return (minimum_spacing, span, symmetry, coverage,
+                earlier_tiebreak)
+
+    candidates = (
+        offsets for offsets in combinations(legal, count) if 0 in offsets)
+    return max(candidates, key=score)
 
 
 def atomic_write_json(path: Path, value: object) -> None:
@@ -586,6 +695,359 @@ def select_deployment_seeds(
                 selection_origin="deployment_topk",
             ))
     return result
+
+
+def select_lightglue_ranked_seeds(
+        frame: pd.DataFrame, evidence: pd.DataFrame, *, kind: str,
+        sessions: Sequence[str], max_sessions: int, minimum_gap: int,
+        positive_threshold: float, negative_threshold: float,
+        minimum_anchor: int) -> List[CandidateSeed]:
+    """Select one history anchor per session using only image geometry.
+
+    ``evidence`` must be the output of the deployment-side DINO top-K audit.
+    Candidate generation therefore remains unchanged.  Ranking is a frozen,
+    label-blind lexicographic order: epipolar inlier count, spatial grid/hull
+    coverage, LightGlue median confidence, DINO cosine, then the earlier frame.
+    Teacher co-visibility is joined *after* selection and is used only for
+    diagnostic labels; it cannot affect the chosen anchor.
+    """
+    missing = LIGHTGLUE_SELECTION_COLUMNS - set(evidence.columns)
+    if missing:
+        raise ValueError(
+            f"LightGlue selection CSV missing columns: {sorted(missing)}")
+    if minimum_gap < 1:
+        raise ValueError("minimum_gap must be positive")
+    data = frame.loc[frame["kind"].eq(kind)].copy()
+    if sessions:
+        data = data.loc[data["session_id"].isin(sessions)]
+    data = data.loc[
+        data["teacher_covis"].notna()
+        & data["dino_cosine"].notna()
+        & data["candidate_frame"].ge(minimum_anchor)]
+    session_ids = sorted(data["session_id"].unique().tolist())
+    if max_sessions:
+        session_ids = session_ids[:max_sessions]
+    if not session_ids:
+        return []
+
+    evidence = evidence.loc[evidence["session_id"].isin(session_ids)].copy()
+    duplicate = evidence.duplicated(
+        ["session_id", "candidate_frame"], keep=False)
+    if duplicate.any():
+        row = evidence.loc[duplicate].iloc[0]
+        raise ValueError(
+            "LightGlue evidence has a duplicate session/frame: "
+            f"{row['session_id']}/{int(row['candidate_frame'])}")
+
+    result: List[CandidateSeed] = []
+    for session_id in session_ids:
+        group = data.loc[data["session_id"].eq(session_id)]
+        candidates = evidence.loc[evidence["session_id"].eq(session_id)]
+        if candidates.empty:
+            raise RuntimeError(
+                f"LightGlue evidence lacks selected session: {session_id}")
+        numeric_columns = [
+            "fundamental_inliers",
+            "fundamental_query_grid_coverage",
+            "fundamental_query_hull_coverage",
+            "lightglue_score_median",
+            "dino_cosine",
+            "candidate_frame",
+        ]
+        if not np.isfinite(
+                candidates[numeric_columns].to_numpy(dtype=np.float64)).all():
+            raise ValueError(
+                f"LightGlue evidence contains non-finite rank data: {session_id}")
+        ranked = candidates.sort_values(
+            numeric_columns,
+            ascending=[False, False, False, False, False, True],
+            kind="mergesort")
+        chosen = ranked.iloc[0]
+        candidate_frame = int(chosen["candidate_frame"])
+        matching = group.loc[
+            group["candidate_frame"].eq(candidate_frame)
+            & group["query_path"].astype(str).eq(str(chosen["query_path"]))
+            & group["candidate_path"].astype(str).eq(
+                str(chosen["candidate_path"]))]
+        if len(matching) != 1:
+            raise RuntimeError(
+                "LightGlue-selected candidate does not map uniquely to the "
+                f"teacher: {session_id}/{candidate_frame} (n={len(matching)})")
+        row = matching.iloc[0]
+        if not math.isclose(
+                float(row["dino_cosine"]), float(chosen["dino_cosine"]),
+                rel_tol=0.0, abs_tol=1e-7):
+            raise RuntimeError(
+                "LightGlue evidence DINO value differs from the teacher: "
+                f"{session_id}/{candidate_frame}")
+        maximum_covisibility = float(chosen["session_max_covis"])
+        covisibility = float(row["teacher_covis"])
+        if (not math.isfinite(maximum_covisibility)
+                or maximum_covisibility + 1e-12 < covisibility):
+            raise RuntimeError(
+                "invalid post-selection co-visibility audit metadata: "
+                f"{session_id}/{candidate_frame}")
+        label = (1 if covisibility >= positive_threshold else
+                 0 if covisibility <= negative_threshold else -1)
+        result.append(CandidateSeed(
+            session_id=str(row["session_id"]),
+            scene=str(row["scene"]),
+            episode=str(row["episode"]),
+            kind=str(row["kind"]),
+            query_path=Path(str(row["query_path"])).resolve(),
+            candidate_path=Path(str(row["candidate_path"])).resolve(),
+            candidate_frame=candidate_frame,
+            dino_cosine=float(row["dino_cosine"]),
+            teacher_covis=covisibility,
+            label=label,
+            session_has_positive=(maximum_covisibility >= positive_threshold),
+            session_is_strict_no_match=(
+                maximum_covisibility <= negative_threshold),
+            session_max_covis=maximum_covisibility,
+            causal_manifest_sample_id=optional_causal_sample_id(row),
+            selection_origin="lightglue_fundamental_rank_v1",
+        ))
+    return result
+
+
+def select_cdec_oof_ranked_seeds(
+        frame: pd.DataFrame, evidence: pd.DataFrame, *, kind: str,
+        sessions: Sequence[str], max_sessions: int, minimum_gap: int,
+        positive_threshold: float, negative_threshold: float,
+        minimum_anchor: int) -> List[CandidateSeed]:
+    """Select one anchor with a scene-held-out pairwise patch ranker.
+
+    The evidence artifact contains only deployment-visible candidate fields and
+    OOF scores.  Teacher co-visibility is joined strictly after the argmax and
+    is used only to audit the selected candidate.
+    """
+    missing = CDEC_SELECTION_COLUMNS - set(evidence.columns)
+    if missing:
+        raise ValueError(f"CDEC selection CSV missing columns: {sorted(missing)}")
+    data = frame.loc[frame["kind"].eq(kind)].copy()
+    if sessions:
+        data = data.loc[data["session_id"].isin(sessions)]
+    data = data.loc[
+        data["teacher_covis"].notna()
+        & data["dino_cosine"].notna()
+        & data["candidate_frame"].ge(minimum_anchor)]
+    session_ids = sorted(data["session_id"].unique().tolist())
+    if max_sessions:
+        session_ids = session_ids[:max_sessions]
+    if not session_ids:
+        return []
+    evidence = evidence.loc[evidence["session_id"].isin(session_ids)].copy()
+    duplicate = evidence.duplicated(
+        ["session_id", "candidate_frame"], keep=False)
+    if duplicate.any():
+        row = evidence.loc[duplicate].iloc[0]
+        raise ValueError(
+            "CDEC evidence has a duplicate session/frame: "
+            f"{row['session_id']}/{int(row['candidate_frame'])}")
+    numeric = evidence[[
+        "candidate_frame", "dino_cosine", "cdec_oof_score",
+        "cdec_outer_fold", "cdec_inner_selected_c",
+    ]].to_numpy(dtype=np.float64)
+    if not np.isfinite(numeric).all():
+        raise ValueError("CDEC evidence contains non-finite values")
+
+    result: List[CandidateSeed] = []
+    for session_id in session_ids:
+        group = data.loc[data["session_id"].eq(session_id)]
+        candidates = evidence.loc[evidence["session_id"].eq(session_id)]
+        if candidates.empty:
+            raise RuntimeError(f"CDEC evidence lacks selected session: {session_id}")
+        # Learned preference first; DINO and earlier frame are deterministic,
+        # deployment-visible tie breakers only.
+        chosen = candidates.sort_values(
+            ["cdec_oof_score", "dino_cosine", "candidate_frame"],
+            ascending=[False, False, True], kind="mergesort").iloc[0]
+        candidate_frame = int(chosen["candidate_frame"])
+        matching = group.loc[
+            group["candidate_frame"].eq(candidate_frame)
+            & group["query_path"].astype(str).eq(str(chosen["query_path"]))
+            & group["candidate_path"].astype(str).eq(
+                str(chosen["candidate_path"]))]
+        if len(matching) != 1:
+            raise RuntimeError(
+                "CDEC-selected candidate does not map uniquely to the teacher: "
+                f"{session_id}/{candidate_frame} (n={len(matching)})")
+        row = matching.iloc[0]
+        if not math.isclose(
+                float(row["dino_cosine"]), float(chosen["dino_cosine"]),
+                rel_tol=0.0, abs_tol=1e-7):
+            raise RuntimeError(
+                "CDEC evidence DINO value differs from the teacher: "
+                f"{session_id}/{candidate_frame}")
+        maximum_covisibility = float(group["teacher_covis"].max())
+        covisibility = float(row["teacher_covis"])
+        label = (1 if covisibility >= positive_threshold else
+                 0 if covisibility <= negative_threshold else -1)
+        result.append(CandidateSeed(
+            session_id=str(row["session_id"]),
+            scene=str(row["scene"]), episode=str(row["episode"]),
+            kind=str(row["kind"]),
+            query_path=Path(str(row["query_path"])).resolve(),
+            candidate_path=Path(str(row["candidate_path"])).resolve(),
+            candidate_frame=candidate_frame,
+            dino_cosine=float(row["dino_cosine"]),
+            teacher_covis=covisibility, label=label,
+            session_has_positive=(maximum_covisibility >= positive_threshold),
+            session_is_strict_no_match=(
+                maximum_covisibility <= negative_threshold),
+            session_max_covis=maximum_covisibility,
+            causal_manifest_sample_id=optional_causal_sample_id(row),
+            selection_origin="cdec_scene_oof_pairwise_rank_v1",
+        ))
+    return result
+
+
+def validate_cdec_training_binding(
+        teacher: pd.DataFrame, training_rows: pd.DataFrame,
+        evidence: pd.DataFrame, *, kind: str, minimum_anchor: int) -> None:
+    """Bind every label-free OOF score to its static row and raw teacher row."""
+    for name, frame in (("training", training_rows), ("evidence", evidence)):
+        missing = set(CDEC_BINDING_COLUMNS) - set(frame.columns)
+        if missing:
+            raise ValueError(
+                f"CDEC {name} rows lack binding columns: {sorted(missing)}")
+        if frame.duplicated(["session_id", "candidate_frame"]).any():
+            raise RuntimeError(
+                f"CDEC {name} rows duplicate a session/frame identity")
+    if len(training_rows) != len(evidence):
+        raise RuntimeError("CDEC training/selection row counts differ")
+    order = ["session_id", "candidate_rank", "candidate_frame"]
+    training = training_rows.sort_values(order, kind="mergesort").reset_index(
+        drop=True)
+    selected = evidence.sort_values(order, kind="mergesort").reset_index(
+        drop=True)
+    for column in CDEC_BINDING_COLUMNS:
+        if column == "dino_cosine":
+            if not np.allclose(
+                    training[column].to_numpy(dtype=np.float64),
+                    selected[column].to_numpy(dtype=np.float64),
+                    rtol=0.0, atol=1e-7):
+                raise RuntimeError(
+                    "CDEC selection DINO values differ from training rows")
+        elif not training[column].astype(str).equals(
+                selected[column].astype(str)):
+            raise RuntimeError(
+                f"CDEC selection differs from training rows: {column}")
+
+    raw = teacher.loc[
+        teacher["kind"].eq(kind)
+        & teacher["teacher_covis"].notna()
+        & teacher["dino_cosine"].notna()
+        & teacher["candidate_frame"].ge(minimum_anchor),
+        ["session_id", "query_path", "candidate_path", "candidate_frame",
+         "dino_cosine"],
+    ].copy()
+    keys = ["session_id", "query_path", "candidate_path", "candidate_frame"]
+    if raw.duplicated(keys).any():
+        raise RuntimeError("raw teacher duplicates a CDEC candidate identity")
+    joined = training.merge(
+        raw, on=keys, how="left", validate="one_to_one",
+        suffixes=("_static", "_teacher"), indicator=True)
+    if len(joined) != len(training) or joined["_merge"].ne("both").any():
+        raise RuntimeError("CDEC static training rows do not map to raw teacher")
+    if not np.allclose(
+            joined["dino_cosine_static"].to_numpy(dtype=np.float64),
+            joined["dino_cosine_teacher"].to_numpy(dtype=np.float64),
+            rtol=0.0, atol=1e-7):
+        raise RuntimeError("CDEC static DINO values differ from raw teacher")
+
+
+def interleave_dual_proposals(
+        geometry: Sequence[CandidateSeed],
+        learned: Sequence[CandidateSeed]) -> List[CandidateSeed]:
+    """Return geometry then learned proposal for every identical session."""
+    geometry_by_session = {seed.session_id: seed for seed in geometry}
+    learned_by_session = {seed.session_id: seed for seed in learned}
+    if (len(geometry_by_session) != len(geometry)
+            or len(learned_by_session) != len(learned)
+            or set(geometry_by_session) != set(learned_by_session)):
+        raise RuntimeError("dual proposal session universes differ or duplicate")
+    result = []
+    for session in sorted(geometry_by_session):
+        result.extend((geometry_by_session[session], learned_by_session[session]))
+    return result
+
+
+def validated_cdec_proposals(
+        args: argparse.Namespace, teacher: pd.DataFrame,
+        selection_arguments: Mapping[str, object]
+) -> Tuple[List[CandidateSeed], dict]:
+    assert args.cdec_selection_csv is not None
+    assert args.cdec_selection_report is not None
+    assert args.expected_cdec_selection_csv_sha256 is not None
+    assert args.expected_cdec_selection_report_sha256 is not None
+    assert args.cdec_training_rows_csv is not None
+    assert args.expected_cdec_training_rows_sha256 is not None
+    selection_csv_sha = sha256(args.cdec_selection_csv)
+    selection_report_sha = sha256(args.cdec_selection_report)
+    training_rows_sha = sha256(args.cdec_training_rows_csv)
+    if selection_csv_sha != args.expected_cdec_selection_csv_sha256:
+        raise RuntimeError("CDEC selection CSV SHA mismatch")
+    if selection_report_sha != args.expected_cdec_selection_report_sha256:
+        raise RuntimeError("CDEC selection report SHA mismatch")
+    if training_rows_sha != args.expected_cdec_training_rows_sha256:
+        raise RuntimeError("CDEC training rows SHA mismatch")
+    with args.cdec_selection_report.open(encoding="utf-8") as handle:
+        selection_report = json.load(handle)
+    if selection_report.get("schema_version") != (
+            "cdec_factorized_pairwise_ranker_oof_v1_20260813"):
+        raise RuntimeError("CDEC selection report schema changed")
+    if (selection_report.get("inputs", {}).get("rows_csv_sha256")
+            != training_rows_sha):
+        raise RuntimeError(
+            "CDEC selection report is bound to different training rows")
+    selection_binding = selection_report.get("selection_artifact", {})
+    if (selection_binding.get("sha256") != selection_csv_sha
+            or int(selection_binding.get("rows", -1)) != 3840
+            or selection_binding.get("contains_teacher_or_task_labels")
+            is not False):
+        raise RuntimeError("CDEC report does not bind a label-free CSV")
+    protocol = selection_report.get("protocol", {})
+    if (protocol.get("groups") != "scene"
+            or protocol.get("development_or_blind_read") is not False
+            or protocol.get("activation_or_NULL_learned") is not False):
+        raise RuntimeError("CDEC report violates factorized OOF protocol")
+    evidence = pd.read_csv(args.cdec_selection_csv)
+    training_rows = pd.read_csv(args.cdec_training_rows_csv)
+    if (len(evidence) != 3840
+            or evidence["session_id"].nunique() != 480
+            or evidence.groupby("session_id").size().ne(args.top_k).any()):
+        raise RuntimeError("CDEC selection artifact coverage changed")
+    validate_cdec_training_binding(
+        teacher, training_rows, evidence, kind=args.kind,
+        minimum_anchor=args.num_scale)
+    fold_scenes = {
+        int(row["outer_fold"]): set(map(str, row["test_scenes"]))
+        for row in selection_report.get("folds", [])
+    }
+    if len(fold_scenes) != int(protocol.get("outer_folds", -1)):
+        raise RuntimeError("CDEC report fold coverage changed")
+    for row in evidence[["scene", "cdec_outer_fold"]].drop_duplicates(
+            ).itertuples(index=False):
+        fold = int(row.cdec_outer_fold)
+        if str(row.scene) not in fold_scenes.get(fold, set()):
+            raise RuntimeError(
+                f"CDEC row was not scene-held-out: {row.scene}/fold{fold}")
+    seeds = select_cdec_oof_ranked_seeds(
+        teacher, evidence, **selection_arguments)
+    provenance = {
+        "csv": str(args.cdec_selection_csv.resolve()),
+        "csv_sha256": selection_csv_sha,
+        "report": str(args.cdec_selection_report.resolve()),
+        "report_sha256": selection_report_sha,
+        "training_rows_csv": str(args.cdec_training_rows_csv.resolve()),
+        "training_rows_sha256": training_rows_sha,
+        "ranking": "cdec_scene_oof_pairwise_rank_v1",
+        "uses_teacher_labels_for_training": True,
+        "row_scene_held_out": True,
+        "learns_activation_or_null": False,
+    }
+    return seeds, provenance
 
 
 def select_train_augmented_seeds(
@@ -1118,7 +1580,15 @@ def symmetric_cloud_overlap(first: torch.Tensor, second: torch.Tensor,
 def append_goal_at_anchor(lb, cache: dict, rgb_dir: Path,
                           goal_image: torch.Tensor, anchor: int, warm: int,
                           *, pixel_stride: int, confidence_quantile: float,
-                          max_points: int, overlap_ratio: float) -> dict:
+                          max_points: int, overlap_ratio: float,
+                          registration_methods: Sequence[str] = (),
+                          registration_pixel_stride: int = 4,
+                          registration_max_points: int = 4096,
+                          pnp_sift: bool = False,
+                          pnp_config: Optional[SiftPnPConfig] = None,
+                          pnp_lightglue_matcher: Optional[
+                              LightGluePointMatcher] = None,
+                          goal_image_path: Optional[Path] = None) -> dict:
     """Append one goal and return geometry-native loop-closure measurements."""
     scale = lb.num_scale
     start = max(scale, anchor - warm + 1)
@@ -1186,6 +1656,58 @@ def append_goal_at_anchor(lb, cache: dict, rgb_dir: Path,
     overlap_forward, overlap_backward, overlap_f1 = symmetric_cloud_overlap(
         candidate_cloud, goal_cloud, overlap_threshold)
 
+    pnp_result = {}
+    if pnp_sift:
+        pnp_result = jsonable_pnp(sift_pnp_localize(
+            warm_images[-1], candidate_d, candidate_c, anchor_pose,
+            goal_image, config=pnp_config or SiftPnPConfig()))
+    pnp_lightglue_result = {}
+    if pnp_lightglue_matcher is not None:
+        if goal_image_path is not None:
+            matched = pnp_lightglue_matcher.match_paths(
+                paths[-1], goal_image_path,
+                target_height=int(candidate_d.shape[0]),
+                target_width=int(candidate_d.shape[1]),
+                patch_size=int(lb.patch_size))
+        else:
+            matched = pnp_lightglue_matcher.match(
+                warm_images[-1], goal_image)
+        pnp_lightglue_result = correspondence_pnp_localize(
+            matched["reference_points"], matched["query_points"],
+            candidate_d, candidate_c, anchor_pose,
+            config=pnp_config or SiftPnPConfig(),
+            match_scores=matched["scores"], epipolar_threshold_px=1.5)
+        pnp_lightglue_result.update({
+            "reference_keypoints": matched["reference_keypoints"],
+            "query_keypoints": matched["query_keypoints"],
+            "coordinate_source": matched.get(
+                "coordinate_source", "lingbot_preprocessed_rgb"),
+            "reference_raw_hw": matched.get("reference_raw_hw"),
+            "query_raw_hw": matched.get("query_raw_hw"),
+        })
+        pnp_lightglue_result = jsonable_pnp(pnp_lightglue_result)
+
+    registrations = {}
+    if registration_methods:
+        candidate_points, candidate_colors, _ = colored_world_cloud(
+            candidate_d, candidate_c, warm_images[-1], anchor_pose,
+            pixel_stride=registration_pixel_stride,
+            confidence_quantile=confidence_quantile,
+            max_points=registration_max_points)
+        goal_points, goal_colors, _ = colored_world_cloud(
+            goal_d, goal_c, goal_image, goal_pose,
+            pixel_stride=registration_pixel_stride,
+            confidence_quantile=confidence_quantile,
+            max_points=registration_max_points)
+        for method in registration_methods:
+            registration = multiscale_registration(
+                goal_points, goal_colors,
+                candidate_points, candidate_colors,
+                depth_scale=depth_scale,
+                method=method,
+                schedule=RegistrationSchedule())
+            registrations[method] = jsonable_registration(registration)
+
     if len(poses) >= 2:
         refine_translation = float((poses[-1][:3] - poses[-2][:3]).norm())
         refine_rotation = quaternion_angle(poses[-1][3:7], poses[-2][3:7])
@@ -1205,6 +1727,9 @@ def append_goal_at_anchor(lb, cache: dict, rgb_dir: Path,
         "cloud_overlap_f1": overlap_f1,
         "overlap_threshold_raw": overlap_threshold,
         "depth_scale_raw": depth_scale,
+        "registrations": registrations,
+        "pnp_sift": pnp_result,
+        "pnp_lightglue": pnp_lightglue_result,
     }
 
 
@@ -1220,6 +1745,27 @@ def pairwise_pose_dispersion(results: Sequence[dict]) -> Tuple[float, float]:
             rotation.append(math.degrees(quaternion_angle(
                 pose[left][3:7], pose[right][3:7])))
     return float(np.median(translation)), float(np.median(rotation))
+
+
+def pairwise_pnp_pose_dispersion(
+        results: Sequence[dict], key: str = "pnp_sift",
+        ) -> Tuple[int, float, float]:
+    """Pose agreement across independently localized neighboring anchors."""
+    pose = [
+        torch.as_tensor(result[key]["pose9"], dtype=torch.float32)
+        for result in results
+        if result.get(key, {}).get("status") == "ok"
+    ]
+    if len(pose) < 2:
+        return len(pose), float("nan"), float("nan")
+    translation = []
+    rotation = []
+    for left in range(len(pose)):
+        for right in range(left + 1, len(pose)):
+            translation.append(float((pose[left][:3] - pose[right][:3]).norm()))
+            rotation.append(math.degrees(quaternion_angle(
+                pose[left][3:7], pose[right][3:7])))
+    return len(pose), float(np.median(translation)), float(np.median(rotation))
 
 
 def finite_mean(values: Iterable[float]) -> float:
@@ -1254,10 +1800,20 @@ def auc_summary(rows: pd.DataFrame) -> Dict[str, dict]:
         "lingbot_cloud_overlap": ("cloud_overlap_f1_median", 1.0),
         "lingbot_pose_consistency": ("goal_pose_translation_dispersion_norm", -1.0),
         "lingbot_pose_refinement": ("goal_refine_translation_norm_median", -1.0),
+        "sift_pnp_inliers": ("pnp_sift_inliers_max", 1.0),
+        "sift_pnp_inlier_ratio": ("pnp_sift_inlier_ratio_max", 1.0),
+        "sift_pnp_query_coverage": ("pnp_sift_query_inlier_coverage_max", 1.0),
+        "sift_pnp_pose_consistency": (
+            "pnp_sift_pose_translation_dispersion_norm", -1.0),
+        "lightglue_pnp_inliers": ("pnp_lightglue_inliers_max", 1.0),
+        "lightglue_pnp_query_coverage": (
+            "pnp_lightglue_query_inlier_coverage_max", 1.0),
     }
     labels = rows["label"].to_numpy(dtype=np.int64)
     result: Dict[str, dict] = {}
     for name, (column, direction) in definitions.items():
+        if column not in rows:
+            continue
         values = rows[column].to_numpy(dtype=np.float64)
         # Ignore-band candidates are retained for a calibrated set model but
         # must not be silently coerced into either binary AUC class.
@@ -1320,12 +1876,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kind", default="revisit_b")
     parser.add_argument(
         "--selection-mode", choices=(
-            "balanced", "deployment", "train_augmented"),
+            "balanced", "deployment", "train_augmented",
+            "lightglue_ranked", "cdec_oof_ranked",
+            "cdec_geometry_dual_ranked"),
         default="balanced",
         help=("balanced: positive/negative feasibility pairs; deployment: "
               "temporal-diverse top-DINO sets including true no-match; "
               "train_augmented: deployment set plus at most one missing "
-              "teacher-positive and hard-negative candidate"))
+              "teacher-positive and hard-negative candidate; "
+              "lightglue_ranked: one label-blind geometrically ranked anchor "
+              "from a separately generated DINO top-K evidence CSV; "
+              "cdec_oof_ranked: one scene-held-out task-ranked anchor from "
+              "the same frozen DINO top-K; cdec_geometry_dual_ranked: both "
+              "proposals in one process for a hardware-paired certificate audit"))
+    parser.add_argument(
+        "--lightglue-selection-csv", type=Path,
+        help=("image-only DINO top-K + LightGlue evidence; required with "
+              "--selection-mode lightglue_ranked"))
+    parser.add_argument(
+        "--lightglue-selection-report", type=Path,
+        help=("companion report binding the selection CSV to the current "
+              "teacher and a label-free audit configuration"))
+    parser.add_argument("--expected-lightglue-selection-csv-sha256")
+    parser.add_argument("--expected-lightglue-selection-report-sha256")
+    parser.add_argument(
+        "--cdec-selection-csv", type=Path,
+        help=("label-free scene-OOF CDEC score artifact; required with "
+              "--selection-mode cdec_oof_ranked"))
+    parser.add_argument(
+        "--cdec-selection-report", type=Path,
+        help="nested scene-OOF report binding the CDEC score artifact")
+    parser.add_argument("--expected-cdec-selection-csv-sha256")
+    parser.add_argument("--expected-cdec-selection-report-sha256")
+    parser.add_argument(
+        "--cdec-training-rows-csv", type=Path,
+        help="exact static top-K table used to train/score the OOF ranker")
+    parser.add_argument("--expected-cdec-training-rows-sha256")
     parser.add_argument("--session", action="append", default=[])
     parser.add_argument("--max-sessions", type=int, default=1)
     parser.add_argument("--per-class", type=int, default=2)
@@ -1337,6 +1923,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--neighbor-offset", type=int, action="append",
                         default=None,
                         help="repeatable; default: -4, 0, +4")
+    parser.add_argument(
+        "--adaptive-neighbor-radius", type=int, default=0,
+        help=("if positive, replace fixed offsets with a deterministic "
+              "fixed-count local clip inside this radius; the center view "
+              "is always included and short clips fail in preflight"))
+    parser.add_argument(
+        "--adaptive-neighbor-count", type=int, default=3,
+        help="required local-clip size when adaptive neighbors are enabled")
     parser.add_argument("--warm", type=int, default=64)
     parser.add_argument(
         "--full-replay", action="store_true",
@@ -1350,6 +1944,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--confidence-quantile", type=float, default=0.5)
     parser.add_argument("--max-points", type=int, default=768)
     parser.add_argument("--overlap-ratio", type=float, default=0.025)
+    parser.add_argument(
+        "--registration-method", action="append",
+        choices=("geometric", "colored"), default=[],
+        help=("repeatable opt-in true pose refinement; unlike the legacy "
+              "overlap score, this optimizes a source-to-target transform"))
+    parser.add_argument(
+        "--registration-pixel-stride", type=int, default=4,
+        help="RGB/depth sampling stride for opt-in ICP registration")
+    parser.add_argument(
+        "--registration-max-points", type=int, default=4096,
+        help="maximum aligned RGB/XYZ samples per registration cloud")
+    parser.add_argument(
+        "--pnp-sift", action="store_true",
+        help=("localize the goal camera from SIFT 2D--3D correspondences "
+              "lifted through LingBot history depth; diagnostic only"))
+    parser.add_argument(
+        "--pnp-lightglue", action="store_true",
+        help=("localize with SuperPoint+LightGlue correspondences and "
+              "LingBot history depth; requires the two dependency paths"))
+    parser.add_argument("--lightglue-repo", type=Path)
+    parser.add_argument("--lightglue-dependency-root", type=Path)
+    parser.add_argument("--lightglue-max-keypoints", type=int, default=2048)
     parser.add_argument(
         "--pooled-metric-scale", type=float,
         default=_DEFAULT_POOLED_METRIC_SCALE,
@@ -1369,7 +1985,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    offsets = tuple(sorted(set(args.neighbor_offset or (-4, 0, 4))))
+    registration_methods = tuple(sorted(set(args.registration_method)))
+    pnp_config = SiftPnPConfig()
+    if args.pnp_lightglue and args.lightglue_repo is None:
+        raise ValueError("--pnp-lightglue requires --lightglue-repo")
+    adaptive_neighbors = args.adaptive_neighbor_radius > 0
+    if adaptive_neighbors:
+        explicit_offsets = tuple(sorted(set(args.neighbor_offset or (0,))))
+        if explicit_offsets != (0,):
+            raise ValueError(
+                "adaptive neighbors accept only the implicit/explicit center "
+                "offset 0")
+        # The external causal-scale contract binds the candidate center here;
+        # exact adaptive offsets are independently bounded in preflight below.
+        offsets = (0,)
+    else:
+        offsets = tuple(sorted(set(args.neighbor_offset or (-4, 0, 4))))
     external_arguments = (
         args.causal_manifest,
         args.expected_causal_manifest_sha256,
@@ -1398,7 +2029,14 @@ def main() -> None:
             or args.candidate_min_gap < 1 or args.warm < 1
             or args.num_scale < 1 or args.pixel_stride < 1
             or args.max_points < 16 or args.overlap_ratio <= 0.0
+            or args.registration_pixel_stride < 1
+            or args.registration_max_points < 16
+            or args.lightglue_max_keypoints < 32
             or args.max_cached_episodes < 1
+            or args.adaptive_neighbor_radius < 0
+            or args.adaptive_neighbor_count < 1
+            or (adaptive_neighbors and args.adaptive_neighbor_count
+                > 2 * args.adaptive_neighbor_radius + 1)
             or not np.isfinite(args.pooled_metric_scale)
             or args.pooled_metric_scale <= 0.0):
         raise ValueError("invalid diagnostic configuration")
@@ -1408,9 +2046,63 @@ def main() -> None:
                  args.lingbot_repo, args.weights):
         if not path.exists():
             raise FileNotFoundError(path)
+    if args.pnp_lightglue:
+        for path in (args.lightglue_repo, args.lightglue_dependency_root):
+            if path is not None and not path.exists():
+                raise FileNotFoundError(path)
     if bool(args.split_manifest) != bool(args.allowed_role):
         raise ValueError(
             "--split-manifest and --allowed-role must be provided together")
+    lightglue_selection_args = (
+        args.lightglue_selection_csv,
+        args.lightglue_selection_report,
+        args.expected_lightglue_selection_csv_sha256,
+        args.expected_lightglue_selection_report_sha256,
+    )
+    cdec_selection_args = (
+        args.cdec_selection_csv,
+        args.cdec_selection_report,
+        args.expected_cdec_selection_csv_sha256,
+        args.expected_cdec_selection_report_sha256,
+        args.cdec_training_rows_csv,
+        args.expected_cdec_training_rows_sha256,
+    )
+    if args.selection_mode in (
+            "lightglue_ranked", "cdec_geometry_dual_ranked"):
+        if not all(value is not None for value in lightglue_selection_args):
+            raise ValueError(
+                "lightglue_ranked selection requires its CSV, report, and "
+                "both exact SHA pins")
+        assert args.lightglue_selection_csv is not None
+        assert args.lightglue_selection_report is not None
+        for path in (args.lightglue_selection_csv,
+                     args.lightglue_selection_report):
+            if not path.is_file():
+                raise FileNotFoundError(path)
+    elif any(value is not None for value in lightglue_selection_args):
+        raise ValueError(
+            "LightGlue selection artifacts are only valid with "
+            "--selection-mode lightglue_ranked")
+    if args.selection_mode in (
+            "cdec_oof_ranked", "cdec_geometry_dual_ranked"):
+        if not all(value is not None for value in cdec_selection_args):
+            raise ValueError(
+                "cdec_oof_ranked selection requires its CSV, report, and "
+                "both exact SHA pins")
+        assert args.cdec_selection_csv is not None
+        assert args.cdec_selection_report is not None
+        assert args.cdec_training_rows_csv is not None
+        for path in (args.cdec_selection_csv, args.cdec_selection_report,
+                     args.cdec_training_rows_csv):
+            if not path.is_file():
+                raise FileNotFoundError(path)
+        if args.allowed_role != "train":
+            raise ValueError(
+                "scene-OOF CDEC selection is a train-only diagnostic")
+    elif any(value is not None for value in cdec_selection_args):
+        raise ValueError(
+            "CDEC selection artifacts are only valid with "
+            "--selection-mode cdec_oof_ranked")
     if external_scale_mode and args.allowed_role not in ("train", "development"):
         raise ValueError(
             "external causal-scale collection requires an explicit train or "
@@ -1424,6 +2116,39 @@ def main() -> None:
     source_commit = git_value(
         Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
     lingbot_commit = git_value(args.lingbot_repo, "rev-parse", "HEAD")
+    collector_source_sha256 = {
+        path.name: sha256(path)
+        for path in (
+            Path(__file__).resolve(),
+            Path(__file__).resolve().with_name(
+                "lingbot_colored_registration.py"),
+            Path(__file__).resolve().with_name(
+                "lingbot_pnp_localization.py"),
+        )
+    }
+    lightglue_provenance = None
+    if args.pnp_lightglue:
+        checkpoint_root = Path(torch.hub.get_dir()) / "checkpoints"
+        lightglue_weights = {
+            "superpoint": checkpoint_root / "superpoint_v1.pth",
+            "lightglue": (
+                checkpoint_root / "superpoint_lightglue_v0-1_arxiv.pth"),
+        }
+        missing_lightglue_weights = [
+            str(path) for path in lightglue_weights.values()
+            if not path.is_file()
+        ]
+        if missing_lightglue_weights:
+            raise FileNotFoundError(
+                f"pinned LightGlue weights are absent: {missing_lightglue_weights}")
+        lightglue_provenance = {
+            "commit": git_value(args.lightglue_repo, "rev-parse", "HEAD"),
+            "weights": {
+                name: {"path": str(path.resolve()), "sha256": sha256(path)}
+                for name, path in lightglue_weights.items()
+            },
+            "coordinate_source": "native_rgb_to_lingbot_pad",
+        }
     if args.expected_weight_sha and weight_sha != args.expected_weight_sha:
         raise RuntimeError(
             f"LingBot weight SHA mismatch: {weight_sha} != "
@@ -1532,18 +2257,84 @@ def main() -> None:
         positive_threshold=args.positive_threshold,
         negative_threshold=args.negative_threshold,
         minimum_anchor=args.num_scale)
+    lightglue_selection_provenance = None
+    cdec_selection_provenance = None
     if args.selection_mode == "balanced":
         seeds = select_balanced_seeds(
             teacher, per_class=args.per_class, **selection_arguments)
     elif args.selection_mode == "deployment":
         seeds = select_deployment_seeds(
             teacher, top_k=args.top_k, **selection_arguments)
-    else:
+    elif args.selection_mode == "train_augmented":
         if args.allowed_role != "train":
             raise ValueError(
                 "train_augmented selection is forbidden outside the train split")
         seeds = select_train_augmented_seeds(
             teacher, top_k=args.top_k, **selection_arguments)
+    elif args.selection_mode in (
+            "lightglue_ranked", "cdec_geometry_dual_ranked"):
+        assert args.lightglue_selection_csv is not None
+        assert args.lightglue_selection_report is not None
+        assert args.expected_lightglue_selection_csv_sha256 is not None
+        assert args.expected_lightglue_selection_report_sha256 is not None
+        selection_csv_sha = sha256(args.lightglue_selection_csv)
+        selection_report_sha = sha256(args.lightglue_selection_report)
+        if selection_csv_sha != args.expected_lightglue_selection_csv_sha256:
+            raise RuntimeError("LightGlue selection CSV SHA mismatch")
+        if selection_report_sha != args.expected_lightglue_selection_report_sha256:
+            raise RuntimeError("LightGlue selection report SHA mismatch")
+        with args.lightglue_selection_report.open(encoding="utf-8") as handle:
+            selection_report = json.load(handle)
+        if (selection_report.get("provenance", {}).get("teacher_csv_sha256")
+                != teacher_sha):
+            raise RuntimeError(
+                "LightGlue selection report is bound to a different teacher")
+        if (selection_report.get("provenance", {}).get("rows_csv_sha256")
+                != selection_csv_sha):
+            raise RuntimeError(
+                "LightGlue selection report does not bind the exact CSV")
+        selection_config = selection_report.get("config", {})
+        if (selection_config.get("kind") != args.kind
+                or selection_config.get("decision_threshold_fitted") is not False
+                or int(selection_config.get("top_k", 0)) != args.top_k
+                or int(selection_config.get("candidate_min_gap", 0))
+                != args.candidate_min_gap
+                or int(selection_config.get("minimum_anchor", -1))
+                != args.num_scale
+                or args.top_k < 2):
+            raise RuntimeError(
+                "LightGlue selection report lacks the frozen label-free "
+                "DINO top-K contract")
+        expected_bound_source = (
+            "teacher_contract_only" if external_scale_mode
+            else "legacy_feature_camera_cache_anchor_plus_one")
+        if selection_config.get("candidate_bound_source") != expected_bound_source:
+            raise RuntimeError(
+                "LightGlue candidate-bound universe differs from the "
+                f"collector: expected {expected_bound_source}")
+        evidence = pd.read_csv(args.lightglue_selection_csv)
+        if (int(selection_report.get("n_candidates", -1)) != len(evidence)
+                or int(selection_report.get("n_sessions", -1))
+                != evidence["session_id"].nunique()):
+            raise RuntimeError(
+                "LightGlue selection report/CSV coverage mismatch")
+        seeds = select_lightglue_ranked_seeds(
+            teacher, evidence, **selection_arguments)
+        lightglue_selection_provenance = {
+            "csv": str(args.lightglue_selection_csv.resolve()),
+            "csv_sha256": selection_csv_sha,
+            "report": str(args.lightglue_selection_report.resolve()),
+            "report_sha256": selection_report_sha,
+            "ranking": "lightglue_fundamental_rank_v1",
+            "uses_teacher_labels": False,
+        }
+        if args.selection_mode == "cdec_geometry_dual_ranked":
+            learned, cdec_selection_provenance = validated_cdec_proposals(
+                args, teacher, selection_arguments)
+            seeds = interleave_dual_proposals(seeds, learned)
+    elif args.selection_mode == "cdec_oof_ranked":
+        seeds, cdec_selection_provenance = validated_cdec_proposals(
+            args, teacher, selection_arguments)
     if not seeds:
         raise RuntimeError(
             f"no {args.selection_mode} candidate seeds selected")
@@ -1622,6 +2413,8 @@ def main() -> None:
 
     checked_episodes = set()
     pose_cache: Dict[Path, EpisodePoseData] = {}
+    adaptive_offsets_by_seed: Dict[CandidateSeed, Tuple[int, ...]] = {}
+    camera_frame_count_by_episode: Dict[Tuple[str, str], int] = {}
     for seed in seeds:
         key = (seed.scene, seed.episode)
         if key not in checked_episodes:
@@ -1635,6 +2428,8 @@ def main() -> None:
                     cached, camera,
                     expected_num_scale_frames=args.num_scale,
                     require_versioned=False)
+                camera_frame_count_by_episode[key] = int(
+                    np.asarray(camera["cam_pose_enc"]).shape[0])
                 if external_contract is not None:
                     cache_schema = int(np.asarray(
                         camera["cache_schema_version"]).reshape(-1)[0])
@@ -1659,6 +2454,35 @@ def main() -> None:
         if not 0 <= seed.candidate_frame < len(candidate_pose_data.actions):
             raise IndexError(
                 f"candidate frame outside trajectory: {seed.candidate_path}")
+        if adaptive_neighbors:
+            rgb_frames = [
+                int(path.stem) for path in raw_rgb_dir(seed).glob("*.jpg")
+                if path.stem.isdigit()
+            ]
+            if not rgb_frames:
+                raise RuntimeError(
+                    f"candidate stream has no numeric RGB frames: {seed}")
+            maximum_anchor = min(
+                camera_frame_count_by_episode[key] - 2,
+                len(candidate_pose_data.actions) - 1,
+                max(rgb_frames),
+            )
+            external_binding = external_bindings.get(seed)
+            if external_binding is not None:
+                maximum_anchor = min(
+                    maximum_anchor, external_binding.decision_frame - 1)
+            selected_offsets = adaptive_neighbor_offsets(
+                seed.candidate_frame, args.num_scale, maximum_anchor,
+                radius=args.adaptive_neighbor_radius,
+                count=args.adaptive_neighbor_count,
+            )
+            if len(selected_offsets) != args.adaptive_neighbor_count:
+                raise RuntimeError(
+                    "adaptive local clip cannot preserve constant view count: "
+                    f"{seed.session_id} frame={seed.candidate_frame} "
+                    f"legal_offsets={selected_offsets} "
+                    f"required={args.adaptive_neighbor_count}")
+            adaptive_offsets_by_seed[seed] = selected_offsets
         query_camera_to_world(seed.query_path, pose_cache)
     if args.preflight_only:
         print(json.dumps({
@@ -1668,6 +2492,9 @@ def main() -> None:
             "n_episodes": len(checked_episodes),
             "n_pose_episodes": len(pose_cache),
             "selection_mode": args.selection_mode,
+            "adaptive_neighbors": adaptive_neighbors,
+            "adaptive_neighbor_radius": args.adaptive_neighbor_radius,
+            "adaptive_neighbor_count": args.adaptive_neighbor_count,
             "allowed_role": args.allowed_role,
             "split_manifest_sha256": split_manifest_sha,
             "lingbot_commit": lingbot_commit,
@@ -1684,6 +2511,13 @@ def main() -> None:
         ground_scale_from_h_est,
     )
 
+    neighbor_compute_config = {"neighbor_offsets": offsets}
+    if adaptive_neighbors:
+        neighbor_compute_config.update({
+            "adaptive_neighbor_radius": args.adaptive_neighbor_radius,
+            "adaptive_neighbor_count": args.adaptive_neighbor_count,
+            "adaptive_neighbor_policy": "maximin_spacing_v1",
+        })
     checkpoint_signature = {
         "schema_version": _CHECKPOINT_SCHEMA_VERSION,
         "seed_manifest_sha256": seed_manifest_sha256(seeds),
@@ -1700,7 +2534,7 @@ def main() -> None:
             "candidate_min_gap": args.candidate_min_gap,
             "positive_threshold": args.positive_threshold,
             "negative_threshold": args.negative_threshold,
-            "neighbor_offsets": offsets,
+            **neighbor_compute_config,
             "warm": args.warm,
             "full_replay": args.full_replay,
             "num_scale": args.num_scale,
@@ -1711,6 +2545,20 @@ def main() -> None:
             "confidence_quantile": args.confidence_quantile,
             "max_points": args.max_points,
             "overlap_ratio": args.overlap_ratio,
+            "registration_methods": registration_methods,
+            "registration_pixel_stride": args.registration_pixel_stride,
+            "registration_max_points": args.registration_max_points,
+            "registration_schedule": RegistrationSchedule().__dict__,
+            "pnp_sift": args.pnp_sift,
+            "pnp_sift_config": pnp_config.__dict__,
+            "pnp_lightglue": args.pnp_lightglue,
+            "lightglue_repo": (
+                str(args.lightglue_repo.resolve())
+                if args.lightglue_repo else None),
+            "lightglue_dependency_root": (
+                str(args.lightglue_dependency_root.resolve())
+                if args.lightglue_dependency_root else None),
+            "lightglue_max_keypoints": args.lightglue_max_keypoints,
             "pooled_metric_scale": args.pooled_metric_scale,
             "max_cached_episodes": args.max_cached_episodes,
             "device": args.device,
@@ -1724,6 +2572,7 @@ def main() -> None:
         },
         "provenance": {
             "source_commit": source_commit,
+            "collector_source_sha256": collector_source_sha256,
             "lingbot_commit": lingbot_commit,
             "lingbot_weight_sha256": weight_sha,
             "teacher_csv_sha256": teacher_sha,
@@ -1734,6 +2583,10 @@ def main() -> None:
             "flow_cache_routing": routed_cache_provenance,
             "external_causal_scale": external_contract_summary,
             "upstream_receipts": upstream_receipts_summary,
+            "lightglue": lightglue_provenance,
+            "lightglue_candidate_selection": (
+                lightglue_selection_provenance),
+            "cdec_candidate_selection": cdec_selection_provenance,
         },
     }
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -1767,6 +2620,13 @@ def main() -> None:
         device=args.device,
         scale_lru_size=args.max_cached_episodes,
     ).eval()
+    pnp_lightglue_matcher = (
+        LightGluePointMatcher(
+            args.lightglue_repo,
+            dependency_root=args.lightglue_dependency_root,
+            device=args.device,
+            max_keypoints=args.lightglue_max_keypoints)
+        if args.pnp_lightglue else None)
     episode_cache = BoundedEpisodeCache(
         args.max_cached_episodes,
         on_evict=lambda _key, _value: release_lingbot_device_state(lb),
@@ -1872,9 +2732,16 @@ def main() -> None:
             f"[{seed_index}/{len(seeds)}] {seed.session_id} "
             f"frame={seed.candidate_frame} label={seed.label} "
             f"covis={seed.teacher_covis:.3f}", flush=True)
-        for offset in offsets:
+        active_offsets = adaptive_offsets_by_seed.get(seed, offsets)
+        for offset in active_offsets:
             anchor = seed.candidate_frame + offset
             if not args.num_scale <= anchor <= maximum_anchor:
+                if adaptive_neighbors:
+                    raise RuntimeError(
+                        "adaptive local clip changed after preflight: "
+                        f"{seed.session_id} frame={seed.candidate_frame} "
+                        f"offset={offset} bounds=[{args.num_scale},"
+                        f"{maximum_anchor}]")
                 continue
             replay_warm = (
                 anchor - args.num_scale + 1
@@ -1885,7 +2752,14 @@ def main() -> None:
                 pixel_stride=args.pixel_stride,
                 confidence_quantile=args.confidence_quantile,
                 max_points=args.max_points,
-                overlap_ratio=args.overlap_ratio)
+                overlap_ratio=args.overlap_ratio,
+                registration_methods=registration_methods,
+                registration_pixel_stride=args.registration_pixel_stride,
+                registration_max_points=args.registration_max_points,
+                pnp_sift=args.pnp_sift,
+                pnp_config=pnp_config,
+                pnp_lightglue_matcher=pnp_lightglue_matcher,
+                goal_image_path=seed.query_path)
             measurement["offset"] = offset
             measurement["replay_frames"] = replay_warm
             anchor_pose9 = cache["cam_pose_enc"][anchor].detach().cpu().numpy()
@@ -1897,6 +2771,48 @@ def main() -> None:
             measurement.update(relative_pose_errors(
                 predicted_xy, target_xy,
                 predicted_rotation, target_rotation))
+            for pnp_key in ("pnp_sift", "pnp_lightglue"):
+                pnp_result = measurement.get(pnp_key, {})
+                if pnp_result.get("status") != "ok":
+                    continue
+                pnp_pose = np.asarray(pnp_result["pose9"], dtype=np.float64)
+                pnp_xy, pnp_rotation = lingbot_relative_prediction(
+                    anchor_pose9, pnp_pose, metric_scale)
+                pnp_errors = relative_pose_errors(
+                    pnp_xy, target_xy, pnp_rotation, target_rotation)
+                lingbot_goal_pose = np.asarray(
+                    measurement["goal_pose"], dtype=np.float64)
+                pnp_result.update({
+                    "predicted_relative_xy_m": pnp_xy.tolist(),
+                    **pnp_errors,
+                    "lingbot_goal_pose_translation_delta_norm": (
+                        float(np.linalg.norm(
+                            pnp_pose[:3] - lingbot_goal_pose[:3]))
+                        / max(measurement["depth_scale_raw"], 1e-6)),
+                    "lingbot_goal_pose_rotation_delta_deg": (
+                        math.degrees(quaternion_angle(
+                            torch.as_tensor(pnp_pose[3:7]).float(),
+                            torch.as_tensor(
+                                lingbot_goal_pose[3:7]).float()))),
+                })
+            for method, registration in measurement["registrations"].items():
+                prefix = f"registration_{method}"
+                refined_pose = apply_world_delta_to_pose9(
+                    measurement["goal_pose"],
+                    np.asarray(registration["transform"], dtype=np.float64))
+                refined_xy, refined_rotation = lingbot_relative_prediction(
+                    anchor_pose9, refined_pose, metric_scale)
+                refined_errors = relative_pose_errors(
+                    refined_xy, target_xy,
+                    refined_rotation, target_rotation)
+                registration.update({
+                    "refined_goal_pose": refined_pose.tolist(),
+                    "refined_relative_xy_m": refined_xy.tolist(),
+                    **{
+                        f"refined_{name}": value
+                        for name, value in refined_errors.items()
+                    },
+                })
             measurement.update({
                 "metric_scale_m_per_raw": metric_scale,
                 "metric_scale_source": metric_scale_source,
@@ -1905,10 +2821,22 @@ def main() -> None:
                 "target_relative_distance_m": float(np.linalg.norm(target_xy)),
             })
             hypotheses.append(measurement)
+        if adaptive_neighbors and len(hypotheses) != args.adaptive_neighbor_count:
+            raise RuntimeError(
+                "adaptive local clip violated constant-view contract: "
+                f"{seed.session_id} frame={seed.candidate_frame} "
+                f"got={len(hypotheses)} "
+                f"expected={args.adaptive_neighbor_count}")
         if not hypotheses:
             continue
         translation_dispersion, rotation_dispersion = pairwise_pose_dispersion(
             hypotheses)
+        (pnp_successful_hypotheses, pnp_translation_dispersion,
+         pnp_rotation_dispersion) = pairwise_pnp_pose_dispersion(hypotheses)
+        (pnp_lightglue_successful_hypotheses,
+         pnp_lightglue_translation_dispersion,
+         pnp_lightglue_rotation_dispersion) = pairwise_pnp_pose_dispersion(
+             hypotheses, "pnp_lightglue")
         depth_scale = finite_median(
             result["depth_scale_raw"] for result in hypotheses)
         norm = max(depth_scale, 1e-6)
@@ -1936,6 +2864,16 @@ def main() -> None:
             "goal_pose_translation_dispersion_raw": translation_dispersion,
             "goal_pose_translation_dispersion_norm": translation_dispersion / norm,
             "goal_pose_rotation_dispersion_deg": rotation_dispersion,
+            "pnp_sift_successful_hypotheses": pnp_successful_hypotheses,
+            "pnp_sift_pose_translation_dispersion_norm": (
+                pnp_translation_dispersion / norm),
+            "pnp_sift_pose_rotation_dispersion_deg": pnp_rotation_dispersion,
+            "pnp_lightglue_successful_hypotheses": (
+                pnp_lightglue_successful_hypotheses),
+            "pnp_lightglue_pose_translation_dispersion_norm": (
+                pnp_lightglue_translation_dispersion / norm),
+            "pnp_lightglue_pose_rotation_dispersion_deg": (
+                pnp_lightglue_rotation_dispersion),
             "cloud_overlap_f1_center": center["cloud_overlap_f1"],
             "cloud_overlap_f1_mean": finite_mean(
                 item["cloud_overlap_f1"] for item in hypotheses),
@@ -1977,6 +2915,112 @@ def main() -> None:
                 jsonable_measurement(item) for item in hypotheses
             ], sort_keys=True),
         }
+        if args.pnp_sift:
+            pnp_results = [item["pnp_sift"] for item in hypotheses]
+            solved_pnp = [
+                item for item in pnp_results if item.get("status") == "ok"
+            ]
+            center_pnp = center["pnp_sift"]
+            row.update({
+                "pnp_sift_status_center": center_pnp.get("status"),
+                "pnp_sift_ratio_matches_center": center_pnp.get(
+                    "ratio_matches", 0),
+                "pnp_sift_depth_valid_matches_center": center_pnp.get(
+                    "depth_valid_matches", 0),
+                "pnp_sift_inliers_center": center_pnp.get("inliers", 0),
+                "pnp_sift_inliers_max": max(
+                    (item.get("inliers", 0) for item in pnp_results),
+                    default=0),
+                "pnp_sift_inlier_ratio_center": center_pnp.get(
+                    "inlier_ratio", 0.0),
+                "pnp_sift_inlier_ratio_max": max(
+                    (item.get("inlier_ratio", 0.0) for item in pnp_results),
+                    default=0.0),
+                "pnp_sift_reprojection_rmse_px_min": min(
+                    (item.get("reprojection_rmse_px", float("inf"))
+                     for item in solved_pnp), default=float("nan")),
+                "pnp_sift_query_inlier_coverage_max": max(
+                    (item.get("query_inlier_coverage", 0.0)
+                     for item in solved_pnp), default=0.0),
+                "pnp_sift_relative_position_error_m_center": center_pnp.get(
+                    "relative_position_error_m", float("nan")),
+                "pnp_sift_relative_direction_error_deg_center": (
+                    center_pnp.get(
+                        "relative_position_direction_error_deg", float("nan"))),
+                "pnp_sift_relative_rotation_error_deg_center": center_pnp.get(
+                    "relative_rotation_error_deg", float("nan")),
+                "pnp_sift_lingbot_pose_translation_delta_norm_center": (
+                    center_pnp.get(
+                        "lingbot_goal_pose_translation_delta_norm", float("nan"))),
+                "pnp_sift_lingbot_pose_rotation_delta_deg_center": (
+                    center_pnp.get(
+                        "lingbot_goal_pose_rotation_delta_deg", float("nan"))),
+            })
+        if args.pnp_lightglue:
+            pnp_results = [item["pnp_lightglue"] for item in hypotheses]
+            solved_pnp = [
+                item for item in pnp_results if item.get("status") == "ok"
+            ]
+            center_pnp = center["pnp_lightglue"]
+            row.update({
+                "pnp_lightglue_status_center": center_pnp.get("status"),
+                "pnp_lightglue_matches_center": center_pnp.get("matches", 0),
+                "pnp_lightglue_epipolar_inliers_center": center_pnp.get(
+                    "epipolar_inliers", 0),
+                "pnp_lightglue_depth_valid_matches_center": center_pnp.get(
+                    "depth_valid_matches", 0),
+                "pnp_lightglue_inliers_center": center_pnp.get("inliers", 0),
+                "pnp_lightglue_inliers_max": max(
+                    (item.get("inliers", 0) for item in pnp_results),
+                    default=0),
+                "pnp_lightglue_inlier_ratio_center": center_pnp.get(
+                    "inlier_ratio", 0.0),
+                "pnp_lightglue_reprojection_rmse_px_min": min(
+                    (item.get("reprojection_rmse_px", float("inf"))
+                     for item in solved_pnp), default=float("nan")),
+                "pnp_lightglue_query_inlier_coverage_max": max(
+                    (item.get("query_inlier_coverage", 0.0)
+                     for item in solved_pnp), default=0.0),
+                "pnp_lightglue_relative_position_error_m_center": (
+                    center_pnp.get("relative_position_error_m", float("nan"))),
+                "pnp_lightglue_relative_direction_error_deg_center": (
+                    center_pnp.get(
+                        "relative_position_direction_error_deg", float("nan"))),
+                "pnp_lightglue_relative_rotation_error_deg_center": (
+                    center_pnp.get("relative_rotation_error_deg", float("nan"))),
+                "pnp_lightglue_lingbot_pose_translation_delta_norm_center": (
+                    center_pnp.get(
+                        "lingbot_goal_pose_translation_delta_norm", float("nan"))),
+                "pnp_lightglue_lingbot_pose_rotation_delta_deg_center": (
+                    center_pnp.get(
+                        "lingbot_goal_pose_rotation_delta_deg", float("nan"))),
+            })
+        for method in registration_methods:
+            prefix = f"registration_{method}"
+            center_registration = center["registrations"][method]
+            row.update({
+                f"{prefix}_status_center": center_registration["status"],
+                f"{prefix}_fitness_center": center_registration["fitness"],
+                f"{prefix}_fitness_median": finite_median(
+                    item["registrations"][method]["fitness"]
+                    for item in hypotheses),
+                f"{prefix}_inlier_rmse_center": center_registration[
+                    "inlier_rmse"],
+                f"{prefix}_correspondences_center": center_registration[
+                    "correspondences"],
+                f"{prefix}_delta_translation_norm_center": (
+                    center_registration.get("delta_translation_raw", float("nan"))
+                    / max(center["depth_scale_raw"], 1e-6)),
+                f"{prefix}_delta_rotation_deg_center": (
+                    center_registration.get("delta_rotation_deg", float("nan"))),
+                f"{prefix}_refined_position_error_m_center": (
+                    center_registration["refined_relative_position_error_m"]),
+                f"{prefix}_refined_direction_error_deg_center": (
+                    center_registration[
+                        "refined_relative_position_direction_error_deg"]),
+                f"{prefix}_refined_rotation_error_deg_center": (
+                    center_registration["refined_relative_rotation_error_deg"]),
+            })
         if external_binding is not None:
             row.update(external_binding.row_fields())
         current_rows.append((seed_index, row))
@@ -2043,6 +3087,23 @@ def main() -> None:
                 "train-only top-DINO set augmented by at most one signed-teacher "
                 "positive and hard negative; development must remain deployment-only",
             ],
+            "lightglue_ranked": [
+                "one label-blind LightGlue/Fundamental-ranked anchor from a "
+                "separately hash-bound DINO top-K candidate set",
+            ],
+            "cdec_oof_ranked": [
+                "one task-trained but scene-held-out pairwise patch-ranked "
+                "anchor from a hash-bound DINO top-K candidate set",
+                "the learned score proposes an anchor only; it does not "
+                "authorize activation or replace the atomic PnP certificate",
+            ],
+            "cdec_geometry_dual_ranked": [
+                "geometry-first and scene-OOF learned proposals are evaluated "
+                "in one LingBot process on one GPU",
+                "the learned proposal is a reject-only fallback and never "
+                "overrides an accepted geometry proposal",
+                "proposal labels are read only after both anchors are frozen",
+            ],
         }[args.selection_mode]) + [
             "candidate labels come from task-aligned co-visibility teacher",
             "ground-truth pose errors are evaluation targets, not deployment inputs",
@@ -2072,6 +3133,12 @@ def main() -> None:
             "positive_threshold": args.positive_threshold,
             "negative_threshold": args.negative_threshold,
             "neighbor_offsets": offsets,
+            "adaptive_neighbor_radius": (
+                args.adaptive_neighbor_radius if adaptive_neighbors else None),
+            "adaptive_neighbor_count": (
+                args.adaptive_neighbor_count if adaptive_neighbors else None),
+            "adaptive_neighbor_policy": (
+                "maximin_spacing_v1" if adaptive_neighbors else None),
             "warm": args.warm,
             "full_replay": args.full_replay,
             "num_scale": args.num_scale,
@@ -2081,6 +3148,20 @@ def main() -> None:
             "confidence_quantile": args.confidence_quantile,
             "max_points": args.max_points,
             "overlap_ratio": args.overlap_ratio,
+            "registration_methods": registration_methods,
+            "registration_pixel_stride": args.registration_pixel_stride,
+            "registration_max_points": args.registration_max_points,
+            "registration_schedule": RegistrationSchedule().__dict__,
+            "pnp_sift": args.pnp_sift,
+            "pnp_sift_config": pnp_config.__dict__,
+            "pnp_lightglue": args.pnp_lightglue,
+            "lightglue_repo": (
+                str(args.lightglue_repo.resolve())
+                if args.lightglue_repo else None),
+            "lightglue_dependency_root": (
+                str(args.lightglue_dependency_root.resolve())
+                if args.lightglue_dependency_root else None),
+            "lightglue_max_keypoints": args.lightglue_max_keypoints,
             "pooled_metric_scale": args.pooled_metric_scale,
             "max_cached_episodes": args.max_cached_episodes,
             "resumed": args.resume,
@@ -2094,6 +3175,7 @@ def main() -> None:
         },
         "provenance": {
             "source_commit": source_commit,
+            "collector_source_sha256": collector_source_sha256,
             "lingbot_commit": lingbot_commit,
             "lingbot_weight_sha256": weight_sha,
             "teacher_csv": str(args.teacher_csv.resolve()),
@@ -2108,6 +3190,10 @@ def main() -> None:
             "flow_cache_routing": routed_cache_provenance,
             "external_causal_scale": external_contract_summary,
             "upstream_receipts": upstream_receipts_summary,
+            "lightglue": lightglue_provenance,
+            "lightglue_candidate_selection": (
+                lightglue_selection_provenance),
+            "cdec_candidate_selection": cdec_selection_provenance,
             "elapsed_seconds": time.time() - started,
         },
         "rows_csv": str(csv_path.resolve()),

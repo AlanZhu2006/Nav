@@ -31,6 +31,8 @@ class NavDPGoalSwitchTest(unittest.TestCase):
         self.assertFalse(should_reset_before_leg("before_b", 0))
         self.assertTrue(should_reset_before_leg("before_b", 1))
         self.assertFalse(should_reset_before_leg("before_b", 2))
+        self.assertFalse(should_reset_before_leg("before_c", 1))
+        self.assertTrue(should_reset_before_leg("before_c", 2))
         self.assertTrue(should_reset_before_leg("every_goal", 1))
         self.assertTrue(should_reset_before_leg("every_goal", 2))
         self.assertFalse(should_reset_before_leg("carry", 1))
@@ -124,6 +126,20 @@ class NavDPGoalSwitchTest(unittest.TestCase):
     def test_standalone_memnav_reset_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "standalone MemNav"):
             navdp_server_base("memnav", "http://memnav", None)
+
+    def test_cec_portability_resets_through_the_composite_server(self):
+        calls = []
+
+        def post(url, json):
+            calls.append((url, json))
+            return FakeResponse({"algo": "cec_controller_portability"})
+
+        payload = reset_navdp_short_memory(
+            post, "cec_portability", "http://hub", None, env_id=2)
+        self.assertEqual(payload["algo"], "cec_controller_portability")
+        self.assertEqual(calls, [
+            ("http://hub/navigator_reset_env", {"env_id": 2}),
+        ])
 
     def test_wrong_server_response_fails_closed(self):
         def post(_url, json):

@@ -1,0 +1,9 @@
+{
+  "schema": "mdtec_environment_smoke_split_v1_20260818",
+  "scientific_scope": "environment_and_pipeline_smoke_only_not_gate_c",
+  "train": [
+    "17DRP5sb8fy",
+    "1LXtFkjw3qL",
+    "Uxmj2M2itWa"
+  ]
+}

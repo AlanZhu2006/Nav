@@ -1,0 +1,164 @@
+{
+  "schema_version": "certified_2leg_stagnation_graph_internal_gate_v1",
+  "scope": "post-hoc failure-mechanism gate on consumed fresh160; not a success-rate estimate or paper confirmation",
+  "source": {
+    "mirror_root": ".diagnostics/certified_relocalization_minimal_mirror_20260813",
+    "data_manifest_sha256": "8013fa2a768d84638a9f9ecc50df46dda67ebb79250d14ad0a8087ac52fd33e5",
+    "formal_report_sha256": "0e41a6d9b339d143229ba405b04802654d2053b5d641a03ed2d09aefc1a589f4",
+    "asset_root": "/home/asus/Research/datasets/mp3d_20scene/assets"
+  },
+  "frozen_runtime": {
+    "success_distance_m": 1.0,
+    "max_steps": 500,
+    "execution_horizon": 8,
+    "stuck_window": 150,
+    "stuck_distance_m": 0.1,
+    "graph_spacing_m": 1.25,
+    "graph_arrival_m": 0.6,
+    "adapter": "verified_bearing_v1_fixed_2.5m",
+    "arms": [
+      "direct",
+      "budget_control",
+      "rescue"
+    ],
+    "primary_contrast": "rescue_minus_budget_control_on_reproduced_accepted_stuck_failures"
+  },
+  "selection": {
+    "known_failure_rule": "all five fresh160 A-success episodes where the frozen certificate accepted and certified direct terminated stuck",
+    "success_control_rule": "within the same scene, choose an accepted certified success minimizing absolute Goal-B geodesic-distance difference; break ties by absolute step difference then episode id",
+    "known_failure_count": 5,
+    "success_control_count": 5
+  },
+  "episodes": [
+    {
+      "index": 0,
+      "scene": "e9zR4mvMWw7",
+      "episode": "episode_0003",
+      "cohort": "known_failure",
+      "source_scene_dir": "01_e9zR4mvMWw7",
+      "episode_seed": 2026081303,
+      "source_trace_sha256": "89d859f675af4240d178a6aff30ce8328b2210c6bb1a1d8660be680b8deb889b",
+      "source_metric_sha256": "db55829a5ba0c667211643e21d29a3ee8ada6254a6fa524589cae852a71c8d05",
+      "source_B_success": false,
+      "source_B_steps": 279,
+      "source_B_termination": "stuck"
+    },
+    {
+      "index": 1,
+      "scene": "e9zR4mvMWw7",
+      "episode": "episode_0004",
+      "cohort": "success_control",
+      "source_scene_dir": "01_e9zR4mvMWw7",
+      "episode_seed": 2026081304,
+      "source_trace_sha256": "9d0280242805c4135d6ca4c2d102632337c4f5780b203fafb7bd7dcbc53c0e30",
+      "source_metric_sha256": "db55829a5ba0c667211643e21d29a3ee8ada6254a6fa524589cae852a71c8d05",
+      "source_B_success": true,
+      "source_B_steps": 87,
+      "source_B_termination": "success"
+    },
+    {
+      "index": 2,
+      "scene": "mJXqzFtmKg4",
+      "episode": "episode_0002",
+      "cohort": "known_failure",
+      "source_scene_dir": "08_mJXqzFtmKg4",
+      "episode_seed": 2026081302,
+      "source_trace_sha256": "5e69bda0ab28455f57e92a293c5efb7fb6ec50ee38d59a29265d23ccad8d7370",
+      "source_metric_sha256": "e8f0b6ef7daf120b0b25ddddb9991d0faba63163f0f4601ee5529f96ba8d63ba",
+      "source_B_success": false,
+      "source_B_steps": 267,
+      "source_B_termination": "stuck"
+    },
+    {
+      "index": 3,
+      "scene": "mJXqzFtmKg4",
+      "episode": "episode_0003",
+      "cohort": "success_control",
+      "source_scene_dir": "08_mJXqzFtmKg4",
+      "episode_seed": 2026081303,
+      "source_trace_sha256": "0e9ca9def51de3b90c7074b50ca50172a5c87083a56c7e91cf5992bf864eabe5",
+      "source_metric_sha256": "e8f0b6ef7daf120b0b25ddddb9991d0faba63163f0f4601ee5529f96ba8d63ba",
+      "source_B_success": true,
+      "source_B_steps": 88,
+      "source_B_termination": "success"
+    },
+    {
+      "index": 4,
+      "scene": "oLBMNvg9in8",
+      "episode": "episode_0007",
+      "cohort": "known_failure",
+      "source_scene_dir": "10_oLBMNvg9in8",
+      "episode_seed": 2026081307,
+      "source_trace_sha256": "e8f4d0242826f5e50edd86c0b9d3cac966d0f5f52a8f293ccd3496493d20b6be",
+      "source_metric_sha256": "53162c093f4cdf1580436df26624eaa25ff038c84c6c34e3bca0e7b1957f2222",
+      "source_B_success": false,
+      "source_B_steps": 178,
+      "source_B_termination": "stuck"
+    },
+    {
+      "index": 5,
+      "scene": "oLBMNvg9in8",
+      "episode": "episode_0005",
+      "cohort": "success_control",
+      "source_scene_dir": "10_oLBMNvg9in8",
+      "episode_seed": 2026081305,
+      "source_trace_sha256": "12c7ee45d241bf90d49911d891d59e6f3179a0a05fba39cee6935fe149f5ceb7",
+      "source_metric_sha256": "53162c093f4cdf1580436df26624eaa25ff038c84c6c34e3bca0e7b1957f2222",
+      "source_B_success": true,
+      "source_B_steps": 117,
+      "source_B_termination": "success"
+    },
+    {
+      "index": 6,
+      "scene": "rPc6DW4iMge",
+      "episode": "episode_0000",
+      "cohort": "known_failure",
+      "source_scene_dir": "12_rPc6DW4iMge",
+      "episode_seed": 2026081300,
+      "source_trace_sha256": "24c6437d08e101b6ef795283c883f28a046f0c81316c6324450fb0e73a2743a0",
+      "source_metric_sha256": "27f6241ee7ae8c535304139a38618be1fb352ba018ee6bf816c969a55df6948b",
+      "source_B_success": false,
+      "source_B_steps": 214,
+      "source_B_termination": "stuck"
+    },
+    {
+      "index": 7,
+      "scene": "rPc6DW4iMge",
+      "episode": "episode_0002",
+      "cohort": "success_control",
+      "source_scene_dir": "12_rPc6DW4iMge",
+      "episode_seed": 2026081302,
+      "source_trace_sha256": "9aee3d721d2b959d6dc1969811c585e0f84aa0fd42a8a73699d3e4654d2aa0bb",
+      "source_metric_sha256": "27f6241ee7ae8c535304139a38618be1fb352ba018ee6bf816c969a55df6948b",
+      "source_B_success": true,
+      "source_B_steps": 100,
+      "source_B_termination": "success"
+    },
+    {
+      "index": 8,
+      "scene": "qoiz87JEwZ2",
+      "episode": "episode_0005",
+      "cohort": "known_failure",
+      "source_scene_dir": "15_qoiz87JEwZ2",
+      "episode_seed": 2026081305,
+      "source_trace_sha256": "ea25ec14fd88ba78401468ce9aba0355064e63bf22b00bcff3b6e8b22b09f10a",
+      "source_metric_sha256": "7d34781e5534b1b6dd395265293868b40017a801c8505586c2d1ffed2ad00afb",
+      "source_B_success": false,
+      "source_B_steps": 265,
+      "source_B_termination": "stuck"
+    },
+    {
+      "index": 9,
+      "scene": "qoiz87JEwZ2",
+      "episode": "episode_0003",
+      "cohort": "success_control",
+      "source_scene_dir": "15_qoiz87JEwZ2",
+      "episode_seed": 2026081303,
+      "source_trace_sha256": "3453235f4413bd81b546f01b043cbbe89c1dd36e7106448af567a18765296c14",
+      "source_metric_sha256": "7d34781e5534b1b6dd395265293868b40017a801c8505586c2d1ffed2ad00afb",
+      "source_B_success": true,
+      "source_B_steps": 85,
+      "source_B_termination": "success"
+    }
+  ]
+}

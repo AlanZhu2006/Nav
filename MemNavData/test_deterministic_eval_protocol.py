@@ -5,12 +5,14 @@ import unittest
 from pathlib import Path
 
 from MemNavData.deterministic_eval_protocol import (
+    NATIVE_OBSERVATION_REPLAY_CONTRACT,
     bytes_sha256,
     diffusion_plan_seed,
     diffusion_resample_seed,
     load_leg1_trace,
     validate_leg1_trace,
     write_leg1_trace,
+    validate_shared_trace_source,
 )
 
 
@@ -85,6 +87,25 @@ class DeterministicEvalProtocolTest(unittest.TestCase):
             validate_leg1_trace(broken)
         with self.assertRaisesRegex(ValueError, "source scene mismatch"):
             validate_leg1_trace(payload, expected_source_scene="other")
+
+    def test_shared_trace_accepts_native_phase_source(self):
+        payload = self.payload()
+        payload["source_hybrid_route"] = "phase"
+        validate_shared_trace_source(payload)
+        payload["source_backend"] = "navdp"
+        with self.assertRaisesRegex(ValueError, "replay seal"):
+            validate_shared_trace_source(payload)
+        payload["source_control_contract"] = NATIVE_OBSERVATION_REPLAY_CONTRACT
+        payload["source_navdp_checkpoint_sha256"] = "a" * 64
+        payload["source_memory_observer_present"] = False
+        validate_shared_trace_source(payload)
+        payload["source_memory_observer_present"] = True
+        with self.assertRaisesRegex(ValueError, "memory was absent"):
+            validate_shared_trace_source(payload)
+        payload["source_backend"] = "hybrid_pose"
+        payload["source_hybrid_route"] = "unknown"
+        with self.assertRaisesRegex(ValueError, "route"):
+            validate_shared_trace_source(payload)
 
     def test_navdp_http_seed_parser_is_strict(self):
         path = (Path(__file__).resolve().parents[1]

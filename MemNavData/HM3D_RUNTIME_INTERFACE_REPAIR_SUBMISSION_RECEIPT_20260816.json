@@ -1,0 +1,40 @@
+{
+  "base_receipt_sha256": "74001a9e0150c38c599a206fa0f4dd5e1279b9bed5d167119f4d14cb77995e98",
+  "dependency_base_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/certified_relocalization_closed_loop_d3bd281fc374cc80",
+  "episode_count": 36,
+  "evaluation_concurrency": 4,
+  "evaluation_scene_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    9
+  ],
+  "failed_parent_run": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_heldout_val10_revisit_20260816/hm3d_heldout_val10_20260816T0448Z",
+  "frozen_manifest_sha256": "62bc6299203da709e65787c735a531974905f2ab8e940f72e91318914d949c89",
+  "guards": {
+    "heldout_depends_afterok_on_consumed_smoke": true,
+    "manifest_copied_byte_identically": true,
+    "method_change": false,
+    "navigation_outcomes_read_before_repair": false,
+    "new_formal_output_root": true
+  },
+  "jobs": {
+    "consumed_four_arm_smoke": 15839649,
+    "formal_evaluation_array": 15839654,
+    "independent_verification": 15839656,
+    "summary": 15839655
+  },
+  "runtime_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/shared_online_nnr_11458cb2b75ee334",
+  "runtime_receipt_sha256": "31b3e087b855e0220f6821ad96e6f5e74114bc12dc6c3afa6f7f79150dfb4575",
+  "schema_version": "hm3d_runtime_interface_repair_submission_v1_20260816",
+  "scope": "interface repair; no method, population, or analysis change",
+  "smoke_data_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_consumed_runtime_smoke_7f16b7768c2dd054",
+  "smoke_data_receipt_sha256": "7f16b7768c2dd054977ea00bc5d275c5e0bd552f6d49340fa9e8f2286bb58466",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_runtime_interface_repair_b49e7ef92e24e35c",
+  "task_receipt_sha256": "dbbc362d68c0dc97bd25722915f7dbc361b72807f599b621c9fb1a0d62aae48d"
+}

@@ -145,6 +145,60 @@ class ExpandedBenchmarkTest(unittest.TestCase):
             evaluator,
         )
 
+    def test_phase_b_p0_arm_is_ranking_only_and_explicitly_opt_in(self):
+        runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
+        evaluator = (ROOT / "eval_2leg_habitat.py").read_text()
+        server = (
+            ROOT.parent / "NavDP/baselines/memnav/memnav_server.py"
+        ).read_text()
+        self.assertIn(
+            "RUN_LEARNED_RANK_GEOMETRY=${RUN_LEARNED_RANK_GEOMETRY:-0}",
+            runner,
+        )
+        self.assertIn("EXPECTED_PHASE_B_CKPT_SHA", runner)
+        self.assertIn("--phase_b_allow_unapproved", runner)
+        self.assertIn(
+            "run_geometry_arm learned_rank_geometry 8 "
+            "learned_rank_geometry",
+            runner,
+        )
+        self.assertIn('f"{BASE}/phase_b_rank"', evaluator)
+        self.assertIn(
+            'rank_out.get("activation_uses_model_score") is not False',
+            evaluator,
+        )
+        self.assertIn('@app.route("/phase_b_rank"', server)
+        self.assertIn(
+            '"activation_semantics": '
+            '"diagnostic_only_geometry_gate_unchanged"',
+            (ROOT / "phase_b_runtime.py").read_text(),
+        )
+
+    def test_phase_b_p0_hpc_mode_freezes_a_within_each_array_task(self):
+        runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
+        sbatch = (ROOT / "slurm_expanded_navdp_router_eval.sbatch").read_text()
+        self.assertIn("P0_SHARED_PREFIX=${P0_SHARED_PREFIX:-0}", runner)
+        self.assertIn(
+            "P0_SHARED_PREFIX requires exactly native/geometry/learned arms",
+            runner,
+        )
+        protocol = runner.index("Generate Goal A exactly once on this node")
+        geometry = runner.index(
+            "run_geometry_arm geometry_router 8 memory_geometry", protocol
+        )
+        learned = runner.index(
+            "run_geometry_arm learned_rank_geometry 8 learned_rank_geometry",
+            geometry,
+        )
+        native = runner.index('run_native_arm "${P0_SHARED_ARGS[@]}"', learned)
+        self.assertLess(geometry, learned)
+        self.assertLess(learned, native)
+        self.assertIn(
+            '--shared_leg1_trace_root "${SCENE_ROOT}/geometry_router"',
+            runner,
+        )
+        self.assertIn('P0_SHARED_PREFIX="${P0_SHARED_PREFIX}"', sbatch)
+
     def test_global_subgoal_oracle_is_explicit_and_fail_closed(self):
         runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
         self.assertIn(
@@ -166,6 +220,57 @@ class ExpandedBenchmarkTest(unittest.TestCase):
         )
         self.assertIn(
             'args.trajectory_selector == "server"', evaluator)
+
+    def test_xnavdp_revisit_controller_is_opt_in_and_history_audited(self):
+        evaluator = (ROOT / "eval_2leg_habitat.py").read_text()
+        contract = (ROOT / "xnavdp_revisit_contract.py").read_text()
+        server = (ROOT / "xnavdp_revisit_server.py").read_text()
+        self.assertIn('default="navdp_mixed"', evaluator)
+        self.assertIn('f"{NOVEL_BASE}/navdp_step_ip_mixgoal"', evaluator)
+        self.assertIn('f"{NOVEL_BASE}/pointgoal_step"', evaluator)
+        self.assertIn('f"{XNAVDP_BASE}/pointgoal_step"', evaluator)
+        self.assertIn('xnavdp_state_payload(', evaluator)
+        self.assertIn(
+            '"X-NavDP history contract violated: final frame count "',
+            evaluator,
+        )
+        self.assertIn(
+            'args.navdp_goal_switch_reset != "carry"', evaluator)
+        self.assertIn("OFFICIAL_XNAVDP_COMMIT", contract)
+        self.assertIn("_assert_clean_official_checkout", server)
+
+    def test_xnavdp_gate_freezes_goal_a_and_keeps_base_point_attribution(self):
+        runner = (ROOT / "run_expanded_navdp_router_scene.sh").read_text()
+        submitter = (ROOT / "submit_xnavdp_revisit_gate_hpc.sh").read_text()
+        # MemNav imports navdp_backbone through the lazy encoder package and does
+        # not use the optional, gitignored Long-CLIP checkout.  Requiring it here
+        # would make a clean inference deployment depend on an unrelated model.
+        self.assertNotIn("LONGCLIP_ENTRY", runner)
+        self.assertIn("XNAVDP_REVISIT_GATE=${XNAVDP_REVISIT_GATE:-0}", runner)
+        mixed = runner.index(
+            "run_revisit_controller_arm memory_mixed navdp_mixed")
+        shared = runner.index(
+            '--shared_leg1_trace_root "${SCENE_ROOT}/memory_mixed"', mixed)
+        base = runner.index(
+            "run_revisit_controller_arm memory_base_point navdp_point",
+            shared,
+        )
+        xnavdp = runner.index(
+            "run_revisit_controller_arm memory_xnavdp_point xnavdp_point",
+            shared,
+        )
+        native = runner.index(
+            'run_native_arm "${XNAVDP_SHARED_ARGS[@]}"', shared)
+        self.assertLess(mixed, shared)
+        self.assertLess(shared, base)
+        self.assertLess(shared, xnavdp)
+        self.assertLess(base, native)
+        self.assertLess(xnavdp, native)
+        self.assertIn("xnavdp_scene_audit.json", runner)
+        self.assertIn(
+            'common_exports="ALL,ROOT=${ROOT},EXPECTED_COMMIT=',
+            submitter,
+        )
 
 
 if __name__ == "__main__":

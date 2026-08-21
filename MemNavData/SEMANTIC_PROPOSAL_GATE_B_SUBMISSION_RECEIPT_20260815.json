@@ -1,0 +1,130 @@
+{
+  "array_concurrency": 4,
+  "base_source_receipt_sha256": "74001a9e0150c38c599a206fa0f4dd5e1279b9bed5d167119f4d14cb77995e98",
+  "dependency_receipt_sha256": "4eb0ca6479a26f8e04f85a31d906cee4e68b1785f66cfd3ac23bf65424d36e5e",
+  "formal_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/semantic_proposal_gate_b_20260815/formal_consumed_final_20260814T232857Z",
+  "gate_a_independent_verification_sha256": "c4f91978986ca289db2752c031b9e693030aeb8452763f13d21bc420f7cf5769",
+  "jobs": {
+    "formal_array": 15763485,
+    "independent_verification": 15764893,
+    "infrastructure_smoke": 15763484,
+    "summary": 15764892,
+    "task18_repair": 15764888
+  },
+  "infrastructure_incidents": [
+    {
+      "affected_population_indices": [
+        18
+      ],
+      "archive_bytes": 15759678,
+      "archive_file_count": 203,
+      "archive_receipt_sha256": "b85f5e110dae618203321ed259e8305cf1cf2c339aa829230260ffd71471115d",
+      "archive_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/semantic_proposal_gate_b_20260815/formal_consumed_final_20260814T232857Z/failed_attempts/task018_job15764627_sigabrt_gh133",
+      "failed_node": "gh133",
+      "failed_slurm_task_job": 15764627,
+      "failure": "Habitat native process SIGABRT before a paired completion record existed",
+      "method_outcome_read": false,
+      "repair_completed": true,
+      "repair_elapsed": "00:02:59",
+      "repair_node": "gh014",
+      "repair_partition": "h100_tandon,a100_tandon",
+      "repair_scope": "population index 18 only; all completed records untouched"
+    }
+  ],
+  "outcome_accounting": "raw physical success is retained, but any saved certified-relocalization plan with ok=false makes the arm's Gate-B decision outcome zero; an ordinary certificate rejection remains ok=true and is not a runtime failure",
+  "population": {
+    "expected_scenes": 15,
+    "histories": 28,
+    "query_role": "revisit",
+    "runtime_role_visibility": "none"
+  },
+  "population_manifest_sha256": "0cdabbfb6c3477e5578406a3c8c0ef9e2387e4ad2f8e231fb873b3eece0f3625",
+  "promotion_rule": "paired semantic-first gains must strictly exceed losses",
+  "result": {
+    "execution_audit": {
+      "all_prefixes_equal": true,
+      "first_arm_counts": {
+        "geometry_first": 14,
+        "semantic_first": 14
+      },
+      "first_selected_anchor_changed": 21,
+      "runtime_failure_plans": {
+        "geometry_first": 0,
+        "semantic_first": 0
+      },
+      "runtime_role_visibility": "none"
+    },
+    "gate_b_passed": false,
+    "independent_verification_sha256": "03b036b6943419039b1ae9414c9ba8459fc4aea47407273ba212216cf85c080a",
+    "independent_verified": true,
+    "next_action": "retain_geometry_first_cec",
+    "paired_semantic_minus_geometry": {
+      "exact_mcnemar_p": 1.0,
+      "gains": 0,
+      "losses": 0,
+      "ties_failure": 3,
+      "ties_success": 25
+    },
+    "posthoc_first_authorized_bearing": {
+      "all_28_at_query_step_zero": true,
+      "angular_difference_deg_max": 4.478,
+      "angular_difference_deg_mean": 0.77,
+      "angular_difference_deg_median": 0.413,
+      "all_below_5_deg": true
+    },
+    "raw_physical_successes": {
+      "denominator": 28,
+      "geometry_first": 25,
+      "semantic_first": 25
+    },
+    "successes": {
+      "denominator": 28,
+      "geometry_first": 25,
+      "semantic_first": 25
+    },
+    "summary_sha256": "8a8c70e766bd862485f8c23fbd702fe0e50528159ac0d8d0811fab07a3f0697a"
+  },
+  "schema_version": "semantic_proposal_gate_b_submission_receipt_v1_20260815",
+  "scope": "consumed closed-loop method-development gate; never confirmation evidence",
+  "smoke_outcome_read_before_formal_submission": false,
+  "smoke_completion_sha256": "79ae733f193534b0a81426d70648e212f12c9116a89c816134ee35ca001fbc0e",
+  "smoke_contract_verified": true,
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/semantic_proposal_gate_b_20260815/smoke_final_20260814T232857Z",
+  "source_bundle": "/scratch/yz11502/Research/source_bundles/semantic_proposal_gate_b_runtimecount_380f82590aa03518",
+  "source_manifest_sha256": "380f82590aa03518d861792e053b18efdd92d730260308ed28426ec43ab5bfb2",
+  "source_receipt_sha256": "fd0b8c233378b0d004c674639a98089981ddd6a6275347c5bacf27f00f7415db",
+  "status": "complete_verified_gate_b_failed_retain_geometry_first",
+  "superseded_attempts": [
+    {
+      "cancelled_before_execution_jobs": [
+        15763289,
+        15763290,
+        15763291
+      ],
+      "failed_smoke_completion_records": 0,
+      "failed_smoke_job": 15763288,
+      "reason": "proposal order existed in the planner response but was omitted from the saved per-plan audit record"
+    },
+    {
+      "formal_records": 0,
+      "reason": "submission correctly rejected because failed smoke cannot satisfy afterok",
+      "root": "/scratch/yz11502/Research/Nav-axis-uturn-results/semantic_proposal_gate_b_20260815/formal_consumed_accounting_repair_20260814T231900Z"
+    },
+    {
+      "cancelled_before_execution_jobs": [
+        15763428,
+        15763429,
+        15763430,
+        15763431
+      ],
+      "reason": "pre-execution audit broadened runtime failure counting from endpoint exceptions to every certified ok=false plan"
+    },
+    {
+      "cancelled_before_execution_jobs": [
+        15763486,
+        15763487
+      ],
+      "reason": "the original summary chain lacked a dependency on the exact-index repair after task 18 suffered an unpaired native simulator SIGABRT; it was cancelled before execution and replaced by repair-aware jobs 15764892 and 15764893"
+    }
+  ]
+}

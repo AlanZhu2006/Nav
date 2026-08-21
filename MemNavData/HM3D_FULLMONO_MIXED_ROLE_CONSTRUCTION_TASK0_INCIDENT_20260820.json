@@ -1,0 +1,34 @@
+{
+  "affected_array_element": "16032656_0",
+  "affected_scene": "HaxA7YrQdEC",
+  "affected_scene_index": 0,
+  "cancelled_by_uid": 0,
+  "elapsed_before_cancellation": "00:02:03",
+  "event": "external_slurm_cancellation_before_any_scene_output",
+  "job_id_raw": 16036376,
+  "node": "ga040",
+  "original_dependency_chain": {
+    "construction_array": 16032656,
+    "independent_verification": 16032721,
+    "population_finalize": 16032668,
+    "query_evaluation_array": 16032690,
+    "query_smoke": 16032673,
+    "summary": 16032711
+  },
+  "preserved_evidence": {
+    "completed_construction_receipts": 8,
+    "completed_goal_a_receipts": 9,
+    "goal_a_sources": 36,
+    "goal_a_successes": 24,
+    "query_artifacts_present": false,
+    "scene0_construction_directory_present": false,
+    "scene0_slurm_stderr_present": false,
+    "scene0_slurm_stdout_present": false
+  },
+  "repair_policy": "Reuse the byte-identical immutable source bundle and run root; rerun only construction scene 0, then create a new finalize-smoke-eval-summary-verify dependency chain. Do not rerun Goal-A or any completed construction scene.",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_mixed_role_20260820/formal_20260819T182657Z_0e587874",
+  "schema_version": "hm3d_fullmono_mixed_role_external_cancellation_incident_v1_20260820",
+  "scientific_outcomes_read": false,
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_mixed_role_0e587874d5b89531",
+  "source_bundle_receipt_sha256": "0e587874d5b8953176a49a77345f6bde8733c2d31930ab3547d8c238a857b372"
+}

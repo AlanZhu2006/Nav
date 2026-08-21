@@ -1,0 +1,12 @@
+{
+  "schema_version": "final14_zero_source_receipt_repair_v1_20260817",
+  "trigger": "attempt2 empty-source collection elements failed after writing empty metric containers",
+  "observed_policy_records": 0,
+  "root_cause": "the final scene receipt parser treated an empty comma-separated episode string as a one-element list containing an empty identity",
+  "repair": "filter empty episode tokens so a frozen scene with zero available source episodes is retained as an explicit zero-source attrition scene",
+  "affected_population": "only scenes with zero available source episodes",
+  "navigation_policy_called_for_affected_population": false,
+  "method_or_query_construction_changed": false,
+  "parent_protocol_alignment": "implements the frozen rule to retain scenes with fewer than eight source episodes without borrowing or replacing a scene",
+  "attempt3_submission_precedes_any_goal_a_or_query_outcome": true
+}

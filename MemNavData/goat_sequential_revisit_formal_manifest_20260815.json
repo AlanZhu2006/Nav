@@ -1,0 +1,950 @@
+{
+  "analysis_contract": {
+    "arm_order": "manifest-frozen alternating order after scene-id sort; 17 native-first and 17 CEC-first in the 34-scene formal set",
+    "base_seed": 100,
+    "constructibility_diagnostics_only": [
+      "target entered by each arm",
+      "prior exact-instance task success",
+      "target certificate candidate/accept coverage",
+      "non-recurrent pre-target certificate takeover"
+    ],
+    "effect_interval": "scene-cluster percentile bootstrap risk-difference interval",
+    "maximum_steps_per_arm": 5000,
+    "minimum_mechanistic_coverage_for_interpretation": {
+      "distinct_scenes": 12,
+      "paired_episodes_entering_target": 20
+    },
+    "paired_test": "two-sided exact McNemar",
+    "post_result_method_or_threshold_changes_forbidden": true,
+    "primary_comparison": "role-free CEC minus released official GOAT",
+    "primary_outcome": "success of the frozen repeated ImageGoal target",
+    "primary_population": "all selected episodes, intention-to-treat; no filtering by target reach, prior success, certificate support, or outcome",
+    "semantic_stop_contract": "official GOAT SUBTASK_STOP is executed exactly; CEC may only override non-stop motion after certificate acceptance; no terminal U-turn or orientation alignment"
+  },
+  "controller_reads_target_metadata": false,
+  "dataset_receipt": {
+    "aggregate_index_sha256": "bb4c9aa90ef21dc8686fca229c19722f05f832f391bbee0c736af473ab88408b",
+    "content_shard_count": 36,
+    "sorted_content_receipts_sha256": "c5ecbb379b1f8e38748a9056a8f31ea78bf3ebb68407c6ad957d71e85834a5df"
+  },
+  "episodes": [
+    {
+      "all_repeated_image_subtask_indices": [
+        2
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "3",
+      "index": 0,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "mirror_595",
+          "modality": "image",
+          "subtask_index": 1
+        }
+      ],
+      "scene_id": "6s7QHgap2fW",
+      "selection_tie_break_sha256": "0a1889b8c0ed133f5172eeb685e9ed1b85ed50495509e9e00bc128fe969cc9d7",
+      "source_content_sha256": "9c03faa6c339a9a7d069e8c58ce81875d9f8279b71d3de720bf00f4e23a0965b",
+      "source_content_shard": "6s7QHgap2fW.json.gz",
+      "target_instance_id": "mirror_595",
+      "target_subtask_index": 2,
+      "task_count": 6
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1,
+        3,
+        4
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "4",
+      "index": 1,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "glass_1564",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "7MXmsvcQjpJ",
+      "selection_tie_break_sha256": "8c7104d11cc415abbabde614b9eaf7b6dbf4c8920dd9bfdab7839b19ed73080c",
+      "source_content_sha256": "aea7d587bb47719ead11f46f2d18b3ddf75f9dc20d9bf33b79ffbeee5fa2537f",
+      "source_content_shard": "7MXmsvcQjpJ.json.gz",
+      "target_instance_id": "glass_1564",
+      "target_subtask_index": 1,
+      "task_count": 5
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "1",
+      "index": 2,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "refrigerator_307",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "BAbdmeyTvMZ",
+      "selection_tie_break_sha256": "405d01eb81d14394df215842c63b918f50a8169db89441e35e6cb5fbeed061c3",
+      "source_content_sha256": "838ab652b02137227a6a7f635f8fc4070590e09aaf4e0a83b9707f136096a964",
+      "source_content_shard": "BAbdmeyTvMZ.json.gz",
+      "target_instance_id": "refrigerator_307",
+      "target_subtask_index": 1,
+      "task_count": 9
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        2,
+        4,
+        5,
+        7
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "0",
+      "index": 3,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "refrigerator_374",
+          "modality": "image",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "CrMo8WxCyVb",
+      "selection_tie_break_sha256": "c7733f4e46102c20a062f9b8509550d3ccd3796dea1efa5ffc35a87204d42f74",
+      "source_content_sha256": "4204467784c4dce0ceb2408fe2dc49d7927143f2e98debe00c0d28e57f24c18a",
+      "source_content_shard": "CrMo8WxCyVb.json.gz",
+      "target_instance_id": "refrigerator_374",
+      "target_subtask_index": 2,
+      "task_count": 9
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1,
+        3,
+        6
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "8",
+      "index": 4,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "island_223",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "DYehNKdT76V",
+      "selection_tie_break_sha256": "b8cb4edecca66e934847de08f000e9bc86acc06513f8384742756f3ca4e0020b",
+      "source_content_sha256": "c94ea4a5c7c26b2df50af692da7fd7bb42838461abbd3b9cbec283a6f694c97a",
+      "source_content_shard": "DYehNKdT76V.json.gz",
+      "target_instance_id": "island_223",
+      "target_subtask_index": 1,
+      "task_count": 8
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        2,
+        3,
+        4
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "6",
+      "index": 5,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "rug_7",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "Dd4bFSTQ8gi",
+      "selection_tie_break_sha256": "d920667eda8840e93cb7d40bccafbff7d739fcf112eac18473d07812efcba3fb",
+      "source_content_sha256": "4bed950114760c1fc36619606d293e7b7af3594588d5acd9c5c4a6a8d90fe833",
+      "source_content_shard": "Dd4bFSTQ8gi.json.gz",
+      "target_instance_id": "rug_7",
+      "target_subtask_index": 2,
+      "task_count": 5
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        4
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "8",
+      "index": 6,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "mirror_488",
+          "modality": "image",
+          "subtask_index": 2
+        }
+      ],
+      "scene_id": "GLAQ4DNUx5U",
+      "selection_tie_break_sha256": "cdd4da8b208227daf7f7960dccf124dd8f39796dc6ce76d93b2799a8b7713001",
+      "source_content_sha256": "cda17ce462b3787fed9a53370e8f15be4a729146c2e6dee7dd3934bba7ab3ba6",
+      "source_content_shard": "GLAQ4DNUx5U.json.gz",
+      "target_instance_id": "mirror_488",
+      "target_subtask_index": 4,
+      "task_count": 7
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        2
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "1",
+      "index": 7,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "statue_308",
+          "modality": "description",
+          "subtask_index": 1
+        }
+      ],
+      "scene_id": "HY1NcmCgn3n",
+      "selection_tie_break_sha256": "f994c9fb282b6e4c28960e8b4d051a7cd5671ba0b522ae1d00d9ac6078bea21a",
+      "source_content_sha256": "15349e5e8a43e49cb0f111e1a8080e79fff462ce37d7ff6a40ffe0f19883f18f",
+      "source_content_shard": "HY1NcmCgn3n.json.gz",
+      "target_instance_id": "statue_308",
+      "target_subtask_index": 2,
+      "task_count": 6
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "2",
+      "index": 8,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "rug_105",
+          "modality": "image",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "LT9Jq6dN3Ea",
+      "selection_tie_break_sha256": "ac5bc8f49142d902e80dfd159543b94361f7dfed930008b795ee8f741c36b7b4",
+      "source_content_sha256": "a57247f4818efd2497dbe2da6940a935cf8a891978549d9bf2d98ee938606ca3",
+      "source_content_shard": "LT9Jq6dN3Ea.json.gz",
+      "target_instance_id": "rug_105",
+      "target_subtask_index": 1,
+      "task_count": 5
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1,
+        3,
+        5,
+        7
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "9",
+      "index": 9,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "parapet_380",
+          "modality": "image",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "MHPLjHsuG27",
+      "selection_tie_break_sha256": "3c86805853aad60e655e7f4bc8433d7e7e2919ba965866f70b46c4a78c842520",
+      "source_content_sha256": "4fa3d095315a76cdba70e13fab3ac20378e8cf141f0211f3506db27ac963b9f5",
+      "source_content_shard": "MHPLjHsuG27.json.gz",
+      "target_instance_id": "parapet_380",
+      "target_subtask_index": 1,
+      "task_count": 8
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        2
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "5",
+      "index": 10,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "microwave_45",
+          "modality": "image",
+          "subtask_index": 1
+        }
+      ],
+      "scene_id": "Nfvxx8J5NCo",
+      "selection_tie_break_sha256": "221721ff9a8382baff1776fd2e93a123bc3946e680ac53b142fc654708e8bb60",
+      "source_content_sha256": "b105d01ebc7ce567a3dc900240599ba7d19471e398336bb65c4337091aa4ec5f",
+      "source_content_shard": "Nfvxx8J5NCo.json.gz",
+      "target_instance_id": "microwave_45",
+      "target_subtask_index": 2,
+      "task_count": 7
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        4
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "7",
+      "index": 11,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "mirror_82",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "QaLdnwvtxbs",
+      "selection_tie_break_sha256": "1608a225db2976637437bf68971f60d0d95aaad94862b0631d4b8c1b232cea93",
+      "source_content_sha256": "f6666d988c56f8ebbf3fcaced2933cf6acaae0453709218b63ee0055c0372c84",
+      "source_content_shard": "QaLdnwvtxbs.json.gz",
+      "target_instance_id": "mirror_82",
+      "target_subtask_index": 4,
+      "task_count": 7
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        2,
+        4
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "1",
+      "index": 12,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "pillow_608",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "TEEsavR23oF",
+      "selection_tie_break_sha256": "4899a329ea3185b1745dc27207c5ffab08ed3a3caea75f58bf2913b8beb85f86",
+      "source_content_sha256": "08de5c225e34214733e4779c30ed7c19b2c5fad63af037fb35f96a76056a71f6",
+      "source_content_shard": "TEEsavR23oF.json.gz",
+      "target_instance_id": "pillow_608",
+      "target_subtask_index": 2,
+      "task_count": 8
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "0",
+      "index": 13,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "plant_551",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "VBzV5z6i1WS",
+      "selection_tie_break_sha256": "97b1c05dfb4dfa2f0679a32d604ca34054121d4c6b3ea5811496f8aa6c587027",
+      "source_content_sha256": "e9ce640ce70c9403ae30291b83b49b520cb92adb74d4820dcd55ef874a50ddc5",
+      "source_content_shard": "VBzV5z6i1WS.json.gz",
+      "target_instance_id": "plant_551",
+      "target_subtask_index": 1,
+      "task_count": 7
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1,
+        2
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "6",
+      "index": 14,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "dresser_377",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "XB4GS9ShBRE",
+      "selection_tie_break_sha256": "5c34722a0b1eb5b8687a1bc8f46ec9b9fce14d5b9d82e46e2570ad9fa291fb8d",
+      "source_content_sha256": "157183d7b74a5e135b43f40dc8df1d528ce413bdd72579cc7e33e53388d484b6",
+      "source_content_shard": "XB4GS9ShBRE.json.gz",
+      "target_instance_id": "dresser_377",
+      "target_subtask_index": 1,
+      "task_count": 7
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1,
+        3,
+        7
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "1",
+      "index": 15,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "dresser_96",
+          "modality": "image",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "a8BtkwhxdRV",
+      "selection_tie_break_sha256": "1baff1c8996c87d504b02c66639af7835d2493b0639d798948fd58ea1c527813",
+      "source_content_sha256": "291f7b6850da970e2952a2e1780b4177d3ec22e2038f56810f0565766f9a6c64",
+      "source_content_shard": "a8BtkwhxdRV.json.gz",
+      "target_instance_id": "dresser_96",
+      "target_subtask_index": 1,
+      "task_count": 8
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1,
+        5,
+        7
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "3",
+      "index": 16,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "rug_349",
+          "modality": "image",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "bCPU9suPUw9",
+      "selection_tie_break_sha256": "9e96f8e2c9b7b84ae139102c3116e524cee74bb2a16339a81ef3baa4503dabb1",
+      "source_content_sha256": "0788cfff741b9d589da246b882233f94aa344ec477bfcb474448652d4ae5bb51",
+      "source_content_shard": "bCPU9suPUw9.json.gz",
+      "target_instance_id": "rug_349",
+      "target_subtask_index": 1,
+      "task_count": 9
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        3,
+        7
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "5",
+      "index": 17,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "hanging clothes_9",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "bxsVRursffK",
+      "selection_tie_break_sha256": "3e1868b63eb34c1beb675e1fe4a33614f6838421236dc6859c47c5befd1c83ca",
+      "source_content_sha256": "cfbf3223cff83c06a487f726ce1b478a6ed75794f6dc5db227652e310f6bfe45",
+      "source_content_shard": "bxsVRursffK.json.gz",
+      "target_instance_id": "hanging clothes_9",
+      "target_subtask_index": 3,
+      "task_count": 10
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        4
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "8",
+      "index": 18,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "mirror_159",
+          "modality": "image",
+          "subtask_index": 2
+        }
+      ],
+      "scene_id": "cvZr5TUy5C5",
+      "selection_tie_break_sha256": "04f2b9a010a01a9f0ab8b94b0137f6f4a7fb3dd8b61e8d76628425e23c4e7d1b",
+      "source_content_sha256": "13b675f7c1c2520ffa2f565fb1d8ede1454f2764a39f937d065cc16edd41d927",
+      "source_content_shard": "cvZr5TUy5C5.json.gz",
+      "target_instance_id": "mirror_159",
+      "target_subtask_index": 4,
+      "task_count": 7
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        4
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "1",
+      "index": 19,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "picture_141",
+          "modality": "description",
+          "subtask_index": 1
+        }
+      ],
+      "scene_id": "eF36g7L6Z9M",
+      "selection_tie_break_sha256": "47b708a84d2f55eefc0926e1bd8e768f2a579bb89f17601675aba5d2b9ecaae0",
+      "source_content_sha256": "03518182bfb0614b2455a9c791024c278aabfb94980c25e6ea811c89de6599dd",
+      "source_content_shard": "eF36g7L6Z9M.json.gz",
+      "target_instance_id": "picture_141",
+      "target_subtask_index": 4,
+      "task_count": 5
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        2,
+        4
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "4",
+      "index": 20,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "piano_430",
+          "modality": "image",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "h1zeeAwLh9Z",
+      "selection_tie_break_sha256": "d9b40a180605335deeed3ea631601ff347c8790c0affd5b9ef694a875035fb1a",
+      "source_content_sha256": "3b4643316efe0756a62af4581f1e924c88d7b2923f5ef785380e71338a997b02",
+      "source_content_shard": "h1zeeAwLh9Z.json.gz",
+      "target_instance_id": "piano_430",
+      "target_subtask_index": 2,
+      "task_count": 7
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        3
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "0",
+      "index": 21,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "decorative plant_45",
+          "modality": "image",
+          "subtask_index": 0
+        },
+        {
+          "instance_id": "decorative plant_45",
+          "modality": "description",
+          "subtask_index": 1
+        }
+      ],
+      "scene_id": "k1cupFYWXJ6",
+      "selection_tie_break_sha256": "844c8658ac1ecdc7110b75d97c806adb490a35708022710d64205c9aabd8968d",
+      "source_content_sha256": "063787bfade5ecc4e08b9f49fcdcb4e11692f11a10141df8a5b48ff914b204fe",
+      "source_content_shard": "k1cupFYWXJ6.json.gz",
+      "target_instance_id": "decorative plant_45",
+      "target_subtask_index": 3,
+      "task_count": 9
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1,
+        2,
+        4,
+        5,
+        9
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "7",
+      "index": 22,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "refrigerator_277",
+          "modality": "image",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "mL8ThkuaVTM",
+      "selection_tie_break_sha256": "80640c147c93287b26107cf64eb8b30b19fdb23d918b96e6abcbdd12e5dd4e51",
+      "source_content_sha256": "1dd0a6be629e2ad77ef83e2e6b8bd9753ff9395f98a1681a3ed26dc8f126d417",
+      "source_content_shard": "mL8ThkuaVTM.json.gz",
+      "target_instance_id": "refrigerator_277",
+      "target_subtask_index": 1,
+      "task_count": 10
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "3",
+      "index": 23,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "mirror_284",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "mv2HUxq3B53",
+      "selection_tie_break_sha256": "0b2629d95ba8832d4a1aec457cccce323a1fe43a8696ec7c92d8c9abd7098c45",
+      "source_content_sha256": "2c97a25ca36acd5d3bd0f8250c31e490fc5d672bbae67b56797f1c9b3f569aa1",
+      "source_content_shard": "mv2HUxq3B53.json.gz",
+      "target_instance_id": "mirror_284",
+      "target_subtask_index": 1,
+      "task_count": 6
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        3
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "0",
+      "index": 24,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "dresser_788",
+          "modality": "description",
+          "subtask_index": 1
+        }
+      ],
+      "scene_id": "p53SfW6mjZe",
+      "selection_tie_break_sha256": "3268100e72255107167dc855b8de60c0d23a7aec283e9dceac18ade35f65f9c5",
+      "source_content_sha256": "3e5b916fc4e3e7b7796f860fbda23229f67094e4d880ae645cdb47b428623f72",
+      "source_content_shard": "p53SfW6mjZe.json.gz",
+      "target_instance_id": "dresser_788",
+      "target_subtask_index": 3,
+      "task_count": 10
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        3
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "1",
+      "index": 25,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "picture_109",
+          "modality": "image",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "q3zU7Yy5E5s",
+      "selection_tie_break_sha256": "affc72b11f35af1947e691c41cb451a9f922269dc761ad4b6ee72a95bcfdef8f",
+      "source_content_sha256": "03a69df3ff7b4f460d4b0bcbcea409a1cd2704f82e3705ebf1c4a2d74760d2fa",
+      "source_content_shard": "q3zU7Yy5E5s.json.gz",
+      "target_instance_id": "picture_109",
+      "target_subtask_index": 3,
+      "task_count": 6
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1,
+        7
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "1",
+      "index": 26,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "picture_363",
+          "modality": "image",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "q5QZSEeHe5g",
+      "selection_tie_break_sha256": "0f5d9826e1007e584dba0863414ad5a1c4a212aa922c05c97bdbc8b03a13158a",
+      "source_content_sha256": "323110edd84e9924963ca2e1ae1b11f0b958386ae9c69f49892cdcbd67aee211",
+      "source_content_shard": "q5QZSEeHe5g.json.gz",
+      "target_instance_id": "picture_363",
+      "target_subtask_index": 1,
+      "task_count": 9
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        3
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "7",
+      "index": 27,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "rug_304",
+          "modality": "image",
+          "subtask_index": 0
+        },
+        {
+          "instance_id": "rug_304",
+          "modality": "description",
+          "subtask_index": 1
+        }
+      ],
+      "scene_id": "qyAac8rV8Zk",
+      "selection_tie_break_sha256": "008f5b982a401e48abc35bce4d2f3fd1644674f887f0582ab2e4f1eb150f182a",
+      "source_content_sha256": "a7f2a0574a2e1f7161e29ff84046db5f293f9a60128a0252f4f7c5d42e4d2f12",
+      "source_content_shard": "qyAac8rV8Zk.json.gz",
+      "target_instance_id": "rug_304",
+      "target_subtask_index": 3,
+      "task_count": 5
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        3
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "8",
+      "index": 28,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "plant_350",
+          "modality": "image",
+          "subtask_index": 2
+        }
+      ],
+      "scene_id": "svBbv1Pavdk",
+      "selection_tie_break_sha256": "883a6b9de4c9cf01af58218496733a1b26f1f5091406264b9770e03f8add1962",
+      "source_content_sha256": "ca361971d949d3cdbca178b669d42f62a57a7b3967bd8af56914e5663456c899",
+      "source_content_shard": "svBbv1Pavdk.json.gz",
+      "target_instance_id": "plant_350",
+      "target_subtask_index": 3,
+      "task_count": 8
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "8",
+      "index": 29,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "book_684",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "wcojb4TFT35",
+      "selection_tie_break_sha256": "8779b3bc1d9c766f37bf81fcab50993d8f3a07029965eb8fb0503a4581c6a219",
+      "source_content_sha256": "1f590bcec3b3866b9025a015e467d1cfbbb95250fd90c45ae76dba9cb9fab012",
+      "source_content_shard": "wcojb4TFT35.json.gz",
+      "target_instance_id": "book_684",
+      "target_subtask_index": 1,
+      "task_count": 5
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        2
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "3",
+      "index": 30,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "refrigerator_598",
+          "modality": "image",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "y9hTuugGdiq",
+      "selection_tie_break_sha256": "1b058ccafaa766479a85ba138f9b584efaae962336de906ebf568638147d48b6",
+      "source_content_sha256": "0939656bd13ae3967cb7dc40e625e39ad824bb3b77aa498e4e17c564f2d34932",
+      "source_content_shard": "y9hTuugGdiq.json.gz",
+      "target_instance_id": "refrigerator_598",
+      "target_subtask_index": 2,
+      "task_count": 5
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        2,
+        5
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "8",
+      "index": 31,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "vase_135",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "yr17PDCnDDW",
+      "selection_tie_break_sha256": "23eb5167f2d542548f67d16dd7af77e1ae80d6ec0977cdfcf6ff9bf1f889b7a4",
+      "source_content_sha256": "de1756221b1877a2a921777172e2070490c589335b8831de551880fee028c8df",
+      "source_content_shard": "yr17PDCnDDW.json.gz",
+      "target_instance_id": "vase_135",
+      "target_subtask_index": 2,
+      "task_count": 8
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        3
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "9",
+      "index": 32,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "nightstand_158",
+          "modality": "image",
+          "subtask_index": 2
+        }
+      ],
+      "scene_id": "ziup5kvtCCR",
+      "selection_tie_break_sha256": "532c678148d6ce57bfc863b4e9ebe6cbb76b565ce953bcd298f41c9ad570de9f",
+      "source_content_sha256": "0c3c762d6766c7632264daa9b0afad5204a62d372f2eb783bab6ab9c588eb5ae",
+      "source_content_shard": "ziup5kvtCCR.json.gz",
+      "target_instance_id": "nightstand_158",
+      "target_subtask_index": 3,
+      "task_count": 5
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1,
+        2,
+        3,
+        7,
+        8
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "1",
+      "index": 33,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "refrigerator_586",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "zt1RVoi7PcG",
+      "selection_tie_break_sha256": "61901b04b42fe485ba5ede7d546b1f50fae7f7dfef756bb7cc2a91431cf8c994",
+      "source_content_sha256": "f620b4bada4f242eb743b7de90a761b6084b5a8a75c324ef73f842771660ee35",
+      "source_content_shard": "zt1RVoi7PcG.json.gz",
+      "target_instance_id": "refrigerator_586",
+      "target_subtask_index": 1,
+      "task_count": 9
+    }
+  ],
+  "evaluation_stage": "formal_targeted_external_evaluation",
+  "is_full_goat_benchmark_score": false,
+  "method_or_threshold_selection_allowed": false,
+  "paper_claim_authorized": true,
+  "paper_claim_scope": "targeted GOAT val_unseen sequential-Revisit evaluation; not a full GOAT benchmark score",
+  "purpose": "scene-balanced held-out sequential-Revisit external evaluation",
+  "schema_version": "goat_sequential_revisit_manifest_v2_20260815",
+  "selection_rule": {
+    "episode_per_scene": "minimum target_subtask_index, with salted SHA256 identity tie-break; no rollout or method output is read",
+    "excluded_scenes": [
+      "4ok3usBNeis",
+      "5cdEh9F2hJL"
+    ],
+    "included_scenes": null,
+    "salt": "goat-cec-sequential-revisit-constructibility-v1",
+    "target": "first exact-instance ImageGoal preceded by any instance-specific task"
+  },
+  "source_population": {
+    "content_scenes": 36,
+    "episodes": 360,
+    "episodes_with_exact_recurrence": 211,
+    "exact_repeated_image_targets": 338,
+    "image_goals": 822,
+    "scenes_with_exact_recurrence": 36,
+    "selected_scenes": 34
+  },
+  "split": "val_unseen",
+  "target_metadata_use": "evaluator stopping and stratification only"
+}

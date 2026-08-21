@@ -1,0 +1,60 @@
+{
+  "schema_version": "final14_attempt4_execution_receipt_v1_20260817",
+  "authorization_inherited_from": "MemNavData/FINAL14_LEARNED_RELOCALIZER_PREFLIGHT_RECEIPT_20260817.json",
+  "repair_provenance": [
+    "MemNavData/FINAL14_ATTEMPT3_COLLECTION_INCIDENT_20260817.json",
+    "MemNavData/FINAL14_ATTEMPT4_COLLECTION_REPAIR_RECEIPT_20260817.json",
+    "MemNavData/FINAL14_ATTEMPT4_BUNDLE_CLOSURE_AUDIT_20260817.json"
+  ],
+  "execution_bundle": {
+    "local_path": ".diagnostics/learned_relocalizer_20260817/final14_learned_complete_f7acd766c0835548",
+    "remote_path": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_learned_complete_f7acd766c0835548",
+    "source_receipt_sha256": "f7acd766c08355485ea7a7349b0f181e8e7f37633dbeb86c3ff7ed75fee493d3",
+    "regular_files": 4011,
+    "manifest_entries": 4010,
+    "writable_entries": 0,
+    "local_and_remote_hash_verification": true
+  },
+  "remote_exact_runtime_preflight": {
+    "container": "/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif",
+    "overlay": "/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf",
+    "overlay_mode": "read_only",
+    "formal_materialization_import_smoke": true,
+    "empty_scene_construction_test": "7 passed plus 1 consumed-fixture skip",
+    "source_bundle_modified_by_test": false
+  },
+  "frozen_source_manifest_expected_aggregate": {
+    "scenes": 14,
+    "source_episode_target": 112,
+    "source_episodes_available": 80,
+    "scenes_below_target": 4
+  },
+  "reuse_attempt3_partial_records": false,
+  "method_population_threshold_or_scene_order_changed": false,
+  "submission": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T0715Z_attempt4",
+    "final14_source_manifest_sha256": "a3e6ee0ce9bb01c81f8a467ab86cab5d42164c56e1518eba9227bc0297c1d4ed",
+    "source_manifest_aggregate": {
+      "scenes": 14,
+      "source_episode_target": 112,
+      "source_episodes_available": 80,
+      "scenes_below_target": 4,
+      "policy_outcomes_read_at_submission": false
+    },
+    "attempt3_selection_equivalence": {
+      "scene_and_episode_selection_equal": true,
+      "normalized_selection_sha256": "dfbb333cae549eefe17eab55a8007b493aeea81936bf8c3b4102a11e29c3e035",
+      "manifest_hash_difference_is_only_final14_source_provenance": true
+    },
+    "jobs": {
+      "collect_array": 15885114,
+      "construction_summary": 15885121,
+      "evaluation_array": 15885125,
+      "policy_summary": 15885128,
+      "independent_verification": 15885139
+    },
+    "initial_state": "all pending; collection held by QOSGrpGRES",
+    "scheduler_estimated_collection_start": "2026-08-17T03:42:52 EDT"
+  },
+  "status": "attempt4_submitted"
+}

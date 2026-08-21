@@ -1,0 +1,28 @@
+{
+  "schema_version": "hm3d_fresh_fullmono_receipt_upload_incident_v1_20260820",
+  "scope": "infrastructure-only post-submission receipt transfer",
+  "scientific_jobs_already_submitted": true,
+  "scientific_jobs_resubmitted": false,
+  "source_bundle_changed": false,
+  "protocol_changed": false,
+  "population_changed": false,
+  "failed_command_contract": "scp -S was incorrectly used as if -S selected an SSH control socket",
+  "confirmed_cause": "for scp, -S selects the program used for the encrypted connection; the socket must be passed with -o ControlPath=...",
+  "repair": "uploaded the already-created byte-identical local submission receipt with -o ControlPath and wrote its remote SHA-256 sidecar",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+  "local_receipt": "MemNavData/HM3D_FRESH_FULLMONO_MIXED_ROLE_SUBMISSION_RECEIPT_20260820.json",
+  "remote_receipt_sha256": "16b0c68d1fcb4349b519efa258e2848dbf8ffe66f83888c36234265e87cbba68",
+  "job_ids": {
+    "asset_prepare": 16080295,
+    "source_generation_array": 16080301,
+    "parent_manifest": 16080319,
+    "goal_a_collection_array": 16080320,
+    "construction_array": 16080332,
+    "population_finalize": 16080338,
+    "query_smoke": 16080339,
+    "query_evaluation_array": 16080342,
+    "summary": 16080348,
+    "independent_verification": 16080360
+  },
+  "status": "repaired_without_scientific_resubmission"
+}

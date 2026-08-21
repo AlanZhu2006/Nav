@@ -1,0 +1,16 @@
+{
+  "files": {
+    "MemNavData/build_cgc_multiyaw_dataset.py": "218244d93f917f67fd771645474cf75cda0b66a5abf1a21df1ab5ed9ed62b728",
+    "MemNavData/circular_goal_compass.py": "992667265a95433de2c1338c8cc3dfb7990e25e2a245e80d4b719b9abcf1a575",
+    "MemNavData/habitat_rollout_primitives.py": "6b4a71b68ab5e57a1ef760ee3baf49d48ead374eee2a2feb331019c18755ee11",
+    "MemNavData/ORBIT_DISTILLED_SUBGOAL_O1_PROTOCOL_20260810.md": "93d7e861da154b140ee87c639b06ea4829ece60935d40b092aa3fadaa013943b",
+    "MemNavData/orbit_distilled_subgoal_eligibility_20260810.json": "6c3b88dd575dab45c68c18a4be19324d309bd421bf955c42e0ae310c13d40028",
+    "MemNavData/router_multiscene_split_20260805.json": "97309c183e25cb3dd65472908748d55a94798a636db6157ab6fe120fca05cf7a",
+    "MemNavData/slurm_orbit_distilled_subgoal_o1.sbatch": "02e12c0482de5bff7ce38564693491f27971117bd076ec5121c3fd8debd38303",
+    "MemNavData/test_circular_goal_compass.py": "ac132bd083712cce171bcd77658d87447539f9ccfac58c9971958f423df0a1d2",
+    "MemNavData/test_orbit_distilled_subgoal_o1.py": "8a898da823a174d64fd34ff4c12c4399a88663dca4698e578fa8c911966f999d",
+    "MemNavData/train_cgc_scene_oof.py": "dc85187e999377db674ed702b3884ae05d4806b508c8da36686aa10349e975fb",
+    "MemNavData/train_orbit_distilled_subgoal_o1.py": "7cd56e4f421aa55e25b59fe40f277ef829b0d5c874ef427b4d56c7bdee917cd0"
+  },
+  "schema_version": "orbit_distilled_subgoal_source_bundle_v1"
+}

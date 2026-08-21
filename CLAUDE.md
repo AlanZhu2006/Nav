@@ -8,6 +8,8 @@ This working directory contains two sibling repositories:
 - `NavDP/` — inference + evaluation (this is the benchmark suite)
 - `InternNav/` — training code for NavDP models
 
+There is also `MemNavData/` — the Habitat-native (not IsaacSim) working directory for the MemNav / Certified Episodic Compass research project. It has its own `MemNavData/CLAUDE.md` with different conventions (frozen protocols, immutable HPC bundles, two-interpreter execution); read that file before working there.
+
 NavDP (Navigation Diffusion Policy) is an end-to-end mapless navigation benchmark and model suite built on NVIDIA IsaacSim/IsaacLab. It evaluates visual navigation methods via a decoupled client-server architecture: navigation models run as Flask HTTP servers, while IsaacSim runs the simulation environment and sends RGB-D observations to the server for trajectory planning.
 
 **Training lives in the sibling `InternNav/` directory.** The `NavDP/` repo is inference + evaluation only. `InternNav/` is a broader navigation toolbox covering several model families — `cma`, `seq2seq`, `rdp`, `navdp`, `logoplanner`, `internvla_n1` — each with parallel `internnav/trainer/<m>_trainer.py`, `internnav/dataset/<m>_dataset_lerobot.py`, `internnav/model/basemodel/<m>/`, and `scripts/train/configs/<m>.py`. The dispatch happens in `scripts/train/train.py` via `--model-name`. When the user asks about training, dataset loaders, loss functions, or the InternData-N1 dataset format, read from `InternNav/` rather than `NavDP/`.

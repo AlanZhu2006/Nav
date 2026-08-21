@@ -1,15 +1,100 @@
 import numpy as np
+import hashlib
+import pickle
+import sys
 import torch
+import types
 from PIL import Image as PILImage
 from typing import List
 from torchvision import transforms
 from base_agent import ViNTBaseAgent
-from vint_network import ViNTPolicy, NoGoalViNTPolicy, MaskedViNTPolicy
+from vint_network import (
+    MaskedViNTPolicy,
+    MultiLayerDecoder,
+    NoGoalViNTPolicy,
+    PositionalEncoding,
+    ViNT,
+    ViNTPolicy,
+)
 import traj_opt
 import torchvision.transforms.functional as TF
 
 VISUALIZATION_IMAGE_SIZE = (160, 120)
 IMAGE_ASPECT_RATIO = (4 / 3)
+
+# The upstream ViNT release is a training bundle containing optimizer,
+# scheduler, and a pickled model object.  Keep the unsafe compatibility path
+# hash-pinned; converted/plain state_dict checkpoints stay on weights_only.
+_TRUSTED_LEGACY_CHECKPOINTS = {
+    "155fd72de2e98ae0e2fef9404072e1aefa79dae5f7f2411d4bcf7e384b83aa1f",
+}
+
+
+class _DiscardedScheduler:
+    """Placeholder used only while extracting a model from a trusted bundle."""
+
+
+def _sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as checkpoint_file:
+        for chunk in iter(lambda: checkpoint_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _legacy_module_aliases():
+    modules = {
+        name: types.ModuleType(name)
+        for name in (
+            "vint_train",
+            "vint_train.models",
+            "vint_train.models.vint",
+            "vint_train.models.vint.vint",
+            "vint_train.models.vint.self_attention",
+            "warmup_scheduler",
+            "warmup_scheduler.scheduler",
+        )
+    }
+    modules["vint_train.models.vint.vint"].ViNT = ViNT
+    modules["vint_train.models.vint.self_attention"].MultiLayerDecoder = MultiLayerDecoder
+    modules["vint_train.models.vint.self_attention"].PositionalEncoding = PositionalEncoding
+    modules["warmup_scheduler.scheduler"].GradualWarmupScheduler = _DiscardedScheduler
+    return modules
+
+
+def _load_vint_state_dict(model_path: str):
+    try:
+        payload = torch.load(model_path, map_location="cpu", weights_only=True)
+    except pickle.UnpicklingError:
+        checkpoint_sha = _sha256(model_path)
+        if checkpoint_sha not in _TRUSTED_LEGACY_CHECKPOINTS:
+            raise RuntimeError(
+                "Refusing to unpickle an untrusted legacy ViNT checkpoint "
+                f"with sha256={checkpoint_sha}"
+            )
+        aliases = _legacy_module_aliases()
+        previous = {name: sys.modules.get(name) for name in aliases}
+        sys.modules.update(aliases)
+        try:
+            payload = torch.load(model_path, map_location="cpu", weights_only=False)
+        finally:
+            for name, module in previous.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+    if isinstance(payload, dict) and "model" in payload:
+        payload = payload["model"]
+    if hasattr(payload, "module"):
+        payload = payload.module
+    if hasattr(payload, "state_dict"):
+        payload = payload.state_dict()
+    if not isinstance(payload, dict):
+        raise TypeError(f"Unsupported ViNT checkpoint payload: {type(payload)!r}")
+    return payload
+
+
 def to_numpy(tensor: torch.Tensor) -> np.ndarray:
     return tensor.detach().cpu().numpy()
 def from_numpy(array: np.ndarray) -> torch.Tensor:
@@ -54,9 +139,14 @@ class ViNTAgent(ViNTBaseAgent):
         super(ViNTAgent, self).__init__(image_intrinsic, model_path, model_config_path, robot_config_path, device)
         self.vint_former = ViNTPolicy(self.cfg)
         self.vint_former.to(self.device)
-        self.vint_former.model.load_state_dict(torch.load(self.model_path, map_location=self.device), strict=True)
+        self.vint_former.model.load_state_dict(
+            _load_vint_state_dict(self.model_path), strict=True)
         self.vint_former.eval()
         self.traj_generate = traj_opt.TrajOpt()
+
+    def observe(self, image):
+        """Advance only the causal RGB context without sampling an action."""
+        self.callback_obs(image)
 
     def step_imagegoal(self, goal_image, image):
         with torch.no_grad():
@@ -106,7 +196,8 @@ class NoGoalViNTAgent(ViNTBaseAgent):
         super(NoGoalViNTAgent, self).__init__(image_intrinsic, model_path, model_config_path, robot_config_path, device)
         self.vint_former = NoGoalViNTPolicy(self.cfg)
         self.vint_former.to(self.device)
-        self.vint_former.model.load_state_dict(torch.load(self.model_path, map_location=self.device), strict=True)
+        self.vint_former.model.load_state_dict(
+            _load_vint_state_dict(self.model_path), strict=True)
         self.vint_former.eval()
         self.traj_generate = traj_opt.TrajOpt()
 

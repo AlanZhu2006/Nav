@@ -1,0 +1,28 @@
+{
+  "analysis_version": 1,
+  "created_at": "2026-08-19T00:52:00+08:00",
+  "parent_protocol": {
+    "path": "MemNavData/mdtec_raw_depth_gate_d_protocol_20260819.json",
+    "sha256": "8deb4e13bd169bb39c7696a777656c3e4912f985f48ee364111b4a9a76cf9413"
+  },
+  "paired_unit": [
+    "scene",
+    "episode"
+  ],
+  "cluster_unit": "scene",
+  "cluster_bootstrap": {
+    "method": "percentile_resample_scenes_with_replacement_keep_all_episodes",
+    "seed": 2026081901,
+    "resamples": 100000,
+    "quantiles": [
+      0.025,
+      0.975
+    ]
+  },
+  "primary_contrast": "raw_first40_vs_metric_teacher",
+  "secondary_contrasts": [
+    "zero_depth_vs_metric_teacher",
+    "raw_first40_vs_zero_depth"
+  ],
+  "note": "Frozen after transport-only 1-episode/80-step smoke and before any formal Gate-D outcome. No threshold or population change."
+}

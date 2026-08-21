@@ -1,0 +1,16 @@
+{
+  "cause": "The smoke runner and independent verifier used zip(..., strict=True), which is valid in local Python 3.10 but unsupported by the pinned Habitat Python 3.9 runtime.",
+  "failed_job": "16020251_0",
+  "failure_stage": "post-rollout smoke audit after all five arms and ten guarded queries completed",
+  "formal_jobs": {
+    "16020253": "automatically cancelled by invalid dependency",
+    "16020256": "automatically cancelled by invalid dependency"
+  },
+  "method_result_produced": false,
+  "repair": [
+    "retain the existing explicit equal-length assertion and use ordinary zip",
+    "add a remote py_compile gate under the pinned Habitat Python 3.9 interpreter",
+    "create a new immutable source bundle and fresh output roots"
+  ],
+  "schema_version": "final14_mono_factorial_attempt3_py39_incident_v1_20260819"
+}

@@ -1,0 +1,13 @@
+{
+  "benchmark_manifest_sha256": "7468703a9efbb10e801ffdd226911f696a30fa9432ef9ab486d3134f6e40fe6a",
+  "formal_array_job": "16020253",
+  "formal_history_count": 21,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_mono_factorial_20260819/formal_20260819T122207Z_4683951e",
+  "schema_version": "final14_mono_factorial_submission_receipt_v1_20260819",
+  "scope": "consumed_final14_query_controller_depth_attribution",
+  "smoke_job": "16020251",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_mono_factorial_20260819/formal_20260819T122207Z_4683951e_smoke",
+  "source_receipt_sha256": "4683951eca5bee59b51046ea49b5fc8edd898295f925d06d4744ce9ed415a98d",
+  "source_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_4683951eca5bee59",
+  "summary_job": "16020256"
+}

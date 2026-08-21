@@ -1,0 +1,18 @@
+{
+  "schema_version": "hm3d_fullmono_mixed_role_infrastructure_incident_v1_20260820",
+  "attempt": 1,
+  "stage": "pre_submission_remote_run_root_setup",
+  "scientific_tasks_submitted": false,
+  "query_outcomes_read": false,
+  "goal_a_outcomes_read": false,
+  "cause": "known shared-SSH multiplexed no-PTY command channel hung while the authenticated PTY path remained healthy",
+  "preserved_partial_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_mixed_role_20260820/formal_20260819T182205Z_7d5bba3e",
+  "preserved_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_mixed_role_7d5bba3ee4c76fc3",
+  "partial_contents": [
+    "sealed_inputs/parent_hm3d_manifest.json",
+    "sealed_inputs/parent_hm3d_manifest.json.sha256"
+  ],
+  "repair": "preserve attempt 1, use the same authoritative authenticated master socket through an explicit forced-PTY command path, and create a new immutable bundle/run root",
+  "method_population_threshold_seed_or_budget_changed": false
+}
+

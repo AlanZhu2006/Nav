@@ -15,6 +15,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--port",type=int,default=8888)
 parser.add_argument("--config",type=str,default="./configs/iplanner.yaml")
 parser.add_argument("--checkpoint",type=str,default="./checkpoints/iplanner.pth")
+parser.add_argument("--device",type=str,default="cuda:0")
+parser.add_argument("--record_video",action="store_true")
 args = parser.parse_known_args()[0]
 
 app = Flask(__name__)
@@ -31,12 +33,12 @@ def iplanner_reset():
         iplanner_navigator = IPlannerAgent(intrinsic,
                                            model_path=args.checkpoint,
                                            model_config_path=args.config,
-                                           device='cuda:0')
-    if iplanner_fps_writer is None:
+                                           device=args.device)
+    if args.record_video and iplanner_fps_writer is None:
         format_time = datetime.datetime.fromtimestamp(time.time())
         format_time = format_time.strftime("%Y-%m-%d %H:%M:%S")
         iplanner_fps_writer = imageio.get_writer("{}_fps_pointgoal.mp4".format(format_time),fps=7)
-    else:
+    elif args.record_video:
         iplanner_fps_writer.close()
         format_time = datetime.datetime.fromtimestamp(time.time())
         format_time = format_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -76,7 +78,8 @@ def iplanner_step_pointgoal():
     depth = depth.reshape((batch_size, -1, depth.shape[1], 1))
     
     _,trajectory,fear = iplanner_navigator.step_pointgoal(depth,goal)
-    iplanner_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
+    if iplanner_fps_writer is not None:
+        iplanner_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
     
     return jsonify({'trajectory': trajectory.cpu().numpy().tolist(),
                     'all_trajectory': trajectory.cpu().numpy()[None,:,:,:].tolist(),
@@ -84,5 +87,3 @@ def iplanner_step_pointgoal():
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0',port=args.port)
-
-        

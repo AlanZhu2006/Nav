@@ -31,6 +31,7 @@ from typing import Dict, Sequence, Tuple
 import numpy as np
 
 try:
+    from MemNavData.cdec_pairwise_runtime import pad_dino_image_batch
     from MemNavData.patch_temporal_router import (
         combine_patch_temporal,
         combined_feature_names,
@@ -53,6 +54,7 @@ try:
     )
     from MemNavData.audit_router_candidate_recall import select_temporal_nms
 except ModuleNotFoundError:  # direct script invocation
+    from cdec_pairwise_runtime import pad_dino_image_batch  # type: ignore
     from patch_temporal_router import (  # type: ignore
         combine_patch_temporal,
         combined_feature_names,
@@ -341,6 +343,12 @@ def load_exact_patch_tokens(paths: Sequence[Path], lingbot_repo: Path,
             [str(path) for path in paths[start:start + batch_size]],
             mode="pad", image_size=518, patch_size=14)
         images = images.to(torch_device, non_blocking=use_cuda)
+        # BF16 transformer kernels change their rounding path with the batch
+        # shape.  Pad the final batch so every cached image is extracted with
+        # the same GEMM shape that deployment freezes.  DINO has no cross-image
+        # attention, so duplicating the last image cannot change other samples.
+        images, real_count = pad_dino_image_batch(
+            images, batch_size=batch_size)
         autocast = (torch.autocast("cuda", dtype=torch.bfloat16)
                     if use_cuda else torch.autocast("cpu", enabled=False))
         with torch.inference_mode(), autocast:
@@ -354,7 +362,8 @@ def load_exact_patch_tokens(paths: Sequence[Path], lingbot_repo: Path,
                 patches, (grid_size, grid_size))
             patches = patches.flatten(2).transpose(1, 2)
             patches = torch.nn.functional.normalize(patches, dim=-1)
-        outputs.append(patches.to(dtype=torch.float16).cpu().numpy())
+        outputs.append(
+            patches[:real_count].to(dtype=torch.float16).cpu().numpy())
         if start == 0 or (start // batch_size + 1) % 25 == 0:
             print(f"[patch] {min(start + batch_size, len(paths))}/{len(paths)}",
                   flush=True)

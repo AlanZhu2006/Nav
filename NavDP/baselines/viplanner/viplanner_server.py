@@ -17,6 +17,8 @@ parser.add_argument("--config",type=str,default="./configs/viplanner.yaml")
 parser.add_argument("--checkpoint",type=str,default="./checkpoints/viplanner.pt")
 parser.add_argument("--m2f_config",type=str,default="~/miniconda3/envs/habitat/lib/python3.9/site-packages/mmdet/.mim/configs/mask2former/mask2former_r50_8xb2-lsj-50e_coco-panoptic.py")
 parser.add_argument("--m2f_checkpoint",type=str,default="./checkpoints/mask2former_r50_8xb2-lsj-50e_coco-panoptic_20230118_125535-54df384a.pth")
+parser.add_argument("--device",type=str,default="cuda:0")
+parser.add_argument("--record_video",action="store_true")
 args = parser.parse_known_args()[0]
 
 app = Flask(__name__)
@@ -35,12 +37,12 @@ def iplanner_reset():
                                             m2f_config_path=args.m2f_config,
                                             model_path=args.checkpoint,
                                             model_config_path=args.config,
-                                            device='cuda:0')
-    if viplanner_fps_writer is None:
+                                            device=args.device)
+    if args.record_video and viplanner_fps_writer is None:
         format_time = datetime.datetime.fromtimestamp(time.time())
         format_time = format_time.strftime("%Y-%m-%d %H:%M:%S")
         viplanner_fps_writer = imageio.get_writer("{}_fps_pointgoal.mp4".format(format_time),fps=7)
-    else:
+    elif args.record_video:
         viplanner_fps_writer.close()
         format_time = datetime.datetime.fromtimestamp(time.time())
         format_time = format_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -80,7 +82,8 @@ def viplanner_step_pointgoal():
     depth = depth.reshape((batch_size, -1, depth.shape[1], 1))
     
     _,trajectory,fear = viplanner_navigator.step_pointgoal(image,depth,goal)
-    viplanner_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
+    if viplanner_fps_writer is not None:
+        viplanner_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
     
     return jsonify({'trajectory': trajectory.cpu().numpy().tolist(),
                     'all_trajectory': trajectory.cpu().numpy()[None,:,:,:].tolist(),
@@ -88,5 +91,3 @@ def viplanner_step_pointgoal():
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0',port=args.port)
-
-        

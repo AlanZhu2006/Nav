@@ -1,0 +1,37 @@
+{
+  "adapter": {
+    "endpoint_stop_radius_m": 0.2,
+    "execution_horizon": 8,
+    "forward_step_m": 0.25,
+    "lookahead_points": 4,
+    "turn_angle_deg": 30.0
+  },
+  "arrival_contract": {
+    "causal_scale_config": {
+      "bias_correction": 1.15,
+      "confidence_quantile": 0.5,
+      "histogram_bins": 60,
+      "maximum_scale": 6.0,
+      "minimum_scale": 0.8,
+      "peak_threshold": 0.3,
+      "pixel_stride": 4
+    },
+    "distance_threshold_m": 0.075,
+    "minimum_causal_stream_frames": 64,
+    "schema_version": "goat_certified_arrival_contract_v1_20260815",
+    "train_report_sha256": "13f265b200f02c877557bdc18a846688274961ddc451ead463dbcb319d528373",
+    "train_verification_sha256": "ffb2576ef25f1a0ff571d66640ec7cddd611417858a35d4e15de1c6ef2ea7dfd",
+    "zero_without_certificate_semantics": "abstain_never_stop"
+  },
+  "base_seed": 20260815,
+  "episodes": [
+    {"episode_id": "1", "scene_id": "bCPU9suPUw9"}
+  ],
+  "engineering_smoke_only": true,
+  "is_full_goat_benchmark_score": false,
+  "max_navigation_actions": 120,
+  "method_or_threshold_selection_allowed": false,
+  "navdp_stop_threshold": -0.5,
+  "same_observation_resample_limit": 3,
+  "schema_version": "goat_certified_arrival_manifest_v1_20260815"
+}

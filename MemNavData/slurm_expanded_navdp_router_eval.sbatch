@@ -1,5 +1,9 @@
 #!/bin/bash
 # One scene per array task; submit index 0 first, then 1-19 after it passes.
+# For strict Phase-B P0 pairing, export P0_SHARED_PREFIX=1 together with
+# RUN_NAVDP_NATIVE=1,RUN_GEOMETRY_TOP1=0,RUN_GEOMETRY_ROUTER=1,
+# RUN_LEARNED_RANK_GEOMETRY=1,DETERMINISTIC_PLAN_SEEDS=1.  Each array task
+# then runs geometry -> learned -> native on one node and one pair of servers.
 # Example:
 #   sbatch --array=0 --export=ALL,RUN_TAG=<tag>,EXPECTED_COMMIT=<sha>,EXPECTED_MANIFEST_SHA=<sha> <this-file>
 #   sbatch --array=1-19%2 --dependency=afterok:<smoke-job> --export=... <this-file>
@@ -32,6 +36,10 @@ RUNNER=${ROOT}/MemNavData/run_expanded_navdp_router_scene.sh
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 HAB_PY=/scratch/lg154/conda-envs/habitat/bin/python
 MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python
+RUN_LEARNED_RANK_GEOMETRY=${RUN_LEARNED_RANK_GEOMETRY:-0}
+P0_SHARED_PREFIX=${P0_SHARED_PREFIX:-0}
+PHASE_B_CKPT=${PHASE_B_CKPT:-}
+EXPECTED_PHASE_B_CKPT_SHA=${EXPECTED_PHASE_B_CKPT_SHA:-}
 
 mkdir -p "${RESULT_BASE}" "${RUN_ROOT}"
 for required in "${BASE_SIF}" "${HAB_PY}" "${MEMNAV_PY}" \
@@ -60,4 +68,8 @@ exec singularity exec --nv \
     SCENE_INDEX="${SLURM_ARRAY_TASK_ID}" \
     HAB_PY="${HAB_PY}" \
     MEMNAV_PY="${MEMNAV_PY}" \
+    RUN_LEARNED_RANK_GEOMETRY="${RUN_LEARNED_RANK_GEOMETRY}" \
+    P0_SHARED_PREFIX="${P0_SHARED_PREFIX}" \
+    PHASE_B_CKPT="${PHASE_B_CKPT}" \
+    EXPECTED_PHASE_B_CKPT_SHA="${EXPECTED_PHASE_B_CKPT_SHA}" \
     "${RUNNER}"

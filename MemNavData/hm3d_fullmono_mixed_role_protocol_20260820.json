@@ -1,0 +1,71 @@
+{
+  "schema_version": "hm3d_fullmono_mixed_role_protocol_v1_20260820",
+  "frozen_at": "2026-08-20T00:00:00+08:00",
+  "scope": "prospective same-scene HM3D actual-online full-monocular mixed-role integration",
+  "fresh_scene_generalization": false,
+  "query_outcomes_read_before_freeze": false,
+  "dataset": {
+    "name": "HM3D",
+    "release": "v0.2",
+    "parent_manifest": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_heldout_val10_runtime_repair_20260816/hm3d_heldout_val10_rt_20260816T1345Z/data_manifest.json",
+    "parent_manifest_sha256": "62bc6299203da709e65787c735a531974905f2ab8e940f72e91318914d949c89",
+    "episodes_per_scene": 4,
+    "source_episode_count": 36,
+    "scenes": [
+      {"rank": 0, "parent_index": 0, "scene_id": "HaxA7YrQdEC"},
+      {"rank": 1, "parent_index": 1, "scene_id": "BHXhpBwSMLh"},
+      {"rank": 2, "parent_index": 2, "scene_id": "SUHsP6z2gcJ"},
+      {"rank": 3, "parent_index": 3, "scene_id": "tQ5s4ShP627"},
+      {"rank": 4, "parent_index": 4, "scene_id": "rsggHU7g7dh"},
+      {"rank": 5, "parent_index": 5, "scene_id": "Qpor2mEya8F"},
+      {"rank": 6, "parent_index": 6, "scene_id": "7UrtFsADwob"},
+      {"rank": 7, "parent_index": 7, "scene_id": "mma8eWq3nNQ"},
+      {"rank": 8, "parent_index": 9, "scene_id": "X4qjx5vquwH"}
+    ]
+  },
+  "goal_a": {
+    "controller": "frozen NavDP",
+    "hybrid_route": "native_sidecar",
+    "navdp_depth_source": "monocular_sidecar",
+    "depth_contract": "raw_lingbot_depth_first40_v1",
+    "maximum_steps": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "base_seed": 2026082000,
+    "seed_formula": "base_seed + 100 * scene_rank + source_episode_rank",
+    "run_once_per_source": true,
+    "metric_depth_sensor_reads_allowed": 0
+  },
+  "construction": {
+    "minimum_runtime_eligible_frame": 39,
+    "end_margin_frames": 16,
+    "maximum_histories_per_scene": 4,
+    "novel_max_online_a_covis_exclusive": 0.10,
+    "revisit_online_a_covis_band_inclusive": [0.55, 0.90],
+    "query_geodesic_band_m": [2.0, 9.0],
+    "explicit_parent_asset_path_required": true,
+    "all_materialized_histories_attempted": true,
+    "query_policy_outcomes_read": false
+  },
+  "query": {
+    "arms": ["mono_native", "mono_raw_fixed", "mono_cec"],
+    "navdp_depth_source": "monocular_sidecar",
+    "maximum_steps": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "runtime_role_visibility": "none",
+    "independent_reset_and_exact_mono_a_replay": true,
+    "deterministic_plan_seeds": true,
+    "metric_depth_sensor_reads_allowed": 0
+  },
+  "guards": {
+    "no_training": true,
+    "no_threshold_tuning": true,
+    "no_source_or_query_outcome_filtering": true,
+    "no_role_label_forwarded_to_policy": true,
+    "no_new_scene_generalization_claim": true,
+    "no_metric_depth_in_goal_a_replay_or_query": true,
+    "old_metric_goal_a_traces_forbidden": true,
+    "final14_reopening_forbidden": true
+  }
+}

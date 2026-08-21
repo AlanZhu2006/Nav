@@ -1,0 +1,26 @@
+{
+  "protocol_version": 1,
+  "protocol_id": "mdtec_monocular_cec_composition_v1_20260819",
+  "status": "conditional_on_gate_d_authorization",
+  "source_doc": "MemNavData/MDTEC_MONOCULAR_CEC_COMPOSITION_PROTOCOL_20260819.md",
+  "arms": ["raw_native", "raw_cec"],
+  "episodes_per_scene": 2,
+  "manifest": {
+    "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/revisit_fresh_confirmation_20260811/fresh160_v3_attempt600_20260811T2000/data_manifest.json",
+    "sha256": "8013fa2a768d84638a9f9ecc50df46dda67ebb79250d14ad0a8087ac52fd33e5"
+  },
+  "selection_rule": "first_n_episodes_per_scene_by_manifest_order_no_result_filtering",
+  "evaluation": {
+    "scenes": 20,
+    "episodes_per_scene": 2,
+    "max_steps": 500,
+    "execution_horizon": 8,
+    "success_distance_m": 1.0
+  },
+  "audit": {
+    "certified_runtime_failure_budget": 0,
+    "metric_depth_sensor_consumed_any_budget": 0,
+    "scale_receipt_unique_count_max": 1,
+    "reject_action_must_match_native": true
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "analysis_contract": {
+    "arm_order": "manifest-frozen alternating order after scene-id sort; 17 native-first and 17 CEC-first in the 34-scene formal set",
+    "base_seed": 100,
+    "constructibility_diagnostics_only": [
+      "target entered by each arm",
+      "prior exact-instance task success",
+      "target certificate candidate/accept coverage",
+      "non-recurrent pre-target certificate takeover"
+    ],
+    "effect_interval": "scene-cluster percentile bootstrap risk-difference interval",
+    "maximum_steps_per_arm": 5000,
+    "minimum_mechanistic_coverage_for_interpretation": {
+      "distinct_scenes": 12,
+      "paired_episodes_entering_target": 20
+    },
+    "paired_test": "two-sided exact McNemar",
+    "post_result_method_or_threshold_changes_forbidden": true,
+    "primary_comparison": "role-free CEC minus released official GOAT",
+    "primary_outcome": "success of the frozen repeated ImageGoal target",
+    "primary_population": "all selected episodes, intention-to-treat; no filtering by target reach, prior success, certificate support, or outcome",
+    "semantic_stop_contract": "official GOAT SUBTASK_STOP is executed exactly; CEC may only override non-stop motion after certificate acceptance; no terminal U-turn or orientation alignment"
+  },
+  "controller_reads_target_metadata": false,
+  "dataset_receipt": {
+    "aggregate_index_sha256": "bb4c9aa90ef21dc8686fca229c19722f05f832f391bbee0c736af473ab88408b",
+    "content_shard_count": 36,
+    "sorted_content_receipts_sha256": "c5ecbb379b1f8e38748a9056a8f31ea78bf3ebb68407c6ad957d71e85834a5df"
+  },
+  "episodes": [
+    {
+      "all_repeated_image_subtask_indices": [
+        1,
+        3
+      ],
+      "arm_order": [
+        "native",
+        "cec"
+      ],
+      "episode_id": "9",
+      "index": 0,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "refrigerator_334",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "4ok3usBNeis",
+      "selection_tie_break_sha256": "f85c0961ef9f66f1090dcdcd94d609eb1fc128dffc36ebfb2701c54c0241b342",
+      "source_content_sha256": "a874b91b619b94ddba04a820e1b6f4674a1b114ffa361baa20e96178664d12ef",
+      "source_content_shard": "4ok3usBNeis.json.gz",
+      "target_instance_id": "refrigerator_334",
+      "target_subtask_index": 1,
+      "task_count": 5
+    },
+    {
+      "all_repeated_image_subtask_indices": [
+        1
+      ],
+      "arm_order": [
+        "cec",
+        "native"
+      ],
+      "episode_id": "5",
+      "index": 1,
+      "prior_instance_subtasks": [
+        {
+          "instance_id": "carpet_270",
+          "modality": "description",
+          "subtask_index": 0
+        }
+      ],
+      "scene_id": "5cdEh9F2hJL",
+      "selection_tie_break_sha256": "f978f4ec35a89d6cca20308134e94a20129bbadb1bb90ff7928c74cb30eb5ff4",
+      "source_content_sha256": "c388d0e2c13c5d8f7c52c4c0db379830052ec615d804b9b275a17efcda49982d",
+      "source_content_shard": "5cdEh9F2hJL.json.gz",
+      "target_instance_id": "carpet_270",
+      "target_subtask_index": 1,
+      "task_count": 5
+    }
+  ],
+  "evaluation_stage": "engineering_smoke",
+  "is_full_goat_benchmark_score": false,
+  "method_or_threshold_selection_allowed": false,
+  "paper_claim_authorized": false,
+  "paper_claim_scope": null,
+  "purpose": "consumed-scene engineering smoke",
+  "schema_version": "goat_sequential_revisit_manifest_v2_20260815",
+  "selection_rule": {
+    "episode_per_scene": "minimum target_subtask_index, with salted SHA256 identity tie-break; no rollout or method output is read",
+    "excluded_scenes": [],
+    "included_scenes": [
+      "4ok3usBNeis",
+      "5cdEh9F2hJL"
+    ],
+    "salt": "goat-cec-sequential-revisit-constructibility-v1",
+    "target": "first exact-instance ImageGoal preceded by any instance-specific task"
+  },
+  "source_population": {
+    "content_scenes": 36,
+    "episodes": 360,
+    "episodes_with_exact_recurrence": 211,
+    "exact_repeated_image_targets": 338,
+    "image_goals": 822,
+    "scenes_with_exact_recurrence": 36,
+    "selected_scenes": 2
+  },
+  "split": "val_unseen",
+  "target_metadata_use": "evaluator stopping and stratification only"
+}

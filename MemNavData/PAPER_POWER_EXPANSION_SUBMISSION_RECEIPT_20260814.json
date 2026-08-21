@@ -1,0 +1,49 @@
+{
+  "schema_version": "paper_power_expansion_submission_audit_v1_20260814",
+  "scope": "pre-result MP3D phase-2 power replication",
+  "trigger": {
+    "attempt": 7,
+    "constructible_histories": 9,
+    "scene_clusters": 9,
+    "target_histories": 20,
+    "target_scene_clusters": 12,
+    "population_receipt_sha256": "2ecb102f137f0ec25abd615ec544f342cb4d259a9d945fa069041a8a5bb611bc",
+    "query_outcomes_read_before_freeze": false
+  },
+  "population": {
+    "scenes": 16,
+    "episodes_per_scene": 4,
+    "source_episodes": 64,
+    "episode_ids": [
+      "episode_0002",
+      "episode_0003",
+      "episode_0004",
+      "episode_0005"
+    ],
+    "scene_replacement": false,
+    "manifest_sha256": "c148c9695d0a03f877cd860b1c1810ace36e4750da9a7ed5ec385bb29336a598"
+  },
+  "run": {
+    "root": "/scratch/yz11502/Research/Nav-axis-uturn-results/paper_certified_compass_20260814/paper_power_expansion_20260814_pre_result",
+    "source_bundle": "/scratch/yz11502/Research/source_bundles/paper_power_expansion_915f6c6a30837ee5",
+    "source_receipt_sha256": "e29c996fbcf4ce9dabf1bae6db8bf61e2b8d7e924ea967307b8cd6772012f10b",
+    "remote_submission_receipt_sha256": "b3201bd82d18193f24f260b09af6a5778639471c898ad5ce2cbee36c4f4d0796",
+    "method_adaptation": "none",
+    "upstream_attempt7_independent_verification_job": 15727268
+  },
+  "jobs": {
+    "collect_array": 15729697,
+    "construction_summary": 15729702,
+    "evaluation_array": 15729707,
+    "policy_summary": 15729708,
+    "independent_verification": 15729714
+  },
+  "dependency_audit": {
+    "collect_array": "afterok:15727268",
+    "construction_summary": "afterok:15729697_*",
+    "evaluation_array": "afterok:15729702",
+    "policy_summary": "afterok:15729707_*",
+    "independent_verification": "afterok:15729708",
+    "verified": true
+  }
+}

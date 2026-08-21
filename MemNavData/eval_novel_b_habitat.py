@@ -430,16 +430,11 @@ def main() -> None:
             b_xz = b_hab[[0, 2]]
             start_floor, start_yaw = base.parquet_pose_hab(rows.iloc[0]["action"])
 
-            def floor_point(xz: np.ndarray) -> np.ndarray:
-                return np.asarray(
-                    [xz[0], start_floor[1], xz[1]], dtype=np.float64
-                )
-
             ok_a, geo_a, _path_a = base.geodesic(
-                pathfinder, start_floor, floor_point(a_xz)
+                pathfinder, start_floor, a_hab
             )
             ok_b, geo_b, _path_b = base.geodesic(
-                pathfinder, floor_point(a_xz), floor_point(b_xz)
+                pathfinder, a_hab, b_hab
             )
             require(
                 ok_a and np.isfinite(geo_a) and ok_b and np.isfinite(geo_b),

@@ -1,0 +1,66 @@
+{
+  "arms": [
+    "native",
+    "ideal_periodic_yaw",
+    "oracle_token_periodic"
+  ],
+  "arm_order": {
+    "base": [
+      "native",
+      "ideal_periodic_yaw",
+      "oracle_token_periodic"
+    ],
+    "rotation": "(scene_index + episode_index_within_scene) mod 3"
+  },
+  "benchmark_role": "internal_mechanism_gate_not_blind_confirmation",
+  "bootstrap": {
+    "cluster": "scene",
+    "confidence": 0.95,
+    "resamples": 100000,
+    "seed": 20260808
+  },
+  "created_at": "2026-08-08T00:00:00+08:00",
+  "decision": {
+    "ambiguous": "otherwise",
+    "go": "ideal_gain >= 4 and ideal_loss <= 1 and ideal_net_gain >= 3",
+    "no_go": "ideal_gain <= 2 or ideal_net_gain <= 0"
+  },
+  "evaluation": {
+    "base_seed": 20260803,
+    "deterministic_plan_seeds": true,
+    "execution_horizon": 8,
+    "max_steps": 500,
+    "scenes": 20,
+    "episodes": 40,
+    "episodes_per_scene": 2,
+    "goal": "Novel_A_only",
+    "success_distance_m": 1.0,
+    "trajectory_selector": "server"
+  },
+  "ideal_periodic_yaw": {
+    "bearing_waypoint_min_distance_m": 0.3,
+    "physical_cost": 0,
+    "trigger_deg": 20.0
+  },
+  "input_overlay": {
+    "path": "MemNavData/novel_a_bearing_inputs_20260808.json",
+    "sha256": "401d43723a37465fa00778fd21b27eecbe46cf114abb074a3582b524451ce901"
+  },
+  "manifest": {
+    "path": "MemNavData/expanded_navdp_router_eval_20260805.json",
+    "sha256": "ba8f72cb504768c801e6c9c386436ccdc66dea07a5e5fac2d7b4248738946a61"
+  },
+  "navdp_checkpoint_sha256": "3bb3ad4ab241e857bb57a4021cc6aab76d5263e81fbf80298d579053ef011947",
+  "primary_contrast": "ideal_periodic_yaw_vs_native",
+  "protocol_version": 1,
+  "secondary_contrast": "oracle_token_periodic_vs_native_conditional_on_positive_primary",
+  "token": {
+    "critic_role": "within_request_server_selection_and_shadow_only",
+    "max_consecutive_plans": 10,
+    "read_only_endpoint": "mixgoal_resample",
+    "request_clip_deg": 100.0,
+    "request_radius_m": 2.0,
+    "resample_seed": "same_as_native_plan_seed",
+    "trigger_deg": 20.0
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "schema_version": "hm3d_summary_schema_analysis_repair_receipt_v1_20260817",
+  "scope": "analysis-interface repair only; no evaluator, rollout, population, arm, threshold, success criterion, or estimand change",
+  "formal_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_heldout_val10_runtime_repair_20260816/hm3d_heldout_val10_rt_20260816T1345Z",
+  "frozen_manifest_sha256": "62bc6299203da709e65787c735a531974905f2ab8e940f72e91318914d949c89",
+  "formal_array": {
+    "job_id": 15839654,
+    "scene_indices": [0, 1, 2, 3, 4, 5, 6, 7, 9],
+    "scene_count": 9,
+    "episode_count": 36,
+    "all_scene_tasks_completed_0_0": true,
+    "evaluation_rerun_for_analysis_repair": false
+  },
+  "original_analysis_incident": {
+    "summary_job": 15839655,
+    "summary_state": "FAILED",
+    "summary_exit_code": "1:0",
+    "downstream_verifier_job": 15839656,
+    "downstream_verifier_state": "CANCELLED",
+    "failure": "first scene contract used the frozen runtime-repair schema name while the summarizer accepted only the legacy schema name",
+    "failed_before_trace_or_arm_metric_read": true,
+    "summary_or_verification_output_created": false,
+    "incident_log_sha256": "b7b750432bd893ff31c753c63de2a313c462528f7d323a91e0ede294d6a19000"
+  },
+  "contract_audit": {
+    "contracts_checked": 9,
+    "observed_schema": "hm3d_heldout_runtime_repair_scene_v1_20260816",
+    "all_expected_fields_exact": true,
+    "all_runtime_repair_method_change_false": true,
+    "navigation_outcomes_used_as_repair_criterion": false
+  },
+  "analysis_repair_bundle": {
+    "path": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_summary_schema_analysis_repair_045f1cb3b7a21ac9",
+    "receipt_file_sha256": "045f1cb3b7a21ac9bacdc13ef6d3795810d9d8b1ae2030c499d0b6da98fc675d",
+    "summarizer_sha256": "c194b81fc3e75268307b522afd913a5dd71ad0a80469580dc4bb04e55d1badda",
+    "summary_test_sha256": "0567f7d95a5bb71413a3db9cbc5af9403e86d6afaa9bc0805d30c72345db2abd",
+    "integration_test_sha256": "0ce83c3b5fb0023206c103a00d85b53dda76567b4368eeaf838d83b695c14456",
+    "accepted_scene_schemas": [
+      "hm3d_heldout_val10_revisit_scene_contract_v1_20260816",
+      "hm3d_heldout_runtime_repair_scene_v1_20260816"
+    ],
+    "runtime_schema_requires_method_change_false": true,
+    "unknown_schema_fails_closed": true,
+    "tests_passed": 20,
+    "bundle_read_only": true
+  },
+  "repair_jobs": {
+    "summary": {
+      "job_id": 15847580,
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:00:18"
+    },
+    "independent_verifier": {
+      "job_id": 15847581,
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:00:14"
+    }
+  },
+  "sealed_outputs": {
+    "summary_sha256": "4e9946a3580c3eff0ffa35567c30527eb96dbbbfc822de11f982630183e8bd34",
+    "independent_verification_sha256": "7bb99848bf4c573af62c3f020015996cd1fba9dfa0f5045af79a6fba5a1def97",
+    "independent_verifier_verified": true
+  }
+}

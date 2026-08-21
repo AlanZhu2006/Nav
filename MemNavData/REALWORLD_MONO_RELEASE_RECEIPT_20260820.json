@@ -1,0 +1,61 @@
+{
+  "schema": "realworld_mono_release_receipt_v1",
+  "created_at": "2026-08-20T23:01:39+08:00",
+  "status": "staged_and_robot_overlay_activated_no_motion",
+  "navigation_sensor_contract": "causal_monocular_rgb_v1",
+  "method": "certified_episodic_compass",
+  "controller": "frozen_navdp",
+  "policy_depth_source": "monocular_sidecar",
+  "metric_depth_sensor_consumed_by_policy": false,
+  "robot_local_depth_role": "collision_safety_only",
+  "hub_protocol_version": 2,
+  "lower_computer": {
+    "ssh_alias": "tegra-ubuntu",
+    "hostname": "tegra-ubuntu",
+    "user": "nvidia",
+    "resolved_ip": "10.209.73.32",
+    "live_overlay": "/home/nvidia/twork/NavDP/deployment/go2/offboard",
+    "immutable_release": "/home/nvidia/twork/NavDP/deployment/go2/releases/cec_mono_20260820_d656b9d9ae30de73",
+    "rollback_copy": "/home/nvidia/twork/NavDP/deployment/go2/releases/rollback_pre_mono_20260820_d656b9d9ae30de73",
+    "release_tree_sha256": "d656b9d9ae30de73f1d70a52b0150318f3dda238d6631dbae42f0a98dec973c2",
+    "release_tree_sha256_scope": "four_offboard_script_payloads_excluding_RELEASE_RECEIPT.json",
+    "files": {
+      "preflight_offboard.sh": "770fe4eb205b6054d6ab50b9bff7fd12b5b587f8eefd1d7fe9bad6e3db8b1d0d",
+      "run_offboard_stack.sh": "ad4c3329a67f6b9ce1d5ab0f205f04b97c6758a41fd97ffb0fdcc603fb99a694",
+      "run_policy_tunnel.sh": "eb65fb3c88c0976b17ddc87ee99e6481e6d4d0c718cc7121630446f76006c2c3",
+      "stop_offboard_stack.sh": "e6b239f1cd2c51d59bd09c57348e037697a7bd4de47c0c9316860c608ed798c3"
+    }
+  },
+  "upper_computer_files": {
+    "MemNavData/realworld_cec_hub.py": "d0c941d82c1d1ae6da16eea1f5e3551542cf1a068131ab5356ed8040ed3e678f",
+    "MemNavData/test_realworld_cec_hub.py": "34c41d4972df9edc923e8e9f45336df34bed1259826a498ed8954a8c3e4e7759",
+    "MemNavData/run_realworld_policy_stack.sh": "3971e3d112d0f7d29faba8585c3a0039888be63ca4733097f90b0d23950a75ed",
+    "MemNavData/run_realworld_navdp_server.sh": "f9c3720e933a100697a5a1331667a7fb939814cdfff333f5976597d38b1c3b9d",
+    "MemNavData/run_realworld_memnav_server.sh": "bce958a7f8ef34307f57fe2534b7c70e3417066ac8fc125de4b2dfb400d697a9",
+    "MemNavData/run_realworld_cec_hub.sh": "165ae5f75fb5be8aad8f9c97b1781f7de7cb3a16f2fb0616d4b5f74c9adefa13",
+    "MemNavData/monocular_depth_runtime.py": "709a4ad200a5778317bb314e87e398ba6da8398939d96c100f235fe1ce98c9fc",
+    "NavDP/baselines/navdp/navdp_server.py": "64e3fa68e098165dc6dc4ed8184e940bb735a3a73b2c347355f08a7fa0fb755d",
+    "NavDP/baselines/memnav/memnav_server.py": "eeb6626ed29e3dfb3686c01eb3e95f3959f282ebe706d520a0c4744e7ec00597",
+    "NavDP/baselines/memnav/policy_agent.py": "8b1e2b32fd1820d887c3e9b42a9e8fc8138cce044a9dfb6b349015b44b185bae"
+  },
+  "verification": {
+    "local_unit_tests": "34 passed",
+    "local_python_compile": true,
+    "local_and_remote_shell_syntax": true,
+    "remote_release_checksum_match": true,
+    "remote_live_overlay_checksum_match": true,
+    "jetson_to_workstation_passwordless_ssh": true,
+    "loopback_tunnel_mono_health_preflight": "5/5 passed",
+    "camera_started": false,
+    "ros_adapter_started": false,
+    "go2_bridge_started": false,
+    "motion_command_sent": false,
+    "post_smoke_processes_stopped": true
+  },
+  "deployment_gate": {
+    "camera_optical_center_height_m": null,
+    "status": "blocked_until_measured",
+    "reason": "the first-40 monocular scale contract requires the installed camera optical-center height; the 0.5 m value used by the health-only smoke was not treated as a calibration",
+    "next_safe_step": "measure and export CEC_CAMERA_HEIGHT_M, then run a camera-only disabled adapter smoke before any Go2 bridge or motion enable"
+  }
+}

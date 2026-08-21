@@ -1,0 +1,45 @@
+{
+  "allowed_added_files": [
+    "MemNavData/PAPER_POWER_EXPANSION_REPAIR_PROTOCOL_20260814.md"
+  ],
+  "allowed_executable_diffs": [
+    "MemNavData/slurm_paper_online_a_summary.sbatch",
+    "MemNavData/summarize_paper_online_a.py"
+  ],
+  "bundle_manifest_sha256": "c18ef4e2021ef3b5fdd10794f74fc8054ba5e4ed1d82e56364f6a9e1de810482",
+  "collection_rerun": false,
+  "collection_reused": true,
+  "construction_result": {
+    "episodes_per_scene": 4,
+    "goal_a_failures": 28,
+    "goal_a_successes": 36,
+    "materialized_histories": 35,
+    "materialized_scene_count": 15,
+    "policy_outcomes_read": false,
+    "role_pair_constructible_histories": 19,
+    "role_pair_scene_count": 12,
+    "source_episodes": 64,
+    "source_scenes": 16,
+    "target_histories": 20,
+    "target_met": false,
+    "target_scenes": 12,
+    "underpowered_if_target_not_met": true
+  },
+  "jobs": {
+    "construction_summary": 15747746,
+    "evaluation_array": 15747763,
+    "independent_verification": 15747768,
+    "policy_summary": 15747767
+  },
+  "method_adaptation": "none",
+  "parent_bundle_manifest_sha256": "915f6c6a30837ee5e86f4b4334b7322de9469f4f84b5ed74e98c34a7c539b1e0",
+  "parent_source_receipt_sha256": "e29c996fbcf4ce9dabf1bae6db8bf61e2b8d7e924ea967307b8cd6772012f10b",
+  "parent_summary_job": 15729702,
+  "policy_or_controller_files_changed": false,
+  "query_outcomes_read_before_repair": false,
+  "remote_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/paper_certified_compass_20260814/paper_power_expansion_20260814_pre_result",
+  "schema_version": "paper_power_expansion_repair_submission_audit_v1_20260814",
+  "source_bundle": "/scratch/yz11502/Research/source_bundles/paper_power_expansion_repair_c18ef4e2021ef3b5",
+  "source_receipt_sha256": "88d5983ebfa58c9970572a112483d0a65010c13b243d1b3a0e8f67ec66958a9d",
+  "submission_time": "2026-08-14T22:56:03+08:00"
+}

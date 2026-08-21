@@ -1,0 +1,55 @@
+{
+  "schema_version": "paper_attempt6_port_race_incident_v1_20260814",
+  "recorded_at_utc": "2026-08-14T05:15:30Z",
+  "attempt": {
+    "tag": "paper_role_pair_20260814T045433Z_attempt6",
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/paper_certified_compass_20260814/paper_role_pair_20260814T045433Z_attempt6",
+    "submission_json_sha256": "823dce92a2ca4b3a896b89b2a7d39e8c69ac5f80b2dc30491a45c29aad9ce2ad",
+    "source_receipt_sha256": "bf0f6c5b142ef5a69b3893ed187a25b54dc8dc3997185b78bc9d1114a2197410"
+  },
+  "failure": {
+    "stage": "collection",
+    "array_job_id": 15726432,
+    "array_task_id": 5,
+    "slurm_job_id": 15726633,
+    "node": "gl061",
+    "state": "FAILED",
+    "exit_code": "2:0",
+    "elapsed": "00:00:41",
+    "requested_port": 39788,
+    "message": "Address already in use; ABORT: NavDP server exited",
+    "stdout_sha256": "292422f1c9020f6285283597828e40281ff44add183994a6689e6ec5181128ff",
+    "stderr_sha256": "0c9f2c9149c4b97a2d14962a23e6672d856deea18b81a8ec331cf1e69a9e9d74",
+    "navdp_log_sha256": "34311e0c4c683f5a1a217dfc06998446ea61938187ecc2ae16fdefafab2272ed"
+  },
+  "scope_audit": {
+    "collection_tasks_completed_before_cancellation": [0, 1, 2, 3, 4, 6],
+    "collection_tasks_cancelled_in_flight": [7, 8, 9],
+    "collection_tasks_never_started": [10, 11, 12, 13, 14, 15],
+    "construction_summary_started": false,
+    "query_evaluation_started": false,
+    "evaluation_directory_absent": true,
+    "policy_summary_started": false,
+    "independent_verification_started": false
+  },
+  "disposition": {
+    "jobs_cancelled": [15726432, 15726439, 15726447, 15726545, 15726564],
+    "partial_outputs_reused": false,
+    "failed_run_retained_for_audit": true,
+    "next_attempt_requires_fresh_tag_and_full_collection": true
+  },
+  "root_cause": {
+    "classification": "infrastructure_startup_TOCTOU",
+    "explanation": "The launcher checked whether the candidate port was free before loading model weights, but the Flask server bound the port only after model initialization. Another process could claim the port during that interval.",
+    "method_or_data_failure": false
+  },
+  "allowed_amendment": {
+    "scope": "server lifecycle and port allocation only",
+    "certificate_changed": false,
+    "thresholds_changed": false,
+    "arms_changed": false,
+    "episode_or_scene_selection_changed": false,
+    "statistical_protocol_changed": false,
+    "result_feedback_used": false
+  }
+}

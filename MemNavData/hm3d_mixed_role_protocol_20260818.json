@@ -1,0 +1,68 @@
+{
+  "schema_version": "hm3d_consumed_val9_mixed_role_protocol_v1_20260818",
+  "scope": "same-scene cross-domain mixed-role safety extension; not a new scene-disjoint confirmation",
+  "dataset": {
+    "name": "HM3D",
+    "release": "v0.2",
+    "split": "heldout_val_asset_subset",
+    "parent_run": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_heldout_val10_runtime_repair_20260816/hm3d_heldout_val10_rt_20260816T1345Z",
+    "parent_manifest_sha256": "62bc6299203da709e65787c735a531974905f2ab8e940f72e91318914d949c89",
+    "scene_reuse_disclosed": true,
+    "training_free": true,
+    "scenes": [
+      {"rank": 0, "parent_index": 0, "scene_id": "HaxA7YrQdEC"},
+      {"rank": 1, "parent_index": 1, "scene_id": "BHXhpBwSMLh"},
+      {"rank": 2, "parent_index": 2, "scene_id": "SUHsP6z2gcJ"},
+      {"rank": 3, "parent_index": 3, "scene_id": "tQ5s4ShP627"},
+      {"rank": 4, "parent_index": 4, "scene_id": "rsggHU7g7dh"},
+      {"rank": 5, "parent_index": 5, "scene_id": "Qpor2mEya8F"},
+      {"rank": 6, "parent_index": 6, "scene_id": "7UrtFsADwob"},
+      {"rank": 7, "parent_index": 7, "scene_id": "mma8eWq3nNQ"},
+      {"rank": 8, "parent_index": 9, "scene_id": "X4qjx5vquwH"}
+    ]
+  },
+  "history": {
+    "source": "byte-identical saved native Goal-A traces from the parent HM3D evaluation",
+    "rerun_goal_a": false,
+    "causal_actual_online": true,
+    "minimum_runtime_eligible_frame": 39,
+    "end_margin_frames": 16,
+    "maximum_histories_per_scene": 3
+  },
+  "queries": {
+    "one_pair_per_history": true,
+    "novel_max_online_a_covis_exclusive": 0.10,
+    "revisit_online_a_covis_band_inclusive": [0.55, 0.90],
+    "query_geodesic_band_m": [2.0, 9.0],
+    "independent_reset_and_exact_online_a_replay": true,
+    "runtime_role_visibility": "none"
+  },
+  "evaluation": {
+    "arms": [
+      "native",
+      "raw_direct",
+      "raw_fixed_bearing",
+      "geometry_fixed",
+      "certified"
+    ],
+    "success_radius_m": 1.0,
+    "maximum_query_steps": 600,
+    "execution_horizon": 8,
+    "deterministic_plan_seeds": true,
+    "primary_estimands": [
+      "Revisit utility versus native",
+      "Novel interference versus native",
+      "utility-interference tradeoff versus raw_fixed_bearing",
+      "certificate false takeover and exact fallback rates"
+    ]
+  },
+  "guards": {
+    "no_training": true,
+    "no_threshold_tuning": true,
+    "no_query_outcome_filtering": true,
+    "no_role_label_forwarded_to_policy": true,
+    "no_new_scene_generalization_claim": true,
+    "all_constructible_histories_retained_in_frozen_order": true,
+    "construction_precedes_query_rollout": true
+  }
+}

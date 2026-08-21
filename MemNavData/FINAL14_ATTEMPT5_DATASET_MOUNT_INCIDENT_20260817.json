@@ -1,0 +1,45 @@
+{
+  "schema_version": "final14_attempt5_dataset_mount_incident_v1_20260817",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T085812Z_attempt5_portable",
+  "jobs": {
+    "cpu_dependency_preflight": 15889358,
+    "formal_gate_task_0": 15889359,
+    "formal_remaining_array_1_83": 15889360,
+    "policy_summary": 15889361,
+    "independent_verification": 15889362
+  },
+  "preflight": {
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed": "00:01:24",
+    "validated": [
+      "source and dependency receipts",
+      "portable Pi3X proof receipt",
+      "four learned proof checkpoints",
+      "sealed benchmark payload"
+    ],
+    "missing_check": "the source episode parquet must be readable through the exact formal container and read-only dataset overlay"
+  },
+  "gate_failure": {
+    "state": "FAILED",
+    "exit_code": "1:0",
+    "elapsed": "00:03:00",
+    "failure_stage": "first arm input loading before Habitat rollout",
+    "error": "FileNotFoundError for /mp3d_revisit_v0/vln_n1/traj_data/mp3d_2leg/8WUmhLawc2A/episode_0000/data/chunk-000/episode_000000.parquet",
+    "root_cause": "slurm_paper_role_pair_eval.sbatch omitted the frozen PT1 squashfs --overlay argument used by collection and manifest construction",
+    "policy_metrics_written": false,
+    "evaluation_artifacts": [
+      "arm_order.txt",
+      "episode_contract.json",
+      "eval_geometry_fixed.log"
+    ]
+  },
+  "containment": {
+    "remaining_gpu_tasks_released": 0,
+    "summary_ran": false,
+    "verification_ran": false,
+    "downstream_jobs_cancelled": true,
+    "new_success_rate_available": false,
+    "scientific_inputs_changed": false
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "adapter": {
+    "endpoint_stop_radius_m": 0.2,
+    "execution_horizon": 8,
+    "forward_step_m": 0.25,
+    "lookahead_points": 4,
+    "turn_angle_deg": 30.0
+  },
+  "arrival_contract": {
+    "causal_scale_config": {
+      "bias_correction": 1.15,
+      "confidence_quantile": 0.5,
+      "histogram_bins": 60,
+      "maximum_scale": 6.0,
+      "minimum_scale": 0.8,
+      "peak_threshold": 0.3,
+      "pixel_stride": 4
+    },
+    "distance_threshold_m": 0.075,
+    "minimum_causal_stream_frames": 64,
+    "schema_version": "goat_certified_arrival_contract_v1_20260815",
+    "train_report_sha256": "13f265b200f02c877557bdc18a846688274961ddc451ead463dbcb319d528373",
+    "train_verification_sha256": "ffb2576ef25f1a0ff571d66640ec7cddd611417858a35d4e15de1c6ef2ea7dfd",
+    "zero_without_certificate_semantics": "abstain_never_stop"
+  },
+  "base_seed": 20260815,
+  "episodes": [
+    {"episode_id": "8", "scene_id": "h1zeeAwLh9Z"},
+    {"episode_id": "6", "scene_id": "4ok3usBNeis"},
+    {"episode_id": "1", "scene_id": "q5QZSEeHe5g"},
+    {"episode_id": "1", "scene_id": "CrMo8WxCyVb"},
+    {"episode_id": "2", "scene_id": "q3zU7Yy5E5s"},
+    {"episode_id": "9", "scene_id": "bxsVRursffK"},
+    {"episode_id": "9", "scene_id": "yr17PDCnDDW"},
+    {"episode_id": "8", "scene_id": "Dd4bFSTQ8gi"},
+    {"episode_id": "2", "scene_id": "svBbv1Pavdk"},
+    {"episode_id": "6", "scene_id": "a8BtkwhxdRV"},
+    {"episode_id": "9", "scene_id": "XB4GS9ShBRE"},
+    {"episode_id": "7", "scene_id": "zt1RVoi7PcG"},
+    {"episode_id": "2", "scene_id": "BAbdmeyTvMZ"},
+    {"episode_id": "7", "scene_id": "LT9Jq6dN3Ea"},
+    {"episode_id": "0", "scene_id": "qyAac8rV8Zk"},
+    {"episode_id": "1", "scene_id": "VBzV5z6i1WS"},
+    {"episode_id": "6", "scene_id": "7MXmsvcQjpJ"},
+    {"episode_id": "5", "scene_id": "QaLdnwvtxbs"},
+    {"episode_id": "5", "scene_id": "eF36g7L6Z9M"},
+    {"episode_id": "1", "scene_id": "GLAQ4DNUx5U"}
+  ],
+  "excluded_runtime_pilot_manifest_sha256": "652cbe0f731c3b817e9c1e0f5e516ae4f386d74380a7ed06c4910651357b5db5",
+  "is_full_goat_benchmark_score": false,
+  "max_navigation_actions": 600,
+  "method_or_threshold_selection_allowed": false,
+  "navdp_stop_threshold": -0.5,
+  "population": "20 ImageGoal-first episodes from 20 HM3D val_unseen scenes disjoint from the ten-scene runtime pilot",
+  "primary_confirmation_gate": {
+    "maximum_false_certified_stops": 0,
+    "minimum_true_certified_stops": 5,
+    "minimum_true_stop_scenes": 5
+  },
+  "same_observation_resample_limit": 3,
+  "schema_version": "goat_certified_arrival_manifest_v1_20260815",
+  "selection_rule": {
+    "episode": "minimum SHA256(salt|scene_id|episode_id) among ImageGoal-first episodes",
+    "excluded_scenes": "all scenes in the frozen ten-scene runtime-pilot manifest",
+    "scene": "first twenty SHA256(salt|scene_id)-ranked eligible remaining val_unseen scenes",
+    "salt": "goat-certified-arrival-confirmation-v1"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "cancelled_pre_run_attempt": {
+    "evaluation_outcomes_produced": false,
+    "executed_seconds": 0,
+    "job_id": 15749139,
+    "reason": "cluster rejected scontrol release for a user --hold job",
+    "state": "CANCELLED before run"
+  },
+  "formal_submission": {
+    "base_navdp_source": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/certified_relocalization_closed_loop_d3bd281fc374cc80",
+    "base_navdp_source_receipt_sha256": "74001a9e0150c38c599a206fa0f4dd5e1279b9bed5d167119f4d14cb77995e98",
+    "is_goat_navigation_score": false,
+    "job_id": 15750812,
+    "manifest_sha256": "652cbe0f731c3b817e9c1e0f5e516ae4f386d74380a7ed06c4910651357b5db5",
+    "method_or_threshold_selection_allowed": false,
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/goat_benchmark_20260814/navdp_runtime_pilot_20260814T160509Z",
+    "source_bundle": "/scratch/yz11502/Research/source_bundles/goat_navdp_runtime_pilot_b877d20d77a7c863",
+    "source_receipt_sha256": "b877d20d77a7c863b6d2812048f5e5107968e71dd937612aaed3098245270b8a"
+  },
+  "schema_version": "goat_navdp_runtime_pilot_local_submission_receipt_v1_20260815"
+}

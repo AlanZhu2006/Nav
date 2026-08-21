@@ -1,0 +1,63 @@
+{
+  "adapter": {
+    "endpoint_stop_radius_m": 0.2,
+    "execution_horizon": 8,
+    "forward_step_m": 0.25,
+    "lookahead_points": 4,
+    "turn_angle_deg": 30.0
+  },
+  "base_seed": 20260814,
+  "episodes": [
+    {
+      "episode_id": "1",
+      "scene_id": "bCPU9suPUw9"
+    },
+    {
+      "episode_id": "8",
+      "scene_id": "HY1NcmCgn3n"
+    },
+    {
+      "episode_id": "2",
+      "scene_id": "6s7QHgap2fW"
+    },
+    {
+      "episode_id": "3",
+      "scene_id": "y9hTuugGdiq"
+    },
+    {
+      "episode_id": "5",
+      "scene_id": "mv2HUxq3B53"
+    },
+    {
+      "episode_id": "2",
+      "scene_id": "TEEsavR23oF"
+    },
+    {
+      "episode_id": "9",
+      "scene_id": "mL8ThkuaVTM"
+    },
+    {
+      "episode_id": "4",
+      "scene_id": "5cdEh9F2hJL"
+    },
+    {
+      "episode_id": "4",
+      "scene_id": "p53SfW6mjZe"
+    },
+    {
+      "episode_id": "1",
+      "scene_id": "ziup5kvtCCR"
+    }
+  ],
+  "max_navigation_actions": 600,
+  "method_or_threshold_selection_allowed": false,
+  "navdp_stop_threshold": -0.5,
+  "paper_metric_use_prohibited": true,
+  "purpose": "ten-scene first-ImageGoal runtime and action-contract gate; not a GOAT score",
+  "schema_version": "goat_navdp_runtime_pilot_manifest_v1_20260814",
+  "selection_rule": {
+    "episode": "minimum SHA256(salt|scene_id|episode_id) among image-first episodes",
+    "scene": "first ten SHA256(salt|scene_id)-ranked eligible val_unseen scenes",
+    "salt": "goat-runtime-pilot-v1"
+  }
+}

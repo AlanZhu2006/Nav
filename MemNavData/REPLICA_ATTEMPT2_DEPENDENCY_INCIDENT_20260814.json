@@ -1,0 +1,33 @@
+{
+  "schema_version": "replica_formal_local_incident_v1_20260814",
+  "attempt": 2,
+  "run_root": "/home/asus/Research/Nav-graph-blind/.diagnostics/replica_formal_10scene_20260814_attempt2",
+  "source_bundle": "/home/asus/Research/Nav-graph-blind/.diagnostics/source_bundles/replica_formal_ab20892548728fa0",
+  "source_receipt_sha256": "f59cd291b6c249f2e35b96b22e1e47db2855cbb5fdb49f6c771e1c6efab57011",
+  "failure_stage": "NavDP server import before native Goal-A or any query rollout",
+  "exception": "ModuleNotFoundError: No module named 'depth_anything'",
+  "root_cause": "The immutable source bundle copied only top-level NavDP Python files and omitted NavDP/baselines/navdp/depth_anything.",
+  "navigation_outcome_read": false,
+  "query_outcome_read": false,
+  "policy_rollouts_started": 0,
+  "source_generation_completed_before_failure": true,
+  "source_generation": {
+    "requested_histories": 40,
+    "generated_histories": 12,
+    "generated_scenes": [
+      "hotel_0",
+      "office_4",
+      "room_0"
+    ],
+    "fresh_primary_histories_excluding_room_0": 8,
+    "fresh_primary_scene_count_excluding_room_0": 2,
+    "frozen_primary_target_histories": 20,
+    "frozen_primary_target_scenes": 8
+  },
+  "scientific_interpretation": "No method effect was observed. The dependency failure is an infrastructure incident. The source attrition is an outcome-blind benchmark-constructibility finding and must be resolved or disclosed before a formal Replica claim.",
+  "remediation": [
+    "Recursively include the bundled depth_anything package in future immutable source bundles.",
+    "Diagnose Goal-A-only source constructibility under the unchanged first-leg contract before spending GPU time on query evaluation.",
+    "Do not reuse or inspect query outcomes from this attempt; none exist."
+  ]
+}

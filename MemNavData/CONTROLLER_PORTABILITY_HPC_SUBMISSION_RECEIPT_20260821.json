@@ -1,0 +1,59 @@
+{
+  "schema": "cec_controller_portability_hpc_submission_v1",
+  "date": "2026-08-21",
+  "status": "environment_verified_smoke_pending_gpu_qos",
+  "interpretation": "Latency and failure-mode pilot only; no formal controller SR claim is authorized.",
+  "source": {
+    "root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/cec_controller_portability_a9ec7146bce7",
+    "receipt": "source_inputs.sha256",
+    "receipt_sha256": "a9ec7146bce72da8c5d2df413ab2292c0cab2caca0d861bf41dbedee416ff92c",
+    "tar_sha256": "c863328ccebb040338717517eea76c22b70df33f59495977b8c748248ee46c7e"
+  },
+  "checkpoints": {
+    "root": "/scratch/yz11502/Research/Nav-axis-uturn-checkpoints/controller_portability_084a3f1fe0f8",
+    "receipt_sha256": "084a3f1fe0f8be2975d6927a5c3d45ddfae7ec3717a99c69b34c54598fc06b9d",
+    "remote_full_hash_verification": true
+  },
+  "benchmark": {
+    "root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T115533Z_attempt7_handoff/benchmarks/natural_direction",
+    "manifest_sha256": "7468703a9efbb10e801ffdd226911f696a30fa9432ef9ab486d3134f6e40fe6a",
+    "smoke_history_index": 0,
+    "query_population": "mixed Novel/Revisit",
+    "runtime_role_visible": false
+  },
+  "dependency_receipt": {
+    "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/shared_online_double_revisit_fresh_20260813/double_revisit_fresh40_20260813T200121Z/dependency_receipt.json",
+    "sha256": "4eb0ca6479a26f8e04f85a31d906cee4e68b1785f66cfd3ac23bf65424d36e5e"
+  },
+  "source_overlay": {
+    "path": "/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf",
+    "bytes": 128854888448
+  },
+  "environment_job": {
+    "job_id": "16085372",
+    "state": "COMPLETED",
+    "elapsed": "00:11:32",
+    "exit_code": "0:0",
+    "environment_receipt_verified": true,
+    "partition": "cpu_short",
+    "time_limit": "01:00:00",
+    "environment_root": "/scratch/yz11502/Research/Nav-axis-uturn-envs/controller_portability_a9ec7146bce7_v1"
+  },
+  "gpu_smoke_job": {
+    "job_id": "16085641_[0]",
+    "state_at_receipt_update": "PENDING",
+    "pending_reason": "QOSGrpGRES",
+    "pending_reason_history": [
+      "QOSMaxGRESPerUser",
+      "QOSGrpGRES"
+    ],
+    "dependency": "afterok:16085372",
+    "partitions": ["h100_tandon", "h200_public", "a100_tandon"],
+    "qos": "gpu48",
+    "time_limit": "01:00:00",
+    "max_steps_per_query": 80,
+    "controllers": ["navdp", "vint", "iplanner", "viplanner"],
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/cec_controller_portability_20260821/pilot_a9ec7146bce7"
+  },
+  "expansion_gate": "Submit history indices 1,4,7,8,11,13,14 only after index 0 completes and its independent audit verifies all per-action proof, fallback, sensor, seed, context-shadow and latency contracts."
+}

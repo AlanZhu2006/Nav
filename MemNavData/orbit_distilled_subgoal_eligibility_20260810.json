@@ -1,0 +1,22 @@
+{
+  "excluded_group_ids": [
+    "train/Pm6F8kyY3z2/episode_0001/goal_b_t0"
+  ],
+  "excluded_scenes": [
+    "5ZKStnWn8Zo",
+    "5q7pvUzZiYa",
+    "7y3sRwLe3Va",
+    "B6ByNegPMKs",
+    "Uxmj2M2itWa",
+    "VFuaQ6m2Qom",
+    "Vt2qJdWjCF2",
+    "VzqfbhrpDEA",
+    "XcA2TqTSSAj"
+  ],
+  "expected_selected_physical_group_count": 123,
+  "expected_selected_scene_count": 31,
+  "input_physical_group_count": 160,
+  "input_scene_count": 40,
+  "schema_version": "orbit_distilled_subgoal_eligibility_v1",
+  "scope": "pre-model complete-pair eligibility: exclude scenes with cross-island Goal-B swaps and one physical state whose C8 try_step basis changes floors"
+}

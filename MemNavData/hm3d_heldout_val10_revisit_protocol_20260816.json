@@ -1,0 +1,94 @@
+{
+  "schema_version": "hm3d_heldout_val10_causal_revisit_protocol_v1_20260816",
+  "scope": "frozen non-MP3D external transfer evaluation",
+  "dataset": {
+    "name": "HM3D",
+    "release": "v0.2",
+    "split": "heldout_val_asset_subset",
+    "source_archive": "hm3d-val-habitat-v0.2.tar",
+    "archive_scene_count": 100,
+    "prior_consumed_scene_count": 36,
+    "unconsumed_scene_count_before_selection": 64,
+    "scene_count": 10,
+    "selection_rule": "ascending archive index after subtracting every historically consumed HM3D scene; take first ten",
+    "selection_audit": "hm3d_consumed_scene_audit_20260816.json",
+    "selection_audit_sha256": "ab2b12dbea80190c6b85bb27e27ef3ad096b8f1fbefc04b6aae5324c1274713e",
+    "scene_overlap_with_consumed_hm3d_evaluations": 0,
+    "scene_overlap_with_project_mp3d": 0
+  },
+  "scenes": [
+    {"index": 0, "directory": "00801-HaxA7YrQdEC", "scene_id": "HaxA7YrQdEC"},
+    {"index": 1, "directory": "00804-BHXhpBwSMLh", "scene_id": "BHXhpBwSMLh"},
+    {"index": 2, "directory": "00805-SUHsP6z2gcJ", "scene_id": "SUHsP6z2gcJ"},
+    {"index": 3, "directory": "00806-tQ5s4ShP627", "scene_id": "tQ5s4ShP627"},
+    {"index": 4, "directory": "00807-rsggHU7g7dh", "scene_id": "rsggHU7g7dh"},
+    {"index": 5, "directory": "00809-Qpor2mEya8F", "scene_id": "Qpor2mEya8F"},
+    {"index": 6, "directory": "00811-7UrtFsADwob", "scene_id": "7UrtFsADwob"},
+    {"index": 7, "directory": "00812-mma8eWq3nNQ", "scene_id": "mma8eWq3nNQ"},
+    {"index": 8, "directory": "00816-q3hn1WQ12rz", "scene_id": "q3hn1WQ12rz"},
+    {"index": 9, "directory": "00817-X4qjx5vquwH", "scene_id": "X4qjx5vquwH"}
+  ],
+  "generation": {
+    "base_seed": 2026081600,
+    "episodes_per_scene": 4,
+    "episode_attempt_multiplier": 60,
+    "legs": 2,
+    "distance_band_m": [3.0, 9.0],
+    "revisit_covisibility_band": [0.2, 1.0],
+    "goal_heading_max_deg": 45.0,
+    "goal_jitter_radius_m": 1.5,
+    "long_term_fraction": 0.7,
+    "minimum_recall_gap_frames": 32,
+    "agent_radius_m": 0.3,
+    "maximum_frame_turn_deg": 15.0
+  },
+  "evaluation": {
+    "base_seed": 2026081602,
+    "max_steps_per_leg": 500,
+    "success_distance_m": 1.0,
+    "execution_horizon": 8,
+    "goal_a_trace": "one frozen native NavDP rollout replayed byte-identically by every arm",
+    "intention_to_treat": true,
+    "runtime_role_label_visible": false,
+    "arms": [
+      "native",
+      "raw_fixed_oracle_role",
+      "geometry_router",
+      "certified_relocalization"
+    ],
+    "primary_contrasts": [
+      "certified_relocalization_minus_native",
+      "certified_relocalization_minus_raw_fixed_oracle_role"
+    ],
+    "metrics": [
+      "joint_goal_b_success",
+      "goal_b_success_given_shared_goal_a_success",
+      "paired_gain_loss",
+      "exact_mcnemar_p",
+      "scene_cluster_bootstrap_risk_difference",
+      "certificate_takeover_coverage",
+      "exact_fallback_coverage"
+    ]
+  },
+  "analysis": {
+    "unit": "episode",
+    "pairing_key": ["scene_id", "episode_id"],
+    "cluster_unit": "scene_id",
+    "cluster_bootstrap_seed": 2026081603,
+    "cluster_bootstrap_resamples": 200000,
+    "mcnemar": "two-sided exact binomial on discordant pairs",
+    "report_unconditional_joint_and_conditional_b": true,
+    "no_multiplicity_adjusted_method_selection": true
+  },
+  "frozen_guards": {
+    "no_mp3d_evaluation": true,
+    "no_scene_or_episode_filtering_after_outcomes": true,
+    "no_threshold_tuning_on_hm3d_heldout_val10": true,
+    "selected_scenes_disjoint_from_all_prior_hm3d_outcomes": true,
+    "goal_a_failures_retained": true,
+    "goal_b_not_executed_after_goal_a_failure": true,
+    "certificate_thresholds_unchanged_from_mp3d_development": true,
+    "raw_fixed_arm_is_explicitly_role_oracle_and_not_deployable": true,
+    "public_benchmark_score_claim": false
+  }
+}

@@ -87,12 +87,15 @@ Jetson 四个 live payload：
 | 文件 | SHA-256 |
 | --- | --- |
 | `preflight_offboard.sh` | `770fe4eb205b6054d6ab50b9bff7fd12b5b587f8eefd1d7fe9bad6e3db8b1d0d` |
-| `run_offboard_stack.sh` | `ad4c3329a67f6b9ce1d5ab0f205f04b97c6758a41fd97ffb0fdcc603fb99a694` |
+| `run_offboard_stack.sh` | `9f363b7bd5aebe783b92b7150dc2afe39580de4e8181918751167784f63f9f24` |
 | `run_policy_tunnel.sh` | `eb65fb3c88c0976b17ddc87ee99e6481e6d4d0c718cc7121630446f76006c2c3` |
 | `stop_offboard_stack.sh` | `e6b239f1cd2c51d59bd09c57348e037697a7bd4de47c0c9316860c608ed798c3` |
+| `fullmono.sh` | `050ba1a45fc4d8d91dfb520bc002654f607bf13634b10373ec7db9afce1420a1` |
 
-四文件内容地址仍为
-`d656b9d9ae30de73f1d70a52b0150318f3dda238d6631dbae42f0a98dec973c2`。
+原始四文件内容地址 release
+`d656b9d9ae30de73f1d70a52b0150318f3dda238d6631dbae42f0a98dec973c2`
+仍作为 rollback 保留；当前 `run_offboard_stack.sh` 只新增 fail-closed 相机存活
+检查，`fullmono.sh` 只负责编排，不改变导航决策或运动授权。
 
 ## 尚未完成，不能误报
 
@@ -107,6 +110,23 @@ Jetson 四个 live payload：
 
 ## 下一步唯一安全入口
 
-现场测量 D435i 光心离地高度并设置 `CEC_CAMERA_HEIGHT_M`，然后严格按
-独立仓库 `RUNBOOK.md` 先启动上位机和 camera-only disabled adapter。所有
-静态 receipt 与故障注入通过后，才允许启动 Go2 bridge。
+现场估测的 D435i 光心离地高度为 `0.42 m`；正式实验前仍需在标准站立姿态下
+精确复测。双机编排现由 Jetson 统一发起：
+
+```bash
+cd /home/nvidia/twork/NavDP
+bash deployment/go2/offboard/fullmono.sh start --with-rviz
+bash deployment/go2/offboard/fullmono.sh status
+bash deployment/go2/offboard/fullmono.sh stop
+```
+
+`start` 会通过免密 SSH 启动或复用 4090 的 Full-Mono 策略栈，再启动 Jetson
+隧道、D435i 与禁用态 adapter。默认不启动 Go2 bridge；即使显式增加
+`--with-go2`，adapter 仍保持锁定，运动必须在现场通过独立 ROS service 授权。
+所有静态 receipt 与故障注入通过后，才允许执行该授权。
+
+实际无运动启动审计发现当前 Jetson 未枚举到 D435i，旧 launcher 会留下“服务
+已启动”的假象。`run_offboard_stack.sh` 已补充真实 `CameraInfo` readiness gate：
+相机缺失时打印 `No device detected`、不启动 adapter，并自动回滚 Jetson 和
+4090 两端。该失败路径已实测，两端 tmux session 与 8888/18888/18889 监听均无
+残留；因此当前现场阻塞是重新接通 D435i，而不是 NavDP、SSH 或双机编排。

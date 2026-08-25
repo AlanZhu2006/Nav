@@ -1,12 +1,12 @@
 # Nav / MemNav 项目权威总账与 Git release（2026-08-25）
 
-更新时间：2026-08-25 17:07（Asia/Shanghai）
+更新时间：2026-08-25 19:06（Asia/Shanghai）
 
 目标远端：`AlanZhu2006/Nav`
 
 目标分支：`feat/memnav-graph-blind-20260806`
 
-本次 release 基线：`cad118a`（`Harden HM3D runtime dependency closure`）
+当前已推送基线：`fa44c44`（`Release full-mono CEC lifelong and deployment stack`）
 
 本文是本次 Git 提交的导航入口。它统一描述当前方法、记忆实现、正式结果、负结果、代码
 入口、真机边界、HPC 状态与下一步。若数字冲突，优先级始终是：
@@ -255,6 +255,11 @@ fallback，不证明 Novel 本身被解决。
 - `begin_revisit` 原子重建 NavDP 短期 FIFO，并在真正 query 起点后才冻结 goal session；
 - query/recording 可以多次切换而保持长期历史。
 
+这里必须区分两个代码层级：Nav 仓库保留论文/仿真侧的研究实现；当前真机权威运行栈维护在
+独立仓库 `/home/asus/Research/Memnav_Realworld`。后者已经进入 protocol-v3、两次运行的
+sealed survey/formal lifecycle 和 direct-bearing-v2，不能把 Nav 内较早的 hub 副本当作
+Jetson/RTX 部署真值。
+
 ### 6.2 Full-Mono lifelong/shared-C
 
 - result-blind A/B 构造、actual mono factual-B collection、prefix construction；
@@ -307,11 +312,17 @@ fallback，不证明 Novel 本身被解决。
 | controller contract/proxy | `MemNavData/controller_portability_contract.py`, `controller_portability_proxy.py` |
 | 真机 RTX hub | `MemNavData/realworld_cec_hub.py` |
 | 真机 goal candidate scorer | `MemNavData/score_realworld_revisit_goal.py` |
+| 尺度无关到达 shadow 合约 | `MemNavData/realworld_visual_convergence_contract.py` |
+| 真机到达物理标定协议 | `MemNavData/REALWORLD_SCALE_FREE_ARRIVAL_CALIBRATION_PROTOCOL_20260825.md` |
 | HPC 操作手册 | `MemNavData/HPC_HARDENING_20260821.md` |
+
+真机运行时的权威入口与状态则在 sibling repo：
+`/home/asus/Research/Memnav_Realworld/CURRENT_STATUS.md` 和
+`/home/asus/Research/Memnav_Realworld/TWO_PASS_REVISIT_RUNBOOK_20260825.md`。
 
 ## 8. 当前 HPC 状态快照
 
-审计时间：2026-08-25 05:07 EDT / 17:07 Asia/Shanghai。
+审计时间：2026-08-25 07:05 EDT / 19:05 Asia/Shanghai。
 
 ### 8.1 HM3D actual-full-mono shared-C
 
@@ -319,10 +330,16 @@ fallback，不证明 Novel 本身被解决。
 - result-blind sealed population：8 histories / 6 scenes；目标 24 / 15，明确 underpowered；
 - 8 条 factual-C collection 均正常完成；C success `5/8`，覆盖 4 scenes；
 - 该 `5/8` 只是决定谁能进入共同 B2 起点，不是 CEC-vs-baseline SR；
-- 已提交 immutable bundle 的 collection array 错误使用 `0-259`；截至快照完成 137 indices，
-  其中 8 个有效，其余为空任务；`137-259` 等待 `QOSGrpGRES`；
+- 已提交 immutable bundle 的 collection array 错误使用 `0-259`；截至快照已越过约 199 个
+  indices，其中只有冻结 population 内的 8 个是有效工作，其余为空任务；`199-259` 仍等待
+  `Resources`；
 - seal、true-stack smoke、B2 evaluation、aggregate 和 verifier 均尚未开始；
 - 因此当前没有新的 multileg SR。
+
+统计能力已经可以先验判定：factual C 只有 `5/8` 成功，所以严格 shared-C B2 最大
+`N=5`。即使 all-prior 相对 initial-leg-only 达到完美 `+5/-0`，exact two-sided McNemar 也
+只能到 `p=.0625`。因此这批运行只能作为共享物理前缀的机制 pilot，不能再称作 formal
+confirmation；继续完成的价值是验证因果实现和估计效应方向，而不是追求显著性。
 
 Git 中的 deferred launcher 已修复为精确 sealed-population array，但不会伪装成已经改变了
 远端旧 immutable job。
@@ -346,10 +363,26 @@ Git 中的 deferred launcher 已修复为精确 sealed-population array，但不
 - reset-required、watchdog 和 fail-closed transport contract。
 
 Jetson/Go2 下位机正式实现维护在独立 `Memnav_Realworld` 仓库，本次 Nav commit 不把它复制
-回来。当前真机已经验证 transport、disabled shadow、深度事务和 Go2 转向死区修复，但尚未
-建立完整自主 Revisit SR。最近的自主轨迹经过高共视目标附近却未可靠自动 STOP；单目 PnP
-metric translation 曾低估真实距离约 7.9 倍，因此现在只允许其 bearing 获得控制权，metric
-norm 只写诊断，不能授权 STOP。
+回来。当前真机已经验证 transport、disabled shadow、深度事务和 Go2 转向死区修复，但三次
+powered trial 都仍是失败，尚未建立一个完整自主 ImageGoal 到达：
+
+- Q->R CEC Revisit：移动 `3.01 m`，以 path-length safety abort 结束；
+- R->Q native Novel：旧速度门控导致左右 hunting，之后已修复控制合约；
+- S->Q full-mono：真实最近距离 `0.993 m`，经过高共视窗口但没有可靠到达判定，最终
+  operator stop。
+
+S->Q 的 frames 325--328 虽通过 LightGlue/LingBot-depth/PnP chain，预测距离最低却只有
+`0.125 m`，相对独立物理最近距离至少低估 `7.9x`。因此现在只允许 PnP bearing 获得控制权，
+metric norm 只写诊断，不能授权 STOP。
+
+新增的只读 visual-convergence audit 扫描了 431 帧，仅 15 帧通过已有 two-view precheck；
+最强 frame 326 有 331 matches、299 fundamental inliers、query/reference hull coverage
+`0.712/0.398` 和 normalized identity flow `0.0613`，但仍对应物理未到达。这说明“高共视”
+也不能从单条失败轨迹后调成 STOP 阈值。
+
+本次新增的 pure contract 只消费 proof-conditioned image-space residual，并要求
+`request_hold -> K 个连续静止观测 -> shadow_stop`。它明确不读取 metric translation，且
+`runtime_stop_authorized` 永远为 false；没有做任何机器人运行时或电机权限变更。
 
 准确状态是“软件框架和安全合约基本齐全，自动视觉收敛/到达判定仍是物理闭环缺口”，不能
 写成真机实验已完成。
@@ -385,16 +418,18 @@ norm 只写诊断，不能授权 STOP。
 
 ## 12. 下一步优先级
 
-### P0：完成 shared-C B2 因果隔离
-
-处理旧 job 的多余空索引，完成 seal/evaluation/verifier。唯一问题是：在严格相同 A/B/C
-物理前缀后，`all_prior` 是否优于 `initial_leg_only`。若最终只有 5 histories / 4 scenes，
-只能报告 pilot，不能包装成确认。
-
-### P1：完成真机视觉收敛与 STOP
+### P0：物理标定尺度无关的真机到达证据
 
 保持 scale-free 原则，构造独立的连续多帧 visual-convergence proof；bearing 负责接近/对齐，
-STOP 不读取未经验证的单目 metric norm。先 disabled shadow，再系绳低速，最后才统计 SR。
+STOP 不读取未经验证的单目 metric norm。先在 3--4 个地点按预声明距离/朝向网格采集物理
+标签；calibration/confirmation 按地点隔离，冻结 rule SHA 后才能读取 confirmation。之后依次
+进入 disabled shadow、系绳低速和正式 SR。当前禁止直接接 runtime STOP。
+
+### P1：完成 shared-C B2 因果 pilot
+
+让旧 job 的多余空索引自然结束，完成 seal/evaluation/verifier。唯一问题是：在严格相同
+A/B/C 物理前缀后，`all_prior` 是否优于 `initial_leg_only`。由于最大 `N=5`，无论结果多好
+都只报告 pilot；若方向值得继续，再冻结一个有统计能力的新 population，而不是复用本批。
 
 ### P2：论文消融与效率
 
@@ -414,8 +449,15 @@ STOP 不读取未经验证的单目 metric norm。先 disabled shadow，再系�
 
 - 修改/新增 Python 全部 `py_compile` 通过；
 - 修改/新增 shell 与 sbatch 全部 `bash -n` 通过；
-- MemNav 合约：147 tests passed；
+- 此前 release 的 MemNav 合约：147 tests passed；
 - Habitat 构造/聚合：21 tests passed；
+- 本次 scale-free arrival contract 与真机 hub focused regression：`37 passed`；
+- 扩展的 15-suite pure-contract regression：`171 passed`；Habitat-linked
+  `test_paper_single_revisit_contract.py` 在当前 `memnav` 环境因缺少既有 `quaternion` 依赖未
+  进入 collection，不把它误记为断言失败或本次回归通过；
+- 431-row 真实 audit CSV schema smoke：431 行兼容、15 个 frozen precheck pass、15 个被
+  deliberately broad smoke rule 读通，`metric_translation_consumed=false`；该 broad rule
+  只验证数据接口，不是冻结阈值或方法结果；
 - `git diff --check` 通过；
 - 未发现私钥、GitHub token 或设备登录 PIN。
 

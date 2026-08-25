@@ -29,6 +29,7 @@ path to NavDP.
 - [Final14 formal result](MemNavData/FINAL14_CEC_PI3X_FORMAL_RESULT_20260818.md)
 - [Fresh HM3D protocol](MemNavData/HM3D_FRESH_FULLMONO_MIXED_ROLE_PROTOCOL_20260820.md)
 - [Real-world deployment guide](MemNavData/REALWORLD_GO2_FULLMONO_DEPLOYMENT_20260820.md)
+- [Scale-free real-world arrival calibration](MemNavData/REALWORLD_SCALE_FREE_ARRIVAL_CALIBRATION_PROTOCOL_20260825.md)
 - [HPC operational hardening](MemNavData/HPC_HARDENING_20260821.md)
 
 ## Main implementation
@@ -40,7 +41,11 @@ path to NavDP.
   geometry contract.
 - `MemNavData/monocular_depth_runtime.py`: causal first-40 monocular scale
   transaction.
-- `MemNavData/realworld_cec_hub.py`: two-phase recording/query control plane.
+- `MemNavData/realworld_cec_hub.py`: research-side recording/query control
+  plane; the authoritative Jetson/RTX deployment is maintained in the
+  separate `AlanZhu2006/Memnav_Realworld` repository.
+- `MemNavData/realworld_visual_convergence_contract.py`: fail-closed,
+  shadow-only scale-free arrival evidence contract.
 
 No model weights, scene assets, generated rollouts, local diagnostics, or
 robot credentials are stored in this repository.

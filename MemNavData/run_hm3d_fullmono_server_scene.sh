@@ -3,7 +3,7 @@
 set -euo pipefail
 umask 0022
 
-MODE=${MODE:?set collect, smoke, or eval}
+MODE=${MODE:?set collect, smoke, eval, or lifelong_b}
 TASK_ROOT=${TASK_ROOT:?set immutable task root}
 BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT:?set verified Final14 mono source root}
 RUN_ROOT=${RUN_ROOT:?set isolated run root}
@@ -19,7 +19,8 @@ EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA:?set base receipt sha}
 RUNTIME_ATTEMPT=${RUNTIME_ATTEMPT:-}
 RESUME_INCOMPLETE=${RESUME_INCOMPLETE:-0}
 
-[[ "${MODE}" == collect || "${MODE}" == smoke || "${MODE}" == eval ]] || {
+[[ "${MODE}" == collect || "${MODE}" == smoke || "${MODE}" == eval \
+   || "${MODE}" == lifelong_b ]] || {
   echo "invalid MODE=${MODE}" >&2; exit 2; }
 [[ "${SCENE_INDEX}" =~ ^[0-9]+$ ]] || { echo "bad scene index" >&2; exit 2; }
 [[ "${RESUME_INCOMPLETE}" =~ ^[01]$ ]] || {
@@ -28,11 +29,19 @@ if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
   [[ "${RUNTIME_ATTEMPT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
     echo "invalid runtime attempt" >&2; exit 2; }
 fi
-scene_count=$(${MEMNAV_PY} - "${PROTOCOL}" <<'PY'
+if [[ "${MODE}" == lifelong_b ]]; then
+  scene_count=$(${MEMNAV_PY} - "${PARENT_MANIFEST}" <<'PY'
+import json,sys
+print(len(json.load(open(sys.argv[1]))["scenes"]))
+PY
+  )
+else
+  scene_count=$(${MEMNAV_PY} - "${PROTOCOL}" <<'PY'
 import json,sys
 print(len(json.load(open(sys.argv[1]))["dataset"]["scenes"]))
 PY
-)
+  )
+fi
 (( SCENE_INDEX >= 0 && SCENE_INDEX < scene_count )) || {
   echo "scene index ${SCENE_INDEX} outside 0..$((scene_count-1))" >&2; exit 2; }
 [[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
@@ -74,7 +83,7 @@ exec > >(tee "${task_run}/run.log") 2>&1
 # The selected prefix is sealed only after all pre-query construction tasks.
 # Formal array elements outside that prefix complete without loading models.
 FORMAL_INDICES=
-if [[ "${MODE}" == eval ]]; then
+if [[ "${MODE}" == eval || "${MODE}" == lifelong_b ]]; then
   BENCH_ROOT=${BENCH_ROOT:?set sealed natural-direction benchmark}
   manifest=${BENCH_ROOT}/manifest.json
   FORMAL_INDICES=$(${MEMNAV_PY} - "${manifest}" "${SCENE_INDEX}" <<'PY'
@@ -95,6 +104,30 @@ fi
 HAB_SITE=$(${HAB_PY} -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
 HAB_PYTHONPATH=${HAB_SITE}/pip/_vendor
 PYTHONPATH_VALUE=${TASK_ROOT}:${TASK_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
+REQUESTS_INIT=${HAB_PYTHONPATH}/requests/__init__.py
+REQUESTS_VERSION=${HAB_PYTHONPATH}/requests/__version__.py
+[[ -r "${REQUESTS_INIT}" && -r "${REQUESTS_VERSION}" ]] || {
+  echo "missing Habitat vendored requests dependency" >&2; exit 2; }
+if [[ -n "${EXPECTED_HAB_REQUESTS_VERSION:-}" ]]; then
+  : "${EXPECTED_HAB_REQUESTS_INIT_BYTES:?}" \
+    "${EXPECTED_HAB_REQUESTS_INIT_SHA:?}" \
+    "${EXPECTED_HAB_REQUESTS_VERSION_BYTES:?}" \
+    "${EXPECTED_HAB_REQUESTS_VERSION_SHA:?}"
+  [[ "$(stat -c '%s' "${REQUESTS_INIT}")" == \
+     "${EXPECTED_HAB_REQUESTS_INIT_BYTES}" ]]
+  [[ "$(sha256sum "${REQUESTS_INIT}" | awk '{print $1}')" == \
+     "${EXPECTED_HAB_REQUESTS_INIT_SHA}" ]]
+  [[ "$(stat -c '%s' "${REQUESTS_VERSION}")" == \
+     "${EXPECTED_HAB_REQUESTS_VERSION_BYTES}" ]]
+  [[ "$(sha256sum "${REQUESTS_VERSION}" | awk '{print $1}')" == \
+     "${EXPECTED_HAB_REQUESTS_VERSION_SHA}" ]]
+  env PYTHONPATH="${HAB_PYTHONPATH}" "${HAB_PY}" -c \
+    'import requests,sys; assert requests.__version__ == sys.argv[1]; assert "/pip/_vendor/requests/" in requests.__file__' \
+    "${EXPECTED_HAB_REQUESTS_VERSION}"
+else
+  env PYTHONPATH="${HAB_PYTHONPATH}" "${HAB_PY}" -c \
+    'import requests; assert "/pip/_vendor/requests/" in requests.__file__'
+fi
 
 port_key=$(( (${SLURM_JOB_ID:-1000} + SCENE_INDEX * 47) % 14000 ))
 MEMNAV_PORT=${MEMNAV_PORT:-$((25000 + port_key))}
@@ -174,6 +207,24 @@ if [[ "${MODE}" == collect ]]; then
   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
     "${HAB_PY}" -u "${collector[@]}" \
       >"${task_run}/logs/collector.log" 2>&1
+elif [[ "${MODE}" == lifelong_b ]]; then
+  BENCH_ROOT=${BENCH_ROOT:?set sealed lifelong A/B role-pair benchmark}
+  manifest=${BENCH_ROOT}/manifest.json
+  expected_manifest_sha=$(sha256sum "${manifest}" | awk '{print $1}')
+  MAX_STEPS=${MAX_STEPS:-600}
+  [[ "${MAX_STEPS}" -eq 600 ]] || { echo "formal B max steps changed" >&2; exit 2; }
+  for history_index in ${FORMAL_INDICES}; do
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
+      "${HAB_PY}" -u \
+      "${TASK_ROOT}/MemNavData/collect_hm3d_fullmono_lifelong_b.py" \
+        --source-root "${TASK_ROOT}" --run-root "${RUN_ROOT}" \
+        --protocol "${PROTOCOL}" --bench-root "${BENCH_ROOT}" \
+        --expected-manifest-sha256 "${expected_manifest_sha}" \
+        --history-index "${history_index}" --hab-python "${HAB_PY}" \
+        --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}" \
+        --max-steps "${MAX_STEPS}" \
+        >"${task_run}/logs/factual_b_${history_index}.log" 2>&1
+  done
 else
   BENCH_ROOT=${BENCH_ROOT:?set sealed natural-direction benchmark}
   manifest=${BENCH_ROOT}/manifest.json

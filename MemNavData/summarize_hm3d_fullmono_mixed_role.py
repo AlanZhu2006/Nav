@@ -112,15 +112,23 @@ def load_records(
                     ),
                     "runtime_failure_plans": int(row["runtime_failure_plans"]),
                     "monocular_receipt_plans": int(row["monocular_receipt_plans"]),
-                    "initial_path_direction_deg": float(
-                        query_metadata[role][
+                    # Direction strata are defined only for Novel queries in
+                    # the fresh manifest; Revisit queries carry the support
+                    # schema instead (first exercised 2026-08-22 -- the
+                    # original summary never ran due to the afterok deadlock).
+                    "initial_path_direction_deg": (
+                        float(query_metadata[role][
                             "initial_path_direction_relative_to_a_end_deg"
-                        ]
+                        ])
+                        if "initial_path_direction_relative_to_a_end_deg"
+                        in query_metadata[role] else None
                     ),
-                    "initial_path_direction_stratum": direction_stratum(
-                        query_metadata[role][
+                    "initial_path_direction_stratum": (
+                        direction_stratum(query_metadata[role][
                             "initial_path_direction_relative_to_a_end_deg"
-                        ]
+                        ])
+                        if "initial_path_direction_relative_to_a_end_deg"
+                        in query_metadata[role] else None
                     ),
                 })
     require(len(records) == len(manifest["episodes"]) * len(ARMS) * 2,

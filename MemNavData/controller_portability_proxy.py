@@ -47,14 +47,22 @@ FORBIDDEN_RUNTIME_FIELDS = frozenset({
 })
 EXPECTED_ALGO = {
     "vint": "vint",
+    "gnm": "gnm",
+    "nomad": "nomad",
     "iplanner": "iplanner",
     "viplanner": "viplanner",
 }
 REQUIRED_CHECKPOINT_LABELS = {
     "vint": frozenset({"vint"}),
+    "gnm": frozenset({"gnm"}),
+    "nomad": frozenset({"nomad"}),
     "iplanner": frozenset({"iplanner"}),
     "viplanner": frozenset({"planner", "mask2former"}),
 }
+# Controllers whose native server keeps a short causal RGB context (a
+# memory_queue of the last few frames) that must be shadow-advanced via
+# /observation_step whenever another controller owns the current action.
+OBSERVATION_STEP_CONTROLLERS = frozenset({"vint", "gnm", "nomad"})
 
 
 def sha256_file(path: Path) -> str:
@@ -178,12 +186,15 @@ def _validate_cec_takeover(
         raise ValueError("CEC selected anchor must be non-negative")
     if adapter == "verified_anchor_imagegoal":
         if form.get("goal_source") != "certified_history_anchor":
-            raise ValueError("ViNT takeover goal must be a certified history anchor")
+            raise ValueError(
+                "verified_anchor_imagegoal takeover goal must be a "
+                "certified history anchor")
         advertised = _validate_sha256(
             form.get("cec_anchor_sha256"), "CEC anchor")
         actual = hashlib.sha256(files["goal"][1]).hexdigest()
         if actual != advertised:
-            raise ValueError("ViNT goal bytes do not match the certified anchor")
+            raise ValueError(
+                "goal bytes do not match the certified anchor")
     return proof_sha
 
 
@@ -371,21 +382,26 @@ class ControllerPortabilityProxy:
         files: Mapping[str, tuple[str, bytes, str]],
         form: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Advance only ViNT's causal short context during shared fallback."""
-        if self.spec.key != "vint":
-            raise ValueError("observation_step is available only for ViNT")
+        """Advance only a short-context controller's causal RGB history
+        during shared fallback (ViNT/GNM/NoMaD keep a memory_queue of the
+        last few frames that must stay causal even while it is not deciding
+        the action)."""
+        if self.spec.key not in OBSERVATION_STEP_CONTROLLERS:
+            raise ValueError(
+                f"observation_step is not available for {self.spec.key!r}")
         if self.config.comparison.protocol != CEC_PROOF_HYBRID:
             raise ValueError("observation_step requires the CEC proof protocol")
         _reject_privileged_fields(form)
         if set(files) != {"image"}:
-            raise ValueError("ViNT observation_step requires exactly one image")
+            raise ValueError("observation_step requires exactly one image")
         result = self._post(
             "observation_step", files=dict(files), data=dict(form))
-        if result.get("algo") != "vint" or result.get("observed") is not True:
-            raise ValueError("ViNT observation_step returned the wrong identity")
+        expected_algo = EXPECTED_ALGO[self.spec.key]
+        if result.get("algo") != expected_algo or result.get("observed") is not True:
+            raise ValueError("observation_step returned the wrong identity")
         self._observation_count += 1
         result["portability_receipt"] = self._receipt(
-            endpoint="observation_step", upstream_algo="vint")
+            endpoint="observation_step", upstream_algo=expected_algo)
         return result
 
 

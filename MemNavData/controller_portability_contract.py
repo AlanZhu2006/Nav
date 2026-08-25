@@ -130,6 +130,34 @@ CONTROLLERS: Mapping[str, ControllerSpec] = {
         exact_imagegoal_fallback=True,
         cec_accept_adapter="verified_anchor_imagegoal",
     ),
+    "gnm": ControllerSpec(
+        key="gnm",
+        display_name="GNM",
+        task_interfaces=frozenset({"imagegoal", "nogoal"}),
+        required_observations=frozenset({"rgb"}),
+        local_path="NavDP/baselines/gnm",
+        official_repository=(
+            "https://github.com/robodhruv/visualnav-transformer"),
+        official_commit="dca79815b704e5aa9c6bdc3082351f9e3b2848c2",
+        license_note="MIT",
+        controller_family="visual_goal_conditioned_policy",
+        exact_imagegoal_fallback=True,
+        cec_accept_adapter="verified_anchor_imagegoal",
+    ),
+    "nomad": ControllerSpec(
+        key="nomad",
+        display_name="NoMaD",
+        task_interfaces=frozenset({"imagegoal", "nogoal"}),
+        required_observations=frozenset({"rgb"}),
+        local_path="NavDP/baselines/nomad",
+        official_repository=(
+            "https://github.com/robodhruv/visualnav-transformer"),
+        official_commit="dca79815b704e5aa9c6bdc3082351f9e3b2848c2",
+        license_note="MIT",
+        controller_family="visual_goal_conditioned_diffusion_policy",
+        exact_imagegoal_fallback=True,
+        cec_accept_adapter="verified_anchor_imagegoal",
+    ),
     "iplanner": ControllerSpec(
         key="iplanner",
         display_name="iPlanner",
@@ -306,8 +334,17 @@ def project_cec_proof(
     proof: Mapping[str, Any],
     *,
     anchor_jpeg: bytes | None = None,
+    shadow_only: bool = False,
 ) -> CecProjection:
     """Project the same certified proof into one controller-native interface.
+
+    ``shadow_only`` audits what an accepted certificate would authorize
+    without requiring the (expensive) certified anchor JPEG to have been
+    fetched -- used by the forced-reject-native baseline, which intentionally
+    skips the anchor fetch for an anchor-based controller because the
+    takeover is never granted.  The returned projection still reports
+    ``takeover=True`` for logging, but its payload cannot carry a real
+    hash-bound anchor.
 
     A valid rejection selects the shared mono-NavDP ImageGoal fallback for the
     current action.  CEC is evaluated again at the next decision, matching the
@@ -368,16 +405,23 @@ def project_cec_proof(
             endpoint = "pointgoal_step"
     elif spec.cec_accept_adapter == "verified_anchor_imagegoal":
         if not isinstance(anchor_jpeg, bytes) or not anchor_jpeg:
-            raise ValueError("ViNT CEC takeover requires the certified anchor JPEG")
-        anchor_sha256 = hashlib.sha256(anchor_jpeg).hexdigest()
-        advertised = proof.get("selected_anchor_image_sha256")
-        if advertised is not None and advertised != anchor_sha256:
-            raise ValueError("certified anchor JPEG does not match the proof")
-        payload = {
-            "cec_selected_anchor": selected_anchor,
-            "cec_anchor_sha256": anchor_sha256,
-            "goal_source": "certified_history_anchor",
-        }
+            if not shadow_only:
+                raise ValueError(
+                    "ViNT CEC takeover requires the certified anchor JPEG")
+            payload = {
+                "cec_selected_anchor": selected_anchor,
+                "shadow_anchor_unresolved": True,
+            }
+        else:
+            anchor_sha256 = hashlib.sha256(anchor_jpeg).hexdigest()
+            advertised = proof.get("selected_anchor_image_sha256")
+            if advertised is not None and advertised != anchor_sha256:
+                raise ValueError("certified anchor JPEG does not match the proof")
+            payload = {
+                "cec_selected_anchor": selected_anchor,
+                "cec_anchor_sha256": anchor_sha256,
+                "goal_source": "certified_history_anchor",
+            }
         endpoint = "imagegoal_step"
     elif spec.cec_accept_adapter == "bearing_metric_map_goal":
         payload = {

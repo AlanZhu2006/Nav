@@ -13,6 +13,8 @@ umask 0022
 ROOT=${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 CONTROLLER=${CONTROLLER:-navdp}
 EVAL_KIND=${EVAL_KIND:-nnr_revisit}
+HM3D_LIFELONG_PAIRED_SCOPES=${HM3D_LIFELONG_PAIRED_SCOPES:-}
+LIFELONG_SHARED_C_ROOT=${LIFELONG_SHARED_C_ROOT:-}
 SCENE=${SCENE:-dhjEzFoUFzH}
 EPISODE=${EPISODE:-episode_0005}
 MAX_STEPS=${MAX_STEPS:-600}
@@ -27,11 +29,20 @@ HUB_PORT=${HUB_PORT:-21844}
 MEMNAV_PY=${MEMNAV_PY:-/home/asus/miniconda3/envs/memnav/bin/python}
 HAB_PY=${HAB_PY:-/home/asus/miniconda3/envs/habitat/bin/python}
 VINT_PY=${VINT_PY:-${ROOT}/.diagnostics/controller_portability_20260821/envs/vint/bin/python}
+# GNM and NoMaD are RGB-only members of the same visualnav-transformer family
+# as ViNT.  GNM needs nothing beyond the plain navdp env; NoMaD additionally
+# needs the diffusion_policy submodule on PYTHONPATH (see NOMAD_PYTHONPATH_EXTRA
+# below).  Both run cleanly in the already-sealed vint venv, so no new venv is
+# built for them.
+GNM_PY=${GNM_PY:-${VINT_PY}}
+NOMAD_PY=${NOMAD_PY:-${VINT_PY}}
 VIPLANNER_PY=${VIPLANNER_PY:-${ROOT}/.diagnostics/controller_portability_20260821/envs/viplanner-py310-cu118/bin/python}
 
 MEMNAV_CKPT=${MEMNAV_CKPT:-/home/asus/Research/Nav-axis-uturn/.diagnostics/unseen_scene_eval_20260803/checkpoints/gatecurr600.memnav.ckpt}
 NAVDP_CKPT=${NAVDP_CKPT:-/home/asus/Research/Nav/NavDP/baselines/navdp/checkpoints/navdp_checkpoint.ckpt}
 VINT_CKPT=${VINT_CKPT:-${ROOT}/.diagnostics/controller_portability_20260821/checkpoints/vint.pth}
+GNM_CKPT=${GNM_CKPT:-${ROOT}/.diagnostics/controller_portability_20260821/checkpoints/gnm.pth}
+NOMAD_CKPT=${NOMAD_CKPT:-${ROOT}/.diagnostics/controller_portability_20260821/checkpoints/nomad.pth}
 IPLANNER_CKPT=${IPLANNER_CKPT:-${ROOT}/.diagnostics/controller_portability_20260821/checkpoints/iplanner.pth}
 VIPLANNER_CKPT=${VIPLANNER_CKPT:-${ROOT}/.diagnostics/controller_portability_20260821/checkpoints/viplanner.pt}
 MASK2FORMER_CKPT=${MASK2FORMER_CKPT:-${ROOT}/.diagnostics/controller_portability_20260821/checkpoints/mask2former_r50_8xb2-lsj-50e_coco-panoptic_20230118_125535-54df384a.pth}
@@ -52,14 +63,22 @@ RUN_ROOT=${RUN_ROOT:-${ROOT}/.diagnostics/controller_portability_20260821/local_
 fail() { echo "ABORT: $*" >&2; exit 2; }
 
 case "${CONTROLLER}" in
-  navdp|vint|iplanner|viplanner) ;;
-  *) fail "CONTROLLER must be navdp, vint, iplanner, or viplanner" ;;
+  navdp|vint|gnm|nomad|iplanner|viplanner) ;;
+  *) fail "CONTROLLER must be navdp, vint, gnm, nomad, iplanner, or viplanner" ;;
 esac
 case "${EVAL_KIND}" in
-  nnr_revisit|role_pair_mixed|lifelong_5leg|lifelong_nnr) ;;
-  *) fail "EVAL_KIND must be nnr_revisit, role_pair_mixed, lifelong_5leg, or lifelong_nnr" ;;
+  nnr_revisit|role_pair_mixed|lifelong_5leg|lifelong_nnr|hm3d_lifelong|lifelong_shared_c_collect|lifelong_shared_c_b2|hm3d_shared_c_collect|hm3d_shared_c_b2) ;;
+  *) fail "unsupported EVAL_KIND=${EVAL_KIND}" ;;
 esac
 [[ "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]] || fail "MAX_STEPS must be positive"
+if [[ -n "${HM3D_LIFELONG_PAIRED_SCOPES}" ]]; then
+  [[ "${EVAL_KIND}" == hm3d_lifelong \
+     || "${EVAL_KIND}" == lifelong_shared_c_b2 \
+     || "${EVAL_KIND}" == hm3d_shared_c_b2 ]] || \
+    fail "paired scopes require a lifelong B2 evaluator"
+  [[ "${LIFELONG_HISTORY_SCOPE:-}" != forced_reject_native ]] || \
+    fail "forced-reject requires its own hub process"
+fi
 
 required=(
   "${MEMNAV_PY}"
@@ -71,7 +90,10 @@ required=(
   "${ROOT}/MemNavData/cec_controller_portability_hub.py"
   "${ROOT}/MemNavData/controller_portability_proxy.py"
 )
-if [[ "${EVAL_KIND}" == nnr_revisit || "${EVAL_KIND}" == lifelong_nnr ]]; then
+if [[ "${EVAL_KIND}" == nnr_revisit \
+   || "${EVAL_KIND}" == lifelong_nnr \
+   || "${EVAL_KIND}" == lifelong_shared_c_collect \
+   || "${EVAL_KIND}" == lifelong_shared_c_b2 ]]; then
   required+=(
     "${BENCHMARK_ROOT}/manifest.json"
     "${BENCHMARK_ROOT}/${EPISODE}/benchmark.json"
@@ -79,6 +101,32 @@ if [[ "${EVAL_KIND}" == nnr_revisit || "${EVAL_KIND}" == lifelong_nnr ]]; then
     "${TRACE_ROOT}/${EPISODE}_legB_trace.json"
     "${ROOT}/MemNavData/eval_shared_online_novel_revisit.py"
   )
+  if [[ "${EVAL_KIND}" == lifelong_shared_c_b2 ]]; then
+    required+=(
+      "${LIFELONG_SHARED_C_ROOT}/population.json"
+      "${LIFELONG_SHARED_C_ROOT}/SEALED"
+      "${ROOT}/MemNavData/eval_lifelong_shared_c_b2.py"
+    )
+  elif [[ "${EVAL_KIND}" == lifelong_shared_c_collect ]]; then
+    required+=("${ROOT}/MemNavData/collect_lifelong_shared_c.py")
+  fi
+elif [[ "${EVAL_KIND}" == hm3d_lifelong \
+     || "${EVAL_KIND}" == hm3d_shared_c_collect \
+     || "${EVAL_KIND}" == hm3d_shared_c_b2 ]]; then
+  required+=(
+    "${BENCHMARK_ROOT}/${EPISODE}/benchmark.json"
+    "${BENCHMARK_ROOT}/${EPISODE}/${EPISODE}_legB_trace.json"
+    "${ROOT}/MemNavData/eval_hm3d_fullmono_lifelong.py"
+  )
+  if [[ "${EVAL_KIND}" == hm3d_shared_c_collect ]]; then
+    required+=("${ROOT}/MemNavData/collect_hm3d_lifelong_shared_c.py")
+  elif [[ "${EVAL_KIND}" == hm3d_shared_c_b2 ]]; then
+    required+=(
+      "${ROOT}/MemNavData/eval_hm3d_lifelong_shared_c_b2.py"
+      "${LIFELONG_SHARED_C_ROOT}/population.json"
+      "${LIFELONG_SHARED_C_ROOT}/SEALED"
+    )
+  fi
 elif [[ "${EVAL_KIND}" == role_pair_mixed ]]; then
   required+=(
     "${BENCHMARK_ROOT}/../manifest.json"
@@ -95,6 +143,8 @@ else
 fi
 case "${CONTROLLER}" in
   vint) required+=("${VINT_PY}" "${VINT_CKPT}") ;;
+  gnm) required+=("${GNM_PY}" "${GNM_CKPT}") ;;
+  nomad) required+=("${NOMAD_PY}" "${NOMAD_CKPT}") ;;
   iplanner) required+=("${IPLANNER_CKPT}") ;;
   viplanner)
     required+=("${VIPLANNER_PY}" "${VIPLANNER_CKPT}"
@@ -154,6 +204,41 @@ wait_for_port() {
   [[ "${ready}" -eq 1 ]] || fail "${label} did not bind port ${port}"
 }
 
+hab_site_packages=$("${HAB_PY}" -c \
+  'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+hab_requests_vendor=${hab_site_packages}/pip/_vendor
+hab_pythonpath=${ROOT}:${hab_requests_vendor}
+requests_init=${hab_requests_vendor}/requests/__init__.py
+requests_version=${hab_requests_vendor}/requests/__version__.py
+[[ -r "${requests_init}" && -r "${requests_version}" ]] || \
+  fail "missing Habitat vendored requests dependency"
+if [[ -n "${EXPECTED_HAB_REQUESTS_VERSION:-}" ]]; then
+  : "${EXPECTED_HAB_REQUESTS_INIT_BYTES:?}" \
+    "${EXPECTED_HAB_REQUESTS_INIT_SHA:?}" \
+    "${EXPECTED_HAB_REQUESTS_VERSION_BYTES:?}" \
+    "${EXPECTED_HAB_REQUESTS_VERSION_SHA:?}"
+  [[ "$(stat -c '%s' "${requests_init}")" == \
+     "${EXPECTED_HAB_REQUESTS_INIT_BYTES}" ]] || \
+    fail "Habitat vendored requests __init__ size changed"
+  [[ "$(sha256sum "${requests_init}" | awk '{print $1}')" == \
+     "${EXPECTED_HAB_REQUESTS_INIT_SHA}" ]] || \
+    fail "Habitat vendored requests __init__ hash changed"
+  [[ "$(stat -c '%s' "${requests_version}")" == \
+     "${EXPECTED_HAB_REQUESTS_VERSION_BYTES}" ]] || \
+    fail "Habitat vendored requests version size changed"
+  [[ "$(sha256sum "${requests_version}" | awk '{print $1}')" == \
+     "${EXPECTED_HAB_REQUESTS_VERSION_SHA}" ]] || \
+    fail "Habitat vendored requests version hash changed"
+  env PYTHONPATH="${hab_requests_vendor}" "${HAB_PY}" -c \
+    'import requests,sys; assert requests.__version__ == sys.argv[1]; assert "/pip/_vendor/requests/" in requests.__file__' \
+    "${EXPECTED_HAB_REQUESTS_VERSION}" || \
+    fail "Habitat vendored requests version/import mismatch"
+else
+  env PYTHONPATH="${hab_requests_vendor}" "${HAB_PY}" -c \
+    'import requests; assert "/pip/_vendor/requests/" in requests.__file__' || \
+    fail "Habitat vendored requests import failed"
+fi
+
 "${MEMNAV_PY}" -m py_compile \
   "${ROOT}/MemNavData/controller_portability_contract.py" \
   "${ROOT}/MemNavData/controller_portability_proxy.py" \
@@ -163,6 +248,11 @@ wait_for_port() {
   "${ROOT}/MemNavData/eval_3leg_habitat.py" \
   "${ROOT}/MemNavData/eval_lifelong_5leg_habitat.py" \
   "${ROOT}/MemNavData/eval_shared_online_lifelong_nnr.py" \
+  "${ROOT}/MemNavData/collect_lifelong_shared_c.py" \
+  "${ROOT}/MemNavData/eval_lifelong_shared_c_b2.py" \
+  "${ROOT}/MemNavData/eval_hm3d_fullmono_lifelong.py" \
+  "${ROOT}/MemNavData/collect_hm3d_lifelong_shared_c.py" \
+  "${ROOT}/MemNavData/eval_hm3d_lifelong_shared_c_b2.py" \
   "${ROOT}/MemNavData/eval_shared_online_novel_revisit.py" \
   "${ROOT}/MemNavData/eval_shared_online_role_pairs.py"
 
@@ -224,6 +314,33 @@ if [[ "${CONTROLLER}" != navdp ]]; then
       proxy_depth=none
       checkpoint_args=(--checkpoint "vint=${VINT_CKPT}")
       ;;
+    gnm)
+      (
+        cd "${ROOT}/NavDP/baselines/gnm"
+        exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+          "${GNM_PY}" -u gnm_server.py --port "${UPSTREAM_PORT}" \
+          --robot_config configs/robot_config.yaml \
+          --gnm_config configs/gnm.yaml --gnm_checkpoint "${GNM_CKPT}"
+      ) >"${RUN_ROOT}/logs/server_gnm.log" 2>&1 &
+      upstream_pid=$!
+      proxy_depth=none
+      checkpoint_args=(--checkpoint "gnm=${GNM_CKPT}")
+      ;;
+    nomad)
+      (
+        cd "${ROOT}/NavDP/baselines/nomad"
+        exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+          PYTHONPATH="${INTERNNAV_ROOT}/src/diffusion-policy" \
+          "${NOMAD_PY}" -u nomad_server.py --port "${UPSTREAM_PORT}" \
+          --robot_config configs/robot_config.yaml \
+          --data_config configs/data_config.yaml \
+          --nomad_config configs/nomad.yaml \
+          --nomad_checkpoint "${NOMAD_CKPT}"
+      ) >"${RUN_ROOT}/logs/server_nomad.log" 2>&1 &
+      upstream_pid=$!
+      proxy_depth=none
+      checkpoint_args=(--checkpoint "nomad=${NOMAD_CKPT}")
+      ;;
     iplanner)
       (
         cd "${ROOT}/NavDP/baselines/iplanner"
@@ -273,6 +390,11 @@ if [[ "${CONTROLLER}" != navdp ]]; then
   controller_url=http://127.0.0.1:${PROXY_PORT}
 fi
 
+hub_extra=()
+if [[ "${LIFELONG_HISTORY_SCOPE:-}" == forced_reject_native ]]; then
+  # Shared-native system baseline: identical pipeline/receipts, no takeover.
+  hub_extra+=(--force-reject-native)
+fi
 (
   cd "${runtime_root}/hub"
   exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT}" \
@@ -283,15 +405,13 @@ fi
       --memnav-url "http://127.0.0.1:${MEMNAV_PORT}" \
       --controller-url "${controller_url}" \
       --fallback-navdp-url "http://127.0.0.1:${FALLBACK_PORT}" \
-      --camera-height-m 0.5
+      --camera-height-m 0.5 \
+      "${hub_extra[@]}"
 ) >"${RUN_ROOT}/logs/server_hub.log" 2>&1 &
 hub_pid=$!
 wait_for_port hub "${hub_pid}" "${HUB_PORT}" \
   "${RUN_ROOT}/logs/server_hub.log"
 
-hab_site_packages=$("${HAB_PY}" -c \
-  'import sysconfig; print(sysconfig.get_paths()["purelib"])')
-hab_pythonpath=${ROOT}:${hab_site_packages}/pip/_vendor
 leg1_mode=shared_trace
 if [[ "${EVAL_KIND}" == lifelong_5leg ]]; then
   leg1_mode=policy
@@ -302,7 +422,7 @@ common_eval=(
   --scene "${SCENE_FILE}" --scene_identity "${SCENE}"
   --host 127.0.0.1 --port "${HUB_PORT}"
   --server_backend cec_portability --navdp_depth_source monocular_sidecar
-  --out "${RUN_ROOT}/result" --success_dist 1.0
+  --success_dist 1.0
   --max_steps "${MAX_STEPS}" --exec_horizon 8
   --trajectory_selector server --trajectory_selector_scope all
   --leg1_mode "${leg1_mode}"
@@ -336,6 +456,52 @@ elif [[ "${EVAL_KIND}" == lifelong_nnr ]]; then
     --shared_online_nnr_arm cec_portability
     --lifelong_history_scope "${LIFELONG_HISTORY_SCOPE:-all_prior}"
   )
+elif [[ "${EVAL_KIND}" == lifelong_shared_c_collect ]]; then
+  evaluator=${ROOT}/MemNavData/collect_lifelong_shared_c.py
+  eval_extra=(
+    --navdp_goal_switch_reset before_c
+    --shared_leg1_trace_root "${TRACE_ROOT}"
+    --double_revisit_c_history initial_leg_only
+    --shared_online_nnr_arm cec_portability
+    --lifelong_history_scope all_prior
+  )
+elif [[ "${EVAL_KIND}" == lifelong_shared_c_b2 ]]; then
+  evaluator=${ROOT}/MemNavData/eval_lifelong_shared_c_b2.py
+  eval_extra=(
+    --navdp_goal_switch_reset before_c
+    --shared_leg1_trace_root "${TRACE_ROOT}"
+    --double_revisit_c_history initial_leg_only
+    --shared_online_nnr_arm cec_portability
+    --lifelong_history_scope "${LIFELONG_HISTORY_SCOPE:-all_prior}"
+    --lifelong_shared_c_trace_root "${LIFELONG_SHARED_C_ROOT}"
+  )
+elif [[ "${EVAL_KIND}" == hm3d_lifelong ]]; then
+  evaluator=${ROOT}/MemNavData/eval_hm3d_fullmono_lifelong.py
+  eval_extra=(
+    --navdp_goal_switch_reset before_c
+    --shared_leg1_trace_root "${BENCHMARK_ROOT}"
+    --double_revisit_c_history initial_leg_only
+    --shared_online_nnr_arm cec_portability
+  )
+elif [[ "${EVAL_KIND}" == hm3d_shared_c_collect ]]; then
+  evaluator=${ROOT}/MemNavData/collect_hm3d_lifelong_shared_c.py
+  eval_extra=(
+    --navdp_goal_switch_reset before_c
+    --shared_leg1_trace_root "${BENCHMARK_ROOT}"
+    --double_revisit_c_history initial_leg_only
+    --shared_online_nnr_arm cec_portability
+    --lifelong_history_scope all_prior
+  )
+elif [[ "${EVAL_KIND}" == hm3d_shared_c_b2 ]]; then
+  evaluator=${ROOT}/MemNavData/eval_hm3d_lifelong_shared_c_b2.py
+  eval_extra=(
+    --navdp_goal_switch_reset before_c
+    --shared_leg1_trace_root "${BENCHMARK_ROOT}"
+    --double_revisit_c_history initial_leg_only
+    --shared_online_nnr_arm cec_portability
+    --lifelong_history_scope "${LIFELONG_HISTORY_SCOPE:-all_prior}"
+    --lifelong_shared_c_trace_root "${LIFELONG_SHARED_C_ROOT}"
+  )
 elif [[ "${EVAL_KIND}" == role_pair_mixed ]]; then
   evaluator=${ROOT}/MemNavData/eval_shared_online_role_pairs.py
   eval_extra=(
@@ -350,19 +516,36 @@ else
     --lifelong_history_scope "${LIFELONG_HISTORY_SCOPE:-all_prior}"
   )
 fi
-env PYTHONPATH="${hab_pythonpath}" PYTHONDONTWRITEBYTECODE=1 \
-  "${HAB_PY}" -u "${evaluator}" "${common_eval[@]}" "${eval_extra[@]}" \
-  >"${RUN_ROOT}/logs/evaluator.log" 2>&1
-
-curl --fail --silent "http://127.0.0.1:${HUB_PORT}/healthz" \
-  >"${RUN_ROOT}/hub_health.json"
-if [[ "${EVAL_KIND}" == nnr_revisit || "${EVAL_KIND}" == lifelong_nnr ]]; then
+if [[ "${EVAL_KIND}" == nnr_revisit \
+   || "${EVAL_KIND}" == lifelong_nnr \
+   || "${EVAL_KIND}" == lifelong_shared_c_collect \
+   || "${EVAL_KIND}" == lifelong_shared_c_b2 ]]; then
   receipt_inputs=(
     "${BENCHMARK_ROOT}/manifest.json"
     "${BENCHMARK_ROOT}/${EPISODE}/benchmark.json"
     "${TRACE_ROOT}/${EPISODE}_leg1_trace.json"
     "${TRACE_ROOT}/${EPISODE}_legB_trace.json"
   )
+  if [[ "${EVAL_KIND}" == lifelong_shared_c_b2 ]]; then
+    receipt_inputs+=(
+      "${LIFELONG_SHARED_C_ROOT}/population.json"
+      "${LIFELONG_SHARED_C_ROOT}/population.json.sha256"
+    )
+  fi
+elif [[ "${EVAL_KIND}" == hm3d_lifelong \
+     || "${EVAL_KIND}" == hm3d_shared_c_collect \
+     || "${EVAL_KIND}" == hm3d_shared_c_b2 ]]; then
+  receipt_inputs=(
+    "${BENCHMARK_ROOT}/${EPISODE}/benchmark.json"
+    "${BENCHMARK_ROOT}/${EPISODE}/${EPISODE}_legB_trace.json"
+    "${BENCHMARK_ROOT}/${EPISODE}/factual_B_completion.json"
+  )
+  if [[ "${EVAL_KIND}" == hm3d_shared_c_b2 ]]; then
+    receipt_inputs+=(
+      "${LIFELONG_SHARED_C_ROOT}/population.json"
+      "${LIFELONG_SHARED_C_ROOT}/population.json.sha256"
+    )
+  fi
 elif [[ "${EVAL_KIND}" == role_pair_mixed ]]; then
   receipt_inputs=(
     "${BENCHMARK_ROOT}/../manifest.json"
@@ -375,8 +558,78 @@ else
     "${BENCHMARK_ROOT}/${EPISODE}/goal_2.jpg"
   )
 fi
-mapfile -t result_files < <(find "${RUN_ROOT}/result" -maxdepth 1 -type f \
-  -name '*.json' -print | sort)
-sha256sum "${receipt_inputs[@]}" "${result_files[@]}" \
-  >"${RUN_ROOT}/result_inputs.sha256"
-echo "DONE controller=${CONTROLLER} result=${RUN_ROOT}/result/summary.json"
+
+run_evaluator() {
+  local arm_root=$1
+  local runtime_scope=$2
+  shift 2
+  if [[ "${arm_root}" == "${RUN_ROOT}" ]]; then
+    [[ ! -e "${arm_root}/result" \
+       && ! -e "${arm_root}/logs/evaluator.log" ]] || \
+      fail "single-arm output already exists: ${arm_root}"
+  else
+    [[ ! -e "${arm_root}" ]] || fail "arm output already exists: ${arm_root}"
+    mkdir -p "${arm_root}/logs"
+  fi
+  env PYTHONPATH="${hab_pythonpath}" PYTHONDONTWRITEBYTECODE=1 \
+    "${HAB_PY}" -u "${evaluator}" "${common_eval[@]}" \
+      --out "${arm_root}/result" "${eval_extra[@]}" "$@" \
+      >"${arm_root}/logs/evaluator.log" 2>&1
+  curl --fail --silent "http://127.0.0.1:${HUB_PORT}/healthz" \
+    >"${arm_root}/hub_health.json"
+  local gpu_uuid memnav_start fallback_start hub_start
+  gpu_uuid=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | sed -n '1p')
+  memnav_start=$(awk '{print $22}' "/proc/${memnav_pid}/stat")
+  fallback_start=$(awk '{print $22}' "/proc/${fallback_pid}/stat")
+  hub_start=$(awk '{print $22}' "/proc/${hub_pid}/stat")
+  "${MEMNAV_PY}" - "${arm_root}/compute_identity.json" \
+    "$(hostname)" "${gpu_uuid}" "${runtime_scope}" \
+    "${memnav_pid}" "${memnav_start}" \
+    "${fallback_pid}" "${fallback_start}" \
+    "${hub_pid}" "${hub_start}" \
+    "${HM3D_LIFELONG_PAIRED_SCOPES}" \
+    "${CUDA_VISIBLE_DEVICES:-}" <<'PY'
+import json,sys
+(path,host,gpu,scope,memnav_pid,memnav_start,navdp_pid,navdp_start,
+ hub_pid,hub_start,pair_order,cuda_visible)=sys.argv[1:]
+payload={
+ "schema_version":"cec_compute_identity_v1_20260824",
+ "host":host,"gpu_uuid":gpu,"cuda_visible_devices":cuda_visible,
+ "runtime_scope":scope,
+ "memnav":{"pid":int(memnav_pid),"process_start_ticks":int(memnav_start)},
+ "navdp":{"pid":int(navdp_pid),"process_start_ticks":int(navdp_start)},
+ "cec_hub":{"pid":int(hub_pid),"process_start_ticks":int(hub_start)},
+ "paired_scope_order":pair_order.split(",") if pair_order else [],
+}
+open(path,"x").write(json.dumps(payload,indent=2,sort_keys=True)+"\n")
+PY
+  mapfile -t result_files < <(find "${arm_root}/result" -maxdepth 1 \
+    -type f -name '*.json' -print | sort)
+  sha256sum "${receipt_inputs[@]}" "${result_files[@]}" \
+    "${arm_root}/compute_identity.json" \
+    >"${arm_root}/result_inputs.sha256"
+  echo "DONE controller=${CONTROLLER} result=${arm_root}/result/summary.json"
+}
+
+if [[ -n "${HM3D_LIFELONG_PAIRED_SCOPES}" ]]; then
+  IFS=',' read -r -a paired_scopes <<<"${HM3D_LIFELONG_PAIRED_SCOPES}"
+  [[ "${#paired_scopes[@]}" -eq 2 ]] || \
+    fail "paired run requires exactly two scopes"
+  [[ " ${paired_scopes[*]} " == *" all_prior "* \
+     && " ${paired_scopes[*]} " == *" initial_leg_only "* ]] || \
+    fail "paired scopes must be all_prior and initial_leg_only"
+  for scope in "${paired_scopes[@]}"; do
+    run_evaluator "${RUN_ROOT}/${scope}" "${scope}" \
+      --lifelong_history_scope "${scope}"
+  done
+else
+  scope_args=()
+  if [[ "${EVAL_KIND}" == hm3d_lifelong \
+     || "${EVAL_KIND}" == lifelong_shared_c_b2 \
+     || "${EVAL_KIND}" == hm3d_shared_c_b2 ]]; then
+    scope_args=(--lifelong_history_scope \
+      "${LIFELONG_HISTORY_SCOPE:-all_prior}")
+  fi
+  run_evaluator "${RUN_ROOT}" "${LIFELONG_HISTORY_SCOPE:-single}" \
+    "${scope_args[@]}"
+fi

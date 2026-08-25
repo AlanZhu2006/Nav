@@ -94,6 +94,21 @@ def _resolve_observation_depth(
     if batch_size != 1:
         raise ValueError("monocular sidecar currently requires batch_size=1")
     cached = monocular_depth_cache.get(image_digest)
+    if (
+        cached is not None
+        and transaction_token
+        and cached[1].get("monocular_depth_transaction_token")
+        != str(transaction_token)
+    ):
+        # Byte-identical JPEGs legitimately recur at different stream
+        # positions whenever the agent is blocked/stationary between plans
+        # (verified 2026-08-22: four identical frames at the death point of
+        # 019_66seV3BWPoX_episode_0002, reproduced in two different arms).
+        # The cache is keyed by image digest, so this hit belongs to the
+        # OLDER append.  Treat it as a miss and refetch by the caller's
+        # exact transaction token: the sidecar stores transactions by token
+        # and every genuine mismatch still fails closed during validation.
+        cached = None
     if cached is None:
         if not args.monocular_depth_url:
             raise RuntimeError("monocular depth URL is not configured")
@@ -141,12 +156,6 @@ def _resolve_observation_depth(
         )
         cached = (depth_2d, metadata)
         monocular_depth_cache = {image_digest: cached}
-    elif transaction_token and cached[1].get(
-        "monocular_depth_transaction_token"
-    ) != str(transaction_token):
-        raise RuntimeError(
-            "cached monocular depth belongs to a different transaction"
-        )
     depth_2d, metadata = cached
     depth = depth_2d[None, :, :, None].astype(np.float32, copy=False)
     return depth, {

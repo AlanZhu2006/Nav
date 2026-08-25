@@ -68,7 +68,7 @@ PY
 memnav_ckpt=${dependencies[0]}; navdp_ckpt=${dependencies[1]}
 lingbot_weights=${dependencies[2]}
 
-controllers=(navdp vint iplanner viplanner)
+controllers=(navdp vint gnm nomad iplanner viplanner)
 offset=$(( HISTORY_INDEX % ${#controllers[@]} ))
 order=()
 for ((i=0; i<${#controllers[@]}; i++)); do
@@ -89,9 +89,13 @@ for controller in "${order[@]}"; do
     HUB_PORT="$((BASE_PORT+4))" \
     MEMNAV_PY="${MEMNAV_PY}" HAB_PY="${HAB_PY}" \
     VINT_PY="${PORTABILITY_ENV_ROOT}/vint/bin/python" \
+    GNM_PY="${PORTABILITY_ENV_ROOT}/vint/bin/python" \
+    NOMAD_PY="${PORTABILITY_ENV_ROOT}/vint/bin/python" \
     VIPLANNER_PY="${PORTABILITY_ENV_ROOT}/viplanner/bin/python" \
     MEMNAV_CKPT="${memnav_ckpt}" NAVDP_CKPT="${navdp_ckpt}" \
     VINT_CKPT="${PORTABILITY_CHECKPOINT_ROOT}/vint.pth" \
+    GNM_CKPT="${PORTABILITY_CHECKPOINT_ROOT}/gnm.pth" \
+    NOMAD_CKPT="${PORTABILITY_CHECKPOINT_ROOT}/nomad.pth" \
     IPLANNER_CKPT="${PORTABILITY_CHECKPOINT_ROOT}/iplanner.pth" \
     VIPLANNER_CKPT="${PORTABILITY_CHECKPOINT_ROOT}/viplanner.pt" \
     MASK2FORMER_CKPT="${PORTABILITY_CHECKPOINT_ROOT}/mask2former_r50_8xb2-lsj-50e_coco-panoptic_20230118_125535-54df384a.pth" \

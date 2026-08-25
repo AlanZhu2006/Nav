@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=h3lifeSeal
+#SBATCH --output=/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs/%x_%j.out
+#SBATCH --error=/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs/%x_%j.err
+#SBATCH --time=00:20:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=24G
+#SBATCH --partition=cpu_short
+#SBATCH --account=torch_pr_769_tandon_advanced
+
+set -euo pipefail
+: "${TASK_ROOT:?}" "${BASE_SOURCE_ROOT:?}" "${RUN_ROOT:?}" "${PROTOCOL:?}"
+[[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
+   "${EXPECTED_TASK_RECEIPT_SHA}" ]]
+(cd "${TASK_ROOT}" && sha256sum -c --quiet "${TASK_RECEIPT}")
+PYTHONDONTWRITEBYTECODE=1 \
+PYTHONPATH="${TASK_ROOT}:${TASK_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData" \
+  /scratch/lg154/conda-envs/memnav/bin/python -u \
+    "${TASK_ROOT}/MemNavData/finalize_hm3d_fullmono_lifelong_population.py" \
+      --protocol "${PROTOCOL}" --ab-root "${RUN_ROOT}/benchmarks_ab" \
+      --fragments "${RUN_ROOT}/prefix_fragments" \
+      --out "${RUN_ROOT}/population"
+(cd "${RUN_ROOT}/population" && sha256sum -c POPULATION_FILES.sha256 >/dev/null)
+chmod -R a-w "${RUN_ROOT}/population"

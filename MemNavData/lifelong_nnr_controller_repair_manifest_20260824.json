@@ -1,0 +1,47 @@
+{
+  "schema": "lifelong_nnr_controller_repair_manifest_v1_20260824",
+  "population_sha256": "6ddd24e47b17e27df711ec680ac8a4bc09af2697d38b2d4fc5288b2a1726ac04",
+  "population_size": 18,
+  "scopes": [
+    "all_prior",
+    "initial_leg_only",
+    "forced_reject_native"
+  ],
+  "expected_original_complete": 245,
+  "expected_missing": 25,
+  "selection_rule": "all and only incomplete result triples, frozen before any repair outcomes were read",
+  "original_controller_runs": {
+    "gnm": "/scratch/yz11502/Research/Nav-axis-uturn-results/lifelong_nnr_controller_20260822/lifelong_nnr_gnm_20260822T203356Z",
+    "iplanner": "/scratch/yz11502/Research/Nav-axis-uturn-results/lifelong_nnr_controller_20260822/lifelong_nnr_iplanner_20260822T202801Z",
+    "nomad": "/scratch/yz11502/Research/Nav-axis-uturn-results/lifelong_nnr_controller_20260822/lifelong_nnr_nomad_20260822T203917Z",
+    "vint": "/scratch/yz11502/Research/Nav-axis-uturn-results/lifelong_nnr_controller_20260822/lifelong_nnr_vint_20260822T163628Z",
+    "viplanner": "/scratch/yz11502/Research/Nav-axis-uturn-results/lifelong_nnr_controller_20260822/lifelong_nnr_viplanner_20260822T204507Z"
+  },
+  "entries": [
+    {"controller": "gnm", "population_index": 6, "scene": "fzynW3qQPVF", "episode": "episode_0001", "scope": "forced_reject_native", "reason": "session_reopen"},
+    {"controller": "gnm", "population_index": 13, "scene": "gYvKGZ5eRqb", "episode": "episode_0003", "scope": "all_prior", "reason": "absent"},
+    {"controller": "gnm", "population_index": 15, "scene": "gxdoqLR6rwA", "episode": "episode_0001", "scope": "all_prior", "reason": "absent"},
+    {"controller": "gnm", "population_index": 16, "scene": "gxdoqLR6rwA", "episode": "episode_0004", "scope": "all_prior", "reason": "absent"},
+    {"controller": "iplanner", "population_index": 0, "scene": "dhjEzFoUFzH", "episode": "episode_0003", "scope": "initial_leg_only", "reason": "absent"},
+    {"controller": "iplanner", "population_index": 1, "scene": "dhjEzFoUFzH", "episode": "episode_0005", "scope": "initial_leg_only", "reason": "absent"},
+    {"controller": "iplanner", "population_index": 1, "scene": "dhjEzFoUFzH", "episode": "episode_0005", "scope": "forced_reject_native", "reason": "absent"},
+    {"controller": "iplanner", "population_index": 2, "scene": "e9zR4mvMWw7", "episode": "episode_0001", "scope": "initial_leg_only", "reason": "absent"},
+    {"controller": "iplanner", "population_index": 2, "scene": "e9zR4mvMWw7", "episode": "episode_0001", "scope": "forced_reject_native", "reason": "absent"},
+    {"controller": "iplanner", "population_index": 3, "scene": "e9zR4mvMWw7", "episode": "episode_0003", "scope": "forced_reject_native", "reason": "absent"},
+    {"controller": "iplanner", "population_index": 6, "scene": "fzynW3qQPVF", "episode": "episode_0001", "scope": "forced_reject_native", "reason": "session_reopen"},
+    {"controller": "nomad", "population_index": 0, "scene": "dhjEzFoUFzH", "episode": "episode_0003", "scope": "forced_reject_native", "reason": "absent"},
+    {"controller": "nomad", "population_index": 1, "scene": "dhjEzFoUFzH", "episode": "episode_0005", "scope": "all_prior", "reason": "rgb_mismatch"},
+    {"controller": "nomad", "population_index": 1, "scene": "dhjEzFoUFzH", "episode": "episode_0005", "scope": "initial_leg_only", "reason": "rgb_mismatch"},
+    {"controller": "nomad", "population_index": 1, "scene": "dhjEzFoUFzH", "episode": "episode_0005", "scope": "forced_reject_native", "reason": "absent"},
+    {"controller": "nomad", "population_index": 6, "scene": "fzynW3qQPVF", "episode": "episode_0001", "scope": "forced_reject_native", "reason": "session_reopen"},
+    {"controller": "nomad", "population_index": 8, "scene": "gTV8FGcVJC9", "episode": "episode_0000", "scope": "forced_reject_native", "reason": "absent"},
+    {"controller": "nomad", "population_index": 10, "scene": "gTV8FGcVJC9", "episode": "episode_0003", "scope": "forced_reject_native", "reason": "absent"},
+    {"controller": "nomad", "population_index": 11, "scene": "gYvKGZ5eRqb", "episode": "episode_0001", "scope": "forced_reject_native", "reason": "absent"},
+    {"controller": "vint", "population_index": 13, "scene": "gYvKGZ5eRqb", "episode": "episode_0003", "scope": "initial_leg_only", "reason": "absent"},
+    {"controller": "vint", "population_index": 15, "scene": "gxdoqLR6rwA", "episode": "episode_0001", "scope": "initial_leg_only", "reason": "absent"},
+    {"controller": "viplanner", "population_index": 0, "scene": "dhjEzFoUFzH", "episode": "episode_0003", "scope": "all_prior", "reason": "absent"},
+    {"controller": "viplanner", "population_index": 1, "scene": "dhjEzFoUFzH", "episode": "episode_0005", "scope": "forced_reject_native", "reason": "absent"},
+    {"controller": "viplanner", "population_index": 5, "scene": "e9zR4mvMWw7", "episode": "episode_0007", "scope": "all_prior", "reason": "absent"},
+    {"controller": "viplanner", "population_index": 6, "scene": "fzynW3qQPVF", "episode": "episode_0001", "scope": "forced_reject_native", "reason": "session_reopen"}
+  ]
+}

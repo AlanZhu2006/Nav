@@ -76,6 +76,21 @@ class LifelongGoalSessionTest(unittest.TestCase):
             "long_term_memory_preserved": True,
         })
 
+    def test_replay_goal_session_restores_only_the_query_boundary(self):
+        agent = self.make_agent()
+        agent.n = 80
+        history_cache = dict(agent._certified_reference_depth_cache)
+        receipt = agent.replay_goal_session(b"goal-c", 80)
+        goal_key = hashlib.md5(b"goal-c").hexdigest()
+        self.assertEqual(agent._goal_start_frame[goal_key], 80)
+        self.assertEqual(receipt["candidate_ceiling"], 79)
+        self.assertEqual(receipt["frame_count"], 80)
+        self.assertFalse(receipt["diffusion_sampled"])
+        self.assertFalse(receipt["memory_appended"])
+        self.assertEqual(agent._certified_reference_depth_cache, history_cache)
+        with self.assertRaisesRegex(ValueError, "current frame"):
+            agent.replay_goal_session(b"another-goal", 79)
+
 
 class EarlyCertifiedShortlistTest(unittest.TestCase):
     class FakeLingBot:

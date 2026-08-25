@@ -36,7 +36,10 @@ try:  # package import in tests; script-local import in memnav_server.py
         metric_nodes_between,
         reverse_metric_nodes,
     )
-    from .router_candidates import temporal_nms_candidates
+    from .router_candidates import (
+        causal_goal_support_indices,
+        temporal_nms_candidates,
+    )
 except ImportError:  # pragma: no cover - exercised by the live script entrypoint
     from pose_alignment import lingbot_relative_yaw
     from reverse_memory_graph import (
@@ -44,7 +47,10 @@ except ImportError:  # pragma: no cover - exercised by the live script entrypoin
         metric_nodes_between,
         reverse_metric_nodes,
     )
-    from router_candidates import temporal_nms_candidates
+    from router_candidates import (
+        causal_goal_support_indices,
+        temporal_nms_candidates,
+    )
 
 
 FLOW_TIERS = [(702, 20.0), (877, 25.0), (1075, 30.0), (1506, 40.0), (2048, 50.0)]
@@ -383,6 +389,38 @@ class MemNavAgent:
             "long_term_memory_preserved": True,
         }
 
+    def replay_goal_session(self, goal_jpg_bytes, expected_start_frame):
+        """Restore a frozen query boundary without appending or planning.
+
+        Paired lifelong evaluations replay an already executed C trajectory
+        before branching at B2.  Replaying RGB frames alone is insufficient:
+        the original C query also opened a goal session at the first C frame.
+        This method restores only that lifecycle boundary.  It deliberately
+        performs no retrieval, certificate inference, or controller action.
+        """
+        import hashlib
+
+        expected_start_frame = int(expected_start_frame)
+        if expected_start_frame != int(self.n):
+            raise ValueError(
+                "replayed goal session does not start at the current frame")
+        goal_key = hashlib.md5(goal_jpg_bytes).hexdigest()
+        switched = self._begin_goal_session(goal_key)
+        if not switched:
+            raise ValueError("replayed goal session did not switch goals")
+        goal_start_frame = self._goal_start_frame.setdefault(
+            goal_key, expected_start_frame)
+        if int(goal_start_frame) != expected_start_frame:
+            raise ValueError("replayed goal-session boundary changed")
+        return {
+            **self.goal_session_status(),
+            "goal_start_frame": int(goal_start_frame),
+            "candidate_ceiling": int(goal_start_frame) - 1,
+            "frame_count": int(self.n),
+            "diffusion_sampled": False,
+            "memory_appended": False,
+        }
+
     @torch.no_grad()
     def image_goal_similarity(self, image_jpg_bytes, goal_jpg_bytes):
         """Stateless raw-DINO cosine for terminal visual verification.
@@ -411,6 +449,102 @@ class MemNavAgent:
 
         return float(torch.nn.functional.cosine_similarity(
             current_cls, goal_cls, dim=-1)[0].item())
+
+    @torch.no_grad()
+    def goal_candidate_support(
+            self, goal_jpg_bytes, stride=8, candidate_frame_idx=None,
+            min_frame_gap=None):
+        """Score one prospective goal against cached causal history.
+
+        This is the online counterpart of the real-world candidate scoring
+        script.  It encodes the goal once, compares it with the already-cached
+        per-frame DINO CLS vectors, and geometrically verifies the best sampled
+        anchor.  It does not append a frame, begin a goal session, alter the
+        candidate ceiling, or advance LingBot state.
+        """
+        import hashlib
+        import time
+
+        started = time.perf_counter()
+        stride = max(1, int(stride))
+        if candidate_frame_idx is None:
+            candidate_frame_idx = self.n
+        candidate_frame_idx = int(candidate_frame_idx)
+        if min_frame_gap is None:
+            min_frame_gap = self.retrieval_candidate_min_gap
+        min_frame_gap = max(1, int(min_frame_gap))
+        dense_cls = getattr(self, "dino_cls", ())
+        if self.n < self.S or len(dense_cls) != self.n:
+            return {
+                "ok": False,
+                "reason": "history_dino_not_ready",
+                "frames_total": int(self.n),
+                "dino_frames_ready": int(len(dense_cls)),
+                "state_mutated": False,
+            }
+
+        try:
+            indices = causal_goal_support_indices(
+                self.n,
+                candidate_frame_idx=candidate_frame_idx,
+                stride=stride,
+                min_frame_gap=min_frame_gap,
+            )
+        except ValueError as error:
+            return {
+                "ok": False,
+                "reason": "invalid_causal_support_window",
+                "detail": str(error),
+                "frames_total": int(self.n),
+                "state_mutated": False,
+            }
+        if not indices:
+            return {
+                "ok": False,
+                "reason": "insufficient_temporal_support",
+                "frames_total": int(self.n),
+                "candidate_frame_idx": candidate_frame_idx,
+                "min_frame_gap": min_frame_gap,
+                "state_mutated": False,
+            }
+        goal_key = hashlib.md5(goal_jpg_bytes).hexdigest()
+        goal_cls = self._goal_cache.get(("cls", goal_key))
+        if goal_cls is None:
+            goal_path = os.path.join(
+                self.rgb_dir, "_candidate_support_goal_{}.jpg".format(goal_key))
+            with open(goal_path, "wb") as handle:
+                handle.write(goal_jpg_bytes)
+            goal_image = self.lb.load_images([goal_path])[0][None].to(
+                self.device)
+            goal_cls = self.lb.dino(goal_image)["cls"]
+            self._goal_cache[("cls", goal_key)] = goal_cls
+
+        memory_cls = torch.stack(
+            [dense_cls[index] for index in indices], 0
+        ).to(self.device)
+        cosine = torch.nn.functional.cosine_similarity(
+            goal_cls.expand(memory_cls.shape[0], -1), memory_cls, dim=-1)
+        best_offset = int(torch.argmax(cosine).item())
+        best_anchor = int(indices[best_offset])
+        best_cos = float(cosine[best_offset].item())
+        overlap = self.verify_retrieval_overlap(goal_jpg_bytes, best_anchor)
+        return {
+            "ok": True,
+            "max_cos": best_cos,
+            "argmax_idx": best_anchor,
+            "frames_swept": len(indices),
+            "frames_total": int(self.n),
+            "stride": stride,
+            "candidate_frame_idx": candidate_frame_idx,
+            "min_frame_gap": min_frame_gap,
+            "eligible_anchor_ceiling": int(indices[-1]),
+            "geometry": overlap,
+            "geometry_backend": "sift_fundamental_ransac",
+            "state_mutated": False,
+            "goal_session_index": int(getattr(
+                self, "_goal_session_index", 0)),
+            "scoring_ms": 1000.0 * (time.perf_counter() - started),
+        }
 
     def verify_retrieval_overlap(self, goal_jpg_bytes, anchor):
         """CPU SIFT/epipolar verification for one retrieved history frame.
@@ -799,6 +933,25 @@ class MemNavAgent:
     def add_frame(self, jpg_bytes):
         """Ingest one RGB frame (jpg bytes). Returns the frame index."""
         idx = self.n
+        # Fail closed at the LingBot RoPE position cap.  Past max_frame_num
+        # the streaming 3D-RoPE table slices silently truncate: the temporal
+        # frequency components come back EMPTY (verified 2026-08-22), so
+        # positions past the cap are malformed with no error at this layer.
+        # The flow gate rolls back total_frames_processed for dropped frames
+        # (the gatecurr-era interval fix), so the binding counter is the
+        # aggregator's committed-position count, NOT the raw frame index --
+        # a gated 2500-step episode consumes only a few hundred positions.
+        agg_mod_cap = getattr(self.lb, "agg", None)
+        cap = getattr(agg_mod_cap, "max_frame_num", None)
+        if cap is not None and int(
+                getattr(agg_mod_cap, "total_frames_processed", 0)
+        ) >= int(cap):
+            raise RuntimeError(
+                "memory stream RoPE position cap reached: "
+                f"total_frames_processed would exceed max_frame_num={int(cap)} "
+                "and positions past the cap are silently malformed. Raise "
+                "MEMNAV_MAX_FRAME_NUM, or check that flow gating is enabled "
+                "with the episode's true total length.")
         self._last_frame_jpg_sha256 = hashlib.sha256(jpg_bytes).hexdigest()
         path = os.path.join(self.rgb_dir, f"{idx}.jpg")
         with open(path, "wb") as f:
@@ -1366,9 +1519,67 @@ class MemNavAgent:
         self._arrival_metric_scale_result = dict(result)
         return result
 
+    def _first40_local_pose_metric_scale(self):
+        """Reuse the already-frozen MDTEC scale for robot-local control.
+
+        The full-mono runtime freezes this receipt exactly once after causal
+        frames 0..39 and already uses it for every NavDP depth observation.
+        Replaying LingBot over a second 64-frame prefix inside every fresh
+        real-world episode adds roughly a minute of avoidable startup latency.
+        This path validates and exposes the existing immutable receipt; it
+        never computes a pooled/oracle fallback and does not alter the strict
+        GOAT ``/arrival_query`` policy.
+        """
+
+        from MemNavData.monocular_depth_runtime import (
+            PREFIX_FRAMES,
+            canonical_sha256,
+            validate_first40_scale_receipt,
+        )
+
+        receipt = self._first40_scale_receipt
+        if receipt is None:
+            return {
+                "available": False,
+                "reason": "mdtec_first40_scale_unavailable",
+                "frame_count": int(self.n),
+            }
+        try:
+            validate_first40_scale_receipt(receipt)
+            if receipt["scale_valid"] is not True:
+                raise RuntimeError("frozen first-40 scale is invalid")
+            scale = float(receipt["scale_hat"])
+            result = {
+                "available": True,
+                "reason": "mdtec_first40_causal_scale_available",
+                "frame_count": int(PREFIX_FRAMES),
+                "metric_scale_m_per_raw": scale,
+                "scale_receipt_sha256": canonical_sha256(receipt),
+                "scale_evidence_contract": str(
+                    receipt["scale_evidence_contract"]),
+                "quality": {
+                    "valid_frame_ratio": float(
+                        receipt["valid_frame_ratio"]),
+                    "relative_floor_iqr": float(
+                        receipt["relative_floor_iqr"]),
+                    "scale_clamped": float(
+                        bool(receipt["scale_clamped"])),
+                },
+            }
+        except Exception as error:
+            result = {
+                "available": False,
+                "reason": "mdtec_first40_scale_invalid",
+                "frame_count": int(PREFIX_FRAMES),
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
+        return result
+
     @torch.no_grad()
     def certify_current_image_goal_arrival(
-            self, goal_jpg_bytes, goal_camera_intrinsic=None):
+            self, goal_jpg_bytes, goal_camera_intrinsic=None,
+            metric_scale_policy="strict_first64"):
         """Measure current-to-goal distance without mutating the live stream.
 
         This endpoint supplies geometry evidence only.  It never sees the
@@ -1399,6 +1610,18 @@ class MemNavAgent:
         )
 
         started = time.monotonic()
+        metric_scale_policy = str(metric_scale_policy)
+        if metric_scale_policy not in {"strict_first64", "mdtec_first40"}:
+            return {
+                "schema_version": (
+                    "lingbot_pnp_online_arrival_evidence_v2_20260818"),
+                "status": "invalid_metric_scale_policy",
+                "metric_scale_policy": metric_scale_policy,
+                "certificate_accepted": False,
+                "metric_scale_available": False,
+                "predicted_distance_m": None,
+                "simulator_depth_consumed": False,
+            }
         if goal_camera_intrinsic is None:
             raw_goal_intrinsic = None
         else:
@@ -1416,6 +1639,7 @@ class MemNavAgent:
             "metric_scale_available": False,
             "predicted_distance_m": None,
             "simulator_depth_consumed": False,
+            "metric_scale_policy": metric_scale_policy,
             "goal_camera_calibration": (
                 "explicit_distinct_intrinsic"
                 if raw_goal_intrinsic is not None
@@ -1430,7 +1654,11 @@ class MemNavAgent:
             return {**base, "status": "invalid_goal_camera_intrinsic"}
         if self.certified_relocalization_matcher is None:
             return {**base, "status": "matcher_disabled"}
-        if self.n < MINIMUM_CAUSAL_STREAM_FRAMES:
+        minimum_frames = (
+            40 if metric_scale_policy == "mdtec_first40"
+            else MINIMUM_CAUSAL_STREAM_FRAMES
+        )
+        if self.n < minimum_frames:
             return {**base, "status": "causal_scale_prefix_incomplete"}
         if self._last_agg is None or self._psi is None or not self.cam_pose:
             return {**base, "status": "live_lingbot_state_unavailable"}
@@ -1532,18 +1760,35 @@ class MemNavAgent:
             result["runtime_s"] = float(time.monotonic() - started)
             return result
 
-        scale = self._strict_arrival_metric_scale_preserving_stream()
+        # A certified two-view pose supports relative direction even when the
+        # monocular metric scale is unavailable or poorly calibrated.  Expose
+        # that scale-free quantity before consulting either scale policy.  In
+        # particular, real-world local control must not promote a geometrically
+        # valid bearing into centimetre-level arrival authority merely because
+        # a causal floor-scale receipt exists.
+        scale_free_xy = np.asarray(
+            scale_free_relative_xy(
+                current_pose, np.asarray(pnp["pose9"], dtype=np.float64)),
+            dtype=np.float64,
+        )
+        result["predicted_scale_free_relative_xy"] = scale_free_xy.tolist()
+        result["scale_free_direction_available"] = bool(
+            np.isfinite(scale_free_xy).all()
+            and float(np.linalg.norm(scale_free_xy)) > 1e-8
+        )
+        result.update(self._certified_view_alignment(pnp["pose9"]))
+
+        if metric_scale_policy == "mdtec_first40":
+            scale = self._first40_local_pose_metric_scale()
+        else:
+            scale = self._strict_arrival_metric_scale_preserving_stream()
         result["metric_scale"] = scale
         result["metric_scale_available"] = bool(scale["available"])
         if not scale["available"]:
             result["runtime_s"] = float(time.monotonic() - started)
             return result
 
-        relative_xy = float(scale["metric_scale_m_per_raw"]) * np.asarray(
-            scale_free_relative_xy(
-                current_pose, np.asarray(pnp["pose9"], dtype=np.float64)),
-            dtype=np.float64,
-        )
+        relative_xy = float(scale["metric_scale_m_per_raw"]) * scale_free_xy
         result["predicted_relative_xy_m"] = relative_xy.tolist()
         result["predicted_distance_m"] = float(np.linalg.norm(relative_xy))
         result["pnp_pose9"] = np.asarray(

@@ -21,13 +21,18 @@ from typing import Any
 
 SCHEMA = "cec_controller_portability_smoke_audit_v1"
 HUB_SCHEMA = "cec_controller_portability_hub_v2"
-CONTROLLERS = ("navdp", "vint", "iplanner", "viplanner")
+CONTROLLERS = ("navdp", "vint", "gnm", "nomad", "iplanner", "viplanner")
 ADAPTERS = {
     "navdp": "bearing_mixedgoal",
     "vint": "verified_anchor_imagegoal",
+    "gnm": "verified_anchor_imagegoal",
+    "nomad": "verified_anchor_imagegoal",
     "iplanner": "bearing_pointgoal",
     "viplanner": "bearing_pointgoal",
 }
+# Controllers whose accepted branch takes the hash-bound certified anchor as
+# ImageGoal (short RGB-context family) instead of a 2.5 m PointGoal.
+ANCHOR_IMAGEGOAL_CONTROLLERS = frozenset({"vint", "gnm", "nomad"})
 FORBIDDEN_RUNTIME_FIELDS = {
     "analysis_role", "role", "goal_role", "query_role", "is_revisit",
     "is_novel", "oracle_pose", "gt_pose", "ground_truth_pose",
@@ -143,9 +148,10 @@ def audit_run(controller: str, root: Path) -> dict[str, Any]:
                         f"{controller}/{scene}: Novel projection is not fallback")
                 require(plan.get("cec_controller_seed_consumed") is True,
                         f"{controller}/{scene}: fallback seed was not consumed")
-                if controller == "vint":
+                if controller in ANCHOR_IMAGEGOAL_CONTROLLERS:
                     require(plan.get("cec_alternate_context_shadowed") is True,
-                            f"{controller}/{scene}: ViNT context was not shadowed")
+                            f"{controller}/{scene}: short-context controller "
+                            "was not shadowed")
             else:
                 require(plan.get("cec_takeover") is True
                         and plan.get("cec_action_state") == "takeover",
@@ -154,7 +160,7 @@ def audit_run(controller: str, root: Path) -> dict[str, Any]:
                 require(isinstance(anchor, int),
                         f"{controller}/{scene}: Revisit anchor is missing")
                 anchors.append(anchor)
-                if controller == "vint":
+                if controller in ANCHOR_IMAGEGOAL_CONTROLLERS:
                     anchor_sha = projected.get("cec_anchor_sha256")
                     require(isinstance(anchor_sha, str)
                             and SHA256.fullmatch(anchor_sha) is not None,
@@ -204,7 +210,7 @@ def main() -> None:
     cli = parser.parse_args()
     parsed = [parse_run(item) for item in cli.run]
     require({controller for controller, _path in parsed} == set(CONTROLLERS),
-            "all four headline controllers are required")
+            "all headline controllers are required")
     receipts = [audit_run(controller, path) for controller, path in parsed]
     scenes = sorted({receipt["scene"] for receipt in receipts})
     require(len(scenes) >= cli.minimum_scenes,

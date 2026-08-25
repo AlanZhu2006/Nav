@@ -1,0 +1,30 @@
+{
+  "schema_version": "lifelong_shared_c_vint_node_replay_repair_v1_20260825",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/lifelong_nnr_controller_20260822/lifelong_shared_c_vint_repair_20260824T170803Z",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/lifelong_ctl_vint_de4fc2fdb1c38fe7",
+  "source_receipt_sha256": "21ee8acbdbcda93e92db50d15e20b7094848e78c2ae63b5f7bcd26050f20684d",
+  "failure": {
+    "original_collection_array": 16288964,
+    "failed_index": 3,
+    "failed_node": "gh013",
+    "reason": "strict factual online-A RGB replay hash mismatch caused by cross-node Habitat rendering drift",
+    "successful_indices_before_repair": [0, 1, 2, 4, 5],
+    "successful_node": "gh001"
+  },
+  "repair_contract": {
+    "trace_replay_node": "gh001",
+    "preserve_completed_outputs": true,
+    "repair_indices": "3,6-17",
+    "quarantined_partial_output": "/scratch/yz11502/Research/Nav-axis-uturn-results/lifelong_nnr_controller_20260822/lifelong_shared_c_vint_repair_20260824T170803Z/quarantine_failed_collection/003_e9zR4mvMWw7_episode_0003_job16288964_3_gh013",
+    "old_downstream_jobs_cancelled": [16288974, 16288981, 16288990, 16289004],
+    "old_pending_collection_indices_cancelled": "6-17",
+    "role_or_navigation_outcomes_used_for_repair_selection": false
+  },
+  "jobs": {
+    "repair_collection_array": 16289953,
+    "seal_shared_C_population": 16289954,
+    "paired_B2_evaluation": 16289955,
+    "aggregate": 16289956,
+    "independent_verification": 16289957
+  }
+}

@@ -113,3 +113,9 @@ NavDP/checkpoints/
 /eval_terminal_ab/
 /.diagnostics/
 /.worktrees/
+
+# --- Workspace-owned artifacts maintained outside AlanZhu2006/Nav ---
+/paper/
+/goal.jpg
+/image.jpg
+/input_image.jpg

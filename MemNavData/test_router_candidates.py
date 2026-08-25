@@ -1,10 +1,34 @@
 import unittest
 
 from MemNavData.audit_online_router_topk import score_ranks
-from NavDP.baselines.memnav.router_candidates import temporal_nms_candidates
+from NavDP.baselines.memnav.router_candidates import (
+    causal_goal_support_indices,
+    temporal_nms_candidates,
+)
 
 
 class TemporalCandidateTest(unittest.TestCase):
+    def test_goal_support_window_freezes_capture_time_and_excludes_neighbors(self):
+        at_capture = causal_goal_support_indices(
+            336, candidate_frame_idx=336, stride=8, min_frame_gap=16)
+        after_more_history = causal_goal_support_indices(
+            700, candidate_frame_idx=336, stride=8, min_frame_gap=16)
+        self.assertEqual(at_capture, after_more_history)
+        self.assertEqual(at_capture[-1], 320)
+        self.assertNotIn(328, at_capture)
+
+    def test_goal_support_window_includes_off_stride_causal_ceiling(self):
+        self.assertEqual(
+            causal_goal_support_indices(
+                100, candidate_frame_idx=99, stride=8, min_frame_gap=16),
+            list(range(0, 84, 8)) + [83],
+        )
+
+    def test_goal_support_window_rejects_future_candidate_boundary(self):
+        with self.assertRaises(ValueError):
+            causal_goal_support_indices(
+                10, candidate_frame_idx=11, stride=8, min_frame_gap=2)
+
     def test_adjacent_high_scores_do_not_fill_the_candidate_budget(self):
         scores = [0.99, 0.98, 0.97] + [0.0] * 17 + [0.90]
         selected = temporal_nms_candidates(

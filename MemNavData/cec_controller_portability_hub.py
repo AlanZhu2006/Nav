@@ -6,15 +6,17 @@ CEC rejection uses the shared monocular NavDP ImageGoal fallback for the
 current action.  CEC acceptance authorizes one configured controller adapter:
 
 * NavDP receives its frozen ImageGoal + 2.5 m bearing mixed goal;
-* ViNT receives the hash-bound certified history anchor as ImageGoal;
+* ViNT, GNM and NoMaD receive the hash-bound certified history anchor as
+  ImageGoal;
 * iPlanner and ViPlanner receive the normalized 2.5 m PointGoal and the same
   LingBot monocular-depth sidecar.
 
 This service never reads a Novel/Revisit role label.  CEC authorizes each
 decision independently: reject/error uses the shared mono-NavDP action for
 that decision, while accept uses the configured proof-bound adapter.  The
-fallback and ViNT short contexts are shadow-maintained so later action-level
-switches remain causal.  The service owns no actuator interface.
+fallback and short-context controller (ViNT/GNM/NoMaD) contexts are
+shadow-maintained so later action-level switches remain causal.  The service
+owns no actuator interface.
 """
 
 from __future__ import annotations
@@ -50,8 +52,13 @@ from MemNavData.monocular_depth_runtime import (
 PORTABILITY_HUB_SCHEMA = "cec_controller_portability_hub_v2"
 PROPOSAL_ORDER = "geometry_first"
 SUPPORTED_HTTP_CONTROLLERS = frozenset({
-    "navdp", "vint", "iplanner", "viplanner",
+    "navdp", "vint", "gnm", "nomad", "iplanner", "viplanner",
 })
+# Controllers whose native server keeps a short causal RGB context (a
+# memory_queue of the last few frames) instead of reading a metric-depth
+# sidecar.  These need context shadowing via /observation_step, not a
+# monocular depth sidecar.
+SHORT_CONTEXT_CONTROLLERS = frozenset({"vint", "gnm", "nomad"})
 FORBIDDEN_RUNTIME_FIELDS = frozenset({
     "role", "goal_role", "query_role", "is_revisit", "is_novel",
     "oracle_pose", "gt_pose", "ground_truth_pose", "habitat_pose",
@@ -71,6 +78,10 @@ class PortabilityHubConfig:
     camera_height_m: float
     connect_timeout_s: float = 3.0
     request_timeout_s: float = 180.0
+    # Shared-native system baseline: run the identical probe/certificate
+    # pipeline and receipts, but never grant CEC control authority.  Distinct
+    # from any candidate-ceiling ablation, which still allows takeovers.
+    force_reject_native: bool = False
 
     @property
     def timeout(self) -> tuple[float, float]:
@@ -132,7 +143,8 @@ class CecControllerPortabilityRouter:
             raise ValueError(
                 f"controller {config.controller!r} has no audited HTTP adapter")
         depth_source = (
-            "none" if config.controller == "vint" else "monocular_sidecar")
+            "none" if config.controller in SHORT_CONTEXT_CONTROLLERS
+            else "monocular_sidecar")
         self.plan = ComparisonPlan(
             controller=config.controller,
             protocol=CEC_PROOF_HYBRID,
@@ -232,6 +244,7 @@ class CecControllerPortabilityRouter:
             "cec_accept_adapter": self.spec.cec_accept_adapter,
             "reject_controller": "navdp",
             "reject_policy": "shared_native_exact",
+            "force_reject_native": bool(self.config.force_reject_native),
             "controller_depth_source": self.plan.depth_source,
             "depth_source": "monocular_sidecar",
             "metric_depth_sensor_consumed_by_config": False,
@@ -353,21 +366,23 @@ class CecControllerPortabilityRouter:
         return result
 
     def _shadow_vint_context(self, image: bytes) -> None:
-        """Keep ViNT's short RGB context causal while NavDP owns a query."""
-        if self.spec.key != "vint":
+        """Keep a short-context controller's (ViNT/GNM/NoMaD) causal RGB
+        history advancing while NavDP owns a query."""
+        if self.spec.key not in SHORT_CONTEXT_CONTROLLERS:
             return
         result = self._post_json(
             f"{self.config.controller_url.rstrip('/')}/observation_step",
-            "ViNT shadow observation",
+            f"{self.spec.display_name} shadow observation",
             files={"image": _file("image.jpg", image, "image/jpeg")},
         )
         receipt = result.get("portability_receipt")
         if (result.get("observed") is not True
                 or not isinstance(receipt, Mapping)
-                or receipt.get("controller") != "vint"
+                or receipt.get("controller") != self.spec.key
                 or receipt.get("endpoint") != "observation_step"):
             raise PortabilityHubError(
-                "ViNT shadow observation lost its portability receipt")
+                f"{self.spec.display_name} shadow observation lost its "
+                "portability receipt")
 
     def _shadow_fallback_context(self, image: bytes) -> bool:
         """Keep mono NavDP causal while another controller owns this action."""
@@ -443,10 +458,13 @@ class CecControllerPortabilityRouter:
             result["monocular_depth_receipt"] = depth_receipt
         elif projection.adapter == "verified_anchor_imagegoal":
             if self._anchor_jpeg is None:
-                raise PortabilityHubError("ViNT takeover lacks a certified anchor")
+                raise PortabilityHubError(
+                    f"{self.spec.display_name} takeover lacks a certified "
+                    "anchor")
             controller_started = time.perf_counter()
             result = self._post_json(
-                f"{base}/imagegoal_step", "CEC ViNT step",
+                f"{base}/imagegoal_step",
+                f"CEC {self.spec.display_name} step",
                 files={
                     "image": _file("image.jpg", image, "image/jpeg"),
                     "goal": _file(
@@ -472,8 +490,9 @@ class CecControllerPortabilityRouter:
             result["cec_seed_semantics"] = "navdp_diffusion_rng_consumed"
             result["cec_controller_seed_consumed"] = True
         else:
-            # ViNT/iPlanner/ViPlanner are deterministic inference wrappers and
-            # have no NavDP diffusion RNG.  Preserve the paired request ID for
+            # ViNT/GNM/NoMaD/iPlanner/ViPlanner are deterministic inference
+            # wrappers and have no NavDP diffusion RNG.  Preserve the paired
+            # request ID for
             # evaluator alignment without claiming that their model consumed
             # it as a random seed.
             if requested_seed is not None:
@@ -530,6 +549,7 @@ class CecControllerPortabilityRouter:
                 (time.perf_counter() - certificate_started) * 1000.0)
             projection_started = time.perf_counter()
             if (certificate.get("accepted") is True
+                    and not self.config.force_reject_native
                     and self.spec.cec_accept_adapter
                     == "verified_anchor_imagegoal"):
                 selected_anchor = certificate.get("selected_anchor")
@@ -543,10 +563,14 @@ class CecControllerPortabilityRouter:
                     self._anchor_index = int(selected_anchor)
                     self._anchor_sha256 = str(selected_sha)
             projection = project_cec_proof(
-                self.spec.key, certificate, anchor_jpeg=self._anchor_jpeg)
+                self.spec.key, certificate, anchor_jpeg=self._anchor_jpeg,
+                shadow_only=self.config.force_reject_native)
             projection_ms = (
                 (time.perf_counter() - projection_started) * 1000.0)
-            if projection.takeover:
+            shadow_takeover = bool(projection.takeover)
+            takeover_authorized = (
+                shadow_takeover and not self.config.force_reject_native)
+            if takeover_authorized:
                 result = self._accepted_controller(
                     image, goal, projection, controller_form)
                 shadow_started = time.perf_counter()
@@ -561,8 +585,11 @@ class CecControllerPortabilityRouter:
                 self._shadow_vint_context(image)
                 shadow_ms = (
                     (time.perf_counter() - shadow_started) * 1000.0)
-                alternate_context_shadowed = self.spec.key == "vint"
-                self.last_action_state = "fallback"
+                alternate_context_shadowed = self.spec.key in SHORT_CONTEXT_CONTROLLERS
+                self.last_action_state = (
+                    "forced_reject"
+                    if shadow_takeover and self.config.force_reject_native
+                    else "fallback")
         except PortabilityHubError:
             self.reset_required = True
             raise
@@ -576,7 +603,9 @@ class CecControllerPortabilityRouter:
             "cec_portability_schema": PORTABILITY_HUB_SCHEMA,
             "cec_decision_scope": "per_action",
             "cec_action_state": self.last_action_state,
-            "cec_takeover": bool(projection.takeover),
+            "cec_takeover": takeover_authorized,
+            "cec_shadow_takeover": shadow_takeover,
+            "cec_forced_reject_native": bool(self.config.force_reject_native),
             "cec_accept_controller": self.spec.key,
             "cec_accept_adapter": self.spec.cec_accept_adapter,
             "cec_reject_controller": "navdp",
@@ -638,6 +667,55 @@ class CecControllerPortabilityRouter:
             raise PortabilityHubError(
                 f"CEC memory replay failed: {type(exc).__name__}: {exc}") from exc
 
+    def replay_goal_session(
+        self, goal: bytes, expected_start_frame: int,
+    ) -> dict[str, Any]:
+        """Restore one frozen query lifecycle boundary without inference."""
+        if not self.initialized or self.reset_required:
+            raise PortabilityHubError("router requires a successful reset")
+        if not goal:
+            raise ValueError("goal is required")
+        expected_start_frame = int(expected_start_frame)
+        if expected_start_frame < 0:
+            raise ValueError("expected_start_frame must be non-negative")
+        goal_sha256 = hashlib.sha256(goal).hexdigest()
+        if goal_sha256 == self._goal_sha256:
+            raise ValueError("replayed goal session did not switch goals")
+        try:
+            receipt = self._post_json(
+                f"{self.config.memnav_url.rstrip('/')}/goal_session_replay",
+                "CEC goal-session replay",
+                files={"goal": _file("goal.jpg", goal, "image/jpeg")},
+                data={"expected_start_frame": str(expected_start_frame)},
+            )
+        except Exception as exc:
+            self.reset_required = True
+            raise PortabilityHubError(
+                "CEC goal-session replay failed: "
+                f"{type(exc).__name__}: {exc}") from exc
+        if (receipt.get("diffusion_sampled") is not False
+                or receipt.get("memory_appended") is not False
+                or int(receipt.get("goal_start_frame", -1))
+                != expected_start_frame
+                or receipt.get("goal_session_started") is not True):
+            self.reset_required = True
+            raise PortabilityHubError(
+                "CEC goal-session replay returned an invalid receipt")
+        self.query_index += 1
+        self._goal_sha256 = goal_sha256
+        self._anchor_jpeg = None
+        self._anchor_index = None
+        self._anchor_sha256 = None
+        return {
+            **receipt,
+            "cec_portability_schema": PORTABILITY_HUB_SCHEMA,
+            "cec_goal_sha256": goal_sha256,
+            "cec_query_index": int(self.query_index),
+            "cec_goal_session_expected_start": True,
+            "cec_goal_session_replayed": True,
+            "role_label_visible": False,
+        }
+
     def controller_memory_replay(self, image: bytes) -> dict[str, Any]:
         """Replay one decision RGB into bounded controller context only."""
         if not self.initialized or self.reset_required:
@@ -657,7 +735,7 @@ class CecControllerPortabilityRouter:
             return {
                 **fallback,
                 "cec_portability_schema": PORTABILITY_HUB_SCHEMA,
-                "alternate_context_shadowed": self.spec.key == "vint",
+                "alternate_context_shadowed": self.spec.key in SHORT_CONTEXT_CONTROLLERS,
             }
         except Exception as exc:
             self.reset_required = True
@@ -668,7 +746,14 @@ class CecControllerPortabilityRouter:
                 f"{type(exc).__name__}: {exc}") from exc
 
     def reset_short_context(self, env_id: int) -> dict[str, Any]:
-        """Clear bounded controller state while preserving CEC history."""
+        """Clear bounded controller state without reopening the active goal.
+
+        This endpoint is also used by collision recovery *within* a query.
+        Clearing ``_goal_sha256`` here made the next action look like a new
+        semantic goal to the hub even though MemNav correctly kept the same
+        long-term goal session.  A full episode reset still clears the goal
+        identity in :meth:`reset`; a short FIFO reset must not.
+        """
         if not self.initialized or self.reset_required:
             raise PortabilityHubError("router requires a successful reset")
         payload = {"env_id": int(env_id)}
@@ -692,13 +777,13 @@ class CecControllerPortabilityRouter:
         self._anchor_jpeg = None
         self._anchor_index = None
         self._anchor_sha256 = None
-        self._goal_sha256 = None
         return {
             "ok": True,
             "algo": "cec_controller_portability",
             "fallback": fallback,
             "alternate": alternate,
             "long_term_cec_history_preserved": True,
+            "active_goal_session_preserved": self._goal_sha256 is not None,
         }
 
 
@@ -717,6 +802,7 @@ def create_app(router: CecControllerPortabilityRouter) -> Flask:
             "reset_required": router.reset_required,
             "cec_decision_scope": "per_action",
             "cec_last_action_state": router.last_action_state,
+            "force_reject_native": bool(router.config.force_reject_native),
         })
 
     @app.post("/navigator_reset")
@@ -788,6 +874,26 @@ def create_app(router: CecControllerPortabilityRouter) -> Flask:
         finally:
             call_lock.release()
 
+    @app.post("/goal_session_replay")
+    def goal_session_replay():
+        if "goal" not in request.files:
+            return jsonify({"error": "missing file: goal"}), 400
+        raw_start = request.form.get("expected_start_frame")
+        if raw_start is None:
+            return jsonify({"error": "expected_start_frame is required"}), 400
+        if not call_lock.acquire(blocking=False):
+            return jsonify({"error": "hub_busy"}), 409
+        try:
+            try:
+                return jsonify(router.replay_goal_session(
+                    request.files["goal"].read(), int(raw_start)))
+            except (TypeError, ValueError) as exc:
+                return jsonify({"error": str(exc)}), 400
+            except PortabilityHubError as exc:
+                return jsonify({"error": str(exc), "reset_required": True}), 503
+        finally:
+            call_lock.release()
+
     @app.post("/navigator_reset_env")
     def navigator_reset_env():
         payload = request.get_json(silent=True) or {}
@@ -819,6 +925,12 @@ def main() -> None:
     parser.add_argument("--camera-height-m", type=float, required=True)
     parser.add_argument("--connect-timeout-s", type=float, default=3.0)
     parser.add_argument("--request-timeout-s", type=float, default=180.0)
+    parser.add_argument(
+        "--force-reject-native", action="store_true",
+        help=("shared-native system baseline: run the identical CEC "
+              "probe/certificate pipeline and receipts, but never grant "
+              "takeover authority; every action is the shared mono-NavDP "
+              "fallback"))
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "::1", "localhost"}:
         parser.error("portability hub must bind to loopback; use an SSH tunnel")
@@ -830,6 +942,7 @@ def main() -> None:
         camera_height_m=args.camera_height_m,
         connect_timeout_s=args.connect_timeout_s,
         request_timeout_s=args.request_timeout_s,
+        force_reject_native=bool(args.force_reject_native),
     ))
     create_app(router).run(host=args.host, port=args.port, threaded=True)
 

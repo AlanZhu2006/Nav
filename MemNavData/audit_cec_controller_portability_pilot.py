@@ -14,6 +14,7 @@ from typing import Any
 
 from audit_cec_controller_portability_smoke import (
     ADAPTERS,
+    ANCHOR_IMAGEGOAL_CONTROLLERS,
     CONTROLLERS,
     FORBIDDEN_RUNTIME_FIELDS,
     HUB_SCHEMA,
@@ -116,7 +117,7 @@ def audit_run(controller: str, root: Path) -> dict[str, Any]:
                 require(isinstance(anchor, int),
                         f"{controller}/{role}: anchor missing")
                 anchors.append(anchor)
-                if controller == "vint":
+                if controller in ANCHOR_IMAGEGOAL_CONTROLLERS:
                     require(SHA256.fullmatch(str(
                                 projected.get("cec_anchor_sha256", ""))),
                             f"{controller}/{role}: anchor is not hash-bound")
@@ -138,9 +139,10 @@ def audit_run(controller: str, root: Path) -> dict[str, Any]:
                         f"{controller}/{role}: exact fallback changed")
                 require(plan.get("cec_controller_seed_consumed") is True,
                         f"{controller}/{role}: fallback seed not consumed")
-                if controller == "vint":
+                if controller in ANCHOR_IMAGEGOAL_CONTROLLERS:
                     require(plan.get("cec_alternate_context_shadowed") is True,
-                            f"{controller}/{role}: ViNT context not shadowed")
+                            f"{controller}/{role}: short-context controller "
+                            "not shadowed")
             for field in LATENCY_FIELDS:
                 value = plan.get(field)
                 if field == "cec_depth_sidecar_ms" and value is None:
@@ -187,7 +189,7 @@ def main() -> None:
     cli = parser.parse_args()
     parsed = [parse_run(item) for item in cli.run]
     require({controller for controller, _path in parsed} == set(CONTROLLERS),
-            "all four controllers are required")
+            "all headline controllers are required")
     require(len(parsed) == len(CONTROLLERS),
             "one run per controller is required")
     runs = [audit_run(controller, path) for controller, path in parsed]

@@ -108,7 +108,8 @@ def validate_cli() -> None:
         "lifelong NNR currently requires the role-free CEC portability arm",
     )
     require(
-        args.lifelong_history_scope in ("all_prior", "initial_leg_only"),
+        args.lifelong_history_scope
+        in ("all_prior", "initial_leg_only", "forced_reject_native"),
         "unknown lifelong history scope",
     )
 
@@ -164,11 +165,43 @@ def validate_query_session(
     }
 
 
+def validate_forced_reject(name: str, plans: list[dict]) -> None:
+    """Every decision of the shared-native baseline must refuse takeover."""
+    for row in plans:
+        if row.get("cec_takeover") is None:
+            continue
+        require(
+            row.get("cec_forced_reject_native") is True,
+            f"query {name}: hub is not in force-reject-native mode",
+        )
+        require(
+            row.get("cec_takeover") is False,
+            f"query {name}: forced-reject arm granted a takeover",
+        )
+        require(
+            row.get("cec_action_state") in ("fallback", "forced_reject"),
+            f"query {name}: forced-reject arm left the fallback controller",
+        )
+
+
+def validate_not_forced(name: str, plans: list[dict]) -> None:
+    for row in plans:
+        if row.get("cec_takeover") is None:
+            continue
+        require(
+            row.get("cec_forced_reject_native") is not True,
+            f"query {name}: hub unexpectedly runs force-reject-native",
+        )
+
+
 def plan_stats(plans: list[dict], a_ceiling: int, b_ceiling: int) -> dict:
     decisions = [
         row for row in plans if row.get("cec_takeover") is not None
     ]
     accepted = [row for row in decisions if row.get("cec_takeover") is True]
+    shadow = [
+        row for row in decisions if row.get("cec_shadow_takeover") is True
+    ]
     anchors = [
         int(row["cec_selected_anchor"])
         for row in accepted if row.get("cec_selected_anchor") is not None
@@ -180,6 +213,7 @@ def plan_stats(plans: list[dict], a_ceiling: int, b_ceiling: int) -> dict:
     return {
         "decisions": len(decisions),
         "takeovers": len(accepted),
+        "shadow_takeovers": len(shadow),
         "anchors": anchors,
         "used_A_anchor": any(anchor <= a_ceiling for anchor in anchors),
         "used_factual_B_anchor": any(
@@ -385,7 +419,9 @@ def main() -> None:
             prefix_alive = bool(leg_c["reached"])
             if prefix_alive:
                 b2_ceiling = (
-                    b_ceiling if args.lifelong_history_scope == "all_prior"
+                    b_ceiling
+                    if args.lifelong_history_scope
+                    in ("all_prior", "forced_reject_native")
                     else a_ceiling
                 )
                 leg_b2, geo_b2 = run_query(
@@ -404,7 +440,9 @@ def main() -> None:
             prefix_alive = prefix_alive and bool(leg_b2["reached"])
             if prefix_alive:
                 c2_override = (
-                    None if args.lifelong_history_scope == "all_prior"
+                    None
+                    if args.lifelong_history_scope
+                    in ("all_prior", "forced_reject_native")
                     else a_ceiling
                 )
                 leg_c2, geo_c2 = run_query(
@@ -424,6 +462,13 @@ def main() -> None:
             legs["C2"] = leg_c2
             geodesics["C2"] = geo_c2
 
+            for name in QUERY_NAMES:
+                if not legs[name]["plans"]:
+                    continue
+                if args.lifelong_history_scope == "forced_reject_native":
+                    validate_forced_reject(name, legs[name]["plans"])
+                else:
+                    validate_not_forced(name, legs[name]["plans"])
             memory_legs = [("A", leg_a), ("B", leg_b)] + [
                 (name, legs[name]) for name in QUERY_NAMES
                 if legs[name]["memory_trace"]
@@ -474,6 +519,8 @@ def main() -> None:
                 metric[f"final_dist_{name}"] = float(
                     leg["final_goal_dist_m"])
                 metric[f"cec_takeovers_{name}"] = stats[name]["takeovers"]
+                metric[f"cec_shadow_takeovers_{name}"] = stats[name][
+                    "shadow_takeovers"]
                 metric[f"cec_decision_ms_median_{name}"] = stats[name][
                     "decision_ms_median"]
                 metric[f"cec_decision_ms_max_{name}"] = stats[name][

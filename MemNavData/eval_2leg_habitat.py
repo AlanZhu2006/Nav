@@ -157,6 +157,12 @@ parser.add_argument(
           "adapter for scale-free certified relocalization"),
 )
 parser.add_argument(
+    "--contract_dry_run", action="store_true",
+    help=("validate the full argument contract (routes, adapters, seeds, "
+          "thresholds) and exit before touching Habitat, servers, or any "
+          "output; lets submit scripts fail fast on a login node"),
+)
+parser.add_argument(
     "--certified_cdec_rescue",
     choices=["off", "on"],
     default="off",
@@ -485,12 +491,22 @@ parser.add_argument(
 )
 parser.add_argument(
     "--lifelong_history_scope",
-    choices=["all_prior", "initial_leg_only"],
+    choices=["all_prior", "initial_leg_only", "forced_reject_native"],
     default="all_prior",
-    help=("eval_lifelong_5leg_habitat.py only: all_prior exposes every frame "
-          "acquired before the current goal session; initial_leg_only is an "
+    help=("lifelong evaluators only: all_prior exposes every frame acquired "
+          "before the current goal session; initial_leg_only is an "
           "evaluation ablation that caps every post-A query at the actual "
-          "online leg-A memory boundary"),
+          "online leg-A memory boundary; forced_reject_native records the "
+          "identical memory and receipts but never grants CEC takeover "
+          "authority (shared-native system baseline; requires the "
+          "portability hub's --force-reject-native)"),
+)
+parser.add_argument(
+    "--lifelong_shared_c_trace_root",
+    type=str,
+    default="",
+    help=("shared-C controller experiment only: immutable directory holding "
+          "the single factual C trace replayed before the B2 treatment"),
 )
 parser.add_argument(
     "--lifelong_sequence",
@@ -913,6 +929,27 @@ def srv_memory(image_jpg):
     r = requests.post(f"{BASE}/memory_step", files={"image": ("image.jpg", image_jpg)})
     r.raise_for_status()
     return r.json()
+
+
+def srv_replay_goal_session(goal_jpg, expected_start_frame):
+    """Restore a sealed query boundary without appending or planning."""
+    if args.server_backend != "cec_portability":
+        raise ValueError(
+            "goal-session replay requires the CEC portability backend")
+    response = requests.post(
+        f"{BASE}/goal_session_replay",
+        files={"goal": ("goal.jpg", goal_jpg)},
+        data={"expected_start_frame": str(int(expected_start_frame))},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if (payload.get("diffusion_sampled") is not False
+            or payload.get("memory_appended") is not False
+            or payload.get("cec_goal_session_replayed") is not True
+            or int(payload.get("goal_start_frame", -1))
+            != int(expected_start_frame)):
+        raise RuntimeError("goal-session replay receipt is invalid")
+    return payload
 
 
 def bind_navdp_monocular_transaction(navdp_data, append_receipt, image_jpg):
@@ -2949,6 +2986,10 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                   cec_action_state=response.get(
                                       "cec_action_state"),
                                   cec_takeover=response.get("cec_takeover"),
+                                  cec_shadow_takeover=response.get(
+                                      "cec_shadow_takeover"),
+                                  cec_forced_reject_native=response.get(
+                                      "cec_forced_reject_native"),
                                   cec_accept_controller=response.get(
                                       "cec_accept_controller"),
                                   cec_accept_adapter=response.get(
@@ -3549,6 +3590,13 @@ def main():
         raise ValueError("--router_min_inliers must be >= 0")
     if not 0.0 <= args.router_min_inlier_ratio <= 1.0:
         raise ValueError("--router_min_inlier_ratio must be in [0, 1]")
+    if args.contract_dry_run:
+        print("[eval2leg] contract_dry_run OK: "
+              f"backend={args.server_backend} route={args.hybrid_route} "
+              f"adapter={args.revisit_adapter} leg1={args.leg1_mode} "
+              f"depth={args.navdp_depth_source} "
+              f"selector={args.trajectory_selector}")
+        return
     try:
         import imageio
     except ImportError:

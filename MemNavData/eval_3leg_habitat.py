@@ -62,7 +62,11 @@ def replay_shared_leg_b(
         expected_episode=episode,
         expected_seed=int(episode_seed),
         expected_goal_sha256=base.bytes_sha256(goal_jpg),
-        expected_source_scene=Path(args.scene).stem,
+        # Stable scene identity is explicit because HM3D asset filenames may
+        # contain representation suffixes (for example ``.basis.glb``).
+        # Deriving identity from Path.stem is only accidentally correct for
+        # MP3D's ``<scene>.glb`` layout.
+        expected_source_scene=base.SCENE_IDENTITY,
     )
     if payload["goal_source_episode"] != episode:
         raise RuntimeError("shared trace does not use the episode's own Goal B")

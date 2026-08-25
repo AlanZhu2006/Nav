@@ -56,16 +56,19 @@ def checkpoint(tmp_path, name):
     return path
 
 
+RGB_ONLY_CONTROLLERS = frozenset({"vint", "gnm", "nomad"})
+
+
 def make_proxy(tmp_path, controller="iplanner", session=None):
-    if controller == "vint":
+    if controller in RGB_ONLY_CONTROLLERS:
         comparison = ComparisonPlan(
-            controller="vint",
+            controller=controller,
             protocol=NATIVE_IMAGEGOAL,
             depth_source="none",
             query_population="mixed_role",
             reject_policy="not_applicable",
         )
-        checkpoints = {"vint": checkpoint(tmp_path, "vint.pth")}
+        checkpoints = {controller: checkpoint(tmp_path, f"{controller}.pth")}
     elif controller == "viplanner":
         comparison = ComparisonPlan(
             controller="viplanner",
@@ -97,10 +100,10 @@ def make_proxy(tmp_path, controller="iplanner", session=None):
 
 
 def make_hybrid_proxy(tmp_path, controller, session=None):
-    depth = "none" if controller == "vint" else "metric_sensor"
+    depth = "none" if controller in RGB_ONLY_CONTROLLERS else "metric_sensor"
     checkpoints = (
-        {"vint": checkpoint(tmp_path, "vint-hybrid.pth")}
-        if controller == "vint"
+        {controller: checkpoint(tmp_path, f"{controller}-hybrid.pth")}
+        if controller in RGB_ONLY_CONTROLLERS
         else {"iplanner": checkpoint(tmp_path, "iplanner-hybrid.pth")}
     )
     return ControllerPortabilityProxy(ProxyConfig(
@@ -199,15 +202,17 @@ def test_pointgoal_rejects_privileged_fields_and_malformed_output(tmp_path):
         )
 
 
-def test_vint_native_imagegoal_is_allowed_but_pointgoal_is_not(tmp_path):
+@pytest.mark.parametrize("controller", ["vint", "gnm", "nomad"])
+def test_rgb_only_native_imagegoal_is_allowed_but_pointgoal_is_not(
+        tmp_path, controller):
     session = FakeSession([trajectory_payload()])
-    proxy = make_proxy(tmp_path, controller="vint", session=session)
+    proxy = make_proxy(tmp_path, controller=controller, session=session)
     result = proxy.step(
         "imagegoal_step",
         files=request_files(include_goal=True),
         form={},
     )
-    assert result["portability_receipt"]["controller"] == "vint"
+    assert result["portability_receipt"]["controller"] == controller
     assert result["portability_receipt"]["pointgoal_radius_m"] is None
     with pytest.raises(ValueError, match="does not support pointgoal"):
         proxy.step(
@@ -262,7 +267,9 @@ def test_cec_iplanner_proxy_requires_proof_and_action_authorization(tmp_path):
             form={**form, "cec_action_authorized": "0"})
 
 
-def test_cec_vint_proxy_accepts_only_hash_bound_history_anchor(tmp_path):
+@pytest.mark.parametrize("controller", ["vint", "gnm", "nomad"])
+def test_cec_rgb_only_proxy_accepts_only_hash_bound_history_anchor(
+        tmp_path, controller):
     anchor = b"certified-anchor"
     anchor_sha = hashlib.sha256(anchor).hexdigest()
     files = request_files(include_goal=True)
@@ -274,7 +281,7 @@ def test_cec_vint_proxy_accepts_only_hash_bound_history_anchor(tmp_path):
         "goal_source": "certified_history_anchor",
     }
     proxy = make_hybrid_proxy(
-        tmp_path, "vint", FakeSession([trajectory_payload()]))
+        tmp_path, controller, FakeSession([trajectory_payload()]))
     result = proxy.step("imagegoal_step", files=files, form=form)
     assert result["portability_receipt"]["cec_accept_adapter"] == (
         "verified_anchor_imagegoal")
@@ -285,10 +292,12 @@ def test_cec_vint_proxy_accepts_only_hash_bound_history_anchor(tmp_path):
             form={**form, "cec_anchor_sha256": "b" * 64})
 
 
-def test_cec_vint_shadow_observation_advances_context_without_goal(tmp_path):
+@pytest.mark.parametrize("controller", ["vint", "gnm", "nomad"])
+def test_cec_rgb_only_shadow_observation_advances_context_without_goal(
+        tmp_path, controller):
     proxy = make_hybrid_proxy(
-        tmp_path, "vint",
-        FakeSession([{"algo": "vint", "observed": True}]))
+        tmp_path, controller,
+        FakeSession([{"algo": controller, "observed": True}]))
     result = proxy.observe(
         files={"image": ("image.jpg", b"rgb", "image/jpeg")},
         form={},
@@ -298,3 +307,14 @@ def test_cec_vint_shadow_observation_advances_context_without_goal(tmp_path):
     assert result["portability_receipt"]["observation_count"] == 1
     with pytest.raises(ValueError, match="exactly one image"):
         proxy.observe(files=request_files(), form={})
+
+
+def test_cec_observation_step_is_refused_for_non_rgb_only_controllers(
+        tmp_path):
+    proxy = make_hybrid_proxy(
+        tmp_path, "iplanner", FakeSession([]))
+    with pytest.raises(ValueError, match="not available"):
+        proxy.observe(
+            files={"image": ("image.jpg", b"rgb", "image/jpeg")},
+            form={},
+        )

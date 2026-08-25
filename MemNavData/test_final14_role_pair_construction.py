@@ -10,11 +10,109 @@ from pathlib import Path
 import numpy as np
 
 import build_final14_role_pair_scene as builder
+import construct_hm3d_fullmono_lifelong_ab as lifelong_builder
 import finalize_final14_role_pairs as finalizer
 from audit_final14_role_pairs import audit as audit_final14
 
 
 class Final14RolePairConstructionTest(unittest.TestCase):
+    def test_parent_certified_missing_online_root_is_zero_history_attrition(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scene = "upstream_empty_scene"
+            scene_index = 4
+            parent_manifest = root / "parent_manifest.json"
+            parent_population = root / "population_receipt.json"
+            protocol = root / "protocol.json"
+            parent_manifest.write_text("{}\n")
+            parent_population.write_text("{}\n")
+            protocol.write_text("{}\n")
+            parent_scene = (
+                root / "construction/scenes"
+                / f"{scene_index:02d}_{scene}"
+            )
+            parent_scene.mkdir(parents=True)
+            upstream = {
+                "status": "complete",
+                "scene": scene,
+                "scene_index": scene_index,
+                "query_policy_outcomes_read": False,
+                "construction_attrition": [{
+                    "scene": scene,
+                    "stage": "source_generation",
+                    "reason": "fixed_attempt_source_generation_incomplete",
+                }],
+                "materialization": {
+                    "materialized": 0,
+                    "manifest_sha256": None,
+                },
+            }
+            completion_path = parent_scene / "completion.json"
+            completion_path.write_text(json.dumps(upstream, sort_keys=True) + "\n")
+            upstream_sha = lifelong_builder.sha256_file(completion_path)
+            (parent_scene / "completion.json.sha256").write_text(
+                upstream_sha + "  completion.json\n"
+            )
+            fragment = {
+                "scene": scene,
+                "scene_index": scene_index,
+                "materialized_histories": 0,
+                "goal_a_successes": 0,
+                "retained_histories": 0,
+                "construction_completion_sha256": upstream_sha,
+            }
+            out = root / "repair" / f"{scene_index:02d}_{scene}"
+            receipt = lifelong_builder.write_upstream_empty_scene(
+                parent_root=root,
+                protocol_path=protocol,
+                parent_manifest_path=parent_manifest,
+                parent_population_path=parent_population,
+                population_fragment=fragment,
+                scene=scene,
+                scene_index=scene_index,
+                online_root=parent_scene / "online_a",
+                out=out,
+            )
+            self.assertEqual(receipt["materialized_A_histories"], 0)
+            self.assertEqual(receipt["constructible_AB_C_histories"], 0)
+            self.assertFalse(receipt["query_policy_outcomes_read"])
+            self.assertIsNone(receipt["online_A_manifest_sha256"])
+            self.assertEqual(
+                receipt["upstream_parent_completion_sha256"], upstream_sha
+            )
+            manifest = json.loads(
+                (out / "role_pairs/manifest.json").read_text()
+            )
+            self.assertEqual(manifest["episodes"], [])
+
+    def test_missing_online_root_cannot_hide_materialized_history(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ("parent_manifest.json", "population_receipt.json",
+                         "protocol.json"):
+                (root / name).write_text("{}\n")
+            with self.assertRaisesRegex(
+                RuntimeError, "despite materialized histories"
+            ):
+                lifelong_builder.write_upstream_empty_scene(
+                    parent_root=root,
+                    protocol_path=root / "protocol.json",
+                    parent_manifest_path=root / "parent_manifest.json",
+                    parent_population_path=root / "population_receipt.json",
+                    population_fragment={
+                        "scene": "scene",
+                        "scene_index": 0,
+                        "materialized_histories": 1,
+                        "goal_a_successes": 1,
+                        "retained_histories": 1,
+                        "construction_completion_sha256": "0" * 64,
+                    },
+                    scene="scene",
+                    scene_index=0,
+                    online_root=root / "construction/scenes/00_scene/online_a",
+                    out=root / "out",
+                )
+
     def test_empty_scene_is_retained_as_fail_closed_attrition(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -1,5 +1,19 @@
 # MemNav — Implicit-Memory Image-Goal Navigation
 
+> **Current supported path (2026-08-25).** The paper/deployment method has
+> converged to Full-Mono Certified Episodic Compass (CEC), not the trainable
+> cross-view decoder described in the historical section below. CEC keeps
+> causal RGB/JPEG history and frozen DINO retrieval keys, uses LingBot's
+> streaming pose/depth state as an implicit geometric coordinate scaffold,
+> verifies a retrieved anchor with LightGlue + PnP + an atomic certificate,
+> and exposes only a scale-free bearing to frozen NavDP. It is neither a
+> classical explicit map nor only a LingBot KV cache. See
+> [`STATUS_20260825_GIT_RELEASE.md`](../../../MemNavData/STATUS_20260825_GIT_RELEASE.md)
+> for the current architecture,
+> evidence ledger, code map, and claim boundaries.
+
+## Historical learned MemNav design
+
 MemNav is an image-goal navigation policy with **persistent implicit memory**. It replaces
 NavDP's shallow 8-frame RGBD window with a frozen **LingBot-Map** streaming backbone
 (Geometric Context Transformer, `/home/asus/Research/lingbot-map/`) as the history encoder, and

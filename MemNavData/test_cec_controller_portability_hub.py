@@ -190,6 +190,51 @@ def test_reject_uses_shared_mono_navdp_and_rechecks_next_action():
     ]
 
 
+def test_goal_session_replay_restores_boundary_without_inference():
+    session = FakeSession([
+        memory_reset(), fallback_reset(),
+        FakeResponse({
+            "goal_session_index": 1,
+            "goal_session_started": True,
+            "long_term_memory_preserved": True,
+            "goal_start_frame": 80,
+            "candidate_ceiling": 79,
+            "frame_count": 80,
+            "diffusion_sampled": False,
+            "memory_appended": False,
+        }),
+    ])
+    router = CecControllerPortabilityRouter(
+        config("navdp"), session=session)
+    reset(router)
+    result = router.replay_goal_session(b"goal-c", 80)
+    assert result["cec_goal_session_replayed"] is True
+    assert result["cec_query_index"] == 1
+    assert result["goal_start_frame"] == 80
+    assert result["diffusion_sampled"] is False
+    assert [url for url, _ in session.calls][-1] == (
+        "http://mem/goal_session_replay")
+
+
+def test_goal_session_replay_fails_closed_on_mutating_receipt():
+    session = FakeSession([
+        memory_reset(), fallback_reset(),
+        FakeResponse({
+            "goal_session_index": 1,
+            "goal_session_started": True,
+            "goal_start_frame": 80,
+            "diffusion_sampled": False,
+            "memory_appended": True,
+        }),
+    ])
+    router = CecControllerPortabilityRouter(
+        config("navdp"), session=session)
+    reset(router)
+    with pytest.raises(PortabilityHubError):
+        router.replay_goal_session(b"goal-c", 80)
+    assert router.reset_required is True
+
+
 def test_iplanner_accept_uses_same_proof_bearing_and_lingbot_depth():
     image = b"current-rgb"
     session = FakeSession([
@@ -230,7 +275,9 @@ def test_iplanner_accept_uses_same_proof_bearing_and_lingbot_depth():
     assert set(kwargs["files"]) == {"image", "depth"}
 
 
-def test_vint_receives_only_the_proof_bound_history_anchor():
+@pytest.mark.parametrize("controller", ["vint", "gnm", "nomad"])
+def test_short_context_controller_receives_only_the_proof_bound_history_anchor(
+        controller):
     anchor_image = b"certified-history-anchor"
     anchor_sha = hashlib.sha256(anchor_image).hexdigest()
     binary = FakeResponse(
@@ -242,7 +289,7 @@ def test_vint_receives_only_the_proof_bound_history_anchor():
     )
     session = FakeSession([
         memory_reset(), fallback_reset(),
-        controller_reset("vint", "verified_anchor_imagegoal"),
+        controller_reset(controller, "verified_anchor_imagegoal"),
         FakeResponse({
             "frame_idx": 40,
             "certified_visual_candidates": [{"anchor": 12, "score": 0.9}],
@@ -252,7 +299,8 @@ def test_vint_receives_only_the_proof_bound_history_anchor():
         echo_proof,
         FakeResponse({"algo": "navdp", "diffusion_sampled": False}),
     ])
-    router = CecControllerPortabilityRouter(config("vint"), session=session)
+    router = CecControllerPortabilityRouter(
+        config(controller), session=session)
     reset(router)
     result = router.plan_imagegoal(image=b"current", goal=b"original-goal")
     assert result["cec_takeover"] is True
@@ -322,27 +370,30 @@ def test_new_goal_reopens_cec_without_resetting_episode_history():
         "http://mem/certified_relocalize") == 2
 
 
-def test_vint_fallback_keeps_short_context_warm_without_action():
+@pytest.mark.parametrize("controller", ["vint", "gnm", "nomad"])
+def test_short_context_controller_fallback_keeps_context_warm_without_action(
+        controller):
     native = trajectory(
         depth_source="monocular_sidecar",
         metric_depth_sensor_consumed=False,
     )
     shadow = FakeResponse({
-        "algo": "vint",
+        "algo": controller,
         "observed": True,
         "portability_receipt": {
-            "controller": "vint",
+            "controller": controller,
             "endpoint": "observation_step",
         },
     })
     session = FakeSession([
         memory_reset(), fallback_reset(),
-        controller_reset("vint", "verified_anchor_imagegoal"),
+        controller_reset(controller, "verified_anchor_imagegoal"),
         FakeResponse({"frame_idx": 40, "certified_visual_candidates": []}),
         FakeResponse({"ok": True, "accepted": False, "reason": "novel"}),
         FakeResponse(native), shadow,
     ])
-    router = CecControllerPortabilityRouter(config("vint"), session=session)
+    router = CecControllerPortabilityRouter(
+        config(controller), session=session)
     reset(router)
     result = router.plan_imagegoal(image=b"current", goal=b"novel")
     assert result["cec_action_state"] == "fallback"
@@ -365,25 +416,28 @@ def test_memory_step_replays_only_into_long_term_cec_history():
     assert set(session.calls[-1][1]["files"]) == {"image"}
 
 
-def test_controller_replay_updates_fallback_and_vint_without_sampling():
+@pytest.mark.parametrize("controller", ["vint", "gnm", "nomad"])
+def test_controller_replay_updates_fallback_and_short_context_without_sampling(
+        controller):
     session = FakeSession([
         memory_reset(), fallback_reset(),
-        controller_reset("vint", "verified_anchor_imagegoal"),
+        controller_reset(controller, "verified_anchor_imagegoal"),
         FakeResponse({
             "algo": "navdp",
             "diffusion_sampled": False,
             "history_frame_count": 8,
         }),
         FakeResponse({
-            "algo": "vint",
+            "algo": controller,
             "observed": True,
             "portability_receipt": {
-                "controller": "vint",
+                "controller": controller,
                 "endpoint": "observation_step",
             },
         }),
     ])
-    router = CecControllerPortabilityRouter(config("vint"), session=session)
+    router = CecControllerPortabilityRouter(
+        config(controller), session=session)
     reset(router)
     result = router.controller_memory_replay(b"decision-rgb")
     assert result["diffusion_sampled"] is False
@@ -394,7 +448,7 @@ def test_controller_replay_updates_fallback_and_vint_without_sampling():
     ]
 
 
-def test_short_reset_clears_query_cache_but_preserves_long_term_cec():
+def test_short_reset_clears_anchor_cache_but_preserves_active_goal_session():
     session = FakeSession([
         memory_reset(), fallback_reset(),
         controller_reset("iplanner", "bearing_pointgoal"),
@@ -408,8 +462,103 @@ def test_short_reset_clears_query_cache_but_preserves_long_term_cec():
     router._anchor_jpeg = b"old-anchor"
     result = router.reset_short_context(0)
     assert result["long_term_cec_history_preserved"] is True
-    assert router._goal_sha256 is None
+    assert result["active_goal_session_preserved"] is True
+    assert router._goal_sha256 == hashlib.sha256(b"old-goal").hexdigest()
     assert router._anchor_jpeg is None
     assert router.last_action_state == "unresolved"
     assert all(url != "http://mem/navigator_reset"
                for url, _kwargs in session.calls[3:])
+
+
+def forced_config(controller="navdp"):
+    return PortabilityHubConfig(
+        controller=controller,
+        memnav_url="http://mem",
+        controller_url="http://fallback",
+        fallback_navdp_url="http://fallback",
+        camera_height_m=0.5,
+        force_reject_native=True,
+    )
+
+
+def test_forced_reject_native_never_takes_over_on_accept():
+    native = trajectory(
+        depth_source="monocular_sidecar",
+        metric_depth_sensor_consumed=False,
+    )
+    session = FakeSession([
+        memory_reset(), fallback_reset(),
+        FakeResponse({
+            "frame_idx": 40, "certified_visual_candidates": [{"anchor": 12}],
+            "goal_session_index": 1, "goal_session_started": True,
+            "long_term_memory_preserved": True,
+            "goal_start_frame": 40, "candidate_ceiling": 39,
+        }),
+        accepted_certificate(),
+        FakeResponse(native),
+    ])
+    router = CecControllerPortabilityRouter(forced_config(), session=session)
+    receipt = reset(router)
+    assert receipt["force_reject_native"] is True
+    result = router.plan_imagegoal(image=b"i1", goal=b"g")
+    # The certificate accepted, but authority stays with the shared fallback.
+    assert result["cec_takeover"] is False
+    assert result["cec_shadow_takeover"] is True
+    assert result["cec_forced_reject_native"] is True
+    assert result["cec_action_state"] == "forced_reject"
+    # The action came from the shared mono-NavDP fallback endpoint.
+    assert session.calls[-1][0] == "http://fallback/imagegoal_step"
+    # Session receipts survive unchanged for the memory-recording audit.
+    assert result["cec_goal_session_started"] is True
+    assert result["cec_candidate_ceiling"] == 39
+
+
+def test_forced_reject_native_plain_reject_stays_fallback():
+    native = trajectory(
+        depth_source="monocular_sidecar",
+        metric_depth_sensor_consumed=False,
+    )
+    session = FakeSession([
+        memory_reset(), fallback_reset(),
+        FakeResponse({
+            "frame_idx": 40, "certified_visual_candidates": [],
+            "goal_session_index": 1, "goal_session_started": True,
+            "long_term_memory_preserved": True,
+            "goal_start_frame": 40, "candidate_ceiling": 39,
+        }),
+        FakeResponse({
+            "ok": True, "accepted": False, "reason": "no_causal_candidate"}),
+        FakeResponse(native),
+    ])
+    router = CecControllerPortabilityRouter(forced_config(), session=session)
+    reset(router)
+    result = router.plan_imagegoal(image=b"i1", goal=b"g")
+    assert result["cec_takeover"] is False
+    assert result["cec_shadow_takeover"] is False
+    assert result["cec_action_state"] == "fallback"
+    assert result["cec_forced_reject_native"] is True
+
+
+def test_default_mode_reports_shadow_equal_to_takeover():
+    native = trajectory(
+        depth_source="monocular_sidecar",
+        metric_depth_sensor_consumed=False,
+    )
+    session = FakeSession([
+        memory_reset(), fallback_reset(),
+        FakeResponse({
+            "frame_idx": 40, "certified_visual_candidates": [],
+            "goal_session_index": 1, "goal_session_started": True,
+            "long_term_memory_preserved": True,
+            "goal_start_frame": 40, "candidate_ceiling": 39,
+        }),
+        FakeResponse({
+            "ok": True, "accepted": False, "reason": "no_causal_candidate"}),
+        FakeResponse(native),
+    ])
+    router = CecControllerPortabilityRouter(config("navdp"), session=session)
+    receipt = reset(router)
+    assert receipt["force_reject_native"] is False
+    result = router.plan_imagegoal(image=b"i1", goal=b"g")
+    assert result["cec_shadow_takeover"] == result["cec_takeover"] is False
+    assert result["cec_forced_reject_native"] is False

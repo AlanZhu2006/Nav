@@ -31,6 +31,10 @@ Endpoints (NavDP wire-contract style):
   POST /retrieval_verify     files: goal (jpg), form: anchor
                              -> CPU two-view geometric overlap diagnostics;
                              does not mutate streaming model state.
+  POST /goal_candidate_support files: goal (jpg), form: stride,
+                               candidate_frame_idx, min_frame_gap
+                             -> cached whole-history DINO top-1 + geometric
+                                support; does not open a goal session.
   POST /phase_b_rank         files: goal (jpg), form: candidates (JSON)
                              -> learned ordering of the frozen DINO shortlist;
                              no activation decision and no stream mutation.
@@ -522,15 +526,7 @@ def monocular_depth_query():
     return jsonify(payload)
 
 
-@app.route("/arrival_query", methods=["POST"])
-def arrival_query():
-    """Return read-only LingBot/PnP evidence for the latest streamed frame.
-
-    This endpoint cannot emit or authorize GOAT ``SUBTASK_STOP`` because it
-    does not receive the native-zero trigger.  Authorization remains a pure
-    client-side conjunction under the frozen contract.
-    """
-
+def _current_goal_pose_query(metric_scale_policy):
     if "goal" not in request.files:
         return jsonify({"error": "goal image is required"}), 400
     raw_goal_intrinsic = request.form.get("goal_camera_intrinsic")
@@ -545,8 +541,33 @@ def arrival_query():
             }), 400
     result = agent.certify_current_image_goal_arrival(
         request.files["goal"].read(),
-        goal_camera_intrinsic=goal_camera_intrinsic)
+        goal_camera_intrinsic=goal_camera_intrinsic,
+        metric_scale_policy=metric_scale_policy)
     return jsonify(result)
+
+
+@app.route("/arrival_query", methods=["POST"])
+def arrival_query():
+    """Return strict GOAT arrival evidence for the latest streamed frame.
+
+    This endpoint cannot emit or authorize GOAT ``SUBTASK_STOP`` because it
+    does not receive the native-zero trigger.  Authorization remains a pure
+    client-side conjunction under the frozen strict-first-64 contract.
+    """
+
+    return _current_goal_pose_query("strict_first64")
+
+
+@app.route("/local_pose_query", methods=["POST"])
+def local_pose_query():
+    """Return low-latency current-to-goal pose for real-world control.
+
+    This explicitly reuses the immutable first-40 MDTEC scale already
+    consumed by full-mono NavDP.  It is a local controller observation, not a
+    replacement for the separately frozen GOAT semantic-arrival contract.
+    """
+
+    return _current_goal_pose_query("mdtec_first40")
 
 
 def candidate_ceiling_override():
@@ -558,6 +579,22 @@ def with_goal_session_receipt(payload):
     payload = dict(payload)
     payload.update(agent.goal_session_status())
     return payload
+
+
+@app.route("/goal_session_replay", methods=["POST"])
+def goal_session_replay():
+    """Restore a frozen goal-session boundary without inference or append."""
+    if "goal" not in request.files:
+        return jsonify({"error": "goal image is required"}), 400
+    raw_start = request.form.get("expected_start_frame")
+    if raw_start is None:
+        return jsonify({"error": "expected_start_frame is required"}), 400
+    try:
+        out = agent.replay_goal_session(
+            request.files["goal"].read(), int(raw_start))
+    except (TypeError, ValueError) as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify(out)
 
 
 @app.route("/imagegoal_step", methods=["POST"])
@@ -635,6 +672,37 @@ def retrieval_verify():
     out = agent.verify_retrieval_overlap(
         request.files["goal"].read(), int(anchor))
     return jsonify(out)
+
+
+@app.route("/goal_candidate_support", methods=["POST"])
+def goal_candidate_support():
+    """Read-only whole-history support query for real-world goal selection."""
+    if "goal" not in request.files:
+        return jsonify({
+            "ok": False,
+            "reason": "goal_required",
+            "state_mutated": False,
+        }), 400
+    try:
+        stride = max(1, int(request.form.get("stride", 8)))
+        candidate_frame_idx = request.form.get("candidate_frame_idx")
+        if candidate_frame_idx is not None:
+            candidate_frame_idx = int(candidate_frame_idx)
+        min_frame_gap = request.form.get("min_frame_gap")
+        if min_frame_gap is not None:
+            min_frame_gap = max(1, int(min_frame_gap))
+    except (TypeError, ValueError):
+        return jsonify({
+            "ok": False,
+            "reason": "invalid_causal_support_parameters",
+            "state_mutated": False,
+        }), 400
+    return jsonify(agent.goal_candidate_support(
+        request.files["goal"].read(),
+        stride=stride,
+        candidate_frame_idx=candidate_frame_idx,
+        min_frame_gap=min_frame_gap,
+    ))
 
 
 @app.route("/phase_b_rank", methods=["POST"])

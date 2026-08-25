@@ -183,11 +183,13 @@ def test_navdp_preserves_the_frozen_cec_mixed_goal_adapter():
     assert projected.payload["preserve_original_imagegoal"] is True
 
 
-def test_vint_consumes_the_certified_anchor_not_an_uncertified_goal():
+@pytest.mark.parametrize("controller", ["vint", "gnm", "nomad"])
+def test_short_context_controller_consumes_the_certified_anchor_not_an_uncertified_goal(
+        controller):
     anchor = b"certified-anchor-jpeg"
     anchor_sha = hashlib.sha256(anchor).hexdigest()
     projected = project_cec_proof(
-        "vint",
+        controller,
         accepted_proof(selected_anchor_image_sha256=anchor_sha),
         anchor_jpeg=anchor,
     )
@@ -197,10 +199,27 @@ def test_vint_consumes_the_certified_anchor_not_an_uncertified_goal():
     assert projected.payload["cec_anchor_sha256"] == anchor_sha
     with pytest.raises(ValueError, match="does not match"):
         project_cec_proof(
-            "vint",
+            controller,
             accepted_proof(selected_anchor_image_sha256="0" * 64),
             anchor_jpeg=anchor,
         )
+
+
+@pytest.mark.parametrize("controller", ["vint", "gnm", "nomad"])
+def test_short_context_controller_shadow_only_needs_no_anchor_fetch(
+        controller):
+    """forced-reject-native audits a shadow takeover without paying for the
+    (expensive) certified anchor fetch, since the takeover is never granted."""
+    projected = project_cec_proof(
+        controller, accepted_proof(), anchor_jpeg=None, shadow_only=True)
+    assert projected.takeover
+    assert projected.adapter == "verified_anchor_imagegoal"
+    assert projected.payload["shadow_anchor_unresolved"] is True
+    assert "cec_anchor_sha256" not in projected.payload
+    with pytest.raises(ValueError, match="requires the certified anchor"):
+        project_cec_proof(
+            controller, accepted_proof(), anchor_jpeg=None,
+            shadow_only=False)
 
 
 def test_ego_consumes_only_the_local_cec_goal_and_remains_non_headline():
@@ -212,7 +231,8 @@ def test_ego_consumes_only_the_local_cec_goal_and_remains_non_headline():
 
 
 @pytest.mark.parametrize(
-    "controller", ["navdp", "vint", "iplanner", "viplanner", "ego_planner"])
+    "controller",
+    ["navdp", "vint", "gnm", "nomad", "iplanner", "viplanner", "ego_planner"])
 def test_cec_rejection_selects_the_same_native_action_fallback(controller):
     projected = project_cec_proof(controller, {
         "certified_relocalization_schema_version": 2,

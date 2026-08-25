@@ -427,6 +427,14 @@ def main() -> None:
                     counts = router_counts(leg["plans"])
                     depth = depth_counts(leg["plans"])
                     latency = cec_latency_counts(leg["plans"])
+                    query_trace_payload = base.leg1_trace_payload(
+                        episode=episode_dir.name,
+                        episode_seed=episode_seed,
+                        goal_jpg=goal_jpg,
+                        goal_source_episode=episode_dir.name,
+                        source_scene=scene,
+                        leg=leg,
+                    )
                     metric = {
                         "scene": scene,
                         "episode": episode_dir.name,
@@ -446,6 +454,10 @@ def main() -> None:
                         "path_len_m": float(leg["path_len"]),
                         "steps": int(leg["steps"]),
                         "final_goal_dist_m": float(leg["final_goal_dist_m"]),
+                        "end_x_m": float(leg["end_pos"][0]),
+                        "end_y_m": float(leg["end_pos"][1]),
+                        "end_z_m": float(leg["end_pos"][2]),
+                        "end_yaw_rad": float(leg["end_psi"]),
                         "termination_reason": leg.get("termination_reason"),
                         **counts,
                         **depth,
@@ -471,6 +483,37 @@ def main() -> None:
                                     "legA": leg_a["rollout_trace"],
                                     "query": leg["rollout_trace"],
                                 },
+                                # Canonical factual-prefix construction needs
+                                # the exact terminal state returned by the
+                                # controller, not an endpoint inferred from the
+                                # last pre-action observation.  These fields are
+                                # diagnostics for ordinary role-pair runs and a
+                                # sealed source for later multi-leg replay.
+                                "query_result": {
+                                    "reached": bool(leg["reached"]),
+                                    "path_len_m": float(leg["path_len"]),
+                                    "path_len_at_reach_m": (
+                                        None
+                                        if leg.get("path_len_at_reach") is None
+                                        else float(leg["path_len_at_reach"])
+                                    ),
+                                    "step_at_reach": leg.get("step_at_reach"),
+                                    "steps": int(leg["steps"]),
+                                    "termination_reason": leg.get(
+                                        "termination_reason"
+                                    ),
+                                    "blocked_step_count": int(
+                                        leg.get("blocked_step_count", 0)
+                                    ),
+                                    "final_goal_dist_m": float(
+                                        leg["final_goal_dist_m"]
+                                    ),
+                                    "end_position": [
+                                        float(value) for value in leg["end_pos"]
+                                    ],
+                                    "end_yaw_rad": float(leg["end_psi"]),
+                                },
+                                "query_trace_payload": query_trace_payload,
                             },
                             indent=2,
                             sort_keys=True,

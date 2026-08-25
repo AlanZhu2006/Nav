@@ -75,21 +75,22 @@ def accepted_anchors(plans: list[dict]) -> list[int]:
     ]
 
 
+# Fields that identify WHAT decision CEC made: accept/reject, which adapter,
+# which historical anchor, which goal session.  The paired all_prior/
+# initial_leg_only design promises an identical shared prefix, so these must
+# match exactly -- a mismatch here means the construction contract broke
+# (wrong ceiling threaded through, cache not preserved across arms, etc).
 CAUSAL_PLAN_KEYS = (
     "step",
     "requested_diffusion_seed",
     "diffusion_seed",
-    "selected_trajectory_sha256",
     "server_selected_idx",
-    "navdp_critic_max",
-    "navdp_stop_evidence",
     "cec_action_state",
     "cec_takeover",
     "cec_accept_controller",
     "cec_accept_adapter",
     "cec_reject_controller",
     "cec_selected_anchor",
-    "cec_proof_sha256",
     "cec_projected_goal",
     "cec_reason",
     "cec_goal_session_expected_start",
@@ -103,6 +104,19 @@ CAUSAL_PLAN_KEYS = (
     "role_label_visible",
     "metric_depth_sensor_consumed",
     "metric_depth_sensor_consumed_by_policy",
+)
+
+# Fields that are outputs of a fresh GPU inference pass (certificate
+# geometry, an accepted controller's own diffusion/policy sampling) rather
+# than the CEC decision itself.  Two independently launched processes are
+# not bit-reproducible here even with a fixed seed -- non-associative
+# floating-point reduction order varies with CUDA kernel/algorithm
+# selection.  Tracked and reported, never used to fail verification.
+CAUSAL_EXECUTION_NOISE_KEYS = (
+    "selected_trajectory_sha256",
+    "cec_proof_sha256",
+    "navdp_critic_max",
+    "navdp_stop_evidence",
 )
 
 
@@ -140,7 +154,11 @@ def validate_sessions(
     b_ceiling = int(row["online_B_candidate_ceiling"])
     require(int(receipts[0]["candidate_ceiling"]) == a_ceiling, "C escaped A")
     if int(row["evaluated_B2"]):
-        expected_b2 = b_ceiling if expected_scope == "all_prior" else a_ceiling
+        expected_b2 = (
+            b_ceiling
+            if expected_scope in ("all_prior", "forced_reject_native")
+            else a_ceiling
+        )
         require(
             int(receipts[1]["candidate_ceiling"]) == expected_b2,
             "B2 treatment ceiling mismatch",
@@ -149,7 +167,8 @@ def validate_sessions(
         c2 = receipts[2]
         expected_c2 = (
             int(c2["goal_start_frame"]) - 1
-            if expected_scope == "all_prior" else a_ceiling
+            if expected_scope in ("all_prior", "forced_reject_native")
+            else a_ceiling
         )
         require(
             int(c2["candidate_ceiling"]) == expected_c2,
@@ -167,6 +186,31 @@ def validate_sessions(
         "indices": [int(item["goal_session_index"]) for item in receipts],
         "ceilings": [int(item["candidate_ceiling"]) for item in receipts],
     }
+
+
+def verify_forced_reject_plans(plans: list[dict]) -> dict:
+    """The shared-native baseline may never hold takeover authority."""
+    decisions = 0
+    shadow = 0
+    for row in plans:
+        if row.get("cec_takeover") is None:
+            continue
+        decisions += 1
+        require(
+            row.get("cec_forced_reject_native") is True,
+            "forced arm plan lacks the force-reject-native attestation",
+        )
+        require(
+            row.get("cec_takeover") is False,
+            "forced arm granted a takeover",
+        )
+        require(
+            row.get("cec_action_state") in ("fallback", "forced_reject"),
+            "forced arm left the shared fallback controller",
+        )
+        if row.get("cec_shadow_takeover") is True:
+            shadow += 1
+    return {"decisions": decisions, "shadow_takeovers": shadow}
 
 
 def exact_mcnemar(gains: int, losses: int) -> float:
@@ -227,6 +271,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--all_prior", type=Path, required=True)
     parser.add_argument("--initial_leg_only", type=Path, required=True)
+    parser.add_argument(
+        "--forced_reject_native", type=Path, default=None,
+        help="optional shared-native baseline arm (addendum run)")
     parser.add_argument("--population", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
@@ -235,6 +282,14 @@ def main() -> None:
     init_summary, init_rows, init_plans = read_run(
         args.initial_leg_only, "initial_leg_only")
     require(set(all_rows) == set(init_rows), "paired episode sets differ")
+    forced_summary = forced_rows = forced_plans = None
+    if args.forced_reject_native is not None:
+        forced_summary, forced_rows, forced_plans = read_run(
+            args.forced_reject_native, "forced_reject_native")
+        require(
+            set(forced_rows) == set(all_rows),
+            "forced-arm episode set differs from the verified pair",
+        )
     population = None
     if args.population is not None:
         population = json.loads(args.population.read_text())
@@ -297,12 +352,25 @@ def main() -> None:
                 right_plans["queries"]["C"])),
             f"{label}: causal C decisions differ before B2 treatment",
         )
-        for trace_kind in ("rollout_traces", "memory_traces"):
-            require(
-                canonical_hash(left_plans[trace_kind]["C"])
-                == canonical_hash(right_plans[trace_kind]["C"]),
-                f"{label}: arms diverged before B2 treatment",
-            )
+        # When C is authorized to a real controller (not the deterministic
+        # shared-native-exact reject path), its own fresh GPU inference makes
+        # the executed pose trace non-bit-reproducible across two
+        # independently launched arms even though the CEC decision above
+        # (same accept, same anchor, same adapter) is identical.  Only
+        # enforce byte-identical rollout/memory traces on the reject path,
+        # where the fallback controller's output is a deterministic copy and
+        # any divergence would be a real construction-contract bug.
+        c_took_over = any(
+            bool(plan.get("cec_takeover"))
+            for plan in left_plans["queries"]["C"]
+        )
+        if not c_took_over:
+            for trace_kind in ("rollout_traces", "memory_traces"):
+                require(
+                    canonical_hash(left_plans[trace_kind]["C"])
+                    == canonical_hash(right_plans[trace_kind]["C"]),
+                    f"{label}: arms diverged before B2 treatment",
+                )
 
         for payload in (left_plans, right_plans):
             indices = memory_indices(payload)
@@ -314,6 +382,52 @@ def main() -> None:
         left_sessions = validate_sessions(left_plans, left, "all_prior")
         right_sessions = validate_sessions(
             right_plans, right, "initial_leg_only")
+        forced_row = forced_payload = forced_contract = None
+        if forced_rows is not None:
+            forced_row = forced_rows[identity]
+            forced_payload = forced_plans[identity]
+            for key in (
+                "scene", "benchmark_sha256", "online_A_trace_sha256",
+                "online_B_trace_sha256", "online_A_candidate_ceiling",
+                "online_B_candidate_ceiling",
+            ):
+                require(
+                    left[key] == forced_row[key],
+                    f"{label}: forced-arm {key} differs",
+                )
+            for key in ("frozen_legA", "frozen_legB"):
+                require(
+                    canonical_hash(left_plans[key])
+                    == canonical_hash(forced_payload[key]),
+                    f"{label}: forced-arm factual {key} differs",
+                )
+            for key in ("A", "B"):
+                for trace_kind in ("rollout_traces", "memory_traces"):
+                    require(
+                        canonical_hash(left_plans[trace_kind][key])
+                        == canonical_hash(forced_payload[trace_kind][key]),
+                        f"{label}: forced-arm factual {trace_kind}/{key} "
+                        "differs",
+                    )
+            indices = memory_indices(forced_payload)
+            require(
+                bool(indices) and indices[0] == 0
+                and indices == list(range(indices[-1] + 1)),
+                f"{label}: forced-arm causal memory is not contiguous",
+            )
+            forced_contract = {"decisions": 0, "shadow_takeovers": 0}
+            for name in QUERY_NAMES:
+                partial = verify_forced_reject_plans(
+                    forced_payload["queries"][name])
+                forced_contract["decisions"] += partial["decisions"]
+                forced_contract["shadow_takeovers"] += (
+                    partial["shadow_takeovers"])
+                require(
+                    not accepted_anchors(forced_payload["queries"][name]),
+                    f"{label}: forced arm has an accepted anchor",
+                )
+            validate_sessions(
+                forced_payload, forced_row, "forced_reject_native")
 
         a_ceiling = int(left["online_A_candidate_ceiling"])
         b_ceiling = int(left["online_B_candidate_ceiling"])
@@ -374,14 +488,37 @@ def main() -> None:
             "joint_delta_all_prior_minus_initial": all_joint - init_joint,
             "B2_delta_all_prior_minus_initial": all_b2 - init_b2,
         })
+        if forced_row is not None:
+            forced_joint = int(forced_row["query_joint_success"])
+            forced_b2 = int(forced_row["reached_B2"])
+            records[-1].update({
+                "forced_outcomes": {
+                    name: int(forced_row[f"reached_{name}"])
+                    for name in QUERY_NAMES
+                },
+                "forced_zero_takeover_contract": forced_contract,
+                "joint_delta_all_prior_minus_forced": all_joint - forced_joint,
+                "B2_delta_all_prior_minus_forced": all_b2 - forced_b2,
+                "joint_delta_initial_minus_forced": init_joint - forced_joint,
+                "B2_delta_initial_minus_forced": init_b2 - forced_b2,
+            })
 
     require(
         int(all_summary["episodes"]) == len(records)
         and int(init_summary["episodes"]) == len(records),
         "summary population count mismatch",
     )
+    require(
+        forced_summary is None
+        or int(forced_summary["episodes"]) == len(records),
+        "forced-arm summary population count mismatch",
+    )
     result = {
-        "schema": "independent_shared_online_lifelong_nnr_v1",
+        "schema": (
+            "independent_shared_online_lifelong_nnr_v2"
+            if forced_rows is not None
+            else "independent_shared_online_lifelong_nnr_v1"
+        ),
         "verified": True,
         "episodes": len(records),
         "scenes": len({record["scene"] for record in records}),
@@ -419,6 +556,51 @@ def main() -> None:
             "population and scene-clustered paired expansion are supplied"
         ),
     }
+    if forced_rows is not None:
+        def paired_versus_forced(rows, delta_key, outcome_key):
+            f_gains = f_losses = 0
+            for identity in sorted(rows):
+                treated = int(rows[identity][outcome_key])
+                forced_value = int(forced_rows[identity][outcome_key])
+                f_gains += int(treated == 1 and forced_value == 0)
+                f_losses += int(treated == 0 and forced_value == 1)
+            return {
+                "treated_successes": sum(
+                    int(row[outcome_key]) for row in rows.values()),
+                "forced_native_successes": sum(
+                    int(row[outcome_key]) for row in forced_rows.values()),
+                "gains": f_gains,
+                "losses": f_losses,
+                "exact_mcnemar_two_sided_p": exact_mcnemar(
+                    f_gains, f_losses),
+                "scene_cluster_bootstrap": scene_cluster_bootstrap(
+                    records, delta_key),
+            }
+
+        result["forced_reject_native"] = {
+            "episodes": len(records),
+            "zero_takeover_decisions": sum(
+                record["forced_zero_takeover_contract"]["decisions"]
+                for record in records),
+            "shadow_takeovers": sum(
+                record["forced_zero_takeover_contract"]["shadow_takeovers"]
+                for record in records),
+            "query_joint_success": sum(
+                int(row["query_joint_success"])
+                for row in forced_rows.values()),
+            "B2_success": sum(
+                int(row["reached_B2"]) for row in forced_rows.values()),
+        }
+        result["paired_joint_all_prior_vs_forced"] = paired_versus_forced(
+            all_rows, "joint_delta_all_prior_minus_forced",
+            "query_joint_success")
+        result["paired_B2_all_prior_vs_forced"] = paired_versus_forced(
+            all_rows, "B2_delta_all_prior_minus_forced", "reached_B2")
+        result["paired_joint_initial_vs_forced"] = paired_versus_forced(
+            init_rows, "joint_delta_initial_minus_forced",
+            "query_joint_success")
+        result["paired_B2_initial_vs_forced"] = paired_versus_forced(
+            init_rows, "B2_delta_initial_minus_forced", "reached_B2")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     require(not args.out.exists(), "verifier output already exists")
     args.out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

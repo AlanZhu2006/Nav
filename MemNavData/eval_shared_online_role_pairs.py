@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -81,6 +82,16 @@ def resolve_arm() -> tuple[str, str | None]:
             "certified arm requires the frozen bearing adapter",
         )
         return "certified", "navdp_auto"
+    if args.hybrid_route == "certified_unthresholded_witness":
+        require(
+            args.revisit_adapter == "verified_bearing_v1",
+            "unthresholded witness arm requires the frozen bearing adapter",
+        )
+        require(
+            args.certified_cdec_rescue == "off",
+            "unthresholded witness must keep the frozen geometry proposal",
+        )
+        return "unthresholded_witness", "navdp_auto"
     if args.hybrid_route == "certified_semantic_first":
         require(
             args.revisit_adapter == "verified_bearing_v1",
@@ -95,7 +106,8 @@ def resolve_arm() -> tuple[str, str | None]:
         return "learned_pi3x_spatial", "navdp_auto"
     raise RuntimeError(
         "role-pair evaluator supports only "
-        "native/native-sidecar/raw/geometry/certified/semantic-first/"
+        "native/native-sidecar/raw/geometry/certified/"
+        "unthresholded-witness/semantic-first/"
         "learned-pi3x"
     )
 
@@ -150,6 +162,15 @@ def validate_cli() -> tuple[str, str | None]:
             args.role_pair_scope == "consumed_integration",
             "role filtering is permitted only for consumed development",
         )
+    if args.role_pair_query_manifest:
+        require(
+            args.role_pair_scope == "consumed_integration",
+            "query-manifest filtering is permitted only for consumed ablation",
+        )
+        require(
+            args.role_pair_query_role == "all",
+            "query manifest cannot be combined with role filtering",
+        )
     if arm != "cec_portability":
         base.validate_revisit_adapter_configuration(
             mode=args.revisit_adapter,
@@ -163,6 +184,57 @@ def validate_cli() -> tuple[str, str | None]:
             ),
         )
     return arm, backend
+
+
+def sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_query_selection(
+    benchmark_audit: dict,
+) -> tuple[set[tuple[str, str, str]], dict | None]:
+    """Load a deployment-evidence query subset without exposing roles."""
+
+    if not args.role_pair_query_manifest:
+        return set(), None
+    path = Path(args.role_pair_query_manifest).resolve()
+    require(path.is_file(), "role-pair query manifest is missing")
+    payload = json.loads(path.read_text())
+    require(
+        payload.get("schema_version")
+        == "cec_first_decision_accepted_population_v1_20260827",
+        "role-pair query manifest schema changed",
+    )
+    require(
+        payload.get("source_benchmark_manifest_sha256")
+        == benchmark_audit["manifest_sha256"],
+        "query manifest is bound to a different benchmark",
+    )
+    entries = payload.get("queries")
+    require(isinstance(entries, list) and entries,
+            "query manifest contains no selected queries")
+    selected: set[tuple[str, str, str]] = set()
+    for entry in entries:
+        require(isinstance(entry, dict), "query manifest entry is invalid")
+        require(not ({"analysis_role", "role", "query_role"} & set(entry)),
+                "query manifest contains a role label")
+        identity = (
+            str(entry.get("scene")), str(entry.get("episode")),
+            str(entry.get("query_id")),
+        )
+        require(all(value and value != "None" for value in identity),
+                "query manifest identity is incomplete")
+        require(identity not in selected, "duplicate query manifest identity")
+        selected.add(identity)
+    return selected, {
+        "path": str(path),
+        "sha256": sha256_path(path),
+        "selected_total": len(selected),
+    }
 
 
 def load_episode(episode_dir: Path, expected_scene: str) -> dict:
@@ -310,6 +382,14 @@ def cec_latency_counts(plans: list[dict]) -> dict:
 
 def main() -> None:
     arm, policy_backend = validate_cli()
+    if args.contract_dry_run:
+        print(
+            "[eval-role-pair] contract_dry_run OK: "
+            f"arm={arm} backend={policy_backend} "
+            f"route={args.hybrid_route} adapter={args.revisit_adapter} "
+            f"depth={args.navdp_depth_source} role_visibility=none"
+        )
+        return
     output = Path(args.out)
     output.mkdir(parents=True, exist_ok=True)
     require(not any(output.iterdir()), "output must be empty")
@@ -321,6 +401,8 @@ def main() -> None:
     benchmark_root = scene_root.parent
     benchmark_audit = audit_benchmark(benchmark_root)
     require(benchmark_audit["ok"], "benchmark-wide audit failed")
+    selected_queries, selection_receipt = load_query_selection(benchmark_audit)
+    selected_seen: set[tuple[str, str, str]] = set()
     episode_dirs = sorted(
         path for path in scene_root.glob("episode_*")
         if (path / "role_pairs.json").is_file()
@@ -331,6 +413,7 @@ def main() -> None:
     if args.episodes:
         episode_dirs = episode_dirs[: args.episodes]
     require(bool(episode_dirs), "no role-pair episodes selected")
+    selected_episode_names = {path.name for path in episode_dirs}
 
     simulator = base.make_sim(str(scene_file), "", agent_radius=args.agent_radius)
     pathfinder = simulator.pathfinder
@@ -369,6 +452,13 @@ def main() -> None:
                             and stored_query["analysis_role"]
                             != args.role_pair_query_role):
                         continue
+                    query_identity = (
+                        scene, episode_dir.name, str(stored_query["query_id"]),
+                    )
+                    if selected_queries and query_identity not in selected_queries:
+                        continue
+                    if selected_queries:
+                        selected_seen.add(query_identity)
                     # The runtime projection deliberately drops analysis_role,
                     # co-visibility and all construction diagnostics.  The role
                     # remains available below only for stratified scoring.
@@ -392,6 +482,8 @@ def main() -> None:
                         episode_len=int(frozen["benchmark"]["online_a_steps"])
                         + int(args.max_steps),
                         camera_intrinsic=camera_intrinsic,
+                        causal_history_sha256=frozen["benchmark"][
+                            "online_a_trace_sha256"],
                     )
                     leg_a, replay = replay_prefix(frozen)
                     position = np.asarray(leg_a["end_pos"], dtype=np.float64)
@@ -536,6 +628,16 @@ def main() -> None:
             role: [row for row in metrics if row["analysis_role"] == role]
             for role in ("novel", "revisit")
         }
+        if selected_queries:
+            expected_for_invocation = {
+                identity for identity in selected_queries
+                if identity[0] == scene
+                and identity[1] in selected_episode_names
+            }
+            require(bool(expected_for_invocation),
+                    "query manifest selected nothing for this invocation")
+            require(selected_seen == expected_for_invocation,
+                    "selected query manifest was not realized exactly")
         scope_map = {
             "consumed_integration": (
                 "consumed-scene integration unless externally promoted"
@@ -550,6 +652,7 @@ def main() -> None:
             "scope": scope_map[args.role_pair_scope],
             "role_pair_scope": args.role_pair_scope,
             "role_pair_query_role": args.role_pair_query_role,
+            "role_pair_query_selection": selection_receipt,
             "arm": arm,
             "server_backend": args.server_backend,
             "hybrid_route": args.hybrid_route,

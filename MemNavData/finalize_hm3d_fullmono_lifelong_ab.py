@@ -10,11 +10,34 @@ import tempfile
 from pathlib import Path
 
 from audit_shared_online_role_pairs import audit
-from build_final14_role_pair_scene import role_contract, write_manifest
 from hm3d_fullmono_lifelong import load_protocol, require, sha256_file
+from shared_online_role_pair_contract import validate_manifest
 
 
 SCHEMA = "hm3d_fullmono_lifelong_ab_population_v1_20260824"
+
+
+def write_manifest(root: Path, payload: dict) -> str:
+    """Write a role-pair manifest without importing the Habitat builder.
+
+    The finalizer is a renderer-free CPU seal.  Importing the scene builder
+    pulled in Habitat's quaternion dependency even though all query assets and
+    contracts had already been materialized.  Keep the seal dependency-light
+    and validate the assembled manifest directly instead.
+    """
+
+    root.mkdir(parents=True, exist_ok=True)
+    if payload["episodes"]:
+        validate_manifest(payload)
+    path = root / "manifest.json"
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    )
+    digest = sha256_file(path)
+    (root / "manifest.json.sha256").write_text(
+        digest + "  manifest.json\n"
+    )
+    return digest
 
 
 def finalize(
@@ -35,6 +58,7 @@ def finalize(
     fragments = []
     episodes = []
     identities = set()
+    frozen_contract = None
     try:
         benchmark_root = temporary / "role_pairs"
         for index, scene_raw in enumerate(parent["scenes"]):
@@ -53,6 +77,14 @@ def finalize(
                     == completion["role_pair_manifest_sha256"],
                     f"{scene}: fragment manifest changed")
             payload = json.loads(source_manifest.read_text())
+            fragment_contract = payload.get("contract")
+            require(isinstance(fragment_contract, dict),
+                    f"{scene}: fragment contract missing")
+            if frozen_contract is None:
+                frozen_contract = fragment_contract
+            else:
+                require(fragment_contract == frozen_contract,
+                        f"{scene}: fragment contract changed")
             for row in payload["episodes"]:
                 identity = (str(row["scene"]), str(row["episode"]))
                 require(identity not in identities, "duplicate recipient history")
@@ -73,6 +105,7 @@ def finalize(
                     completion["constructible_AB_C_histories"]
                 ),
             })
+        require(frozen_contract is not None, "no frozen fragment contract")
         manifest = {
             "schema_version": "shared_online_role_pair_v1_20260814",
             "purpose": (
@@ -85,8 +118,13 @@ def finalize(
             "source_online_manifest_sha256": protocol["parent"][
                 "fullmono_population_receipt_sha256"
             ],
-            "construction_seed": 20260824,
-            "contract": role_contract(support="standard"),
+            "construction_seed": int(protocol["novel_b_construction"].get(
+                "construction_seed", 20260824
+            )),
+            # Preserve the exact contract already frozen into every result-
+            # blind scene fragment rather than reconstructing it from a
+            # renderer-side module at seal time.
+            "contract": frozen_contract,
             "episodes": episodes,
         }
         manifest_sha = write_manifest(benchmark_root, manifest)
@@ -94,6 +132,19 @@ def finalize(
             "ok": True, "episodes": 0, "scenes": 0,
             "manifest_sha256": manifest_sha,
         }
+        scene_clusters = len({row["scene"] for row in episodes})
+        power_gate = protocol.get("construction_power_gate")
+        if power_gate is None:
+            target_histories = 0
+            target_scenes = 0
+            target_met = True
+        else:
+            target_histories = int(power_gate["minimum_candidate_histories"])
+            target_scenes = int(power_gate["minimum_scene_clusters"])
+            target_met = (
+                len(episodes) >= target_histories
+                and scene_clusters >= target_scenes
+            )
         receipt = {
             "schema_version": SCHEMA,
             "scope": protocol["scope"],
@@ -103,7 +154,11 @@ def finalize(
                 row["materialized_A_histories"] for row in fragments
             ),
             "constructible_AB_C_histories": len(episodes),
-            "constructible_scene_clusters": len({row["scene"] for row in episodes}),
+            "constructible_scene_clusters": scene_clusters,
+            "construction_target_histories": target_histories,
+            "construction_target_scene_clusters": target_scenes,
+            "construction_target_met": target_met,
+            "factual_B_authorized": target_met,
             "query_policy_outcomes_read": False,
             "navigation_outcome_selection": False,
             "benchmark_manifest_sha256": manifest_sha,

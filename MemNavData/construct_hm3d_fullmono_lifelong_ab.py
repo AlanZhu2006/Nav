@@ -26,6 +26,7 @@ from final14_role_pair_contract import direction_in_stratum, relative_direction_
 from generate_twoleg import covis_curve, make_sim
 from hm3d_fullmono_lifelong import (
     EXPANSION_PROTOCOL_SCHEMA,
+    POWERED_EXPANSION_PROTOCOL_SCHEMA,
     bind_parent,
     load_protocol,
     require,
@@ -107,6 +108,7 @@ def donor_candidate(
         "donor_frame_index": donor_frame_index,
         "donor_frame_step": int(donor_pose["step"]),
         "donor_frame_temporal_rank": int(donor_frame_temporal_rank),
+        "goal_floor_position": [float(value) for value in donor_floor],
         "support_band": "unsupported_novel",
         "query_geodesic_m": float(a_to_b_distance),
         "a_to_b_geodesic_m": float(a_to_b_distance),
@@ -175,6 +177,7 @@ def write_upstream_empty_scene(
     scene_index: int,
     online_root: Path,
     out: Path,
+    construction_seed: int = 20260824,
 ) -> dict[str, Any]:
     """Seal a parent-certified zero-history scene as explicit attrition.
 
@@ -248,7 +251,7 @@ def write_upstream_empty_scene(
             ),
             "source_online_root": str(online_root.resolve()),
             "source_online_manifest_sha256": None,
-            "construction_seed": 20260824,
+            "construction_seed": int(construction_seed),
             "contract": role_contract(support="standard"),
             "episodes": [],
         }
@@ -308,7 +311,10 @@ def build_scene(
     out: Path,
 ) -> dict[str, Any]:
     protocol = load_protocol(protocol_path)
-    expansion = protocol["schema_version"] == EXPANSION_PROTOCOL_SCHEMA
+    expansion = protocol["schema_version"] in {
+        EXPANSION_PROTOCOL_SCHEMA,
+        POWERED_EXPANSION_PROTOCOL_SCHEMA,
+    }
     construction = protocol["novel_b_construction"]
     parent_paths = bind_parent(protocol, parent_root)
     parent_manifest_path = parent_paths["manifest"]
@@ -341,6 +347,8 @@ def build_scene(
             scene_index=scene_index,
             online_root=online_root,
             out=out,
+            construction_seed=int(construction.get(
+                "construction_seed", 20260824)),
         )
     online_manifest, histories = load_histories(online_root, scene)
     require(int(population_fragment["scene_index"]) == int(scene_index)
@@ -402,6 +410,8 @@ def build_scene(
                         construction["maximum_candidates_per_donor_history"]),
                     prefer_distinct_direction_strata=bool(construction[
                         "prefer_distinct_initial_direction_strata"]),
+                    minimum_planar_separation_m=float(construction.get(
+                        "minimum_candidate_planar_separation_m", 0.0)),
                 )
                 if expansion else [
                     row for row in [select_donor(
@@ -491,7 +501,8 @@ def build_scene(
             "source_online_manifest_sha256": sha256_file(
                 online_root / "manifest.json"
             ),
-            "construction_seed": 20260824,
+            "construction_seed": int(construction.get(
+                "construction_seed", 20260824)),
             "contract": role_contract(support="standard"),
             "episodes": accepted,
         }

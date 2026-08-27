@@ -5,6 +5,7 @@ umask 0022
 
 MODE=${MODE:?set collect, smoke, eval, or lifelong_b}
 TASK_ROOT=${TASK_ROOT:?set immutable task root}
+SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT:-${TASK_ROOT}}
 BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT:?set verified Final14 mono source root}
 RUN_ROOT=${RUN_ROOT:?set isolated run root}
 PARENT_MANIFEST=${PARENT_MANIFEST:?set sealed parent HM3D manifest}
@@ -18,6 +19,7 @@ BASE_RECEIPT=${BASE_RECEIPT:?set verified base receipt}
 EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA:?set base receipt sha}
 RUNTIME_ATTEMPT=${RUNTIME_ATTEMPT:-}
 RESUME_INCOMPLETE=${RESUME_INCOMPLETE:-0}
+FORMAL_INDICES_OVERRIDE=${FORMAL_INDICES_OVERRIDE:-}
 
 [[ "${MODE}" == collect || "${MODE}" == smoke || "${MODE}" == eval \
    || "${MODE}" == lifelong_b ]] || {
@@ -47,6 +49,14 @@ fi
 [[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_TASK_RECEIPT_SHA}" ]]
 (cd "${TASK_ROOT}" && sha256sum -c --quiet "${TASK_RECEIPT}")
+if [[ "${SERVER_SOURCE_ROOT}" != "${TASK_ROOT}" ]]; then
+  : "${SERVER_SOURCE_RECEIPT:?set immutable server source receipt}"
+  : "${EXPECTED_SERVER_SOURCE_RECEIPT_SHA:?set server source receipt SHA}"
+  [[ "$(sha256sum "${SERVER_SOURCE_RECEIPT}" | awk '{print $1}')" == \
+     "${EXPECTED_SERVER_SOURCE_RECEIPT_SHA}" ]]
+  (cd "${SERVER_SOURCE_ROOT}" && \
+    sha256sum -c --quiet "${SERVER_SOURCE_RECEIPT}")
+fi
 [[ "$(sha256sum "${BASE_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_BASE_RECEIPT_SHA}" ]]
 (cd "${BASE_SOURCE_ROOT}" && sha256sum -c --quiet "${BASE_RECEIPT}")
@@ -93,6 +103,19 @@ print(" ".join(str(i) for i,row in enumerate(m["episodes"])
                if int(row["final14_scene_rank"]) == rank))
 PY
 )
+  if [[ -n "${FORMAL_INDICES_OVERRIDE}" ]]; then
+    seen_override=" "
+    for index in ${FORMAL_INDICES_OVERRIDE}; do
+      [[ "${index}" =~ ^[0-9]+$ ]] || {
+        echo "invalid formal history override: ${index}" >&2; exit 2; }
+      [[ " ${FORMAL_INDICES} " == *" ${index} "* ]] || {
+        echo "formal history override escaped scene: ${index}" >&2; exit 2; }
+      [[ "${seen_override}" != *" ${index} "* ]] || {
+        echo "duplicate formal history override: ${index}" >&2; exit 2; }
+      seen_override+="${index} "
+    done
+    FORMAL_INDICES=${FORMAL_INDICES_OVERRIDE}
+  fi
   if [[ -z "${FORMAL_INDICES}" ]]; then
     printf '{"status":"complete","scene_index":%s,"histories":0,"models_loaded":false}\n' \
       "${SCENE_INDEX}" >"${task_run}/empty_scene_receipt.json"
@@ -103,7 +126,7 @@ fi
 
 HAB_SITE=$(${HAB_PY} -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
 HAB_PYTHONPATH=${HAB_SITE}/pip/_vendor
-PYTHONPATH_VALUE=${TASK_ROOT}:${TASK_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
+PYTHONPATH_VALUE=${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
 REQUESTS_INIT=${HAB_PYTHONPATH}/requests/__init__.py
 REQUESTS_VERSION=${HAB_PYTHONPATH}/requests/__version__.py
 [[ -r "${REQUESTS_INIT}" && -r "${REQUESTS_VERSION}" ]] || {
@@ -158,7 +181,7 @@ trap cleanup EXIT INT TERM
     MEMNAV_GROUND_SCALE_MAX=6.0 MEMNAV_GATE_FUSION=complementary \
     MEMNAV_AUX_POSE_CALIBRATION=empirical MEMNAV_COLLISION_SELECT=1 \
     MEMNAV_REPORT_TO=none "${MEMNAV_PY}" -u \
-    "${TASK_ROOT}/NavDP/baselines/memnav/memnav_server.py" \
+    "${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav/memnav_server.py" \
       --port "${MEMNAV_PORT}" --checkpoint "${MEMNAV_CKPT}" \
       --internnav_root "${INTERNNAV_ROOT}" --num_samples 16 \
       --exclude_recent 32 --retrieval raw --retrieval_candidate_top_k 32 \
@@ -172,7 +195,7 @@ MEMNAV_PID=$!
   cd "${runtime_tmp}/navdp"
   exec env NAVDP_DISABLE_VIDEO=1 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="${PYTHONPATH_VALUE}" "${MEMNAV_PY}" -u \
-    "${TASK_ROOT}/NavDP/baselines/navdp/navdp_server.py" \
+    "${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py" \
       --port "${NAVDP_PORT}" --checkpoint "${NAVDP_CKPT}" \
       --depth_source metric_request --allow_depth_source_override \
       --monocular_depth_url "http://127.0.0.1:${MEMNAV_PORT}/monocular_depth_query" \
@@ -217,7 +240,7 @@ elif [[ "${MODE}" == lifelong_b ]]; then
     PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
       "${HAB_PY}" -u \
       "${TASK_ROOT}/MemNavData/collect_hm3d_fullmono_lifelong_b.py" \
-        --source-root "${TASK_ROOT}" --run-root "${RUN_ROOT}" \
+        --source-root "${SERVER_SOURCE_ROOT}" --run-root "${RUN_ROOT}" \
         --protocol "${PROTOCOL}" --bench-root "${BENCH_ROOT}" \
         --expected-manifest-sha256 "${expected_manifest_sha}" \
         --history-index "${history_index}" --hab-python "${HAB_PY}" \

@@ -1,0 +1,22 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_natural_b_audit_submission_v2_20260827",
+  "scope": "result-blind 54-scene multi-candidate constructibility audit",
+  "source_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/formal_20260826T141733Z_375f0b68",
+  "audit_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_audit_e2832e17231534e3",
+  "audit_bundle_receipt_sha256": "e2832e17231534e38db1b3b507ddf68881ee8bd56548c3151235e52a397f3121",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/natural_b_audit_formal_20260827T125748Z_e2832e17",
+  "remote_submission_receipt_sha256": "85aa593db105f41829a5e0da58daeca45644fb5b12789b56a6cdd771774c26f7",
+  "scene_array_job": 16464404,
+  "scene_array": "0-53%4",
+  "scene_partitions": [
+    "h100_tandon",
+    "a100_tandon"
+  ],
+  "time_per_scene": "00:45:00",
+  "aggregate_job": 16464407,
+  "aggregate_dependency": "afterany:16464404",
+  "query_policy_outcomes_read": false,
+  "navigation_outcomes_read": false,
+  "navigation_rollouts_authorized": false,
+  "evaluation_authorized": false
+}

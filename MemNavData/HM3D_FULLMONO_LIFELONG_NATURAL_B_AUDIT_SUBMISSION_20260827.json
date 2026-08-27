@@ -1,0 +1,60 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_natural_b_audit_submission_v1_20260827",
+  "submitted_at": "2026-08-27T08:08:54+08:00",
+  "scope": "result-blind direct-natural Novel-B constructibility audit",
+  "source_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/formal_20260826T141733Z_375f0b68",
+  "source_task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_lifelong_375f0b6879b2ff87",
+  "source_task_receipt_sha256": "375f0b6879b2ff87b7019dae4727880d1b03fd3185a1862e6239942a76b5bcc8",
+  "audit_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_audit_7327a6919acafef8",
+  "audit_bundle_receipt_sha256": "7327a6919acafef8a60d84142015422d60f11da8d5820f0b505d2504dc7a27de",
+  "jobs": {
+    "scene_array": null,
+    "aggregate_and_seal": null
+  },
+  "scene_array": "0-53%4",
+  "scene_time_limit": "00:45:00",
+  "scene_partitions": [
+    "h100_tandon",
+    "a100_tandon",
+    "h200_public",
+    "l40s_public"
+  ],
+  "gpu_smoke": {
+    "job": 16441089,
+    "state": "COMPLETED",
+    "elapsed": "00:01:10",
+    "scene_index": 1,
+    "controlled_revisit_histories": 3,
+    "natural_B_constructible_histories": 0,
+    "used_only_as_implementation_smoke": true
+  },
+  "multi_candidate_gpu_smoke": {
+    "job": 16441408,
+    "state_at_submission": "PENDING_QOSMaxGRESPerUser",
+    "scene_index": 1,
+    "purpose": "validate four deterministic candidate slots and 2m planar de-duplication before the full audit"
+  },
+  "superseded_or_diagnostic_jobs": {
+    "unstarted_gpu_smoke": 16441074,
+    "unstarted_gpu_smoke_state": "CANCELLED",
+    "cpu_renderer_probe": 16441094,
+    "cpu_renderer_probe_state": "FAILED_EXPECTED_NO_EGL_CUDA_DEVICE"
+  },
+  "construction_contract": {
+    "maximum_candidates_per_controlled_revisit_history": 4,
+    "minimum_candidate_planar_separation_m": 2.0,
+    "A_to_B_geodesic_m": [2.0, 9.0],
+    "B_to_C_geodesic_m": [2.0, 9.0],
+    "B_max_online_A_covis_exclusive": 0.1,
+    "cross_online_history_donor_required": false
+  },
+  "query_policy_outcomes_read": false,
+  "navigation_outcomes_read": false,
+  "navigation_rollouts_authorized": false,
+  "formal_v4_authorized": false,
+  "superseded_unstarted_full_audit": {
+    "scene_array": 16441206,
+    "aggregate_and_seal": 16441207,
+    "reason": "one-candidate audit had a mathematical ceiling of 80 and therefore could never test the pre-existing 96-candidate reference gate"
+  }
+}

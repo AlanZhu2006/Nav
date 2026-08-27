@@ -1,0 +1,31 @@
+{
+  "construction_only": true,
+  "factual_B_authorized_only_by_sealed_construction_gate": true,
+  "fresh_scene_generalization_claim": false,
+  "jobs": {
+    "aggregate": 0,
+    "collect_factual_B_array": 0,
+    "collect_shared_C_array": 0,
+    "construct_AB_array": 16401203,
+    "construct_actual_prefix_array": 0,
+    "deferred_shared_C_launcher": 0,
+    "formal_three_arm_evaluation": 0,
+    "independent_verification": 0,
+    "remote_true_stack_smoke": 0,
+    "seal_AB_population": 16401233,
+    "seal_query_population": 0,
+    "seal_shared_C_population": 0
+  },
+  "maximum_AB_histories": 1040,
+  "maximum_logical_query_arms": 0,
+  "maximum_paired_evaluation_tasks": 0,
+  "parent_scene_count": 54,
+  "primary_pair_same_loaded_GPU_process": true,
+  "query_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/formal_20260826T141733Z_375f0b68",
+  "schema_version": "hm3d_fullmono_lifelong_submission_v3_20260826",
+  "scope": "prospective construction-only power gate for exact-prefix lifelong expansion",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/formal_20260826T141733Z_375f0b68_smoke",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_lifelong_375f0b6879b2ff87",
+  "task_receipt_sha256": "375f0b6879b2ff87b7019dae4727880d1b03fd3185a1862e6239942a76b5bcc8"
+}

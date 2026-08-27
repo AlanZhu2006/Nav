@@ -39,6 +39,43 @@ class FullMonoLifelongContractTest(unittest.TestCase):
             contract.ARMS,
         )
 
+    def test_powered_expansion_protocol_is_prospectively_gated(self):
+        path = Path(__file__).with_name(
+            "hm3d_fullmono_lifelong_power_expansion_protocol_20260826.json"
+        )
+        payload = contract.load_protocol(path)
+        self.assertEqual(
+            payload["schema_version"],
+            contract.POWERED_EXPANSION_PROTOCOL_SCHEMA,
+        )
+        self.assertTrue(payload["construction_power_gate"][
+            "halt_before_factual_B_if_not_met"
+        ])
+        self.assertFalse(payload["prior_result_use"][
+            "used_to_select_v3_candidate_identity"
+        ])
+
+    def test_direct_natural_v4_protocol_freezes_five_leg_gate(self):
+        path = Path(__file__).with_name(
+            "hm3d_fullmono_lifelong_direct_natural_protocol_20260827.json"
+        )
+        payload = contract.load_protocol(path)
+        self.assertEqual(
+            payload["schema_version"],
+            contract.DIRECT_NATURAL_PROTOCOL_SCHEMA,
+        )
+        self.assertEqual(
+            payload["query_runtime"]["sequence"],
+            ["A", "B", "C", "B2", "C2"],
+        )
+        self.assertTrue(payload["construction_power_gate"][
+            "halt_before_factual_B_if_not_met"
+        ])
+        self.assertTrue(payload["population"][
+            "halt_before_factual_C_if_target_not_met"
+        ])
+        self.assertFalse(payload["post_prefix_query_outcomes_read_before_freeze"])
+
     def test_arm_rotation_is_balanced_and_deterministic(self):
         self.assertEqual(contract.rotated_arm_order(0), contract.ARMS)
         self.assertEqual(
@@ -153,6 +190,37 @@ class FullMonoLifelongContractTest(unittest.TestCase):
                  maximum_candidates=2, maximum_per_donor=1,
                  prefer_distinct_direction_strata=True,
              )],
+        )
+
+    def test_powered_expansion_enforces_spatially_distinct_candidates(self):
+        rows = []
+        for frame, x, stratum in (
+            (10, 0.0, "front"),
+            (20, 0.5, "side"),
+            (30, 2.1, "rear"),
+            (40, 4.2, "front"),
+        ):
+            rows.append({
+                "donor_episode": "episode_0001",
+                "donor_episode_rank": 1,
+                "donor_frame_index": frame,
+                "goal_floor_position": [x, 0.0, 0.0],
+                "a_to_b_geodesic_m": 4.0 + frame / 1000.0,
+                "b_to_c_geodesic_m": 3.0,
+                "max_recipient_a_covis": 0.01,
+                "assigned_direction_stratum": stratum,
+            })
+        selected = contract.select_donors(
+            rows,
+            recipient_episode="episode_9999",
+            maximum_candidates=4,
+            maximum_per_donor=4,
+            prefer_distinct_direction_strata=True,
+            minimum_planar_separation_m=2.0,
+        )
+        self.assertEqual(
+            [row["donor_frame_index"] for row in selected],
+            [10, 30, 40],
         )
 
     def test_exact_mcnemar(self):

@@ -6,6 +6,7 @@ umask 0022
 ROOT=${ROOT:-/home/asus/Research/Nav-graph-blind}
 POWER_EXPANSION=${POWER_EXPANSION:-0}
 DRY_RUN=${DRY_RUN:-0}
+CONSTRUCTION_ONLY=${CONSTRUCTION_ONLY:-0}
 SSH_ALIAS=${SSH_ALIAS:-alantorch}
 LOCAL_PY=${LOCAL_PY:-/home/asus/miniconda3/envs/memnav/bin/python}
 LOCAL_HAB_PY=${LOCAL_HAB_PY:-/home/asus/miniconda3/envs/habitat/bin/python}
@@ -27,11 +28,19 @@ EXPECTED_HAB_REQUESTS_INIT_BYTES=5057
 EXPECTED_HAB_REQUESTS_INIT_SHA=1e507f1f386bcc6b5f0ff69a614c14875cd65cb67be7f6022f28adef9774573f
 EXPECTED_HAB_REQUESTS_VERSION_BYTES=435
 EXPECTED_HAB_REQUESTS_VERSION_SHA=143abaf3563712f063743a7952aa65319dbcb934d894cfc989bd2c015f8da577
-if [[ "${POWER_EXPANSION}" == 1 ]]; then
-  PROTOCOL_REL=MemNavData/hm3d_fullmono_lifelong_power_expansion_protocol_20260825.json
-else
-  PROTOCOL_REL=MemNavData/hm3d_fullmono_lifelong_protocol_20260824.json
-fi
+case "${POWER_EXPANSION}" in
+  0)
+    PROTOCOL_REL=MemNavData/hm3d_fullmono_lifelong_protocol_20260824.json
+    ;;
+  1)
+    PROTOCOL_REL=MemNavData/hm3d_fullmono_lifelong_power_expansion_protocol_20260825.json
+    ;;
+  2)
+    PROTOCOL_REL=MemNavData/hm3d_fullmono_lifelong_power_expansion_protocol_20260826.json
+    REMOTE_RESULTS=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826
+    ;;
+  *) fail_later=1 ;;
+esac
 CONSTRUCT_CONCURRENCY=${CONSTRUCT_CONCURRENCY:-4}
 B_CONCURRENCY=${B_CONCURRENCY:-4}
 PREFIX_CONCURRENCY=${PREFIX_CONCURRENCY:-4}
@@ -67,8 +76,12 @@ upload_bundle() {
 }
 
 [[ -S "${SSH_CONTROL_PATH}" ]] || fail "authoritative shared SSH socket missing: ${SSH_CONTROL_PATH}"
-[[ "${POWER_EXPANSION}" =~ ^[01]$ ]] || fail "POWER_EXPANSION must be 0 or 1"
+[[ "${POWER_EXPANSION}" =~ ^[012]$ ]] || fail "POWER_EXPANSION must be 0, 1, or 2"
 [[ "${DRY_RUN}" =~ ^[01]$ ]] || fail "DRY_RUN must be 0 or 1"
+[[ "${CONSTRUCTION_ONLY}" =~ ^[01]$ ]] || fail "CONSTRUCTION_ONLY must be 0 or 1"
+if [[ "${POWER_EXPANSION}" == 2 && "${CONSTRUCTION_ONLY}" != 1 ]]; then
+  fail "v3 must finish its prospective construction power gate before factual B"
+fi
 timeout 15 ssh -O check -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" >/dev/null 2>&1 \
   || fail "shared SSH socket has no responsive master: ${SSH_CONTROL_PATH}"
 for value in "${CONSTRUCT_CONCURRENCY}" "${B_CONCURRENCY}" \
@@ -270,10 +283,23 @@ remote "sbatch --test-only --export='${common},DEFERRED_MODE=collect,DEFERRED_SC
 
 build_time=
 if [[ "${POWER_EXPANSION}" == 1 ]]; then build_time="--time=01:30:00"; fi
+if [[ "${POWER_EXPANSION}" == 2 ]]; then build_time="--time=02:00:00"; fi
 build_id=$(remote "sbatch --parsable --qos=gpu48 ${build_time} --array=0-53%${CONSTRUCT_CONCURRENCY} --export='${common}' '${build}'" | job_id)
 [[ "${build_id}" =~ ^[0-9]+$ ]] || fail "bad A/B construction job id"
 seal_ab_id=$(remote "sbatch --parsable --dependency=afterok:${build_id} --kill-on-invalid-dep=yes --export='${common}' '${seal_ab}'" | job_id)
 [[ "${seal_ab_id}" =~ ^[0-9]+$ ]] || fail "bad A/B seal job id"
+if [[ "${CONSTRUCTION_ONLY}" == 1 ]]; then
+  collect_b_id=0
+  prefix_id=0
+  seal_population_id=0
+  smoke_id=0
+  eval_id=0
+  aggregate_id=0
+  verify_id=0
+  shared_c_collect_id=0
+  shared_c_seal_id=0
+  deferred_id=0
+else
 collect_time=
 if [[ "${POWER_EXPANSION}" == 1 ]]; then collect_time="--time=03:00:00"; fi
 collect_b_id=$(remote "sbatch --parsable --qos=gpu48 ${collect_time} --array=0-53%${B_CONCURRENCY} --dependency=afterok:${seal_ab_id} --kill-on-invalid-dep=yes --export='${common},MAX_STEPS=600' '${collect_b}'" | job_id)
@@ -307,24 +333,39 @@ else
   shared_c_seal_id=0
   deferred_id=0
 fi
+fi
 
 receipt=MemNavData/HM3D_FULLMONO_LIFELONG_SUBMISSION_RECEIPT_${run_tag}.json
 "${LOCAL_PY}" - "${receipt}" "${run_root}" "${smoke_root}" "${task_root}" \
   "${task_receipt_sha}" "${build_id}" "${seal_ab_id}" "${collect_b_id}" \
   "${prefix_id}" "${seal_population_id}" "${smoke_id}" "${eval_id}" \
   "${aggregate_id}" "${verify_id}" "${POWER_EXPANSION}" \
-  "${shared_c_collect_id}" "${shared_c_seal_id}" "${deferred_id}" <<'PY'
+  "${shared_c_collect_id}" "${shared_c_seal_id}" "${deferred_id}" \
+  "${CONSTRUCTION_ONLY}" <<'PY'
 import json,sys
 (path,run,smoke,bundle,sha,build,seal_ab,collect_b,prefix,seal_population,
- smoke_job,evaluation,aggregate,verify,power,shared_collect,shared_seal,deferred)=sys.argv[1:]
+ smoke_job,evaluation,aggregate,verify,power,shared_collect,shared_seal,deferred,
+ construction_only)=sys.argv[1:]
+power=int(power)
 payload={
-  "schema_version":"hm3d_fullmono_lifelong_submission_v2_20260825" if int(power) else "hm3d_fullmono_lifelong_submission_v1_20260824",
-  "scope":"result-blind actual-full-mono lifelong power expansion" if int(power) else "consumed-scene actual-full-mono lifelong accumulation confirmation",
+  "schema_version":(
+    "hm3d_fullmono_lifelong_submission_v3_20260826" if power == 2 else
+    "hm3d_fullmono_lifelong_submission_v2_20260825" if power == 1 else
+    "hm3d_fullmono_lifelong_submission_v1_20260824"
+  ),
+  "scope":(
+    "prospective construction-only power gate for exact-prefix lifelong expansion"
+    if power == 2 else
+    "result-blind actual-full-mono lifelong power expansion" if power == 1 else
+    "consumed-scene actual-full-mono lifelong accumulation confirmation"
+  ),
   "run_root":run,"smoke_root":smoke,"task_bundle":bundle,
   "task_receipt_sha256":sha,"parent_scene_count":54,
-  "maximum_AB_histories":260 if int(power) else 130,
-  "maximum_paired_evaluation_tasks":260 if int(power) else 130,
-  "maximum_logical_query_arms":780 if int(power) else 390,
+  "maximum_AB_histories":1040 if power == 2 else 260 if power == 1 else 130,
+  "maximum_paired_evaluation_tasks":0 if int(construction_only) else 260 if power else 130,
+  "maximum_logical_query_arms":0 if int(construction_only) else 780 if power else 390,
+  "construction_only":bool(int(construction_only)),
+  "factual_B_authorized_only_by_sealed_construction_gate":power == 2,
   "primary_pair_same_loaded_GPU_process":True,
   "query_outcomes_read_at_submission":False,
   "fresh_scene_generalization_claim":False,
@@ -348,7 +389,9 @@ timeout 120 scp -q -o BatchMode=yes -o ControlMaster=no \
   -o ControlPath="${SSH_CONTROL_PATH}" "${receipt}" \
   "${SSH_ALIAS}:${run_root}/submission.json" || fail "submission receipt upload failed"
 remote "sha256sum '${run_root}/submission.json' >'${run_root}/submission.json.sha256'"
-if [[ "${POWER_EXPANSION}" == 1 ]]; then
+if [[ "${CONSTRUCTION_ONLY}" == 1 ]]; then
+  queue_ids=${build_id},${seal_ab_id}
+elif [[ "${POWER_EXPANSION}" == 1 ]]; then
   queue_ids=${build_id},${seal_ab_id},${collect_b_id},${prefix_id},${seal_population_id},${deferred_id}
 else
   queue_ids=${build_id},${seal_ab_id},${collect_b_id},${prefix_id},${seal_population_id},${smoke_id},${eval_id},${aggregate_id},${verify_id}
@@ -359,6 +402,8 @@ printf 'RUN_ROOT=%s\nSMOKE_ROOT=%s\nTASK_ROOT=%s\nBUILD=%s\nSEAL_AB=%s\nCOLLECT_
   "${seal_ab_id}" "${collect_b_id}" "${prefix_id}" \
   "${seal_population_id}" "${smoke_id}" "${eval_id}" \
   "${aggregate_id}" "${verify_id}"
-if [[ "${POWER_EXPANSION}" == 1 ]]; then
+if [[ "${CONSTRUCTION_ONLY}" == 1 ]]; then
+  printf 'CONSTRUCTION_ONLY=1\n'
+elif [[ "${POWER_EXPANSION}" == 1 ]]; then
   printf 'DEFERRED_SHARED_C_LAUNCHER=%s\n' "${deferred_id}"
 fi

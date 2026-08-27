@@ -1,0 +1,168 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_direct_natural_power_v4_20260827",
+  "frozen_at": "2026-08-27T21:30:00+08:00",
+  "scope": "result-blind direct-Natural-B full-monocular HM3D five-leg accumulation confirmation",
+  "amendment_of": {
+    "protocol": "hm3d_fullmono_lifelong_power_expansion_protocol_20260826.json",
+    "protocol_sha256": "127a6796c64eeafd4b48906baad09c48c41edb925fefe0fa964ccb584d4af228",
+    "reason": "the cross-history donor construction produced only 52 candidates; the preregistered result-blind direct Natural-B audit produced 99 candidates across 35 scenes"
+  },
+  "prior_result_use": {
+    "v3_navigation_outcomes_read": false,
+    "direct_natural_B_constructibility_summary_read": true,
+    "used_only_to_apply_the_preexisting_96_candidate_15_scene_gate": true,
+    "used_to_select_candidates_by_navigation_outcome": false,
+    "used_to_change_controller_certificate_or_success_thresholds": false
+  },
+  "post_prefix_query_outcomes_read_before_freeze": false,
+  "parent": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+    "parent_manifest": "sealed_inputs/parent_manifest.json",
+    "parent_manifest_sha256": "a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5",
+    "fullmono_population_receipt": "benchmarks/population_receipt.json",
+    "fullmono_population_receipt_sha256": "4dd6b8dcb759dff1c0835bef8e755e7291a5f049c9adec88b954d1fda62e30d5"
+  },
+  "sealed_natural_b_audit": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/natural_b_audit_formal_20260827T125748Z_e2832e17",
+    "scene_fragments": "natural_b_audit/scenes",
+    "summary": "natural_b_audit/summary.json",
+    "summary_sha256": "4edbb3f076360063f3dd267a62d90c09d0cd1425973404e47b41bb4cc04ad60f",
+    "independent_verification": "independent_natural_b_verification.json",
+    "independent_verification_sha256": "52b15b5e05f21e5ab3bc460f351bdc2068d2bdf121a1eae08646a2d3dd591ab7",
+    "audit_source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_audit_e2832e17231534e3",
+    "audit_source_bundle_receipt_sha256": "e2832e17231534e38db1b3b507ddf68881ee8bd56548c3151235e52a397f3121",
+    "source_v3_construction_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/formal_20260826T141733Z_375f0b68/construct_ab/scenes",
+    "expected_scene_fragments": 54,
+    "expected_candidate_histories": 99,
+    "expected_recipient_histories": 61,
+    "expected_scene_clusters": 35,
+    "independent_verification_required": true,
+    "query_policy_outcomes_read": false,
+    "navigation_outcomes_read": false
+  },
+  "novel_b_construction": {
+    "source": "sealed_direct_natural_B_audit_all_candidates",
+    "selection_rule": "materialize_every_candidate_identity_in_the_sealed_audit_ledger",
+    "maximum_candidates_per_recipient": 4,
+    "minimum_candidate_planar_separation_m": 2.0,
+    "recipient_A_to_B_geodesic_band_m": [2.0, 9.0],
+    "B_to_C_geodesic_band_m": [2.0, 9.0],
+    "B_max_recipient_A_covis_exclusive": 0.1,
+    "same_scene_navmesh": true,
+    "goal_rendered_at_frozen_camera_height": true,
+    "cross_online_history_donor_required": false,
+    "candidate_outcomes_read": false,
+    "synthetic_query_identity": "recipient_episode__natural_b_XX",
+    "source_online_A_identity_retained_separately": true,
+    "materialization_must_reproduce_audit_candidate_metadata": true,
+    "materialization_must_serialize_floor_position": true
+  },
+  "construction_power_gate": {
+    "minimum_candidate_histories": 96,
+    "minimum_scene_clusters": 15,
+    "expected_exact_candidate_histories": 99,
+    "expected_exact_recipient_histories": 61,
+    "expected_exact_scene_clusters": 35,
+    "halt_before_factual_B_if_not_met": true,
+    "halt_if_materialization_differs_from_audit": true
+  },
+  "factual_b_collection": {
+    "controller": "frozen NavDP native_sidecar",
+    "navdp_depth_source": "monocular_sidecar",
+    "maximum_steps": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "run_once_per_frozen_candidate": true,
+    "metric_depth_sensor_reads_allowed": 0,
+    "failed_B_prefixes_retained_in_attrition_ledger": true,
+    "successful_B_trace_is_canonical_and_hash_sealed": true,
+    "B_goal_support_by_factual_B_minimum_inclusive": 0.2,
+    "B_goal_support_strong_threshold_inclusive": 0.5,
+    "actual_B_end_to_C_geodesic_band_m": [2.0, 9.0],
+    "post_prefix_query_outcomes_read": false
+  },
+  "population": {
+    "selection_rule": "retain_every_frozen_candidate_whose_single_actual_mono_B_rollout_succeeds_and_has_at_least_0.20_factual_B_covis_support",
+    "minimum_target_histories": 40,
+    "minimum_target_scene_clusters": 15,
+    "underpowered_if_target_not_met": true,
+    "halt_before_factual_C_if_target_not_met": true,
+    "no_replacement_no_threshold_relaxation": true,
+    "C_B2_C2_outcomes_may_not_affect_population": true,
+    "primary_cluster_unit": "scene",
+    "shared_recipient_A_dependencies_reported": true
+  },
+  "query_runtime": {
+    "sequence": ["A", "B", "C", "B2", "C2"],
+    "maximum_steps_per_query": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "navdp_depth_source": "monocular_sidecar",
+    "factual_C_prefix": {
+      "controller": "frozen NavDP plus role-free CEC",
+      "candidate_ceiling": "end_of_A",
+      "executed_once_before_any_B2_treatment": true,
+      "must_reach_C_before_population_entry": true,
+      "selection_reads_B2_or_C2_navigation_outcomes": false,
+      "replayed_by_exact_RGB_pose_and_goal_session_receipts": true,
+      "minimum_formal_histories_after_C": 24,
+      "minimum_formal_scene_clusters_after_C": 12,
+      "halt_B2_if_not_met": true
+    },
+    "primary_endpoint": "B2_success_after_the_same_sealed_factual_C_prefix",
+    "primary_comparison": "all_prior_vs_initial_leg_only",
+    "secondary_comparison": "all_prior_vs_forced_reject_native",
+    "C2_role": "secondary_full_sequence_survival_and_anchor_provenance",
+    "C2_not_used_to_select_or_tune_population": true,
+    "arms": [
+      {
+        "name": "all_prior",
+        "B2_candidate_ceiling": "end_of_B",
+        "C2_candidate_ceiling": "causal_all_prior",
+        "CEC_takeover_authority": true
+      },
+      {
+        "name": "initial_leg_only",
+        "B2_candidate_ceiling": "end_of_A",
+        "C2_candidate_ceiling": "end_of_A",
+        "CEC_takeover_authority": true
+      },
+      {
+        "name": "forced_reject_native",
+        "B2_candidate_ceiling": "end_of_B",
+        "C2_candidate_ceiling": "causal_all_prior",
+        "CEC_takeover_authority": false
+      }
+    ]
+  },
+  "analysis": {
+    "pairing_key": ["scene", "synthetic_candidate_episode"],
+    "primary_cluster_unit": "scene",
+    "source_history_dependency_key": ["scene", "recipient_episode"],
+    "source_history_clustered_sensitivity_required": true,
+    "direction_stratified_report_required": true,
+    "primary_endpoint": "B2 paired success after shared factual C",
+    "secondary_endpoints": [
+      "survived_at_least_1_query_C",
+      "survived_at_least_2_queries_C_B2",
+      "survived_all_3_queries_C_B2_C2",
+      "C2_anchor_provenance"
+    ],
+    "exact_mcnemar": "two-sided exact binomial on discordant pairs",
+    "bootstrap_seed": 20260827,
+    "bootstrap_resamples": 100000,
+    "promotion_rule": "primary exact McNemar p<0.05 and scene-cluster 95% CI lower bound greater than zero",
+    "C2_claim_rule": "secondary only; report causal denominators and anchor provenance without post-hoc promotion"
+  },
+  "guards": {
+    "no_training": true,
+    "no_threshold_tuning": true,
+    "no_metric_depth_for_control_or_CEC": true,
+    "no_runtime_role_label": true,
+    "no_post_prefix_outcome_filtering": true,
+    "no_claim_of_fresh_scene_generalization": true,
+    "independent_raw_file_verifier_required": true,
+    "immutable_source_bundle_and_receipt_required": true,
+    "materialization_must_finish_and_seal_before_any_v4_B_rollout": true
+  }
+}

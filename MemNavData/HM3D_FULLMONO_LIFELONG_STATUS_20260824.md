@@ -185,3 +185,212 @@ launcher 尚未运行，所以没有新的 B2 或 multileg SR。
 `population.json.sha256` 后，读取 `accepted` 的精确非零长度，超过冻结上限 260 则
 fail closed，并在 receipt 中记录实际 array。该修复只影响未来 content-addressed bundle，
 不会回写或伪装改变已经提交的 `16318975`。
+
+## 9. 2026-08-26 v2 最终 shared-C pilot
+
+旧 immutable array 最终自然结束，aggregate 与独立 verifier 均完成。最终共同 C prefix
+只有 5 histories / 4 scenes，因此以下结果严格是机制 pilot：
+
+| B2 arm | success |
+|---|---:|
+| `all_prior` | `4/5` |
+| `initial_leg_only` | `2/5` |
+| `forced_reject_native` | `2/5` |
+
+- `all_prior` 对另外两臂均为 paired `+2/-0`，exact McNemar `p=.5`；
+- `all_prior` 在 3 条 episode 中实际接管，3/3 都使用 factual-B anchor；
+- 两条基线失败/`all_prior` 成功的 gain 均来自该 B 段新增历史，未见 paired loss；
+- 三臂共享精确 A/B/C prefix、same-process pairing 为真；
+- full-mono audit 覆盖 5/5 histories，A/B/B2 metric-depth reads 为 0；
+- `shared_c_independent_verification.json` 给出 `verified=true`。
+
+结果方向支持“持续积累的后续历史具有边际价值”，但 N=5 不能升级为正式 lifelong
+confirmation。
+
+## 10. 2026-08-26 prospective v3 construction power gate
+
+v2 不能通过原样重跑扩样：130 条 materialized A histories 只产生 33 个冻结 Novel-B
+候选；21/33 factual B 失败、另 4/33 在实际 B 终点后不满足冻结 C 距离带，最终只剩
+8 个 B-supported histories，再经 factual C 后只剩 5 个。该 attrition 已从原始 completion
+收据复算。
+
+因此 v3 在读取任何新 B/B2 outcome 前冻结为单独的 construction-only 阶段：
+
+- 每个 donor factual trace 固定取 24 个 linspace 时刻；
+- 每 recipient 最多 8 个候选、每 donor 最多 4 个；
+- 任意两个冻结 B 候选平面距离至少 2.0 m，使两个 1.0 m success disk 不重叠；
+- 仍保持跨 history、Novel covis `<.10`、A-to-B/B-to-C `2--9 m`、相同楼层及固定排序；
+- 只有封存候选达到 `>=96 histories / >=15 scenes`，才授权后续 factual-B；否则在任何
+  v3 导航 rollout 前停止。
+
+冻结协议：
+`hm3d_fullmono_lifelong_power_expansion_protocol_20260826.json`。
+
+本机、隔离 bundle 与远端生产门：
+
+- 本机/staged：`113 passed`；
+- 本机 Habitat：23 tests OK；
+- 远端 Habitat：25 tests OK（1 skip）；
+- 远端 MemNav：38 tests OK；
+- evaluator contract dry-run：OK；
+- 所有 Slurm 脚本均通过 `--test-only`。
+
+不可变提交：
+
+```text
+run root:
+/scratch/yz11502/Research/Nav-axis-uturn-results/
+  hm3d_fullmono_lifelong_power_v3_20260826/
+  formal_20260826T141733Z_375f0b68
+
+bundle:
+/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/
+  hm3d_fullmono_lifelong_375f0b6879b2ff87
+
+construct-only array: 16401203_[0-53%4]
+seal/gate:            16401233
+```
+
+提交时 array 因 `QOSGrpGRES` 等待；seal 等待 dependency。没有 factual-B、factual-C 或
+B2 job 被创建，`query_outcomes_read_at_submission=false`。本轮下一次科学决策只读取 sealed
+construction count 与 scene count，不读取导航 SR。
+
+## 11. 2026-08-27 v3 gate 结果与构造性归因
+
+v3 construction 54/54 scenes 与 seal 均已完成，但只得到 `52 histories / 19 scenes`；
+冻结门为 `96 / 15`，因此 `construction_target_met=false`、
+`factual_B_authorized=false`。没有任何 v3 factual-B、C 或 B2 rollout，也没有新 SR。
+
+独立 result-blind audit 在 54 scenes 上逐候选复算，并精确复现全部 52 个 sealed donor
+identity：
+
+- 130 条 materialized actual-A 中只有 80 条能在 runtime anchor `frame >=39` 后构造
+  距 endpoint 至少 2 m 的 Revisit-C；其余 50 条最大范围均为 `0.638--1.995 m`；
+- 80 条 C-constructible histories 中，73 条有 same-floor donor，68 条满足 A-to-B
+  距离带，59 条同时满足 B-to-C 距离带，最终只有 33 条满足 Novel covis `<.10`；
+- 3,840 个 temporal proposals 中有 330 个 eligible，但只覆盖这 33 个 recipients；2 m
+  去重后为 52 candidates，未损失任何 eligible recipient coverage。
+
+这证明 v3 失败是“短 actual-A 历史 + 跨 successful-online-history donor 稀缺”的结构性
+构造问题，不是 24-frame 采样不足。继续加密 temporal frames 或放松安全/独立性阈值均
+不会形成可信扩样。
+
+当前先做不读结果的 direct-natural-B audit，检验 Novel-B 是否可以像 Final14 一样由同场景
+navmesh 确定性渲染，而 C 继续严格来自 actual-online A。单场景 GPU smoke `16441089_1`
+已通过。原全量 array `16441206/16441207` 在未启动时取消，因为“一条 A 一个 B”的
+理论上限 80 无法检验原 96-candidate gate；修正版每条 A 最多 4 个且相隔至少 2 m，GPU
+smoke `16441408_1` 正在等待配额。CPU smoke `16441094_1` 已确认无 CUDA/EGL 时不能
+渲染。完整数字、不可变 bundle 和允许结论见
+`HM3D_FULLMONO_LIFELONG_CONSTRUCTIBILITY_AUDIT_RESULT_20260827.md`。
+
+## 12. 2026-08-27 direct-natural-B 正式构造审计
+
+`16441408_1` 已在 H100 上用 53 秒正常完成；该单场景有 3 条 controlled Revisit
+history，但仍没有 Natural-B candidate。它只通过 renderer/runtime smoke，不能用于判断
+54-scene population。
+
+按照现行 HPC hardening，正式模板已从 `h200_public/l40s_public` 收窄为
+`h100_tandon,a100_tandon`；科学 Python 与成功 smoke 逐字节相同。新 immutable bundle：
+
+```text
+/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/
+  hm3d_lifelong_natural_b_audit_e2832e17231534e3
+SOURCE_BUNDLE.sha256 SHA-256:
+  e2832e17231534e38db1b3b507ddf68881ee8bd56548c3151235e52a397f3121
+
+run root:
+/scratch/yz11502/Research/Nav-axis-uturn-results/
+  hm3d_fullmono_lifelong_power_v3_20260826/
+  natural_b_audit_formal_20260827T125748Z_e2832e17
+
+scene array: 16464404_[0-53%4]
+seal:        16464407 (afterany + explicit 54-fragment completeness gate)
+```
+
+本轮仍是 result-blind construction-only：没有创建 factual-B、C、B2 或任何导航评测
+job。只有完整 `summary.json` 达到原有 `96 candidates / 15 scenes` reference gate，才允许
+另行冻结 v4；不读取 partial candidate count。
+
+## 13. 2026-08-27 direct Natural-B gate 最终通过
+
+54/54 array、seal 和独立 verifier 已全部完成且 exit 0：
+
+```text
+scene array: 16464404_[0-53%4]
+seal:        16464407
+verifier:    16464666
+```
+
+最终 sealed summary 与独立 raw-fragment recount 完全一致：
+
+- 130 条 materialized actual-online A；
+- 80 条 controlled-Revisit-C constructible histories；
+- 61 条 recipients 至少有一个 Natural-B；
+- 99 个 Natural-B candidates；
+- 35 个 scene clusters；
+- 99/35 超过冻结的 96/15 reference gate；
+- 最大 online-A covis `0.0897222 < 0.10`；
+- 没有读取 query/navigation outcomes，也没有自动取得 evaluation authority。
+
+因此 v4 5-leg population 可以进入“先冻结、再 materialize”的阶段，但尚未运行任何 factual
+B/C/B2/C2。完整数字、哈希、独立 verifier 的能力边界和下一道门见
+`HM3D_FULLMONO_LIFELONG_NATURAL_B_AUDIT_RESULT_20260827.md`。
+
+## 14. 2026-08-27/28 v4 materialization seal 与独立复核
+
+v4 对全部 54 scenes 完成了 query-asset materialization；原 seal `16465110` 仅因
+renderer-free CPU finalizer 间接导入 Habitat `quaternion` 而失败。54 个 GPU fragment
+均成功且没有重跑。finalizer 随后改为直接验证并复用 fragment 中已冻结的 contract，
+不再导入 renderer-side builder。第一次 replacement `16469893` 又暴露出旧 source-task
+parser 不认识 v4 schema；它同样在读取导航结果前失败。
+
+R2 replacement 已完成：
+
+```text
+seal:       16470326  COMPLETED
+verifier:   16470334  COMPLETED
+```
+
+独立 verifier 给出 `verified=true`，并复核：
+
+- 130 条 materialized A histories；
+- 99 个 candidate histories、61 个 recipient histories、35 scenes；
+- direction strata：front 20 / side 22 / rear 57；
+- 396 个 query assets 与 499 个 population-ledger entries 哈希一致；
+- runtime role visibility 为 none；
+- materialization 阶段未读取 query/navigation outcomes，也未执行 factual B。
+
+最终 factual-B gate 为 `99/35 >= 96/15`，正式授权下一阶段。修复没有改变 protocol、
+候选 identity、阈值或任何 GPU materialization 输出。
+
+## 15. 2026-08-28 factual-B 分片提交与 parser-path 修复
+
+99 个冻结候选按 scene 划分为 59 个 shards，每 shard 最多 2 条、并发 4；这样保留同场景
+server 复用，又把单 task 时限控制为一小时。schedule SHA-256：
+`5b89096c613893a3963d34079b382140d1a8cd4e1fb648968da65f93f6eafbef`。
+
+初始 array `16471189` 的首批 task 在启动模型后确定性失败：collector 由旧 server bundle
+的绝对脚本路径执行，Python 将该目录放到 `sys.path[0]`，压过 v4 overlay，因而加载了
+只认识 v3 的 parser。状态审计为 4 个同因失败、4 个启动中取消、51 个未启动；
+`factual-B completion=0`，没有导航结果污染。旧 runtime 日志全部保留。
+
+修复将 collector、prefix constructor 与 population finalizer 的**字节相同副本**放入 v4
+task bundle，仅改变脚本目录与模块解析来源；真实 evaluator、MemNav/NavDP servers 仍来自
+原冻结 server bundle。HPC 生产容器分别用 MemNav 与 Habitat Python 验证三个模块均从
+v4 task root 解析，5 项测试通过。新不可变 bundle：
+
+```text
+/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/
+  hm3d_lifelong_natural_v4_parserfix_14316838b2bec0c9
+SOURCE_BUNDLE.sha256 SHA-256:
+  14316838b2bec0c9e2c4714ffc8aae247650aa3c796a75f1ace288e86b1b9d60
+
+replacement factual-B array: 16472222_[0-58%4]
+deferred prefix launcher:     16472263 (afterany:16472222)
+```
+
+`16472263` 不预占第二个 GPU array。它只在 99 个 factual-B completion 及 sidecar 全部
+存在后，顺序提交 99-task prefix construction；随后一个 CPU job 原子完成 population seal
+与独立 raw-file verifier。该 verifier 会从原始 B trace/plan、mono-depth receipts、prefix
+attrition、复制资产及完整 file ledger 重算 population，不读取 C/B2/C2 outcome。当前没有
+formal multileg SR；replacement array 提交时因 `QOSGrpGRES` 等待。

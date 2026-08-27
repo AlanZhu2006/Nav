@@ -1,0 +1,13 @@
+{
+  "arm": "zero_native",
+  "controller_checkpoint_changed": false,
+  "history_count": 21,
+  "query_count": 42,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_zero_depth_20260828/formal_e2033c8a0771cd84",
+  "same_population_as_final14_factorial": true,
+  "schema_version": "final14_zero_depth_preparation_v1_20260828",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_zero_depth_20260828/smoke_e2033c8a0771cd84",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_zero_depth_e2033c8a0771cd84",
+  "source_bundle_receipt_sha256": "e2033c8a0771cd848a2a4141f5611346f717d8c47f1700f05f091008c9f487c4",
+  "submitted": false
+}

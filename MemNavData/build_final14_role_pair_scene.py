@@ -52,6 +52,18 @@ NOVEL_ATTEMPTS = 5000
 DEPTH_TOLERANCE_M = 0.30
 
 
+class NaturalNovelConstructionError(RuntimeError):
+    """No proposal passed a result-blind natural-Novel contract."""
+
+    def __init__(self, diagnostics: dict[str, Any]):
+        self.diagnostics = dict(diagnostics)
+        super().__init__(
+            "no natural Novel query passed the frozen distance/direction/"
+            "support contract: "
+            f"{json.dumps(self.diagnostics, sort_keys=True)}"
+        )
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
@@ -343,7 +355,21 @@ def sample_natural_novel(
     episode_rank: int,
     paired_revisit_position: np.ndarray,
     camera_height: float,
+    minimum_paired_distance_m: float = 1.0,
+    maximum_paired_distance_m: float | None = None,
+    separated_from_positions: list[np.ndarray] | None = None,
+    minimum_candidate_separation_m: float = 0.0,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    require(minimum_paired_distance_m >= 0.0,
+            "minimum paired distance must be non-negative")
+    require(
+        maximum_paired_distance_m is None
+        or maximum_paired_distance_m >= minimum_paired_distance_m,
+        "maximum paired distance precedes minimum paired distance",
+    )
+    require(minimum_candidate_separation_m >= 0.0,
+            "minimum candidate separation must be non-negative")
+    separated_from_positions = list(separated_from_positions or [])
     endpoint, endpoint_yaw = online_endpoint(history)
     stratum = assigned_direction_stratum(scene_rank, episode_rank)
     yaw_bin = goal_yaw_bin(scene, episode)
@@ -367,9 +393,18 @@ def sample_natural_novel(
         "uniform_random_attempts": 0,
         "duplicate_position_rejects": 0,
         "floor_or_clearance_rejects": 0,
+        "non_navigable_rejects": 0,
+        "floor_mismatch_rejects": 0,
+        "clearance_rejects": 0,
+        "candidate_separation_rejects": 0,
         "geodesic_rejects": 0,
+        "unreachable_rejects": 0,
+        "a_to_b_outside_band_rejects": 0,
         "direction_stratum_rejects": 0,
         "paired_separation_rejects": 0,
+        "paired_unreachable_rejects": 0,
+        "paired_below_minimum_rejects": 0,
+        "paired_above_maximum_rejects": 0,
         "support_rejects": 0,
     }
     for attempt in range(1, NOVEL_ATTEMPTS + 1):
@@ -392,19 +427,33 @@ def sample_natural_novel(
             diagnostics["duplicate_position_rejects"] += 1
             continue
         seen_positions.add(position_key)
-        if (
-            not pathfinder.is_navigable(position)
-            or abs(float(position[1] - endpoint[1])) > 0.20
-            or float(pathfinder.distance_to_closest_obstacle(position)) < 0.30
-        ):
+        if not pathfinder.is_navigable(position):
+            diagnostics["non_navigable_rejects"] += 1
             diagnostics["floor_or_clearance_rejects"] += 1
+            continue
+        if abs(float(position[1] - endpoint[1])) > 0.20:
+            diagnostics["floor_mismatch_rejects"] += 1
+            diagnostics["floor_or_clearance_rejects"] += 1
+            continue
+        if float(pathfinder.distance_to_closest_obstacle(position)) < 0.30:
+            diagnostics["clearance_rejects"] += 1
+            diagnostics["floor_or_clearance_rejects"] += 1
+            continue
+        if any(
+            float(np.linalg.norm(position[[0, 2]] - prior[[0, 2]]))
+            < minimum_candidate_separation_m
+            for prior in separated_from_positions
+        ):
+            diagnostics["candidate_separation_rejects"] += 1
             continue
         geometry = pair_tools.query_geometry(pathfinder, endpoint, position)
         if geometry is None:
+            diagnostics["unreachable_rejects"] += 1
             diagnostics["geodesic_rejects"] += 1
             continue
         query_distance, initial_bearing = geometry
         if not 2.0 <= query_distance <= 9.0:
+            diagnostics["a_to_b_outside_band_rejects"] += 1
             diagnostics["geodesic_rejects"] += 1
             continue
         relative_degrees = relative_direction_degrees(
@@ -416,7 +465,19 @@ def sample_natural_novel(
         paired_distance = _optional_geodesic(
             pathfinder, paired_revisit_position, position
         )
-        if paired_distance is None or paired_distance < 1.0:
+        if paired_distance is None:
+            diagnostics["paired_unreachable_rejects"] += 1
+            diagnostics["paired_separation_rejects"] += 1
+            continue
+        if paired_distance < minimum_paired_distance_m:
+            diagnostics["paired_below_minimum_rejects"] += 1
+            diagnostics["paired_separation_rejects"] += 1
+            continue
+        if (
+            maximum_paired_distance_m is not None
+            and paired_distance > maximum_paired_distance_m
+        ):
+            diagnostics["paired_above_maximum_rejects"] += 1
             diagnostics["paired_separation_rejects"] += 1
             continue
         camera_position = position + np.asarray(
@@ -460,10 +521,7 @@ def sample_natural_novel(
             "_covis_curve": [float(value) for value in curve],
         }
         return record, diagnostics
-    raise RuntimeError(
-        "no natural Novel query passed the frozen distance/direction/support "
-        f"contract: {json.dumps(diagnostics, sort_keys=True)}"
-    )
+    raise NaturalNovelConstructionError(diagnostics)
 
 
 def role_contract(*, support: str) -> dict[str, Any]:

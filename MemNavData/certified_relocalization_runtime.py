@@ -31,6 +31,12 @@ CERTIFICATE_MIN_INLIERS = 16
 CERTIFICATE_MIN_QUERY_COVERAGE = 0.05
 CERTIFICATE_MIN_REFERENCE_COVERAGE = 0.05
 CERTIFICATE_MAX_REPROJECTION_RMSE_PX = 2.0
+STRICT_AUTHORITY_POLICY = "strict_certificate"
+UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY = "pnp_pose_available"
+SUPPORTED_AUTHORITY_POLICIES = (
+    STRICT_AUTHORITY_POLICY,
+    UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
+)
 
 
 def _quat_xyzw_to_matrix(quaternion: np.ndarray) -> np.ndarray:
@@ -242,6 +248,61 @@ def certificate_decision(pnp: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _finite_pose9(pnp: Mapping[str, Any]) -> bool:
+    """Return whether PnP exposed one finite camera pose witness."""
+
+    try:
+        pose = np.asarray(pnp.get("pose9"), dtype=np.float64)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return bool(pose.shape == (9,) and np.isfinite(pose).all())
+
+
+def operational_authority_decision(
+        pnp: Mapping[str, Any], *,
+        policy: str = STRICT_AUTHORITY_POLICY) -> dict[str, Any]:
+    """Separate geometric pose production from intervention authority.
+
+    ``strict_certificate`` is the deployed CEC rule.  The diagnostic
+    ``pnp_pose_available`` policy deliberately removes only the operational
+    certificate thresholds: retrieval, local matching, geometric ranking,
+    LingBot-depth lifting, and PnP remain unchanged.  It therefore measures
+    the causal value of the certificate boundary without becoming a
+    retrieval-only or geometry-free baseline.
+    """
+
+    policy = str(policy)
+    if policy not in SUPPORTED_AUTHORITY_POLICIES:
+        raise ValueError(f"unsupported authority policy: {policy}")
+    certificate = certificate_decision(pnp)
+    pose_available = _finite_pose9(pnp)
+    if policy == STRICT_AUTHORITY_POLICY:
+        accepted = bool(certificate["accepted"] and pose_available)
+        if accepted:
+            reason = "certificate_accepted"
+        elif certificate["accepted"]:
+            reason = "pnp_pose_unavailable"
+        else:
+            reason = str(certificate["reason"])
+        thresholds_enforced = True
+    else:
+        accepted = pose_available
+        reason = (
+            "pnp_pose_available"
+            if accepted else "pnp_pose_unavailable"
+        )
+        thresholds_enforced = False
+    return {
+        "policy": policy,
+        "accepted": accepted,
+        "reason": reason,
+        "pnp_pose_available": pose_available,
+        "certificate_thresholds_enforced": thresholds_enforced,
+        # Always retain the strict decision for paired diagnostics.
+        "strict_certificate": certificate,
+    }
+
+
 def fundamental_can_reach_certificate(
         evidence: Mapping[str, Any]) -> tuple[bool, str]:
     """Safe early abstention before the expensive LingBot-depth replay.
@@ -288,6 +349,10 @@ def runtime_contract() -> dict[str, Any]:
         ],
         "epipolar_threshold_px": CERTIFIED_EPIPOLAR_THRESHOLD_PX,
         "certificate": certificate_decision({})["thresholds"],
+        "default_authority_policy": STRICT_AUTHORITY_POLICY,
+        "diagnostic_authority_policies": [
+            UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
+        ],
         "output": "scale_free_relative_bearing",
         "pointgoal_units": "lingbot_raw_direction_only",
         "metric_distance_certified": False,
@@ -308,10 +373,14 @@ __all__ = [
     "CERTIFIED_MINIMUM_ANCHOR",
     "CERTIFIED_RELOCALIZATION_SCHEMA_VERSION",
     "CERTIFIED_GEOMETRY_CERTIFICATE_VERSION",
+    "STRICT_AUTHORITY_POLICY",
+    "SUPPORTED_AUTHORITY_POLICIES",
+    "UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY",
     "candidate_rank_key",
     "certificate_decision",
     "fundamental_can_reach_certificate",
     "fundamental_support",
+    "operational_authority_decision",
     "rank_candidates",
     "runtime_contract",
     "scale_free_relative_xy",

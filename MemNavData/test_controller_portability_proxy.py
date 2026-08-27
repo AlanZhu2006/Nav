@@ -99,7 +99,9 @@ def make_proxy(tmp_path, controller="iplanner", session=None):
     ), session=session or FakeSession([]))
 
 
-def make_hybrid_proxy(tmp_path, controller, session=None):
+def make_hybrid_proxy(
+        tmp_path, controller, session=None,
+        reject_policy="shared_native_exact"):
     depth = "none" if controller in RGB_ONLY_CONTROLLERS else "metric_sensor"
     checkpoints = (
         {controller: checkpoint(tmp_path, f"{controller}-hybrid.pth")}
@@ -112,8 +114,10 @@ def make_hybrid_proxy(tmp_path, controller, session=None):
             protocol=CEC_PROOF_HYBRID,
             depth_source=depth,
             query_population="mixed_role",
-            reject_policy="shared_native_exact",
-            fallback_controller="navdp",
+            reject_policy=reject_policy,
+            fallback_controller=(
+                controller
+                if reject_policy == "controller_native_exact" else "navdp"),
         ),
         repo_root=ROOT,
         upstream_base="http://127.0.0.1:19999",
@@ -307,6 +311,27 @@ def test_cec_rgb_only_shadow_observation_advances_context_without_goal(
     assert result["portability_receipt"]["observation_count"] == 1
     with pytest.raises(ValueError, match="exactly one image"):
         proxy.observe(files=request_files(), form={})
+
+
+def test_vint_controller_native_fallback_uses_original_goal_without_proof(
+        tmp_path):
+    session = FakeSession([trajectory_payload()])
+    proxy = make_hybrid_proxy(
+        tmp_path, "vint", session,
+        reject_policy="controller_native_exact")
+    files = request_files(include_goal=True)
+    files.pop("depth")
+    result = proxy.step("imagegoal_step", files=files, form={})
+    receipt = result["portability_receipt"]
+    assert receipt["controller"] == "vint"
+    assert receipt["reject_policy"] == "controller_native_exact"
+    assert receipt["fallback_controller"] == "vint"
+    assert "cec_proof_sha256" not in result
+
+    with pytest.raises(ValueError, match="authorization"):
+        proxy.step(
+            "imagegoal_step", files=files,
+            form={"cec_action_authorized": "0"})
 
 
 def test_cec_observation_step_is_refused_for_non_rgb_only_controllers(

@@ -772,6 +772,14 @@ def certified_relocalize():
             "ok": False, "accepted": False,
             "reason": "invalid_proposal_order",
         }), 400
+    authority_policy = request.form.get(
+        "authority_policy", "strict_certificate")
+    if authority_policy not in (
+            "strict_certificate", "pnp_pose_available"):
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "invalid_authority_policy",
+        }), 400
     raw_goal_intrinsic = request.form.get("goal_camera_intrinsic")
     goal_camera_intrinsic = None
     if raw_goal_intrinsic not in (None, ""):
@@ -793,6 +801,7 @@ def certified_relocalize():
         allow_learned_rescue=(raw_learned_rescue == "1"),
         proposal_order=proposal_order,
         goal_camera_intrinsic=goal_camera_intrinsic,
+        authority_policy=authority_policy,
     ))
 
 

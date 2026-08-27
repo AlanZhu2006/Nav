@@ -787,6 +787,87 @@ class CertifiedCascadeRuntimeTest(unittest.TestCase):
             self.assertFalse(result["accepted"])
             self.assertEqual(result["reason"], "invalid_goal_camera_intrinsic")
 
+    def test_unthresholded_witness_keeps_geometry_but_removes_authority_gate(self):
+        weak_support = {
+            "lightglue_matches": 24,
+            "lightglue_score_median": 0.7,
+            "fundamental_inliers": 8,
+            "fundamental_inlier_ratio": 0.5,
+            "fundamental_query_grid_coverage": 0.25,
+            "fundamental_query_hull_coverage": 0.01,
+            "fundamental_reference_grid_coverage": 0.25,
+            "fundamental_reference_hull_coverage": 0.01,
+        }
+
+        def weak_pose(_reference_points, _query_points, _depth, _confidence,
+                      reference_pose, **_kwargs):
+            payload = self.accepted_pose(reference_pose)
+            payload.update({
+                "status": "insufficient_inliers",
+                "inliers": 8,
+                "query_inlier_coverage": 0.01,
+                "reference_inlier_coverage": 0.01,
+                "reprojection_rmse_px": 12.0,
+            })
+            return payload
+
+        patches = lambda pnp: (
+            mock.patch(
+                "MemNavData.certified_relocalization_runtime.fundamental_support",
+                return_value=weak_support),
+            mock.patch(
+                "MemNavData.lingbot_pnp_localization.correspondence_pnp_localize",
+                side_effect=pnp),
+            mock.patch(
+                "MemNavData.lingbot_pnp_localization.jsonable_pnp",
+                side_effect=lambda value: value),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            strict_agent, goal = self.make_agent(Path(temporary))
+            strict_agent.cdec_pairwise_ranker = None
+            strict_patches = patches(weak_pose)
+            with strict_patches[0], strict_patches[1] as strict_pnp, \
+                    strict_patches[2]:
+                strict = strict_agent.certified_relocalize(
+                    goal, [{"anchor": 8, "score": 0.9}])
+            self.assertFalse(strict["accepted"])
+            self.assertEqual(
+                strict["reason"],
+                "precheck_fundamental_inliers",
+            )
+            strict_pnp.assert_not_called()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            witness_agent, goal = self.make_agent(Path(temporary))
+            witness_agent.cdec_pairwise_ranker = None
+            witness_patches = patches(weak_pose)
+            with witness_patches[0], witness_patches[1] as witness_pnp, \
+                    witness_patches[2]:
+                witness = witness_agent.certified_relocalize(
+                    goal,
+                    [{"anchor": 8, "score": 0.9}],
+                    authority_policy="pnp_pose_available",
+                )
+            witness_pnp.assert_called_once()
+            self.assertTrue(witness["accepted"])
+            self.assertFalse(witness["certificate"]["accepted"])
+            self.assertEqual(witness["authority_policy"], "pnp_pose_available")
+            self.assertEqual(witness["reason"], "pnp_pose_available")
+            self.assertFalse(
+                witness["authority"]["certificate_thresholds_enforced"])
+
+    def test_unregistered_authority_policy_fails_before_matching(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            agent, goal = self.make_agent(Path(temporary))
+            result = agent.certified_relocalize(
+                goal,
+                [{"anchor": 8, "score": 0.9}],
+                authority_policy="accept_everything",
+            )
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["accepted"])
+            self.assertEqual(result["reason"], "invalid_authority_policy")
+
     def test_explicit_off_never_invokes_loaded_learned_proposal(self):
         with tempfile.TemporaryDirectory() as temporary:
             agent, goal = self.make_agent(Path(temporary))

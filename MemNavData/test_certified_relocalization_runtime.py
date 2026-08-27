@@ -5,10 +5,13 @@ from certified_relocalization_runtime import (
     CERTIFICATE_MIN_INLIERS,
     CERTIFICATE_MIN_QUERY_COVERAGE,
     CERTIFICATE_MIN_REFERENCE_COVERAGE,
+    STRICT_AUTHORITY_POLICY,
+    UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
     candidate_rank_key,
     certificate_decision,
     fundamental_can_reach_certificate,
     fundamental_support,
+    operational_authority_decision,
     rank_candidates,
     runtime_contract,
     scale_free_relative_xy,
@@ -22,6 +25,7 @@ def valid_pnp(**updates):
         "query_inlier_coverage": CERTIFICATE_MIN_QUERY_COVERAGE,
         "reference_inlier_coverage": CERTIFICATE_MIN_REFERENCE_COVERAGE,
         "reprojection_rmse_px": CERTIFICATE_MAX_REPROJECTION_RMSE_PX,
+        "pose9": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
     }
     payload.update(updates)
     return payload
@@ -50,6 +54,46 @@ def test_certificate_rejects_missing_nonfinite_and_bad_status():
         "accepted"] is False
     assert certificate_decision(valid_pnp(
         reprojection_rmse_px=float("nan")))["accepted"] is False
+
+
+def test_authority_ablation_changes_only_intervention_thresholds():
+    weak_but_finite = valid_pnp(
+        status="insufficient_inliers",
+        inliers=8,
+        query_inlier_coverage=0.01,
+        reference_inlier_coverage=0.01,
+        reprojection_rmse_px=14.0,
+    )
+    strict = operational_authority_decision(
+        weak_but_finite, policy=STRICT_AUTHORITY_POLICY)
+    unthresholded = operational_authority_decision(
+        weak_but_finite,
+        policy=UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
+    )
+    assert strict["accepted"] is False
+    assert strict["certificate_thresholds_enforced"] is True
+    assert unthresholded["accepted"] is True
+    assert unthresholded["reason"] == "pnp_pose_available"
+    assert unthresholded["certificate_thresholds_enforced"] is False
+    assert unthresholded["strict_certificate"] == strict["strict_certificate"]
+
+
+def test_unthresholded_authority_still_requires_a_finite_pose():
+    for payload in (
+        {},
+        valid_pnp(pose9=None),
+        valid_pnp(pose9=[0.0] * 8),
+        valid_pnp(pose9=[0.0] * 8 + [float("nan")]),
+    ):
+        decision = operational_authority_decision(
+            payload, policy=UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY)
+        assert decision["accepted"] is False
+        assert decision["reason"] == "pnp_pose_unavailable"
+
+
+def test_authority_policy_is_closed_to_unregistered_values():
+    with np.testing.assert_raises(ValueError):
+        operational_authority_decision(valid_pnp(), policy="accept_everything")
 
 
 def test_rank_is_frozen_lexicographic_and_prefers_earlier_tie():
@@ -110,6 +154,9 @@ def test_runtime_contract_exposes_fallback_and_not_binary_semantics():
     assert contract["fallback"] == "native_imagegoal"
     assert contract["metric_distance_certified"] is False
     assert contract["output"] == "scale_free_relative_bearing"
+    assert contract["default_authority_policy"] == STRICT_AUTHORITY_POLICY
+    assert contract["diagnostic_authority_policies"] == [
+        UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY]
     assert "unknown" in contract["semantic_claim"]
 
 

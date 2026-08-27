@@ -52,6 +52,7 @@ QUERY_POPULATIONS = frozenset({"any", "mixed_role", "revisit_only"})
 REJECT_POLICIES = frozenset({
     "not_applicable",
     "native_exact",
+    "controller_native_exact",
     "score_uncovered",
     "shared_native_exact",
 })
@@ -269,12 +270,25 @@ def validate_comparison_plan(plan: ComparisonPlan) -> ControllerSpec:
     elif plan.protocol == CEC_PROOF_HYBRID:
         if plan.query_population != "mixed_role":
             raise ValueError("CEC proof portability requires a mixed-role population")
-        if plan.reject_policy != "shared_native_exact":
+        if plan.reject_policy == "shared_native_exact":
+            if plan.fallback_controller != "navdp":
+                raise ValueError(
+                    "shared CEC proof portability freezes mono NavDP as the "
+                    "fallback")
+        elif plan.reject_policy == "controller_native_exact":
+            if ("imagegoal" not in spec.task_interfaces
+                    or not spec.exact_imagegoal_fallback):
+                raise ValueError(
+                    f"{spec.display_name} cannot provide controller-native "
+                    "exact ImageGoal fallback")
+            if plan.fallback_controller != spec.key:
+                raise ValueError(
+                    "controller-native CEC proof portability must fall back "
+                    "to the same controller")
+        else:
             raise ValueError(
-                "CEC proof portability requires the shared exact native fallback")
-        if plan.fallback_controller != "navdp":
-            raise ValueError(
-                "CEC proof portability freezes mono NavDP as the shared fallback")
+                "CEC proof portability requires either the shared exact "
+                "native fallback or controller-native exact fallback")
         if spec.cec_accept_adapter not in CEC_ACCEPT_ADAPTERS:
             raise ValueError(
                 f"{spec.display_name} has no audited CEC proof adapter")
@@ -329,12 +343,27 @@ def _proof_identity(proof: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def cec_proof_sha256(proof: Mapping[str, Any]) -> str:
+    """Return the canonical public identity of one CEC decision.
+
+    The helper is deliberately public so a controller-independent handoff
+    artifact can bind exactly the same proof that :func:`project_cec_proof`
+    consumes.  Keeping one implementation avoids a subtle but serious audit
+    failure where the packet and the live router hash different field sets.
+    """
+
+    if not isinstance(proof, Mapping):
+        raise ValueError("CEC proof must be a mapping")
+    return _proof_identity(proof)
+
+
 def project_cec_proof(
     controller: str,
     proof: Mapping[str, Any],
     *,
     anchor_jpeg: bytes | None = None,
     shadow_only: bool = False,
+    reject_policy: str = "shared_native_exact",
 ) -> CecProjection:
     """Project the same certified proof into one controller-native interface.
 
@@ -346,7 +375,7 @@ def project_cec_proof(
     ``takeover=True`` for logging, but its payload cannot carry a real
     hash-bound anchor.
 
-    A valid rejection selects the shared mono-NavDP ImageGoal fallback for the
+    A valid rejection selects the explicitly frozen ImageGoal fallback for the
     current action.  CEC is evaluated again at the next decision, matching the
     canonical per-action exact-fallback contract.
     """
@@ -362,12 +391,26 @@ def project_cec_proof(
     if proof.get("accepted") is not True and proof.get("accepted") is not False:
         raise ValueError("CEC proof must contain a boolean accepted decision")
     proof_sha256 = _proof_identity(proof)
+    spec = controller_spec(controller)
     if proof.get("accepted") is False:
+        if reject_policy == "shared_native_exact":
+            reject_controller = "navdp"
+            reject_adapter = "shared_native_exact"
+        elif reject_policy == "controller_native_exact":
+            if ("imagegoal" not in spec.task_interfaces
+                    or not spec.exact_imagegoal_fallback):
+                raise ValueError(
+                    f"{spec.display_name} cannot provide controller-native "
+                    "exact ImageGoal fallback")
+            reject_controller = spec.key
+            reject_adapter = "controller_native_exact"
+        else:
+            raise ValueError(f"unsupported CEC reject policy {reject_policy!r}")
         return CecProjection(
             proof_sha256=proof_sha256,
             takeover=False,
-            controller="navdp",
-            adapter="shared_native_exact",
+            controller=reject_controller,
+            adapter=reject_adapter,
             endpoint="imagegoal_step",
             payload={"fallback_this_action": True},
         )
@@ -391,8 +434,6 @@ def project_cec_proof(
         raise ValueError("selected anchor must be a non-negative integer")
     direction = proof.get("direction_vector", proof.get("aux_pose"))
     fixed = _normalized_pointgoal(direction)
-    spec = controller_spec(controller)
-
     if spec.cec_accept_adapter in {"bearing_mixedgoal", "bearing_pointgoal"}:
         payload = {
             **fixed_bearing_payload(fixed),
@@ -490,6 +531,7 @@ __all__ = [
     "MAP_BACKEND_DIAGNOSTIC",
     "NATIVE_IMAGEGOAL",
     "ROLE_FREE_CEC_FULL",
+    "cec_proof_sha256",
     "controller_spec",
     "fixed_bearing_payload",
     "is_headline_eligible",

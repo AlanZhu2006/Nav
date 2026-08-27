@@ -1,0 +1,63 @@
+{
+  "schema_version": "hm3d_vint_controller_native_cec_submission_v1_20260828",
+  "date": "2026-08-28",
+  "status_at_receipt": "pilot_pending_qos_group_gpu_formal_dependency_held",
+  "scientific_question": "Within the same frozen ViNT controller, does role-free CEC improve mixed Novel/Revisit navigation when rejection uses native ViNT and acceptance uses a proof-bound historical anchor ImageGoal?",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_vint_controller_native_cec_20260828/hm3d_vint_cec_table1_20260828",
+  "source_bundle": {
+    "root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_vint_cec_3c8da4454ad11c64",
+    "receipt_sha256": "735f6e39012bfa5bd02c1ddfcbaa8c0a2e17d0369f892260c1e3709fd16796a9"
+  },
+  "protocol": {
+    "markdown": "MemNavData/HM3D_VINT_CONTROLLER_NATIVE_CEC_PROTOCOL_20260828.md",
+    "markdown_sha256_before_submission_note": "824fdb5b4dd49660b069e40bd05a672929e250c52e93ec2778361da7cb9d675d",
+    "json": "MemNavData/hm3d_vint_controller_native_cec_protocol_20260828.json",
+    "json_sha256": "f71687b6231e7a9e0fd1d245cc406b0b7482c293b6c91502b5efe32849574a7c"
+  },
+  "population": {
+    "source_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+    "benchmark_manifest_sha256": "aada40d25d01e9385df3ffdcaf37847f471b63c7be785a704eade961346a50b0",
+    "source_verification_sha256": "3ae4b556eef9e8144f635495f65d58b177ceee8d98301327374967415cf8d2d8",
+    "histories": 28,
+    "scene_clusters": 21,
+    "queries": 56,
+    "roles_per_history": [
+      "novel",
+      "revisit"
+    ]
+  },
+  "comparison": {
+    "controller": "vint",
+    "native_control_arm": "forced_reject_native",
+    "cec_arm": "grant",
+    "reject_policy": "controller_native_exact",
+    "runtime_role_visible": false,
+    "max_steps": 600,
+    "execution_horizon": 8,
+    "success_distance_m": 1.0
+  },
+  "local_gate": {
+    "root": "/home/asus/Research/Nav-graph-blind/.diagnostics/controller_portability_20260828/vint_controller_native_gxdo_ep0_gate2",
+    "audit_sha256": "812e110e611249d2a058897e8198d0190e7d004de2a1349e906070bdfb4e04e4",
+    "verified": true,
+    "tests_passed": 102,
+    "novel_exact_fallback_trace_match": true,
+    "revisit_anchor": 121,
+    "revisit_first_packet_verified": true,
+    "sr_used_as_evidence": false
+  },
+  "jobs": {
+    "pilot_array": 16482370,
+    "pilot_indices": "0-3%2",
+    "pilot_state_at_receipt": "PENDING",
+    "pilot_pending_reason": "QOSGrpGRES",
+    "pilot_aggregate": 16482378,
+    "pilot_verify": 16482381,
+    "formal_array": 16482393,
+    "formal_indices": "0-27%2",
+    "formal_aggregate": 16482395,
+    "formal_verify": 16482397
+  },
+  "dependency_gate": "The formal array is afterok:pilot_verify. Pilot navigation outcomes cannot select, tune, or modify the already frozen formal treatment.",
+  "result_status": "No pilot or formal navigation outcome was available when this receipt was written."
+}

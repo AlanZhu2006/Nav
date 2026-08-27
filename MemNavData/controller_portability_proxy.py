@@ -175,9 +175,9 @@ def _validate_cec_takeover(
     files: Mapping[str, tuple[str, bytes, str]],
     form: Mapping[str, Any],
 ) -> str:
-    proof_sha = _validate_sha256(form.get("cec_proof_sha256"), "CEC proof")
     if form.get("cec_action_authorized") != "1":
         raise ValueError("CEC accepted action must carry authorization")
+    proof_sha = _validate_sha256(form.get("cec_proof_sha256"), "CEC proof")
     try:
         selected_anchor = int(form.get("cec_selected_anchor"))
     except (TypeError, ValueError, OverflowError) as exc:
@@ -331,7 +331,15 @@ class ControllerPortabilityProxy:
                     CEC_BEARING_EXECUTOR, CEC_PROOF_HYBRID}):
             raise ValueError(
                 "pointgoal_step is restricted to CEC bearing/proof plans")
-        if self.config.comparison.protocol == CEC_PROOF_HYBRID:
+        controller_native_fallback = bool(
+            self.config.comparison.protocol == CEC_PROOF_HYBRID
+            and self.config.comparison.reject_policy
+            == "controller_native_exact"
+            and endpoint == "imagegoal_step"
+            and form.get("cec_action_authorized") in (None, "")
+        )
+        if (self.config.comparison.protocol == CEC_PROOF_HYBRID
+                and not controller_native_fallback):
             expected_endpoint = (
                 "imagegoal_step"
                 if self.spec.cec_accept_adapter == "verified_anchor_imagegoal"
@@ -354,7 +362,8 @@ class ControllerPortabilityProxy:
         if endpoint == "pointgoal_step":
             _validate_pointgoal_batch(form.get("goal_data"))
         proof_sha = None
-        if self.config.comparison.protocol == CEC_PROOF_HYBRID:
+        if (self.config.comparison.protocol == CEC_PROOF_HYBRID
+                and not controller_native_fallback):
             proof_sha = _validate_cec_takeover(
                 adapter=self.spec.cec_accept_adapter,
                 files=files,

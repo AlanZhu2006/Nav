@@ -2135,7 +2135,8 @@ class MemNavAgent:
     def certified_relocalize(
             self, goal_jpg_bytes, candidates, *, route_start_anchor=None,
             graph_rescue=False, allow_learned_rescue=False,
-            proposal_order="geometry_first", goal_camera_intrinsic=None):
+            proposal_order="geometry_first", goal_camera_intrinsic=None,
+            authority_policy="strict_certificate"):
         """Rank/localize/certify once; update only scale-free bearing later."""
         import hashlib
         import time
@@ -2145,9 +2146,12 @@ class MemNavAgent:
             CERTIFIED_CANDIDATE_TOP_K,
             CERTIFIED_EPIPOLAR_THRESHOLD_PX,
             CERTIFIED_MINIMUM_ANCHOR,
-            certificate_decision,
+            STRICT_AUTHORITY_POLICY,
+            SUPPORTED_AUTHORITY_POLICIES,
+            UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
             fundamental_can_reach_certificate,
             fundamental_support,
+            operational_authority_decision,
             rank_candidates,
             runtime_contract,
         )
@@ -2161,6 +2165,7 @@ class MemNavAgent:
         started = time.perf_counter()
         frame_idx = self.n - 1
         proposal_order = str(proposal_order)
+        authority_policy = str(authority_policy)
         if goal_camera_intrinsic is None:
             raw_goal_intrinsic = None
         else:
@@ -2190,6 +2195,7 @@ class MemNavAgent:
             "learned_rescue_available": (
                 getattr(self, "cdec_pairwise_ranker", None) is not None),
             "proposal_order": proposal_order,
+            "authority_policy": authority_policy,
             "goal_camera_calibration": (
                 "explicit_distinct_intrinsic"
                 if raw_goal_intrinsic is not None
@@ -2201,6 +2207,23 @@ class MemNavAgent:
             return {
                 **base, "ok": False, "accepted": False,
                 "reason": "invalid_proposal_order", "cached": False,
+                "relocalization_ms": 1000.0 * (
+                    time.perf_counter() - started),
+            }
+        if authority_policy not in SUPPORTED_AUTHORITY_POLICIES:
+            return {
+                **base, "ok": False, "accepted": False,
+                "reason": "invalid_authority_policy", "cached": False,
+                "relocalization_ms": 1000.0 * (
+                    time.perf_counter() - started),
+            }
+        if (authority_policy == UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY
+                and (proposal_order != "geometry_first"
+                     or allow_learned_rescue)):
+            return {
+                **base, "ok": False, "accepted": False,
+                "reason": "invalid_authority_ablation_configuration",
+                "cached": False,
                 "relocalization_ms": 1000.0 * (
                     time.perf_counter() - started),
             }
@@ -2264,6 +2287,7 @@ class MemNavAgent:
         fingerprint = (
             ("learned_rescue_requested", bool(allow_learned_rescue)),
             ("proposal_order", proposal_order),
+            ("authority_policy", authority_policy),
             ("goal_camera_intrinsic", (
                 None if raw_goal_intrinsic is None
                 else tuple(float(value) for value in raw_goal_intrinsic.flat)
@@ -2318,6 +2342,7 @@ class MemNavAgent:
                 "ok": True,
                 "accepted": False,
                 "reason": "no_causal_candidate",
+                "authority": None,
                 "certificate": None,
                 "selected_anchor": None,
                 "selected_dino_rank": None,
@@ -2381,8 +2406,22 @@ class MemNavAgent:
 
         def attempt_proposal(selected, source):
             selected_anchor = int(selected["anchor"])
-            possible, precheck_reason = fundamental_can_reach_certificate(
-                selected)
+            if authority_policy == STRICT_AUTHORITY_POLICY:
+                possible, precheck_reason = (
+                    fundamental_can_reach_certificate(selected))
+            else:
+                # This is an algorithmic minimum for PnP, not an operational
+                # certificate threshold.  The diagnostic arm still requires
+                # local correspondences and a finite geometric pose witness.
+                possible = bool(
+                    int(selected.get("lightglue_matches", 0))
+                    >= int(SiftPnPConfig().min_correspondences)
+                    and selected_anchor in matched_by_anchor
+                )
+                precheck_reason = (
+                    "pnp_attemptable"
+                    if possible else "precheck_lightglue_matches"
+                )
             pnp = {"status": precheck_reason}
             goal_pose9 = None
             reference_depth_cache = None
@@ -2423,19 +2462,22 @@ class MemNavAgent:
                         query_intrinsic=query_intrinsic)
                     pnp = jsonable_pnp(pnp)
                     if "pose9" in pnp:
-                        goal_pose9 = np.asarray(
+                        candidate_pose9 = np.asarray(
                             pnp["pose9"], dtype=np.float64)
+                        if (candidate_pose9.shape == (9,)
+                                and np.isfinite(candidate_pose9).all()):
+                            goal_pose9 = candidate_pose9
                 except Exception as exception:
                     pnp = {
                         "status": "runtime_exception",
                         "error": f"{type(exception).__name__}: {exception}",
                     }
-            certificate = certificate_decision(pnp)
-            accepted = bool(
-                certificate["accepted"] and goal_pose9 is not None)
-            reason = ("certificate_accepted" if accepted
-                      else (precheck_reason if not possible
-                            else certificate["reason"]))
+            authority = operational_authority_decision(
+                pnp, policy=authority_policy)
+            certificate = authority["strict_certificate"]
+            accepted = bool(authority["accepted"])
+            reason = (
+                precheck_reason if not possible else authority["reason"])
             return {
                 "source": source,
                 "selected": selected,
@@ -2444,6 +2486,7 @@ class MemNavAgent:
                 "precheck_reason": precheck_reason,
                 "pnp": pnp,
                 "certificate": certificate,
+                "authority": authority,
                 "accepted": accepted,
                 "reason": reason,
                 "goal_pose9": goal_pose9,
@@ -2460,6 +2503,7 @@ class MemNavAgent:
                 "precheck_passed": attempt["possible"],
                 "pnp_status": attempt["pnp"].get("status"),
                 "certificate": attempt["certificate"],
+                "authority": attempt["authority"],
                 "reference_depth_cache": attempt[
                     "reference_depth_cache"],
             }
@@ -2618,6 +2662,7 @@ class MemNavAgent:
             "accepted": accepted,
             "reason": final_attempt["reason"],
             "certificate": certificate,
+            "authority": final_attempt["authority"],
             "selected_anchor": selected_anchor,
             "selected_dino_rank": selected.get("dino_rank"),
             "selected_proposal_source": final_attempt["source"],

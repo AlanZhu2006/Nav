@@ -117,11 +117,14 @@ parser.add_argument("--out", type=str, default="./eval2leg_out")
 parser.add_argument(
     "--server_backend",
     choices=[
-        "memnav", "navdp", "cec_portability",
+        "memnav", "navdp", "rgb_imagegoal", "cec_portability",
         "hybrid_oracle", "hybrid_pose",
     ],
     default="memnav",
-    help=("HTTP protocol exposed by the policy server.  The NavDP adapter "
+    help=("HTTP protocol exposed by the policy server. rgb_imagegoal is a "
+          "depth-free compatibility path for frozen visual controllers such "
+          "as ViNT: it shares the evaluator's trajectory executor and scoring "
+          "but sends only current/goal RGB.  The NavDP adapter "
           "supplies metric depth and removes the singleton batch dimension. "
           "hybrid_oracle is a diagnostic upper bound: official NavDP controls "
           "the Novel start->A leg while every observation is also streamed to "
@@ -252,6 +255,7 @@ parser.add_argument(
         "memory_geometry",
         "learned_rank_geometry",
         "certified_relocalization",
+        "certified_unthresholded_witness",
         "certified_semantic_first",
         "learned_pi3x_relocalization",
     ],
@@ -266,6 +270,8 @@ parser.add_argument(
           "identical memory_geometry activation gate; "
           "certified_relocalization uses the frozen LightGlue + "
           "LingBot-depth PnP v2 certificate and otherwise falls back native; "
+          "certified_unthresholded_witness keeps the identical proposal and "
+          "PnP witness but authorizes every finite pose as a diagnostic arm; "
           "certified_semantic_first keeps canonical DINO proposal order and "
           "uses the identical certificate as a veto; "
           "learned_pi3x_relocalization replaces all hand geometry/PnP proof "
@@ -582,6 +588,15 @@ parser.add_argument(
           "development run to one evaluator-only role; the role is never "
           "forwarded to either policy"),
 )
+parser.add_argument(
+    "--role_pair_query_manifest",
+    type=str,
+    default="",
+    help=("eval_shared_online_role_pairs.py only: optional immutable list of "
+          "query identities selected from deployment-visible evidence. It "
+          "cannot be combined with role filtering and is never forwarded "
+          "to either policy"),
+)
 parser.add_argument("--loop_cos_min", type=float, default=None,
                     help="optional raw-DINO current/goal cosine threshold for loop closure")
 parser.add_argument("--seed", type=int, default=0,
@@ -654,10 +669,12 @@ XNAVDP_BASE = (f"http://{args.host}:{args.xnavdp_port}"
 HYBRID_BACKENDS = ("hybrid_oracle", "hybrid_pose")
 AUTO_HYBRID_ROUTES = (
     "memory_advantage", "memory_geometry", "learned_rank_geometry",
-    "certified_relocalization", "certified_semantic_first",
+    "certified_relocalization", "certified_unthresholded_witness",
+    "certified_semantic_first",
     "learned_pi3x_relocalization")
 CERTIFIED_RELOCALIZATION_ROUTES = (
-    "certified_relocalization", "certified_semantic_first")
+    "certified_relocalization", "certified_unthresholded_witness",
+    "certified_semantic_first")
 LEARNED_PI3X_RELOCALIZATION_ROUTES = ("learned_pi3x_relocalization",)
 SCALE_FREE_RELOCALIZATION_ROUTES = (
     *CERTIFIED_RELOCALIZATION_ROUTES,
@@ -703,7 +720,7 @@ def depth_png_bytes(depth):
 
 
 def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
-              camera_intrinsic=None):
+              camera_intrinsic=None, causal_history_sha256=None):
     AUTO_ROUTER_STATE.clear()
     MEMNAV_SERVER_INFO.clear()
     XNAVDP_SERVER_INFO.clear()
@@ -720,6 +737,10 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
         }
         if seed is not None:
             payload["seed"] = int(seed)
+        if (args.server_backend == "cec_portability"
+                and causal_history_sha256 is not None):
+            payload["causal_history_sha256"] = str(
+                causal_history_sha256)
         return payload
 
     memnav_payload = {"camera_height": camera_height}
@@ -731,6 +752,24 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
     if episode_len is not None:
         memnav_payload["episode_len"] = int(episode_len)
 
+    if args.server_backend == "rgb_imagegoal":
+        if camera_intrinsic is None:
+            raise ValueError(
+                "RGB ImageGoal reset requires camera_intrinsic")
+        r = requests.post(
+            f"{BASE}/navigator_reset",
+            json={
+                "intrinsic": np.asarray(
+                    camera_intrinsic, dtype=float).tolist(),
+                "batch_size": 1,
+            },
+        )
+        r.raise_for_status()
+        reset_payload = r.json()
+        if not isinstance(reset_payload.get("algo"), str):
+            raise RuntimeError(
+                "RGB ImageGoal controller returned an invalid reset receipt")
+        return reset_payload["algo"]
     if args.server_backend in ("navdp", "cec_portability"):
         r = requests.post(f"{BASE}/navigator_reset", json=navdp_payload())
         r.raise_for_status()
@@ -795,7 +834,11 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
                     or contract.get("metric_distance_certified") is not False
                     or contract.get("controller_adapter") != (
                         "verified_bearing_v1_fixed_2.5m")
-                    or contract.get("fallback") != "native_imagegoal"):
+                    or contract.get("fallback") != "native_imagegoal"
+                    or contract.get("default_authority_policy") != (
+                        "strict_certificate")
+                    or contract.get("diagnostic_authority_policies") != [
+                        "pnp_pose_available"]):
                 raise RuntimeError(
                     "certified relocalization runtime contract changed")
             learned = certified.get("learned_rescue_proposal")
@@ -918,7 +961,7 @@ def srv_memory(image_jpg):
     # inside imagegoal_step.  Streaming the seven controller interpolation
     # frames would change its intended temporal stride, and its server has no
     # memory_step endpoint.
-    if args.server_backend == "navdp":
+    if args.server_backend in ("navdp", "rgb_imagegoal"):
         return {"frame_idx": None}
     if args.server_backend == "cec_portability":
         r = requests.post(
@@ -1101,6 +1144,11 @@ def srv_plan_certified_relocalization(
         if args.hybrid_route == "certified_semantic_first"
         else "geometry_first"
     )
+    expected_authority_policy = (
+        "pnp_pose_available"
+        if args.hybrid_route == "certified_unthresholded_witness"
+        else "strict_certificate"
+    )
     probe = requests.post(
         f"{BASE}/retrieval_probe_step",
         files={
@@ -1129,6 +1177,7 @@ def srv_plan_certified_relocalization(
                 "learned_rescue": (
                     "1" if args.certified_cdec_rescue == "on" else "0"),
                 "proposal_order": expected_proposal_order,
+                "authority_policy": expected_authority_policy,
             },
         )
         response.raise_for_status()
@@ -1137,6 +1186,8 @@ def srv_plan_certified_relocalization(
             raise RuntimeError("certificate endpoint returned non-object JSON")
         if relocalized.get("proposal_order") != expected_proposal_order:
             raise RuntimeError("certificate endpoint used wrong proposal order")
+        if relocalized.get("authority_policy") != expected_authority_policy:
+            raise RuntimeError("certificate endpoint used wrong authority policy")
     except Exception as error:
         # The current frame was already appended by retrieval_probe_step.  An
         # optional localization failure must not skip the native controller or
@@ -1173,7 +1224,10 @@ def srv_plan_certified_relocalization(
     ranked = relocalized.get("ranked_candidates")
     router_diag = {
         "router_memory_advantage": None,
-        "router_prefilter_mode": "certified_relocalization_bearing_v3",
+        "router_prefilter_mode": (
+            "unthresholded_pnp_witness_bearing_v1"
+            if expected_authority_policy == "pnp_pose_available"
+            else "certified_relocalization_bearing_v3"),
         "router_threshold": None,
         "router_visual_floor": None,
         "router_prefilter_pass": None,
@@ -1224,6 +1278,9 @@ def srv_plan_certified_relocalization(
             "uncached_relocalization_ms"),
         "certified_relocalization_certificate": relocalized.get(
             "certificate"),
+        "certified_relocalization_authority": relocalized.get("authority"),
+        "certified_relocalization_authority_policy": relocalized.get(
+            "authority_policy"),
         "certified_relocalization_pnp": relocalized.get("pnp"),
         "certified_relocalization_metric_scale": relocalized.get(
             "metric_scale"),
@@ -2012,6 +2069,7 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
     use_navdp = (args.server_backend in ("navdp", "cec_portability")
                  or (args.server_backend in HYBRID_BACKENDS
                      and policy_backend in ("navdp", "navdp_probe")))
+    use_rgb_imagegoal = args.server_backend == "rgb_imagegoal"
     # The all-CEC hub owns its monocular sidecar and deliberately exposes an
     # RGB-only ImageGoal wire contract.  Do not even serialize Habitat metric
     # depth for this backend: an ignored depth file would still make the
@@ -2085,7 +2143,8 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
         out["memory_frame_idx"] = memory_frame_idx
     elif args.server_backend not in ("navdp", "cec_portability"):
         out.setdefault("memory_frame_idx", out.get("frame_idx"))
-    return normalize_navdp_response(out) if use_navdp else out
+    return (normalize_navdp_response(out)
+            if use_navdp or use_rgb_imagegoal else out)
 
 
 def attach_memnav_diagnostics(out, mem_out, controller, error=None):
@@ -2130,7 +2189,8 @@ def normalize_navdp_response(out):
 
 def srv_similarity(image_jpg, goal_jpg):
     """Direct visual check without appending to or retrieving from memory."""
-    if args.server_backend in ("navdp", "cec_portability"):
+    if args.server_backend in (
+            "navdp", "rgb_imagegoal", "cec_portability"):
         return {"current_goal_cos": None}
     r = requests.post(
         f"{BASE}/imagegoal_similarity",
@@ -2583,7 +2643,9 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             diagnostic_steps=steps,
             termination_reason=termination_reason,
             blocked_step_count=int(blocked_step_count),
-            navdp_depth_source=args.navdp_depth_source,
+            navdp_depth_source=(
+                None if args.server_backend == "rgb_imagegoal"
+                else args.navdp_depth_source),
             metric_depth_sensor_consumed_any=any(
                 plan.get("metric_depth_sensor_consumed") is True
                 for plan in plans
@@ -2996,6 +3058,8 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                       "cec_accept_adapter"),
                                   cec_reject_controller=response.get(
                                       "cec_reject_controller"),
+                                  cec_reject_policy=response.get(
+                                      "cec_reject_policy"),
                                   cec_step_index=response.get(
                                       "cec_step_index"),
                                   cec_query_index=response.get(
@@ -3020,6 +3084,18 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                       "cec_selected_anchor"),
                                   cec_proof_sha256=response.get(
                                       "cec_proof_sha256"),
+                                  cec_handoff_packet=response.get(
+                                      "cec_handoff_packet"),
+                                  cec_handoff_packet_sha256=response.get(
+                                      "cec_handoff_packet_sha256"),
+                                  cec_handoff_single_use=response.get(
+                                      "cec_handoff_single_use"),
+                                  cec_causal_history_before_decision_sha256=(
+                                      response.get(
+                                          "cec_causal_history_before_decision_sha256")),
+                                  cec_causal_history_after_decision_sha256=(
+                                      response.get(
+                                          "cec_causal_history_after_decision_sha256")),
                                   cec_projected_goal=response.get(
                                       "cec_projected_goal"),
                                   cec_controller_portability_receipt=(
@@ -3615,7 +3691,8 @@ def main():
     # Original NavDP constructs its agent on the first reset and therefore
     # needs the episode camera intrinsic.  MemNav can be probed immediately.
     algo = (args.server_backend
-            if args.server_backend in ("navdp", "cec_portability")
+            if args.server_backend in (
+                "navdp", "rgb_imagegoal", "cec_portability")
             or args.server_backend in HYBRID_BACKENDS
             else srv_reset(seed=args.seed))
     print(f"[eval2leg] server algo={algo}, {len(ep_dirs)} episodes, "

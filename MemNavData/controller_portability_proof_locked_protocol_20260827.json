@@ -1,0 +1,110 @@
+{
+  "schema_version": "controller_portability_proof_locked_protocol_v1_20260827",
+  "status": "frozen_design_local_true_stack_gate_passed_no_fresh_hm3d_utility_result",
+  "research_question": "Can one role-free CEC proof carry useful episodic navigation authority across heterogeneous frozen executors?",
+  "source_population": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+    "benchmark_manifest_sha256": "aada40d25d01e9385df3ffdcaf37847f471b63c7be785a704eade961346a50b0",
+    "independent_verification_sha256": "3ae4b556eef9e8144f635495f65d58b177ceee8d98301327374967415cf8d2d8",
+    "independent_verification_passed": true,
+    "histories": 28,
+    "scene_clusters": 21,
+    "queries": 56,
+    "first_decision_accept": 28,
+    "first_decision_reject": 28,
+    "accepted_population_scene_clusters": 21,
+    "accepted_population_equals_revisit_posthoc": true,
+    "source_navigation_outcomes_used_for_selection": false,
+    "scope": "consumed external-scene controller-portability ablation; not new generalization evidence"
+  },
+  "handoff": {
+    "schema": "cec_certified_handoff_packet_v1_20260827",
+    "single_use": true,
+    "decision_scope": "one_high_level_controller_decision",
+    "fixed_radius_m": 2.5,
+    "pointgoal_units": "lingbot_raw_direction_only",
+    "bindings": [
+      "causal_history_sha256",
+      "current_rgb_sha256",
+      "goal_rgb_sha256",
+      "selected_anchor",
+      "selected_anchor_image_sha256",
+      "proof_sha256"
+    ],
+    "forbidden": [
+      "runtime role label",
+      "oracle pose",
+      "ground-truth distance",
+      "metric depth sensor",
+      "re-use after physical state changes"
+    ]
+  },
+  "primary_controllers": {
+    "navdp": "bearing_mixedgoal reference",
+    "vint": "proof-bound anchor ImageGoal visual executor",
+    "iplanner": "2.5 m bearing PointGoal local planner with monocular sidecar"
+  },
+  "secondary_controllers_after_primary": [
+    "gnm",
+    "nomad",
+    "viplanner"
+  ],
+  "paired_arms": [
+    "grant",
+    "forced_reject_native"
+  ],
+  "pairing_contract": {
+    "same_gpu": true,
+    "same_memnav_process": true,
+    "same_mono_navdp_process": true,
+    "same_alternate_controller_process": true,
+    "same_controller_proxy_process": true,
+    "same_online_a_replay": true,
+    "same_first_proof_sha256": true,
+    "same_first_anchor": true,
+    "same_first_handoff_packet_sha256": true,
+    "post_divergence_history_chain_equality_required": false,
+    "later_proof_stream_equality_required": false,
+    "arm_order_balanced": true
+  },
+  "pilot": {
+    "history_indices": [0, 7, 14, 21],
+    "distinct_scenes": 4,
+    "max_steps": 600,
+    "performance_used_as_submission_gate": false,
+    "gate": "all identity, sensor, process, runtime and completion audits pass"
+  },
+  "formal": {
+    "accepted_histories": 28,
+    "scene_clusters": 21,
+    "max_steps": 600,
+    "success_distance_m": 1.0,
+    "exec_horizon": 8,
+    "statistics": [
+      "paired gain/loss",
+      "exact McNemar",
+      "scene-cluster bootstrap 95% CI",
+      "SR/SPL/final-distance/path/collision",
+      "proof and controller latency"
+    ],
+    "utility_claim_gate": "at least one non-NavDP executor shows statistically distinguishable positive utility over its same-process forced-reject baseline with all audits passing"
+  },
+  "novel_evaluation": {
+    "existing_mixed_role_population_remains_primary": true,
+    "full_novel_rollout_repeated_per_controller": false,
+    "exact_fallback_smokes_per_controller": 2
+  },
+  "local_true_stack_gate": {
+    "scene": "gxdoqLR6rwA",
+    "episode": "episode_0000",
+    "max_steps": 8,
+    "controllers": [
+      "vint",
+      "iplanner"
+    ],
+    "shared_first_proof_sha256": "c287e710f3208353673f4d03ac406e91a662be55b0b41ae6d1c4c35a162cd512",
+    "shared_first_anchor": 121,
+    "same_process_pair_verified": true,
+    "navigation_utility_claim": false
+  }
+}

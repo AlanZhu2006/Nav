@@ -2,8 +2,10 @@
 """One CEC proof layer with controller-native accepted-branch adapters.
 
 Every arm observes the same causal RGB stream and runs the same CEC proof.
-CEC rejection uses the shared monocular NavDP ImageGoal fallback for the
-current action.  CEC acceptance authorizes one configured controller adapter:
+The frozen reject policy is explicit: either shared monocular NavDP receives
+the original ImageGoal, or an ImageGoal-capable selected controller receives
+that unchanged goal itself.  CEC acceptance authorizes one configured
+controller adapter:
 
 * NavDP receives its frozen ImageGoal + 2.5 m bearing mixed goal;
 * ViNT, GNM and NoMaD receive the hash-bound certified history anchor as
@@ -12,9 +14,7 @@ current action.  CEC acceptance authorizes one configured controller adapter:
   LingBot monocular-depth sidecar.
 
 This service never reads a Novel/Revisit role label.  CEC authorizes each
-decision independently: reject/error uses the shared mono-NavDP action for
-that decision, while accept uses the configured proof-bound adapter.  The
-fallback and short-context controller (ViNT/GNM/NoMaD) contexts are
+decision independently.  The inactive temporal controller context is
 shadow-maintained so later action-level switches remain causal.  The service
 owns no actuator interface.
 """
@@ -43,6 +43,10 @@ from MemNavData.controller_portability_contract import (
     controller_spec,
     project_cec_proof,
     validate_comparison_plan,
+)
+from MemNavData.cec_handoff_contract import (
+    build_handoff_packet,
+    project_handoff_packet,
 )
 from MemNavData.monocular_depth_runtime import (
     decode_monocular_depth_payload,
@@ -76,12 +80,14 @@ class PortabilityHubConfig:
     controller_url: str
     fallback_navdp_url: str
     camera_height_m: float
+    reject_policy: str = "shared_native_exact"
     connect_timeout_s: float = 3.0
     request_timeout_s: float = 180.0
-    # Shared-native system baseline: run the identical probe/certificate
-    # pipeline and receipts, but never grant CEC control authority.  Distinct
-    # from any candidate-ceiling ablation, which still allows takeovers.
+    # Native-control counterfactual: run the identical probe/certificate
+    # pipeline and receipts, but never grant CEC control authority.  The
+    # configured reject policy determines which native controller acts.
     force_reject_native: bool = False
+    emit_handoff_packets: bool = False
 
     @property
     def timeout(self) -> tuple[float, float]:
@@ -150,8 +156,11 @@ class CecControllerPortabilityRouter:
             protocol=CEC_PROOF_HYBRID,
             depth_source=depth_source,
             query_population="mixed_role",
-            reject_policy="shared_native_exact",
-            fallback_controller="navdp",
+            reject_policy=config.reject_policy,
+            fallback_controller=(
+                config.controller
+                if config.reject_policy == "controller_native_exact"
+                else "navdp"),
         )
         self.spec = validate_comparison_plan(self.plan)
         if (not math.isfinite(config.camera_height_m)
@@ -168,15 +177,45 @@ class CecControllerPortabilityRouter:
         self._anchor_index: int | None = None
         self._anchor_sha256: str | None = None
         self._goal_sha256: str | None = None
+        self._causal_history_sha256: str | None = None
 
     def _post_json(self, url: str, label: str, **kwargs) -> dict[str, Any]:
         return _json_object(
             self.session.post(url, timeout=self.config.timeout, **kwargs), label)
 
+    def _advance_causal_history(self, image: bytes, goal: bytes) -> str:
+        """Extend the role-free history chain after one observed decision.
+
+        The reset digest binds the complete frozen online-A trace.  Each later
+        decision extends it with the actual RGB and active goal, so packets
+        emitted after controller trajectories diverge cannot accidentally
+        claim the same causal history.
+        """
+        if self._causal_history_sha256 is None:
+            raise PortabilityHubError("causal-history chain is unavailable")
+        payload = {
+            "prior_sha256": self._causal_history_sha256,
+            "current_rgb_sha256": hashlib.sha256(image).hexdigest(),
+            "goal_rgb_sha256": hashlib.sha256(goal).hexdigest(),
+            "decision_index": int(self.step_index),
+        }
+        self._causal_history_sha256 = hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+            allow_nan=False).encode("utf-8")).hexdigest()
+        return self._causal_history_sha256
+
     def reset(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         _reject_privileged_fields(payload)
         intrinsic = _finite_intrinsic(payload.get("intrinsic"))
         common = dict(payload)
+        causal_history_sha256 = common.pop("causal_history_sha256", None)
+        if self.config.emit_handoff_packets:
+            if (not isinstance(causal_history_sha256, str)
+                    or len(causal_history_sha256) != 64
+                    or any(character not in "0123456789abcdef"
+                           for character in causal_history_sha256)):
+                raise ValueError(
+                    "handoff packet mode requires causal_history_sha256")
         common["intrinsic"] = intrinsic
         fallback_payload = dict(common)
         fallback_payload["depth_source"] = "monocular_sidecar"
@@ -195,6 +234,7 @@ class CecControllerPortabilityRouter:
         self._anchor_index = None
         self._anchor_sha256 = None
         self._goal_sha256 = None
+        self._causal_history_sha256 = causal_history_sha256
         try:
             memory = self._post_json(
                 f"{self.config.memnav_url.rstrip('/')}/navigator_reset",
@@ -242,9 +282,11 @@ class CecControllerPortabilityRouter:
             "schema": PORTABILITY_HUB_SCHEMA,
             "controller": self.spec.key,
             "cec_accept_adapter": self.spec.cec_accept_adapter,
-            "reject_controller": "navdp",
-            "reject_policy": "shared_native_exact",
+            "reject_controller": self.plan.fallback_controller,
+            "reject_policy": self.plan.reject_policy,
             "force_reject_native": bool(self.config.force_reject_native),
+            "handoff_packets_enabled": bool(
+                self.config.emit_handoff_packets),
             "controller_depth_source": self.plan.depth_source,
             "depth_source": "monocular_sidecar",
             "metric_depth_sensor_consumed_by_config": False,
@@ -338,31 +380,53 @@ class CecControllerPortabilityRouter:
         controller_form: Mapping[str, str],
     ) -> dict[str, Any]:
         controller_started = time.perf_counter()
+        controller_native = (
+            self.config.reject_policy == "controller_native_exact")
+        fallback_url = (
+            self.config.controller_url
+            if controller_native else self.config.fallback_navdp_url)
         result = self._post_json(
-            f"{self.config.fallback_navdp_url.rstrip('/')}/imagegoal_step",
-            "shared native fallback",
+            f"{fallback_url.rstrip('/')}/imagegoal_step",
+            (f"{self.spec.display_name} native fallback"
+             if controller_native else "shared native fallback"),
             files={
                 "image": _file("image.jpg", image, "image/jpeg"),
                 "goal": _file("goal.jpg", original_goal, "image/jpeg"),
             },
             data=dict(controller_form),
         )
-        if (result.get("depth_source") != "monocular_sidecar"
+        if not controller_native and (
+                result.get("depth_source") != "monocular_sidecar"
                 or result.get("metric_depth_sensor_consumed") is not False):
             raise PortabilityHubError(
                 "fallback response did not prove monocular depth consumption")
         requested_seed = controller_form.get("diffusion_seed")
-        if (requested_seed is not None
-                and int(result.get("diffusion_seed", -1))
-                != int(requested_seed)):
-            raise PortabilityHubError(
-                "fallback NavDP did not consume the paired diffusion seed")
+        if controller_native:
+            receipt = result.get("portability_receipt")
+            if (not isinstance(receipt, Mapping)
+                    or receipt.get("controller") != self.spec.key
+                    or receipt.get("endpoint") != "imagegoal_step"
+                    or receipt.get("reject_policy")
+                    != "controller_native_exact"):
+                raise PortabilityHubError(
+                    "controller-native fallback lost its portability receipt")
+            if requested_seed is not None:
+                result["diffusion_seed"] = int(requested_seed)
+            result["cec_seed_semantics"] = (
+                "paired_request_id_not_consumed_by_deterministic_controller")
+            result["cec_controller_seed_consumed"] = False
+        else:
+            if (requested_seed is not None
+                    and int(result.get("diffusion_seed", -1))
+                    != int(requested_seed)):
+                raise PortabilityHubError(
+                    "fallback NavDP did not consume the paired diffusion seed")
+            result["cec_seed_semantics"] = "navdp_diffusion_rng_consumed"
+            result["cec_controller_seed_consumed"] = True
         _finite_trajectory(result)
         result["cec_controller_ms"] = (
             (time.perf_counter() - controller_started) * 1000.0)
         result["cec_depth_sidecar_ms"] = None
-        result["cec_seed_semantics"] = "navdp_diffusion_rng_consumed"
-        result["cec_controller_seed_consumed"] = True
         return result
 
     def _shadow_vint_context(self, image: bytes) -> None:
@@ -537,6 +601,8 @@ class CecControllerPortabilityRouter:
 
         certificate = None
         projection = None
+        handoff_packet = None
+        packet_history_sha256 = self._causal_history_sha256
         fallback_context_shadowed = False
         alternate_context_shadowed = False
         certificate_ms = 0.0
@@ -549,9 +615,10 @@ class CecControllerPortabilityRouter:
                 (time.perf_counter() - certificate_started) * 1000.0)
             projection_started = time.perf_counter()
             if (certificate.get("accepted") is True
-                    and not self.config.force_reject_native
-                    and self.spec.cec_accept_adapter
-                    == "verified_anchor_imagegoal"):
+                    and (self.config.emit_handoff_packets
+                         or (not self.config.force_reject_native
+                             and self.spec.cec_accept_adapter
+                             == "verified_anchor_imagegoal"))):
                 selected_anchor = certificate.get("selected_anchor")
                 selected_sha = certificate.get(
                     "selected_anchor_image_sha256")
@@ -562,9 +629,34 @@ class CecControllerPortabilityRouter:
                         goal, certificate)
                     self._anchor_index = int(selected_anchor)
                     self._anchor_sha256 = str(selected_sha)
-            projection = project_cec_proof(
-                self.spec.key, certificate, anchor_jpeg=self._anchor_jpeg,
-                shadow_only=self.config.force_reject_native)
+            if (self.config.emit_handoff_packets
+                    and certificate.get("accepted") is True):
+                if self._anchor_jpeg is None:
+                    raise PortabilityHubError(
+                        "accepted handoff lacks certified anchor bytes")
+                if self._causal_history_sha256 is None:
+                    raise PortabilityHubError(
+                        "accepted handoff lacks causal-history identity")
+                handoff_packet = build_handoff_packet(
+                    certificate,
+                    current_rgb=image,
+                    goal_rgb=goal,
+                    anchor_jpeg=self._anchor_jpeg,
+                    causal_history_sha256=packet_history_sha256,
+                )
+                projection = project_handoff_packet(
+                    self.spec.key,
+                    handoff_packet,
+                    current_rgb=image,
+                    goal_rgb=goal,
+                    anchor_jpeg=self._anchor_jpeg,
+                    causal_history_sha256=packet_history_sha256,
+                )
+            else:
+                projection = project_cec_proof(
+                    self.spec.key, certificate, anchor_jpeg=self._anchor_jpeg,
+                    shadow_only=self.config.force_reject_native,
+                    reject_policy=self.config.reject_policy)
             projection_ms = (
                 (time.perf_counter() - projection_started) * 1000.0)
             shadow_takeover = bool(projection.takeover)
@@ -582,10 +674,16 @@ class CecControllerPortabilityRouter:
             else:
                 result = self._fallback(image, goal, controller_form)
                 shadow_started = time.perf_counter()
-                self._shadow_vint_context(image)
+                if self.config.reject_policy == "controller_native_exact":
+                    fallback_context_shadowed = self._shadow_fallback_context(
+                        image)
+                else:
+                    self._shadow_vint_context(image)
                 shadow_ms = (
                     (time.perf_counter() - shadow_started) * 1000.0)
-                alternate_context_shadowed = self.spec.key in SHORT_CONTEXT_CONTROLLERS
+                alternate_context_shadowed = bool(
+                    self.config.reject_policy == "shared_native_exact"
+                    and self.spec.key in SHORT_CONTEXT_CONTROLLERS)
                 self.last_action_state = (
                     "forced_reject"
                     if shadow_takeover and self.config.force_reject_native
@@ -608,7 +706,8 @@ class CecControllerPortabilityRouter:
             "cec_forced_reject_native": bool(self.config.force_reject_native),
             "cec_accept_controller": self.spec.key,
             "cec_accept_adapter": self.spec.cec_accept_adapter,
-            "cec_reject_controller": "navdp",
+            "cec_reject_controller": self.plan.fallback_controller,
+            "cec_reject_policy": self.plan.reject_policy,
             "cec_step_index": self.step_index,
             "cec_query_index": self.query_index,
             "cec_goal_sha256": goal_sha256,
@@ -628,6 +727,16 @@ class CecControllerPortabilityRouter:
             "cec_selected_anchor": projection.payload.get(
                 "cec_selected_anchor"),
             "cec_proof_sha256": projection.proof_sha256,
+            "cec_handoff_packet": handoff_packet,
+            "cec_handoff_packet_sha256": (
+                None if handoff_packet is None
+                else handoff_packet["packet_sha256"]),
+            "cec_handoff_single_use": (
+                None if handoff_packet is None
+                else handoff_packet["single_use"]),
+            "cec_causal_history_before_decision_sha256": (
+                packet_history_sha256
+                if self.config.emit_handoff_packets else None),
             "cec_projected_goal": dict(projection.payload),
             "cec_controller_portability_receipt": result.get(
                 "portability_receipt"),
@@ -648,6 +757,9 @@ class CecControllerPortabilityRouter:
         if certificate is not None:
             result["cec_reason"] = certificate.get("reason")
             result["cec_certificate"] = certificate.get("certificate")
+        if self.config.emit_handoff_packets:
+            result["cec_causal_history_after_decision_sha256"] = (
+                self._advance_causal_history(image, goal))
         return result
 
     def memory_step(self, image: bytes) -> dict[str, Any]:
@@ -803,6 +915,10 @@ def create_app(router: CecControllerPortabilityRouter) -> Flask:
             "cec_decision_scope": "per_action",
             "cec_last_action_state": router.last_action_state,
             "force_reject_native": bool(router.config.force_reject_native),
+            "reject_policy": router.plan.reject_policy,
+            "reject_controller": router.plan.fallback_controller,
+            "handoff_packets_enabled": bool(
+                router.config.emit_handoff_packets),
         })
 
     @app.post("/navigator_reset")
@@ -923,14 +1039,25 @@ def main() -> None:
     parser.add_argument("--controller-url", required=True)
     parser.add_argument("--fallback-navdp-url", default="http://127.0.0.1:8888")
     parser.add_argument("--camera-height-m", type=float, required=True)
+    parser.add_argument(
+        "--reject-policy",
+        choices=["shared_native_exact", "controller_native_exact"],
+        default="shared_native_exact",
+        help=("shared_native_exact rejects to mono NavDP; "
+              "controller_native_exact rejects to the selected controller "
+              "with the unchanged original ImageGoal"),
+    )
     parser.add_argument("--connect-timeout-s", type=float, default=3.0)
     parser.add_argument("--request-timeout-s", type=float, default=180.0)
     parser.add_argument(
         "--force-reject-native", action="store_true",
-        help=("shared-native system baseline: run the identical CEC "
+        help=("native-control counterfactual: run the identical CEC "
               "probe/certificate pipeline and receipts, but never grant "
-              "takeover authority; every action is the shared mono-NavDP "
-              "fallback"))
+              "takeover authority; every action follows --reject-policy"))
+    parser.add_argument(
+        "--emit-handoff-packets", action="store_true",
+        help=("seal every accepted live CEC decision as a single-use, "
+              "input-bound handoff packet before controller projection"))
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "::1", "localhost"}:
         parser.error("portability hub must bind to loopback; use an SSH tunnel")
@@ -940,9 +1067,11 @@ def main() -> None:
         controller_url=args.controller_url.rstrip("/"),
         fallback_navdp_url=args.fallback_navdp_url.rstrip("/"),
         camera_height_m=args.camera_height_m,
+        reject_policy=args.reject_policy,
         connect_timeout_s=args.connect_timeout_s,
         request_timeout_s=args.request_timeout_s,
         force_reject_native=bool(args.force_reject_native),
+        emit_handoff_packets=bool(args.emit_handoff_packets),
     ))
     create_app(router).run(host=args.host, port=args.port, threaded=True)
 

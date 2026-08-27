@@ -3,6 +3,12 @@
 日期：2026-08-21（Asia/Shanghai）  
 状态：统一 CEC 契约、四种 accepted-branch adapter、逐动作授权与 ViNT proof-bound anchor 接口均已完成；四臂、两场景 mixed-role 本机 gate 已独立复算通过，尚无新统计闭环 SR。
 
+> **2026-08-27 因果修订：**本文保留为旧 all-CEC 接口实现记录。完整 rollout 在不同
+> controller 首次接管后会产生不同 observation，因此不得继续要求“全部后续 proof stream
+> 完全相同”。新的正式归因单位、同进程 grant/forced pair 与 Fresh-HM3D accepted-set
+> 设计见 `CONTROLLER_PORTABILITY_PROOF_LOCKED_PROTOCOL_20260827.md`。旧 multileg
+> controller 表和 `4 histories / 1 scene` ViNT shared-C pilot 均不构成 portability utility。
+
 ## 1. 冻结问题
 
 本支线不再比较“裸 ViNT / 裸 iPlanner / 裸 ViPlanner 与 CEC+NavDP 谁更强”。正式问题统一为：

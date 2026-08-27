@@ -25,6 +25,18 @@ FALLBACK_PORT=${FALLBACK_PORT:-21841}
 UPSTREAM_PORT=${UPSTREAM_PORT:-21842}
 PROXY_PORT=${PROXY_PORT:-21843}
 HUB_PORT=${HUB_PORT:-21844}
+FORCED_HUB_PORT=${FORCED_HUB_PORT:-21845}
+
+# A controller-portability query can run the granted and forced-reject arms
+# against the same already-loaded MemNav/NavDP/controller processes.  This is
+# the paired unit used by the proof-locked Fresh-HM3D experiment; it avoids the
+# cross-machine CUDA confound that invalidated older controller tables.
+PORTABILITY_AUTHORITY_PAIR=${PORTABILITY_AUTHORITY_PAIR:-0}
+PORTABILITY_AUTHORITY_ORDER=${PORTABILITY_AUTHORITY_ORDER:-grant,forced_reject_native}
+ROLE_PAIR_QUERY_ROLE=${ROLE_PAIR_QUERY_ROLE:-all}
+ROLE_PAIR_QUERY_MANIFEST=${ROLE_PAIR_QUERY_MANIFEST:-}
+CEC_REJECT_POLICY=${CEC_REJECT_POLICY:-shared_native_exact}
+ROLE_PAIR_SCOPE=${ROLE_PAIR_SCOPE:-consumed_integration}
 
 MEMNAV_PY=${MEMNAV_PY:-/home/asus/miniconda3/envs/memnav/bin/python}
 HAB_PY=${HAB_PY:-/home/asus/miniconda3/envs/habitat/bin/python}
@@ -70,6 +82,42 @@ case "${EVAL_KIND}" in
   nnr_revisit|role_pair_mixed|lifelong_5leg|lifelong_nnr|hm3d_lifelong|lifelong_shared_c_collect|lifelong_shared_c_b2|hm3d_shared_c_collect|hm3d_shared_c_b2) ;;
   *) fail "unsupported EVAL_KIND=${EVAL_KIND}" ;;
 esac
+case "${ROLE_PAIR_QUERY_ROLE}" in
+  all|novel|revisit) ;;
+  *) fail "ROLE_PAIR_QUERY_ROLE must be all, novel, or revisit" ;;
+esac
+case "${ROLE_PAIR_SCOPE}" in
+  consumed_integration|paper_heldout) ;;
+  *) fail "ROLE_PAIR_SCOPE must be consumed_integration or paper_heldout" ;;
+esac
+case "${PORTABILITY_AUTHORITY_PAIR}" in
+  0|1) ;;
+  *) fail "PORTABILITY_AUTHORITY_PAIR must be 0 or 1" ;;
+esac
+case "${CEC_REJECT_POLICY}" in
+  shared_native_exact) ;;
+  controller_native_exact)
+    [[ "${CONTROLLER}" == vint || "${CONTROLLER}" == gnm \
+       || "${CONTROLLER}" == nomad ]] || \
+      fail "controller_native_exact requires an RGB ImageGoal controller"
+    ;;
+  *) fail "invalid CEC_REJECT_POLICY=${CEC_REJECT_POLICY}" ;;
+esac
+if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
+  [[ "${EVAL_KIND}" == role_pair_mixed ]] || \
+    fail "authority pairing is currently restricted to role_pair_mixed"
+  [[ "${PORTABILITY_AUTHORITY_ORDER}" == grant,forced_reject_native \
+     || "${PORTABILITY_AUTHORITY_ORDER}" == forced_reject_native,grant ]] || \
+    fail "invalid PORTABILITY_AUTHORITY_ORDER"
+fi
+if [[ -n "${ROLE_PAIR_QUERY_MANIFEST}" ]]; then
+  [[ "${EVAL_KIND}" == role_pair_mixed ]] || \
+    fail "ROLE_PAIR_QUERY_MANIFEST requires role_pair_mixed"
+  [[ "${ROLE_PAIR_QUERY_ROLE}" == all ]] || \
+    fail "query manifest cannot be combined with role filtering"
+  [[ -r "${ROLE_PAIR_QUERY_MANIFEST}" ]] || \
+    fail "missing ROLE_PAIR_QUERY_MANIFEST=${ROLE_PAIR_QUERY_MANIFEST}"
+fi
 [[ "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]] || fail "MAX_STEPS must be positive"
 if [[ -n "${HM3D_LIFELONG_PAIRED_SCOPES}" ]]; then
   [[ "${EVAL_KIND}" == hm3d_lifelong \
@@ -157,6 +205,9 @@ done
 [[ ! -e "${RUN_ROOT}" ]] || fail "output already exists: ${RUN_ROOT}"
 
 ports=("${MEMNAV_PORT}" "${FALLBACK_PORT}" "${HUB_PORT}")
+if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
+  ports+=("${FORCED_HUB_PORT}")
+fi
 if [[ "${CONTROLLER}" != navdp ]]; then
   ports+=("${UPSTREAM_PORT}" "${PROXY_PORT}")
 fi
@@ -167,18 +218,45 @@ for port in "${ports[@]}"; do
 done
 
 mkdir -p "${RUN_ROOT}/logs" "${RUN_ROOT}/buffer"
+if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
+  "${MEMNAV_PY}" - "${RUN_ROOT}/authority_pair_contract.json" \
+    "${CONTROLLER}" "${SCENE}" "${EPISODE}" "${MAX_STEPS}" \
+    "${PORTABILITY_AUTHORITY_ORDER}" "${ROLE_PAIR_QUERY_MANIFEST}" \
+    "${BENCHMARK_ROOT}/../manifest.json" "${CEC_REJECT_POLICY}" \
+    "${ROLE_PAIR_SCOPE}" <<'PY'
+import hashlib,json,sys
+(path,controller,scene,episode,max_steps,order,query_manifest,
+ benchmark_manifest,reject_policy,role_pair_scope)=sys.argv[1:]
+def digest(path):
+ return hashlib.sha256(open(path,"rb").read()).hexdigest()
+payload={
+ "schema_version":"cec_authority_pair_contract_v2_20260828",
+ "controller":controller,"scene":scene,"episode":episode,
+ "max_steps":int(max_steps),"authority_order":order.split(","),
+ "same_loaded_processes":True,"runtime_role_visibility":"none",
+ "handoff_packets_required":True,
+ "reject_policy":reject_policy,"role_pair_scope":role_pair_scope,
+ "query_manifest_path":query_manifest or None,
+ "query_manifest_sha256":digest(query_manifest) if query_manifest else None,
+ "benchmark_manifest_path":benchmark_manifest,
+ "benchmark_manifest_sha256":digest(benchmark_manifest),
+}
+open(path,"x").write(json.dumps(payload,indent=2,sort_keys=True)+"\n")
+PY
+fi
 runtime_root=$(mktemp -d /tmp/cec_controller_portability.XXXXXX)
 mkdir -p "${runtime_root}/memnav" "${runtime_root}/fallback" \
          "${runtime_root}/upstream" "${runtime_root}/proxy" \
-         "${runtime_root}/hub"
+         "${runtime_root}/hub" "${runtime_root}/forced_hub"
 
 memnav_pid=
 fallback_pid=
 upstream_pid=
 proxy_pid=
 hub_pid=
+forced_hub_pid=
 cleanup() {
-  for process_id in "${hub_pid}" "${proxy_pid}" "${upstream_pid}" \
+  for process_id in "${forced_hub_pid}" "${hub_pid}" "${proxy_pid}" "${upstream_pid}" \
                     "${fallback_pid}" "${memnav_pid}"; do
     if [[ -n "${process_id}" ]] && kill -0 "${process_id}" 2>/dev/null; then
       kill "${process_id}" 2>/dev/null || true
@@ -379,7 +457,8 @@ if [[ "${CONTROLLER}" != navdp ]]; then
       "${ROOT}/MemNavData/controller_portability_proxy.py" \
         --controller "${CONTROLLER}" --protocol cec_proof_hybrid \
         --depth-source "${proxy_depth}" --query-population mixed_role \
-        --reject-policy shared_native_exact --fallback-controller navdp \
+        --reject-policy "${CEC_REJECT_POLICY}" \
+        --fallback-controller "$([[ "${CEC_REJECT_POLICY}" == controller_native_exact ]] && printf '%s' "${CONTROLLER}" || printf navdp)" \
         --repo-root "${ROOT}" \
         --upstream-base "http://127.0.0.1:${UPSTREAM_PORT}" \
         "${checkpoint_args[@]}" --host 127.0.0.1 --port "${PROXY_PORT}"
@@ -391,9 +470,13 @@ if [[ "${CONTROLLER}" != navdp ]]; then
 fi
 
 hub_extra=()
-if [[ "${LIFELONG_HISTORY_SCOPE:-}" == forced_reject_native ]]; then
+if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 0 \
+   && "${LIFELONG_HISTORY_SCOPE:-}" == forced_reject_native ]]; then
   # Shared-native system baseline: identical pipeline/receipts, no takeover.
   hub_extra+=(--force-reject-native)
+fi
+if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
+  hub_extra+=(--emit-handoff-packets)
 fi
 (
   cd "${runtime_root}/hub"
@@ -405,12 +488,32 @@ fi
       --memnav-url "http://127.0.0.1:${MEMNAV_PORT}" \
       --controller-url "${controller_url}" \
       --fallback-navdp-url "http://127.0.0.1:${FALLBACK_PORT}" \
-      --camera-height-m 0.5 \
+      --camera-height-m 0.5 --reject-policy "${CEC_REJECT_POLICY}" \
       "${hub_extra[@]}"
 ) >"${RUN_ROOT}/logs/server_hub.log" 2>&1 &
 hub_pid=$!
 wait_for_port hub "${hub_pid}" "${HUB_PORT}" \
   "${RUN_ROOT}/logs/server_hub.log"
+
+if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
+  (
+    cd "${runtime_root}/forced_hub"
+    exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT}" \
+      "${MEMNAV_PY}" -u \
+        "${ROOT}/MemNavData/cec_controller_portability_hub.py" \
+        --host 127.0.0.1 --port "${FORCED_HUB_PORT}" \
+        --controller "${CONTROLLER}" \
+        --memnav-url "http://127.0.0.1:${MEMNAV_PORT}" \
+        --controller-url "${controller_url}" \
+        --fallback-navdp-url "http://127.0.0.1:${FALLBACK_PORT}" \
+        --camera-height-m 0.5 --reject-policy "${CEC_REJECT_POLICY}" \
+        --force-reject-native \
+        --emit-handoff-packets
+  ) >"${RUN_ROOT}/logs/server_forced_hub.log" 2>&1 &
+  forced_hub_pid=$!
+  wait_for_port forced_hub "${forced_hub_pid}" "${FORCED_HUB_PORT}" \
+    "${RUN_ROOT}/logs/server_forced_hub.log"
+fi
 
 leg1_mode=shared_trace
 if [[ "${EVAL_KIND}" == lifelong_5leg ]]; then
@@ -505,9 +608,12 @@ elif [[ "${EVAL_KIND}" == hm3d_shared_c_b2 ]]; then
 elif [[ "${EVAL_KIND}" == role_pair_mixed ]]; then
   evaluator=${ROOT}/MemNavData/eval_shared_online_role_pairs.py
   eval_extra=(
-    --role_pair_scope consumed_integration
-    --role_pair_query_role all
+    --role_pair_scope "${ROLE_PAIR_SCOPE}"
+    --role_pair_query_role "${ROLE_PAIR_QUERY_ROLE}"
   )
+  if [[ -n "${ROLE_PAIR_QUERY_MANIFEST}" ]]; then
+    eval_extra+=(--role_pair_query_manifest "${ROLE_PAIR_QUERY_MANIFEST}")
+  fi
 else
   evaluator=${ROOT}/MemNavData/eval_lifelong_5leg_habitat.py
   eval_extra=(
@@ -551,6 +657,9 @@ elif [[ "${EVAL_KIND}" == role_pair_mixed ]]; then
     "${BENCHMARK_ROOT}/../manifest.json"
     "${BENCHMARK_ROOT}/${EPISODE}/role_pairs.json"
   )
+  if [[ -n "${ROLE_PAIR_QUERY_MANIFEST}" ]]; then
+    receipt_inputs+=("${ROLE_PAIR_QUERY_MANIFEST}")
+  fi
 else
   receipt_inputs=(
     "${BENCHMARK_ROOT}/${EPISODE}/meta/gen_meta.json"
@@ -562,7 +671,9 @@ fi
 run_evaluator() {
   local arm_root=$1
   local runtime_scope=$2
-  shift 2
+  local runtime_hub_port=$3
+  local runtime_hub_pid=$4
+  shift 4
   if [[ "${arm_root}" == "${RUN_ROOT}" ]]; then
     [[ ! -e "${arm_root}/result" \
        && ! -e "${arm_root}/logs/evaluator.log" ]] || \
@@ -573,32 +684,49 @@ run_evaluator() {
   fi
   env PYTHONPATH="${hab_pythonpath}" PYTHONDONTWRITEBYTECODE=1 \
     "${HAB_PY}" -u "${evaluator}" "${common_eval[@]}" \
+      --port "${runtime_hub_port}" \
       --out "${arm_root}/result" "${eval_extra[@]}" "$@" \
       >"${arm_root}/logs/evaluator.log" 2>&1
-  curl --fail --silent "http://127.0.0.1:${HUB_PORT}/healthz" \
+  curl --fail --silent "http://127.0.0.1:${runtime_hub_port}/healthz" \
     >"${arm_root}/hub_health.json"
-  local gpu_uuid memnav_start fallback_start hub_start
+  local gpu_uuid memnav_start fallback_start hub_start upstream_start proxy_start
   gpu_uuid=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | sed -n '1p')
   memnav_start=$(awk '{print $22}' "/proc/${memnav_pid}/stat")
   fallback_start=$(awk '{print $22}' "/proc/${fallback_pid}/stat")
-  hub_start=$(awk '{print $22}' "/proc/${hub_pid}/stat")
+  hub_start=$(awk '{print $22}' "/proc/${runtime_hub_pid}/stat")
+  upstream_start=
+  proxy_start=
+  if [[ -n "${upstream_pid}" ]]; then
+    upstream_start=$(awk '{print $22}' "/proc/${upstream_pid}/stat")
+  fi
+  if [[ -n "${proxy_pid}" ]]; then
+    proxy_start=$(awk '{print $22}' "/proc/${proxy_pid}/stat")
+  fi
   "${MEMNAV_PY}" - "${arm_root}/compute_identity.json" \
     "$(hostname)" "${gpu_uuid}" "${runtime_scope}" \
     "${memnav_pid}" "${memnav_start}" \
     "${fallback_pid}" "${fallback_start}" \
-    "${hub_pid}" "${hub_start}" \
+    "${runtime_hub_pid}" "${hub_start}" \
+    "${upstream_pid}" "${upstream_start}" \
+    "${proxy_pid}" "${proxy_start}" \
     "${HM3D_LIFELONG_PAIRED_SCOPES}" \
-    "${CUDA_VISIBLE_DEVICES:-}" <<'PY'
+    "${CUDA_VISIBLE_DEVICES:-}" "${runtime_hub_port}" <<'PY'
 import json,sys
 (path,host,gpu,scope,memnav_pid,memnav_start,navdp_pid,navdp_start,
- hub_pid,hub_start,pair_order,cuda_visible)=sys.argv[1:]
+ hub_pid,hub_start,controller_pid,controller_start,proxy_pid,proxy_start,
+ pair_order,cuda_visible,hub_port)=sys.argv[1:]
+def process(pid,start):
+ return None if not pid else {"pid":int(pid),"process_start_ticks":int(start)}
 payload={
  "schema_version":"cec_compute_identity_v1_20260824",
  "host":host,"gpu_uuid":gpu,"cuda_visible_devices":cuda_visible,
  "runtime_scope":scope,
  "memnav":{"pid":int(memnav_pid),"process_start_ticks":int(memnav_start)},
  "navdp":{"pid":int(navdp_pid),"process_start_ticks":int(navdp_start)},
- "cec_hub":{"pid":int(hub_pid),"process_start_ticks":int(hub_start)},
+ "cec_hub":{"pid":int(hub_pid),"process_start_ticks":int(hub_start),
+            "port":int(hub_port)},
+ "accepted_controller":process(controller_pid,controller_start),
+ "controller_proxy":process(proxy_pid,proxy_start),
  "paired_scope_order":pair_order.split(",") if pair_order else [],
 }
 open(path,"x").write(json.dumps(payload,indent=2,sort_keys=True)+"\n")
@@ -611,7 +739,17 @@ PY
   echo "DONE controller=${CONTROLLER} result=${arm_root}/result/summary.json"
 }
 
-if [[ -n "${HM3D_LIFELONG_PAIRED_SCOPES}" ]]; then
+if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
+  IFS=',' read -r -a authority_order <<<"${PORTABILITY_AUTHORITY_ORDER}"
+  for authority in "${authority_order[@]}"; do
+    if [[ "${authority}" == grant ]]; then
+      run_evaluator "${RUN_ROOT}/grant" grant "${HUB_PORT}" "${hub_pid}"
+    else
+      run_evaluator "${RUN_ROOT}/forced_reject_native" \
+        forced_reject_native "${FORCED_HUB_PORT}" "${forced_hub_pid}"
+    fi
+  done
+elif [[ -n "${HM3D_LIFELONG_PAIRED_SCOPES}" ]]; then
   IFS=',' read -r -a paired_scopes <<<"${HM3D_LIFELONG_PAIRED_SCOPES}"
   [[ "${#paired_scopes[@]}" -eq 2 ]] || \
     fail "paired run requires exactly two scopes"
@@ -620,6 +758,7 @@ if [[ -n "${HM3D_LIFELONG_PAIRED_SCOPES}" ]]; then
     fail "paired scopes must be all_prior and initial_leg_only"
   for scope in "${paired_scopes[@]}"; do
     run_evaluator "${RUN_ROOT}/${scope}" "${scope}" \
+      "${HUB_PORT}" "${hub_pid}" \
       --lifelong_history_scope "${scope}"
   done
 else
@@ -631,5 +770,6 @@ else
       "${LIFELONG_HISTORY_SCOPE:-all_prior}")
   fi
   run_evaluator "${RUN_ROOT}" "${LIFELONG_HISTORY_SCOPE:-single}" \
+    "${HUB_PORT}" "${hub_pid}" \
     "${scope_args[@]}"
 fi

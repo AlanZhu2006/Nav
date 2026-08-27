@@ -265,6 +265,41 @@ def test_cec_hybrid_cannot_hide_its_shared_fallback_or_role_label():
                           anchor_jpeg=b"anchor")
 
 
+def test_vint_cec_can_use_the_same_controller_as_exact_reject_fallback():
+    candidate = plan(
+        "vint", CEC_PROOF_HYBRID, "none", "mixed_role",
+        "controller_native_exact", fallback_controller="vint")
+    assert validate_comparison_plan(candidate).key == "vint"
+
+    rejected = project_cec_proof(
+        "vint",
+        {
+            "certified_relocalization_schema_version": 2,
+            "frame_idx": 40,
+            "ok": True,
+            "accepted": False,
+            "reason": "no_causal_candidate",
+            "selected_anchor": None,
+            "direction_vector": None,
+            "pointgoal_units": None,
+            "certificate": None,
+        },
+        reject_policy="controller_native_exact",
+    )
+    assert rejected.takeover is False
+    assert rejected.controller == "vint"
+    assert rejected.adapter == "controller_native_exact"
+
+    with pytest.raises(ValueError, match="same controller"):
+        validate_comparison_plan(plan(
+            "vint", CEC_PROOF_HYBRID, "none", "mixed_role",
+            "controller_native_exact", fallback_controller="navdp"))
+    with pytest.raises(ValueError, match="cannot provide controller-native"):
+        validate_comparison_plan(plan(
+            "iplanner", CEC_PROOF_HYBRID, "metric_sensor", "mixed_role",
+            "controller_native_exact", fallback_controller="iplanner"))
+
+
 def test_fractional_anchor_is_not_silently_truncated():
     with pytest.raises(ValueError, match="integer"):
         project_cec_proof("iplanner", accepted_proof(selected_anchor=12.7))

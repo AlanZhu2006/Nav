@@ -8,9 +8,15 @@ This working directory contains two sibling repositories:
 - `NavDP/` — inference + evaluation (this is the benchmark suite)
 - `InternNav/` — training code for NavDP models
 
+There is also `MemNavData/` — the Habitat-native (not IsaacSim) working directory for the MemNav / Certified Episodic Compass (CEC) research project. It has its own `MemNavData/CLAUDE.md` with different conventions (frozen protocols, immutable HPC bundles, two-interpreter execution); read that file before working there. CEC is the current focus of this checkout (a git worktree of `/home/asus/Research/Nav`): the root `README.md` is the CEC project overview with "start here" links into MemNavData's status/protocol documents.
+
+For any CEC HPC operation—including a read-only status query—first follow the mandatory HPC gate in `MemNavData/CLAUDE.md`; its cited SSH and hardening manuals are the source of truth. Treat the user's shared `alantorch` SSH master as the persistent, already-authenticated default and use it without asking the user to log in again. A stalled scripted channel is not evidence that shared SSH or HPC is unavailable; diagnose it through the documented PTY/SFTP/control-socket paths. Never improvise with another responsive socket, and transparently verify that any socket used for state-changing work resolves to `yz11502`.
+
+`paper/` is the ICRA 2027 paper workspace for CEC (double-anonymous, PaperCept `ieeeconf.cls`, **8 pages total including references**, deadline 2026-09-15). Build with `cd paper && latexmk -pdf main.tex`. `paper/README.md` records the frozen paper decision — title, primary claim, and which evidence may be cited; do not restate claims beyond it. `supplementary.tex`/`supp/` are internal authoring material only (ICRA 2027 accepts no supplementary PDF).
+
 NavDP (Navigation Diffusion Policy) is an end-to-end mapless navigation benchmark and model suite built on NVIDIA IsaacSim/IsaacLab. It evaluates visual navigation methods via a decoupled client-server architecture: navigation models run as Flask HTTP servers, while IsaacSim runs the simulation environment and sends RGB-D observations to the server for trajectory planning.
 
-**Training lives in the sibling `InternNav/` directory.** The `NavDP/` repo is inference + evaluation only. `InternNav/` is a broader navigation toolbox covering several model families — `cma`, `seq2seq`, `rdp`, `navdp`, `logoplanner`, `internvla_n1` — each with parallel `internnav/trainer/<m>_trainer.py`, `internnav/dataset/<m>_dataset_lerobot.py`, `internnav/model/basemodel/<m>/`, and `scripts/train/configs/<m>.py`. The dispatch happens in `scripts/train/train.py` via `--model-name`. When the user asks about training, dataset loaders, loss functions, or the InternData-N1 dataset format, read from `InternNav/` rather than `NavDP/`.
+**Training lives in the sibling `InternNav/` directory.** The `NavDP/` repo is inference + evaluation only. `InternNav/` is a broader navigation toolbox covering several model families — `cma`, `seq2seq`, `rdp`, `navdp`, `logoplanner`, `internvla_n1`, `memnav` — each with parallel `internnav/trainer/<m>_trainer.py`, `internnav/dataset/<m>_dataset_lerobot.py`, `internnav/model/basemodel/<m>/`, and `scripts/train/configs/<m>.py`. The dispatch happens in `scripts/train/train.py` via `--model-name`. When the user asks about training, dataset loaders, loss functions, or the InternData-N1 dataset format, read from `InternNav/` rather than `NavDP/`.
 
 `GL.md` (root and `NavDP/GL.md`) is the user's running scratchpad with dataset conversion notes and paper-derived loss/training plans — useful context but not authoritative; trust the code.
 
@@ -46,15 +52,16 @@ cd NavDP/baselines/navdp/
 python navdp_server.py --port 8888 --checkpoint ./checkpoints/navdp_checkpoint.ckpt
 ```
 
-**Run evaluation** (requires IsaacSim environment, run from `NavDP/`). One script per task type — `nogoal`, `pointgoal`, `imagegoal`, `startgoal` (start→goal without odometry):
+**Run evaluation** (requires IsaacSim environment, run from `NavDP/`). One script per task type — `nogoal`, `pointgoal`, `imagegoal`, `startgoal` (start→goal without odometry), `multistop` (start→A→B image-goal, measures the memory gap; design doc: root `multistop_benchmark_design.md`):
 ```bash
 cd NavDP/
 python eval_pointgoal_wheeled.py --port 8888 --scene_dir /absolute/path/to/scene --scene_index 0 --scene_scale 1.0
 python eval_nogoal_wheeled.py    --port 8888 --scene_dir /absolute/path/to/scene --scene_index 0 --scene_scale 1.0
 python eval_imagegoal_wheeled.py --port 8888 --scene_dir /absolute/path/to/scene --scene_index 0 --scene_scale 1.0
 python eval_startgoal_wheeled.py --port 8888 --scene_dir /absolute/path/to/scene --scene_index 0 --scene_scale 1.0
+python eval_multistop_wheeled.py --port 8888 --scene_dir /absolute/path/to/cluttered_hard --scene_index 0 --scene_scale 1.0
 ```
-Scene scale: `0.01` for internscenes, `1.0` for cluttered scenes. Scene dir must be an absolute path. `run.sh` at the NavDP root has a working LoGoPlanner end-to-end smoke test (server on port 19999 → `eval_startgoal_wheeled.py`).
+Scene scale: `0.01` for internscenes, `1.0` for cluttered scenes. Scene dir must be an absolute path. Image-goal and multistop must use cluttered scenes — in `internscenes_home` the goal-camera RGB renders black (2-camera bug on referenced USDs). Run one IsaacSim eval at a time. `run.sh` at the NavDP root has a working LoGoPlanner end-to-end smoke test (server on port 19999 → `eval_startgoal_wheeled.py`).
 
 **Teleoperation** (keyboard control with trajectory visualization):
 ```bash
@@ -66,7 +73,9 @@ python teleop_pointgoal_wheeled.py   # WASD controls
 ```bash
 bash scripts/train/start_train.sh --name my_run --model rdp        # cma | cma_plus | seq2seq | seq2seq_plus | rdp | navdp
 bash scripts/train/runs.sh                                         # single-GPU smoke test for logoplanner on a small shard
+bash scripts/train/runs_navdp.sh                                   # single-GPU navdp smoke on the 2-scene InternData-N1 mini shard (one-time deps in its header)
 ```
+MemNav/CEC training has its own pipeline under `scripts/train_memnav/` (sbatch files, GPU/data preflights, checkpoint eval). Its `README.md` is the mandatory HPC submission checklist (Chinese) — local tests + `bash -n` + `py_compile` before any `sbatch`, and env knobs (`MEMNAV_WINDOW`/`NUM_SCALE`/cache versioning) must match the precompute.
 The `rdp`/`navdp`/`logoplanner` paths import from `src/diffusion-policy/` — that's a git submodule (`git submodule update --init`) and `runs.sh` exports `PYTHONPATH="$PWD/src/diffusion-policy:..."`. If you launch via `train.py` directly, replicate that export.
 
 **InternNav evaluation**: `scripts/eval/eval_habitat.py` for VLN-CE / Habitat tasks; `scripts/eval/eval.py` + `scripts/eval/start_server.py` (with configs in `scripts/eval/configs/h1_*_cfg.py`) for IsaacSim/InternUtopia tasks. InternNav-trained checkpoints can also be served to `NavDP/`'s eval scripts via the matching baseline server in `NavDP/baselines/`.
@@ -86,7 +95,7 @@ Navigation methods are decoupled from the simulation via HTTP. The simulation (I
 
 ### Baselines (`NavDP/baselines/`)
 
-Each subdirectory is a self-contained navigation method: `navdp`, `logoplanner`, `iplanner`, `viplanner`, `ddppo`, `gnm`, `vint`, `nomad`. Each contains:
+Each subdirectory is a self-contained navigation method: `navdp`, `logoplanner`, `iplanner`, `viplanner`, `ddppo`, `gnm`, `vint`, `nomad`, `memnav`. Each contains:
 - `*_server.py` — Flask server with standard HTTP API
 - `*_agent.py` — wraps the model for inference (manages observation history, preprocessing)
 - `policy_network.py` / `*_network.py` — the neural network model
@@ -94,6 +103,8 @@ Each subdirectory is a self-contained navigation method: `navdp`, `logoplanner`,
 **NavDP model** (`NavDP/baselines/navdp/`): Uses DepthAnythingV2 as the RGB-D backbone, a transformer decoder for temporal fusion, and DDPM diffusion (10 timesteps) to generate trajectory predictions. Key params: `memory_size=8` (observation history), `predict_size=24` (waypoints), `token_dim=384`.
 
 **LoGoPlanner** (`NavDP/baselines/logoplanner/`): The newer localization-grounded extension of NavDP, with its own `README.md`, real-world deployment code (`lekiwi_logoplanner_host.py`, `deployment/`) and a Pi3-based geometry head (`geometry_model.py`, vendored `Pi3/` directory). Demonstrated end-to-end in `NavDP/run.sh`.
+
+**MemNav / CEC** (`NavDP/baselines/memnav/`): The research agent for this checkout. `policy_agent.py` (`MemNavAgent`) loads its model from **InternNav** (`internnav/model/basemodel/memnav/memnav_policy.py`) — the local `policy_network.py`/`policy_backbone.py` are a stale v1 sketch, do not extend them. `memnav_server.py` also imports research modules from `MemNavData/`, so the NavDP↔MemNavData dependency is bidirectional via repo-root `sys.path`. It is evaluated with MemNavData's Habitat clients (`eval_2leg_habitat.py`), not the IsaacSim eval scripts. See `MemNavData/CLAUDE.md` for the runtime model, env knobs, and checkpoint/weights paths.
 
 ### Simulation Framework (`NavDP/configs/`, `NavDP/wheeled_robots/`)
 

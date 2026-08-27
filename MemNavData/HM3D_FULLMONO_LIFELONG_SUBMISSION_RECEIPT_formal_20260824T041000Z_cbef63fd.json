@@ -1,0 +1,26 @@
+{
+  "fresh_scene_generalization_claim": false,
+  "jobs": {
+    "aggregate": 16265078,
+    "collect_factual_B_array": 16265042,
+    "construct_AB_array": 16265026,
+    "construct_actual_prefix_array": 16265051,
+    "formal_three_arm_evaluation": 16265073,
+    "independent_verification": 16265088,
+    "remote_true_stack_smoke": 16265066,
+    "seal_AB_population": 16265034,
+    "seal_query_population": 16265056
+  },
+  "maximum_AB_histories": 130,
+  "maximum_logical_query_arms": 390,
+  "maximum_paired_evaluation_tasks": 130,
+  "parent_scene_count": 54,
+  "primary_pair_same_loaded_GPU_process": true,
+  "query_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_20260824/formal_20260824T041000Z_cbef63fd",
+  "schema_version": "hm3d_fullmono_lifelong_submission_v1_20260824",
+  "scope": "consumed-scene actual-full-mono lifelong accumulation confirmation",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_20260824/formal_20260824T041000Z_cbef63fd_smoke",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_lifelong_cbef63fd46d88451",
+  "task_receipt_sha256": "cbef63fd46d88451296fbfcb88ee605861497795c916c28deffbac2f1fdee909"
+}

@@ -1,0 +1,68 @@
+{
+  "schema_version": "hm3d_vint_controller_native_cec_protocol_v1_20260828",
+  "status": "frozen_before_navigation_outcomes",
+  "research_question": "Does proof-bound episodic goal substitution improve the same frozen ViNT controller while certificate rejection preserves native ViNT exactly?",
+  "source_population": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+    "benchmark_relative_path": "benchmarks/natural_direction/manifest.json",
+    "benchmark_manifest_sha256": "aada40d25d01e9385df3ffdcaf37847f471b63c7be785a704eade961346a50b0",
+    "source_independent_verification_sha256": "3ae4b556eef9e8144f635495f65d58b177ceee8d98301327374967415cf8d2d8",
+    "histories": 28,
+    "scene_clusters": 21,
+    "queries": 56,
+    "novel_queries": 28,
+    "revisit_queries": 28,
+    "selection_uses_vint_outcomes": false
+  },
+  "controller": {
+    "key": "vint",
+    "checkpoint_sha256": "155fd72de2e98ae0e2fef9404072e1aefa79dae5f7f2411d4bcf7e384b83aa1f",
+    "input": "rgb_history_plus_imagegoal",
+    "metric_depth_sensor": false
+  },
+  "arms": {
+    "native_control": "same ViNT with every CEC takeover withheld and the original ImageGoal unchanged",
+    "cec": "same ViNT; reject uses the original ImageGoal and accept uses the SHA-bound certified historical anchor ImageGoal"
+  },
+  "reject_policy": "controller_native_exact",
+  "runtime_role_visibility": "none",
+  "pairing": {
+    "same_host_gpu": true,
+    "same_memnav_process": true,
+    "same_vint_process": true,
+    "same_proxy_process": true,
+    "same_online_a_replay": true,
+    "same_first_proof": true,
+    "post_divergence_proof_equality_required": false,
+    "arm_order_balanced": true
+  },
+  "execution": {
+    "success_distance_m": 1.0,
+    "max_steps": 600,
+    "exec_horizon": 8,
+    "novel_full_rollout_required": true,
+    "all_reject_trace_must_match_exactly": true
+  },
+  "pilot": {
+    "history_indices": [0, 7, 14, 21],
+    "scene_clusters": 4,
+    "performance_used_as_gate": false
+  },
+  "formal": {
+    "history_indices": "all_0_through_27",
+    "statistics": [
+      "role-stratified SR and SPL",
+      "paired gain and loss",
+      "exact two-sided McNemar",
+      "scene-cluster bootstrap 95 percent interval",
+      "path length, steps and final distance",
+      "Novel takeover and exact-fallback counts"
+    ]
+  },
+  "prohibited_interpretations": [
+    "the older shared-NavDP fallback experiment fills the ViNT native row",
+    "first-decision Novel rejection proves full-rollout safety",
+    "pilot performance selects or changes the formal arm",
+    "absolute ViNT and NavDP scores isolate controller quality"
+  ]
+}

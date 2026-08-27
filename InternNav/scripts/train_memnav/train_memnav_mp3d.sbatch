@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=memnav_mp3d
-#SBATCH --output=/scratch/lg154/Research/Nav/InternNav/logs/train_memnav/mp3d-%j.out
-#SBATCH --error=/scratch/lg154/Research/Nav/InternNav/logs/train_memnav/mp3d-%j.err
+#SBATCH --output=slurm-%x-%j.out
+#SBATCH --error=slurm-%x-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
 #SBATCH --account=torch_pr_769_tandon_advanced
 #SBATCH --partition=a100_tandon,h100_tandon,h200_tandon
 #SBATCH --gres=gpu:2
@@ -40,19 +40,30 @@
 #
 # Runs 2-GPU DDP (torchrun --nproc_per_node=2) for ~2x throughput. BATCH_SIZE is
 # per-GPU, so the effective global batch is 2x BATCH_SIZE. NUM_WORKERS is also per-GPU
-# (2 x 8 = 16 = cpus-per-task). MEMNAV_MAX_LEGS defaults to 0 = all legs (2- and 3-leg).
+# (2 x 8 = 16 = cpus-per-task). MEMNAV_MAX_LEGS=2 trains on two-leg episodes only.
 #
 # Overridable env vars (defaults shown):
 #   NAME=memnav_mp3d
 #   BATCH_SIZE=4             (per-GPU; effective global batch = 4 x NPROC = 8)
+#   LR=1e-4
 #   EPOCHS=10
 #   NUM_WORKERS=8            (per-GPU)
 #   NPROC=2                  (GPUs / DDP ranks; must be <= --gres=gpu:N)
-#   MEMNAV_MAX_LEGS=0        (unset/0 = all legs, 2-leg + 3-leg; 2 = two-leg only)
+#   MEMNAV_MAX_LEGS=2        (2 = two-leg episodes only; unset/0 = all legs)
 #   MEMNAV_GROUND_SCALE_MAX=6.0  (ground-scale clamp ceiling; corrected per-episode scale
 #                            estimates above this are CLAMPED to it. 6.0 leaves ~95.6% of
 #                            pt1 eps untouched; the ~4% above clamp to 6.0.)
 #   MEMNAV_STREAM_GROUP=1    (per-sample streaming; >1 batches G streams in encode_memory)
+#   MEMNAV_REQUIRE_VERSIONED_CACHE=1 (reject mixed/legacy sparse-cache layouts)
+#   MEMNAV_GATE_TEACHER_START=1.0  (decoder uses GT revisit gate initially)
+#   MEMNAV_GATE_TEACHER_END=0.0    (fully predicted gate after curriculum)
+#   MEMNAV_GATE_TEACHER_STEPS=1000 (linear handoff in optimizer steps)
+#   MEMNAV_INIT_CKPT=''        (optional weights-only warm start; use a fresh NAME)
+#   MEMNAV_GOAL_A_MIN_K=''     (40 enables early Goal-A inference-state coverage)
+#   MEMNAV_GOAL_SWAP_WEIGHT=0  (counterfactual Novel denoising; 0 = historical)
+#   MEMNAV_GOAL_SWAP_MARGIN=.05
+#   MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG=30
+#   MEMNAV_PREFLIGHT_ONLY=0    (1 = one real batch forward/backward, then exit)
 #   MEMNAV_REPORT_TO=wandb   (wandb | tensorboard | none)
 #
 # Submit:
@@ -61,29 +72,31 @@
 #       sbatch --export=ALL InternNav/scripts/train_memnav/train_memnav_mp3d.sbatch
 set -euo pipefail
 
-mkdir -p /scratch/lg154/Research/Nav/InternNav/logs/train_memnav
-
 IMG=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
-REPO_ROOT=/scratch/lg154/Research/Nav/InternNav
+# Source/output worktree.  Never silently fall back to the shared main checkout:
+# this experiment must execute the committed branch containing the curriculum.
+REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-/scratch/lg154/Research/Nav-axis-uturn/InternNav}}
+[[ -f "${REPO_ROOT}/scripts/train/train.py" ]] || {
+  echo "ABORT: REPO_ROOT is not an InternNav checkout: ${REPO_ROOT}"; exit 1;
+}
+mkdir -p "${REPO_ROOT}/logs/train_memnav"
 
-# in-container overlay path (frames) + host feature tree (caches)
-# Default feature tree = the FLOW-GATED caches (precompute_flowgate_full.sbatch,
-# per-episode thr 20/25/30/40/50px by length, gap 30, --skip_scale). The old dense
-# tree mp3d_revisit_v0_feat was deleted from disk (2026-07-28) to free space.
+# in-container overlay path (frames) + host feature tree (caches).  The former
+# dense ``mp3d_revisit_v0_feat`` tree was retired; the current schema-v2 caches
+# use flow-gated sparse keyframes and live in ``*_feat_flowgate``.
 export MEMNAV_ROOT_DIR=/mp3d_revisit_v0/vln_n1/traj_data
 export MEMNAV_FEATURE_ROOT=${MEMNAV_FEATURE_ROOT:-/scratch/lg154/Research/datasets/mp3d_revisit_v0_feat_flowgate/vln_n1/traj_data}
 export LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
 export LINGBOT_WEIGHTS=${LINGBOT_REPO}/weights/lingbot-map-long.pt
 
 # memory-partition geometry — MUST match the precompute
-# (flowgate tree: --kv_cache_sliding_window 32 --num_scale_frames 8 --max_frame_num 2048)
 export MEMNAV_WINDOW=32
 export MEMNAV_NUM_SCALE=8
 export MEMNAV_MAX_FRAME_NUM=2048
-# Fail closed on legacy/pre-schema caches: the flowgate tree is schema v2 with
-# per-episode keyframe_policy=flow_gate_v1 provenance; the loader validates each
-# cache's stored flow_threshold/gap/window against this training geometry.
+# This job is specifically for the versioned pt1 sparse cache tree.  Fail closed if
+# a path typo or mixed tree would otherwise silently fall back to dense row==frame
+# arithmetic (the exact long-horizon interval bug fixed earlier).
 export MEMNAV_REQUIRE_VERSIONED_CACHE=${MEMNAV_REQUIRE_VERSIONED_CACHE:-1}
 
 # Batch G trajectory streams on the aggregator's batch dim inside encode_memory
@@ -92,13 +105,12 @@ export MEMNAV_REQUIRE_VERSIONED_CACHE=${MEMNAV_REQUIRE_VERSIONED_CACHE:-1}
 # at ~Gx resident KV (the batch is processed in chunks of G so peak memory is bounded).
 # Default G=1: in practice G>1 slowed our runs (fatter forwards), and the per-sample
 # loop keeps the GPU continuously busy (high util). Numerically equivalent to G=4
-# (validated: scripts/diag_perf/diag_batched_window.py — cos>0.9999, poses match).
+# (validated: scripts/diag_batched_window.py — cos>0.9999, poses match).
 export MEMNAV_STREAM_GROUP=${MEMNAV_STREAM_GROUP:-1}
 
-# episode leg filter: 0/unset = ALL episodes (2-leg AND 3-leg — the default for
-# flowgate training); 2 = two-leg only. Read by scripts/train/configs/memnav.py
-# -> MemNav_Dataset(max_legs=...).
-export MEMNAV_MAX_LEGS=${MEMNAV_MAX_LEGS:-0}
+# episode leg filter: 2 = train on two-leg episodes only (drops three-leg goal-C
+# episodes). Read by scripts/train/configs/memnav.py -> MemNav_Dataset(max_legs=...).
+export MEMNAV_MAX_LEGS=${MEMNAV_MAX_LEGS:-2}
 
 # ground-scale clamp ceiling (scale_mode='ground'): corrected per-episode scale estimates
 # above this are CLAMPED to it (ground_scale_from_h_est clamps, no longer rejects). Default
@@ -111,9 +123,29 @@ export MEMNAV_GROUND_SCALE_MAX=${MEMNAV_GROUND_SCALE_MAX:-6.0}
 # job continues where a timed-out one stopped. save_total_limit=8 bounds retained ckpts.
 export MEMNAV_SAVE_STEPS=${MEMNAV_SAVE_STEPS:-100}
 
+# Prevent the untrained revisit gate from hiding the already teacher-anchored revisit
+# token from action loss at the start of training.  The ratio reaches zero by step 1000,
+# so the latter part of training exactly matches inference-time predicted-gate routing.
+export MEMNAV_GATE_TEACHER_START=${MEMNAV_GATE_TEACHER_START:-1.0}
+export MEMNAV_GATE_TEACHER_END=${MEMNAV_GATE_TEACHER_END:-0.0}
+export MEMNAV_GATE_TEACHER_STEPS=${MEMNAV_GATE_TEACHER_STEPS:-1000}
+export MEMNAV_GATE_FUSION=${MEMNAV_GATE_FUSION:-complementary}
+export MEMNAV_RETRIEVAL_TOP1_WEIGHT=${MEMNAV_RETRIEVAL_TOP1_WEIGHT:-0.0}
+export MEMNAV_RETRIEVAL_TOP1_MARGIN=${MEMNAV_RETRIEVAL_TOP1_MARGIN:-0.2}
+export MEMNAV_INIT_CKPT=${MEMNAV_INIT_CKPT:-}
+export MEMNAV_GOAL_A_MIN_K=${MEMNAV_GOAL_A_MIN_K:-}
+export MEMNAV_GOAL_SWAP_WEIGHT=${MEMNAV_GOAL_SWAP_WEIGHT:-0.0}
+export MEMNAV_GOAL_SWAP_MARGIN=${MEMNAV_GOAL_SWAP_MARGIN:-0.05}
+export MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG=${MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG:-30.0}
+export MEMNAV_PREFLIGHT_ONLY=${MEMNAV_PREFLIGHT_ONLY:-0}
+# -1 = normal epoch-based training. The guarded preflight sets 1 and executes the
+# exact production train.py entrypoint for one optimizer step after gradient checks.
+export MEMNAV_TRAIN_MAX_STEPS=${MEMNAV_TRAIN_MAX_STEPS:--1}
+
 # training knobs
 export NAME=${NAME:-memnav_mp3d}
 export BATCH_SIZE=${BATCH_SIZE:-4}             # per-GPU; effective = BATCH_SIZE x NPROC
+export LR=${LR:-1e-4}
 export EPOCHS=${EPOCHS:-10}
 export NUM_WORKERS=${NUM_WORKERS:-8}
 export NPROC=${NPROC:-2}                       # DDP ranks (GPUs); keep <= --gres=gpu:N
@@ -144,12 +176,16 @@ srun --export=ALL --ntasks=1 --ntasks-per-node=1 \
   apptainer exec --nv \
     --overlay "${IMG}:ro" \
     -B /scratch/lg154 \
+    -B "${REPO_ROOT}" \
     "${BASE_SIF}" \
     bash -c '
         set -euo pipefail
         ls "${MEMNAV_ROOT_DIR}" >/dev/null || { echo "ABORT: overlay missing ${MEMNAV_ROOT_DIR}"; exit 1; }
         [[ -d "${MEMNAV_FEATURE_ROOT}" ]] || { echo "ABORT: feature tree missing ${MEMNAV_FEATURE_ROOT}"; exit 1; }
         [[ -f "${LINGBOT_WEIGHTS}" ]]     || { echo "ABORT: weights missing ${LINGBOT_WEIGHTS}"; exit 1; }
+        [[ -z "${MEMNAV_INIT_CKPT}" || -f "${MEMNAV_INIT_CKPT}" ]] || {
+          echo "ABORT: warm-start checkpoint missing ${MEMNAV_INIT_CKPT}"; exit 1;
+        }
 
         source /scratch/lg154/miniconda3/etc/profile.d/conda.sh
         conda activate /scratch/lg154/conda-envs/memnav
@@ -182,29 +218,58 @@ srun --export=ALL --ntasks=1 --ntasks-per-node=1 \
         fi
 
         echo "===== TRAIN ENV CHECK ====="
-        which python; python -V
+        command -v python; python -V
         python -c "import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available())"
-        echo "name=${NAME} bs/gpu=${BATCH_SIZE} ep=${EPOCHS} wk/gpu=${NUM_WORKERS} nproc=${NPROC}"
+        echo "name=${NAME} bs/gpu=${BATCH_SIZE} lr=${LR} ep=${EPOCHS} wk/gpu=${NUM_WORKERS} nproc=${NPROC}"
         echo "root=${MEMNAV_ROOT_DIR}"
         echo "feat=${MEMNAV_FEATURE_ROOT}"
-        echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} stream_group=${MEMNAV_STREAM_GROUP} max_legs=${MEMNAV_MAX_LEGS} save_steps=${MEMNAV_SAVE_STEPS}"
+        echo "window=${MEMNAV_WINDOW} num_scale=${MEMNAV_NUM_SCALE} max_frame_num=${MEMNAV_MAX_FRAME_NUM} stream_group=${MEMNAV_STREAM_GROUP} max_legs=${MEMNAV_MAX_LEGS} versioned_cache=${MEMNAV_REQUIRE_VERSIONED_CACHE} save_steps=${MEMNAV_SAVE_STEPS}"
+        echo "gate_teacher=${MEMNAV_GATE_TEACHER_START}->${MEMNAV_GATE_TEACHER_END} over ${MEMNAV_GATE_TEACHER_STEPS} steps"
+        echo "gate_fusion=${MEMNAV_GATE_FUSION} retrieval_top1_weight=${MEMNAV_RETRIEVAL_TOP1_WEIGHT} margin=${MEMNAV_RETRIEVAL_TOP1_MARGIN}"
+        echo "goal_a_min_k=${MEMNAV_GOAL_A_MIN_K:-<historical>} goal_swap_weight=${MEMNAV_GOAL_SWAP_WEIGHT} goal_swap_margin=${MEMNAV_GOAL_SWAP_MARGIN} goal_swap_min_angle=${MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG}deg"
+        echo "init_ckpt=${MEMNAV_INIT_CKPT:-<fresh>}"
+        echo "entrypoint_max_steps=${MEMNAV_TRAIN_MAX_STEPS}"
         nvidia-smi -L || true
+
+        # CPU-side dependency/config/cache/output preflight.  Keep this separate from
+        # the CUDA-context probe below: dependency failures are deterministic and must
+        # fail the job, whereas transient busy GPUs are eligible for bounded requeue.
+        python scripts/train_memnav/dependency_preflight.py
 
         # Preflight: prove every allocated GPU can create a CUDA context BEFORE we
         # commit to the run. On a busy/exclusive GPU this exits 1 -> we return 42 so
         # the host requeues for a fresh allocation instead of dying mid-train.
         python scripts/train_memnav/gpu_preflight.py || exit 42
 
+        TRAIN_CMD=(
+          torchrun --standalone --nnodes=1 --nproc_per_node="${NPROC}"
+          scripts/train/train.py
+          --name "${NAME}"
+          --model-name memnav
+          --batch-size "${BATCH_SIZE}"
+          --lr "${LR}"
+          --num-workers "${NUM_WORKERS}"
+          --epochs "${EPOCHS}"
+          --root-dir "${MEMNAV_ROOT_DIR}"
+        )
+
+        if [[ "${MEMNAV_PREFLIGHT_ONLY}" == "1" ]]; then
+          echo "===== ONE-BATCH TRAINING PREFLIGHT ====="
+          python scripts/train_memnav/full_training_preflight.py
+          [[ "${MEMNAV_TRAIN_MAX_STEPS}" == "1" ]] || {
+            echo "ABORT: preflight must run production entrypoint with MEMNAV_TRAIN_MAX_STEPS=1"
+            exit 1
+          }
+          echo "===== PRODUCTION ENTRYPOINT ONE-STEP PREFLIGHT ====="
+          "${TRAIN_CMD[@]}"
+          echo "===== ENTRYPOINT-PREFLIGHT PASS ====="
+          echo "===== PREFLIGHT-ONLY PASS ====="
+          exit 0
+        fi
+
         # 2-GPU DDP. --standalone runs a single-node c10d rendezvous on a free port and
         # exports RANK/LOCAL_RANK/WORLD_SIZE/MASTER_ADDR/MASTER_PORT, which train.py reads.
-        exec torchrun --standalone --nnodes=1 --nproc_per_node="${NPROC}" \
-            scripts/train/train.py \
-            --name "${NAME}" \
-            --model-name memnav \
-            --batch-size "${BATCH_SIZE}" \
-            --num-workers "${NUM_WORKERS}" \
-            --epochs "${EPOCHS}" \
-            --root-dir "${MEMNAV_ROOT_DIR}"
+        exec "${TRAIN_CMD[@]}"
     '
 rc=$?
 set -e

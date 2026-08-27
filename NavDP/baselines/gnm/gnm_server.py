@@ -53,6 +53,18 @@ def gnm_reset_env():
     gnm_navigator.reset_env(int(request.get_json().get('env_id')))
     return jsonify({"algo":"gnm"})
 
+@app.route("/observation_step", methods=['POST'])
+def gnm_observation_step():
+    """Advance GNM's short RGB context without producing an action."""
+    global gnm_navigator
+    image_file = request.files['image']
+    image = Image.open(image_file.stream).convert('RGB')
+    image = np.asarray(image)
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    image = image.reshape((gnm_navigator.batch_size, -1, image.shape[1], 3))
+    gnm_navigator.observe(image)
+    return jsonify({"algo": "gnm", "observed": True})
+
 @app.route("/nogoal_step",methods=['POST'])
 def gnm_step_nogoal():
     global gnm_navigator,gnm_fps_writer
@@ -73,7 +85,10 @@ def gnm_step_nogoal():
     
     _,trajectory = gnm_navigator.step_nogoal(image) #gnm_fps_writerm.step_pointgoal(image,depth,goal)
     all_values = np.zeros((gnm_navigator.batch_size,1))
-    gnm_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
+    try:
+        gnm_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
+    except Exception:
+        pass  # debug MP4 writer is best-effort, not part of the returned trajectory
     
     return jsonify({'trajectory': trajectory.cpu().numpy().tolist(),
                     'all_trajectory': trajectory.cpu().numpy()[None,:,:,:].tolist(),
@@ -83,21 +98,14 @@ def gnm_step_nogoal():
 def gnm_step_imagegoal():
     global gnm_navigator,gnm_fps_writer
     image_file = request.files['image']
-    depth_file = request.files['depth']
     goal_file = request.files['goal']
-    
+
     image = Image.open(image_file.stream)
     image = image.convert('RGB')
     image = np.asarray(image)
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     image = image.reshape((gnm_navigator.batch_size, -1, image.shape[1], 3))
-    
-    depth = Image.open(depth_file.stream)
-    depth = depth.convert('I')
-    depth = np.asarray(depth)[:,:,np.newaxis]
-    depth = depth.astype(np.float32)/10000.0
-    depth = depth.reshape((gnm_navigator.batch_size, -1, depth.shape[1], 1))
-    
+
     goal = Image.open(goal_file.stream)
     goal = goal.convert('RGB')
     goal = np.asarray(goal)
@@ -106,7 +114,10 @@ def gnm_step_imagegoal():
     
     _,trajectory = gnm_navigator.step_imagegoal(goal,image) #gnm_fps_writerm.step_pointgoal(image,depth,goal)
     all_values = np.zeros((gnm_navigator.batch_size,1))
-    gnm_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
+    try:
+        gnm_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
+    except Exception:
+        pass  # debug MP4 writer is best-effort, not part of the returned trajectory
     
     return jsonify({'trajectory': trajectory.cpu().numpy().tolist(),
                     'all_trajectory': trajectory.cpu().numpy()[None,:,:,:].tolist(),

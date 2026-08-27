@@ -1,0 +1,170 @@
+{
+  "schema": "cec_controller_portability_preflight_v3",
+  "date": "2026-08-21",
+  "closed_loop_sr_available": false,
+  "comparison_contract": {
+    "protocol": "cec_proof_hybrid",
+    "query_population": "mixed_role",
+    "runtime_role_label_visible": false,
+    "reject_policy": "shared_native_exact",
+    "reject_controller": "navdp",
+    "hub_schema": "cec_controller_portability_hub_v2",
+    "decision_scope": "per_action",
+    "exact_fallback_scope": "per_action",
+    "fallback_context_shadowed_on_takeover": true,
+    "vint_context_shadowed_on_fallback": true,
+    "metric_depth_sensor_consumed_by_policy": false,
+    "cec_accept_adapters": {
+      "navdp": "bearing_mixedgoal",
+      "vint": "verified_anchor_imagegoal",
+      "iplanner": "bearing_pointgoal",
+      "viplanner": "bearing_pointgoal",
+      "ego_planner": "bearing_metric_map_goal"
+    }
+  },
+  "checkpoint_directory": ".diagnostics/controller_portability_20260821/checkpoints",
+  "checkpoints": {
+    "vint": {
+      "google_drive_id": "1ckrceGb5m_uUtq3pD8KHwnqtJgPl6kF5",
+      "filename": "vint.pth",
+      "sha256": "155fd72de2e98ae0e2fef9404072e1aefa79dae5f7f2411d4bcf7e384b83aa1f"
+    },
+    "iplanner": {
+      "google_drive_id": "1UD11sSlOZlZhzij2gG_OmxbBN4WxVsO_",
+      "filename": "iplanner.pth",
+      "sha256": "685f16cde28d05249d50d24ed79ab4bdc94b3fbbcb99c8dbaed31039d11633b9"
+    },
+    "viplanner": {
+      "google_drive_id": "1PY7XBkyIGESjdh1cMSiJgwwaIT0WaxIc",
+      "filename": "viplanner.pt",
+      "sha256": "2fd5219cfb160e5035d43319632b3d975637a0e770c4d455a26d3124a15ca87b"
+    },
+    "mask2former": {
+      "google_drive_id": "1DZoaLbXA1qPtg-gUKRUWS2rOH2tvDOOl",
+      "filename": "mask2former_r50_8xb2-lsj-50e_coco-panoptic_20230118_125535-54df384a.pth",
+      "sha256": "54df384aa7f293a7fb13aff779d687d8216545ebdcf8b38216b6927136406536"
+    }
+  },
+  "preflight": {
+    "iplanner": {
+      "local_source_tree_sha256": "7ffeee8c5b4b8eed04c6a7adb9f921caf7c08bdac932c46ec895eccf4f2188b7",
+      "strict_state_dict_load": true,
+      "synthetic_cpu_trajectory_shape": [1, 51, 3],
+      "synthetic_cpu_trajectory_finite": true,
+      "forward_left_mirror_direction_contract": true,
+      "synthetic_rtx4090_warm_median_ms": 1.7012,
+      "synthetic_rtx4090_warm_p90_ms": 1.7202,
+      "closed_loop": "two_scene_mixed_interface_gate_passed"
+    },
+    "vint": {
+      "local_source_tree_sha256": "3df80fd1e4cb77044928bf4818447291a571ad6428174f3a85f2c206737f6612",
+      "strict_state_dict_load": true,
+      "rgb_only_wrapper": true,
+      "unused_depth_upload_removed": true,
+      "fallback_shadow_context_endpoint": true,
+      "episode_reset_clears_short_context": true,
+      "synthetic_cpu_trajectory_shape": [1, 51, 3],
+      "synthetic_cpu_trajectory_finite": true,
+      "synthetic_rtx4090_warm_median_ms": 11.3050,
+      "synthetic_rtx4090_warm_p90_ms": 11.4449,
+      "closed_loop": "two_scene_mixed_interface_gate_passed"
+    },
+    "viplanner": {
+      "local_source_tree_sha256": "ef143f87a36581857a011610d7329cd907f3329090f126bc4070a9687ab72298",
+      "planner_strict_state_dict_load": true,
+      "planner_state_tensor_count": 56,
+      "mask2former_checkpoint_verified": true,
+      "semantic_frontend_inference": "passed",
+      "dual_checkpoint_gpu_trajectory_shape": [1, 51, 3],
+      "dual_checkpoint_gpu_trajectory_finite": true,
+      "forward_left_mirror_direction_contract": true,
+      "synthetic_rtx4090_warm_median_ms": 51.3910,
+      "environment": {
+        "python": "3.10",
+        "torch": "2.0.1+cu118",
+        "torchvision": "0.15.2+cu118",
+        "mmcv": "2.0.0",
+        "mmengine": "0.10.7",
+        "mmdet": "3.3.0",
+        "numpy": "1.26.4",
+        "opencv": "4.10.0"
+      },
+      "closed_loop": "two_scene_mixed_interface_gate_passed"
+    },
+    "ego_planner": {
+      "tier": "map_backend_diagnostic",
+      "audited_source_commit": "bfda51284c8c1b476043255a8145ef925a3778a5",
+      "audited_source_path": ".diagnostics/controller_portability_20260821/sources/ego-planner",
+      "local_adapter": false,
+      "headline_sr_eligible": false
+    }
+  },
+  "development_smokes": {
+    "interpretation": "Interface receipts only. Eight-step query horizons provide no controller success-rate evidence.",
+    "mixed_role_v2": {
+      "verified": true,
+      "controllers": ["navdp", "vint", "iplanner", "viplanner"],
+      "scene_clusters": 2,
+      "queries_per_controller": 4,
+      "total_query_rollouts": 16,
+      "simulator_steps_per_query": 8,
+      "novel_fallback_queries_per_controller": 2,
+      "revisit_takeover_queries_per_controller": 2,
+      "runtime_failures": 0,
+      "metric_depth_sensor_consumed": false,
+      "audit_path": ".diagnostics/controller_portability_20260821/local_v2_mixed_two_scene_audit.json",
+      "audit_sha256": "bf19a73fbb0a01d2ecd18bd8f89763dde846a8f20d89eb94e137a251c3cfc4e6"
+    },
+    "legacy_accepted_branch_v1": {
+      "scene": "dhjEzFoUFzH",
+      "episode": "episode_0005",
+      "interpretation": "Pre-v2 development chain retained for provenance; not a frozen result."
+    },
+    "segmented_latency_smoke": {
+      "controller": "iplanner",
+      "scene": "gxdoqLR6rwA",
+      "episode": "episode_0000",
+      "simulator_steps_per_query": 8,
+      "decisions": 2,
+      "novel_total_decision_ms": 890.0500552263111,
+      "revisit_total_decision_ms": 20639.2043530941,
+      "revisit_certificate_ms": 19937.55525792949,
+      "interpretation": "Single local development timing receipt only; the HPC pilot measures first-proof and cache-hit distributions."
+    }
+  },
+  "implementation_sha256": {
+    "controller_portability_contract.py": "0630d7658a1b71861975dbda80b187615912d95eab27719f29e5c9f269f0d5b9",
+    "controller_portability_proxy.py": "19d13b77654e4f8421b14bbd842d81ba2617d659bc0e3fd5a0e084fb68070617",
+    "cec_controller_portability_hub.py": "ac789fc9ab5f4785d30ab003d0c14c85c24450402ae81050c91fec66500327a7",
+    "eval_2leg_habitat.py": "8cd9a0c3281b0694bdcbf99e3985f3d9fb82d37a98bc7de919079f322d3b41da",
+    "eval_shared_online_novel_revisit.py": "544aa5f8665d0a5fac0f36b39900d4b082f7584f1ba04a6041813a1979dcc9f4",
+    "eval_shared_online_role_pairs.py": "9145ac5981f2eba49d9b9e0341bc051d1552e45c61af1b98e8a48ba9e7d12c20",
+    "run_cec_controller_portability_smoke_local.sh": "b6b7ec13ebc886f82071da6893e081076ed04307ebd615f302aafd632ddb57ea",
+    "audit_cec_controller_portability_smoke.py": "91c0de94140458e288274f33b05fe3720cbdc7ddba9585c7518786d58b38784f",
+    "vint_agent.py": "3e31861250cd473f2d1cb019907b1660496d4ea61084e334a2b7e5feec0c141a",
+    "vint_server.py": "5d7737984ddbcb2f81c7cc0d0e3ccf8719e5390c9d383c98dbf88399e0d1e77a",
+    "memnav_policy_agent.py": "65f2390c6fa709d77aa4f735687935085dfea0bb6a1bcc96a1566483ff0e0701",
+    "memnav_server.py": "1fe7a8473601ce21cb966802ff3461b19c0f8cdd50ea58746bd2b546718777bb",
+    "audit_cec_controller_portability_pilot.py": "d4e98e01237d9f8e730d06db44122d0de3b4a364c464f6a4a143d3b2ff34f3ed",
+    "summarize_cec_controller_portability_pilot.py": "6a34850128eeaedee327aa231102669d646182c72fedc9ec12480a16fe9dad10",
+    "run_cec_controller_portability_hpc_history.sh": "d38670c327bc8362f4f780206fb5ba1651581df8360dc4412b0187f25215c37a",
+    "setup_controller_portability_hpc_envs.sh": "6e643926f86a4a9078ccca2cb9816f8d93ff194c83e370e848b5cf3201e12023",
+    "slurm_setup_controller_portability_envs.sbatch": "75580d60e431153445f6cd631dbbd8ea460e3112c1d8b95cac5a7c3a425eecf6",
+    "slurm_cec_controller_portability_pilot.sbatch": "1392a2d7605782716e427b654eca0813d878a4fe3256df7939f69956a76f3c09",
+    "slurm_cec_controller_portability_pilot_summary.sbatch": "b4ef1f4d790b66e74ca9df383d3ccfdb6f653d2bf34bdf83b015220bd8466124"
+  },
+  "contract_tests": {
+    "passed": 95,
+    "covers": [
+      "cec_proof_projection",
+      "shared_native_fallback",
+      "per_action_authorization",
+      "dual_temporal_context_shadowing",
+      "proof_bound_vint_anchor",
+      "monocular_depth_sidecar",
+      "checkpoint_and_source_receipts",
+      "finite_trajectory"
+    ]
+  },
+  "interpretation": "Preflight proves loadability, proof binding, and interface sanity only; it contains no navigation success-rate result."
+}

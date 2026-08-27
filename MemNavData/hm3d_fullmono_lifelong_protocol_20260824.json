@@ -1,0 +1,165 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_accumulation_protocol_v1_20260824",
+  "frozen_at": "2026-08-24T04:27:50+08:00",
+  "scope": "consumed-scene HM3D actual-online full-monocular lifelong accumulation confirmation",
+  "post_prefix_query_outcomes_read_before_freeze": false,
+  "parent": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+    "parent_manifest": "sealed_inputs/parent_manifest.json",
+    "parent_manifest_sha256": "a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5",
+    "parent_protocol_sha256": "ea49b12c9ef416f66ff4589b0f0d7ba9a646649743f3bafe79346334dced9f89",
+    "fullmono_population_receipt": "benchmarks/population_receipt.json",
+    "fullmono_population_receipt_sha256": "4dd6b8dcb759dff1c0835bef8e755e7291a5f049c9adec88b954d1fda62e30d5",
+    "source_goal_a_episodes": 196,
+    "actual_mono_goal_a_successes": 131,
+    "materialized_actual_online_a_histories": 130,
+    "nonempty_scene_clusters": 46,
+    "all_nonempty_scenes_have_at_least_two_histories": true,
+    "prior_query_outcomes_exist": true,
+    "fresh_scene_generalization_claim_for_this_experiment": false
+  },
+  "sequence": {
+    "semantic_roles": [
+      "Novel_A",
+      "Novel_B",
+      "Revisit_A",
+      "GoalReturn_B",
+      "GoalReturn_A"
+    ],
+    "runtime_names": ["A", "B", "C", "B2", "C2"],
+    "factual_prefix": ["A", "B"],
+    "evaluated_queries": ["C", "B2", "C2"],
+    "runtime_role_visibility": "none"
+  },
+  "novel_b_construction": {
+    "recipient_population": "all_130_materialized_actual_online_A_histories",
+    "donor_pool": "other_actual_online_A_histories_in_the_same_scene",
+    "donor_must_differ_from_recipient": true,
+    "goal_rgb": "donor_last_factual_online_RGB_frame",
+    "goal_depth": "donor_last_factual_online_depth_frame_for_construction_audit_only",
+    "goal_pose": "the_same_donor_last_factual_online_RGB_observation_position_and_yaw",
+    "recipient_A_to_B_geodesic_band_m": [2.0, 9.0],
+    "B_max_recipient_A_covis_exclusive": 0.1,
+    "B_to_C_geodesic_band_m": [2.0, 9.0],
+    "same_floor_tolerance_m": 0.2,
+    "selection_rank": [
+      "absolute_A_to_B_geodesic_minus_4m",
+      "B_max_recipient_A_covis",
+      "donor_episode_rank"
+    ],
+    "donor_reuse_within_scene_allowed": true,
+    "navigation_outcomes_read": false
+  },
+  "revisit_a_construction": {
+    "source": "recipient_actual_online_A_history",
+    "query_kind": "controlled_pose_perturbation_not_exact_frame",
+    "max_online_A_covis_band_inclusive": [0.55, 0.9],
+    "source_translation_band_m": [0.2, 0.8],
+    "source_yaw_delta_band_deg": [12.0, 45.0],
+    "query_geodesic_band_from_A_end_m": [2.0, 9.0],
+    "query_geodesic_band_from_B_goal_m": [2.0, 9.0],
+    "navigation_outcomes_read": false
+  },
+  "factual_b_collection": {
+    "controller": "frozen NavDP native_sidecar",
+    "navdp_depth_source": "monocular_sidecar",
+    "maximum_steps": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "run_once_per_constructible_A_B_pair": true,
+    "metric_depth_sensor_reads_allowed": 0,
+    "failed_B_prefixes_retained_in_attrition_ledger": true,
+    "successful_B_trace_is_canonical_and_hash_sealed": true,
+    "successful_B_completion_and_depth_audit_are_copied_into_the_sealed_query_population": true,
+    "B_goal_support_by_factual_B_minimum_inclusive": 0.2,
+    "B_goal_support_strong_threshold_inclusive": 0.5,
+    "actual_B_end_to_C_geodesic_band_m": [2.0, 9.0],
+    "post_prefix_query_outcomes_read": false
+  },
+  "population": {
+    "selection_rule": "retain_every_constructible_recipient_whose_single_frozen_mono_B_rollout_succeeds_and_whose_B_goal_has_at_least_0.20_factual_B_covis_support",
+    "minimum_target_histories": 24,
+    "minimum_target_scene_clusters": 15,
+    "underpowered_if_target_not_met": true,
+    "no_replacement_no_threshold_relaxation": true,
+    "C_B2_C2_outcomes_may_not_affect_population": true
+  },
+  "query_runtime": {
+    "controller_hub": "CEC_portability_hub_with_frozen_NavDP_fallback_and_accept_controller",
+    "navdp_depth_source": "monocular_sidecar",
+    "maximum_steps_per_query": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "navdp_short_FIFO_reset_before_C": true,
+    "metric_depth_sensor_reads_allowed": 0,
+    "arms": [
+      {
+        "name": "all_prior",
+        "C_candidate_ceiling": "end_of_A",
+        "B2_candidate_ceiling": "end_of_B",
+        "C2_candidate_ceiling": "all_causal_frames_before_C2",
+        "CEC_takeover_authority": true
+      },
+      {
+        "name": "initial_leg_only",
+        "C_candidate_ceiling": "end_of_A",
+        "B2_candidate_ceiling": "end_of_A",
+        "C2_candidate_ceiling": "end_of_A",
+        "CEC_takeover_authority": true
+      },
+      {
+        "name": "forced_reject_native",
+        "C_candidate_ceiling": "end_of_A",
+        "B2_candidate_ceiling": "end_of_B",
+        "C2_candidate_ceiling": "all_causal_frames_before_C2",
+        "CEC_takeover_authority": false,
+        "CEC_shadow_proof_recorded": true
+      }
+    ],
+    "arm_order": "all_prior_then_initial_leg_only_for_even_population_index_and_reverse_for_odd_index_followed_by_forced_reject_native",
+    "primary_CEC_pair_compute_contract": "same_allocated_GPU_node_and_same_persistent_MemNav_NavDP_CEC_processes_with_a_full_reset_before_each_arm",
+    "forced_reject_compute_contract": "same_allocated_GPU_node_after_the_primary_pair_with_a_fresh_fail_closed_hub_process",
+    "deterministic_plan_seeds": true
+  },
+  "analysis": {
+    "pairing_key": ["scene", "recipient_episode"],
+    "cluster_unit": "scene",
+    "primary_endpoint": "B2_success_all_prior_minus_initial_leg_only_among_the_shared_identical_C_success_prefix",
+    "primary_requirements": [
+      "A_and_B_are_hash_identical_factual_replays",
+      "C_action_causality_projection_is_identical_between_all_prior_and_initial_leg_only",
+      "B2_starts_from_the_same_pose_and_yaw",
+      "B2_goal_and_deterministic_seed_are_identical",
+      "all_prior_and_initial_leg_only_share_the_same_loaded_GPU_model_processes"
+    ],
+    "primary_statistics": [
+      "paired_gain_loss",
+      "paired_risk_difference",
+      "two_sided_exact_McNemar",
+      "scene_cluster_bootstrap_95_percent_CI"
+    ],
+    "efficiency_co_primary": "paired_B2_steps_and_path_length_among_both_success",
+    "secondary_endpoints": [
+      "C_success",
+      "C2_success_given_C_and_B2",
+      "three_query_prefix_survival",
+      "three_query_joint_SR",
+      "CEC_all_prior_minus_forced_reject_native",
+      "B2_factual_B_anchor_use"
+    ],
+    "bootstrap_seed": 20260824,
+    "bootstrap_resamples": 100000
+  },
+  "guards": {
+    "no_training": true,
+    "no_threshold_tuning": true,
+    "no_metric_depth_for_control_or_CEC": true,
+    "no_runtime_role_label": true,
+    "no_post_prefix_outcome_filtering": true,
+    "no_claim_of_fresh_scene_generalization": true,
+    "no_claim_of_independent_C2_pairing_after_B2_divergence": true,
+    "independent_raw_file_verifier_required": true,
+    "independent_raw_A_B_depth_receipt_verification_required": true,
+    "immutable_source_bundle_and_receipt_required": true
+  }
+}

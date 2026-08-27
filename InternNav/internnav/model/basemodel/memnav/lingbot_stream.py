@@ -297,6 +297,27 @@ class LingBotStream(nn.Module):
             p.requires_grad_(False)
         self.depth_feat_dim = 256   # DPT `features`
 
+    def train(self, mode: bool = True):
+        """Keep the frozen front-end in eval mode when the outer policy trains.
+
+        ``requires_grad_(False)`` freezes weights, not module behaviour.  Hugging Face
+        Trainer calls ``MemNavPolicy.train()``, whose normal recursive implementation
+        would put the cached-feature producer (GCT) and depth feature head back in train
+        mode.  Caches are always precomputed in eval mode, so live window/goal features
+        must use the same mode as well.  This also avoids activating LingBot's
+        train-only gradient-checkpoint branches for a no-grad frozen module.
+
+        The wrapper's own ``training`` flag still follows ``mode``; only its frozen
+        children are pinned to eval, so callers can continue to use the usual policy
+        train/eval state for training-only routing such as the gate curriculum.
+        """
+        super().train(mode)
+        if hasattr(self, "model"):
+            self.model.eval()
+        if hasattr(self, "depth_feat_head"):
+            self.depth_feat_head.eval()
+        return self
+
     # ------------------------------------------------------------------ #
     # image preprocessing
     # ------------------------------------------------------------------ #

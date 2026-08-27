@@ -1,0 +1,46 @@
+{
+  "schema_version": "final14_execution_incident_v1_20260817",
+  "attempt": "final14_learned_20260817T0630Z_attempt2",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T0630Z_attempt2",
+  "source_bundle_receipt_sha256": "10f00b8eb7f33eb28acd84a77fcb6ec6b4e128cfeacc801ef9795133fcfb604c",
+  "final14_source_manifest_sha256": "e7733b09e81eb1c82370cbf49367faab7f72f5651549042a11758251be3cd4b0",
+  "status": "cancelled_after_result_blind_source_mount_failure",
+  "root_cause": "manifest freezer and collection container used the extracted host mp3d_revisit_v0 root without mounting the pre-existing PT1 squashfs; the host root contains 37 scenes and zero Final14 source episodes",
+  "incorrect_manifest_aggregate": {
+    "scenes": 14,
+    "source_episode_target": 112,
+    "source_episodes_available": 0,
+    "scenes_below_target": 14,
+    "policy_outcomes_read": false
+  },
+  "result_integrity": {
+    "collection_preflight_files": 3,
+    "empty_native_metric_headers": 3,
+    "goal_a_trace_files": 0,
+    "query_metric_files": 0,
+    "policy_summary_exists": false,
+    "query_policy_outcomes_observed": false,
+    "valid_scientific_records": 0
+  },
+  "jobs": {
+    "collect_array": 15884557,
+    "construction_summary": 15884559,
+    "evaluation_array": 15884562,
+    "policy_summary": 15884568,
+    "independent_verification": 15884573,
+    "running_elements_failed_before_goal_a": 3,
+    "pending_elements_and_dependencies_cancelled": true
+  },
+  "result_blind_overlay_audit": {
+    "pt1_path": "/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf",
+    "pt1_final14_scene_directories": 14,
+    "pt1_final14_scenes_with_at_least_one_episode": 10,
+    "pt1_final14_scenes_with_at_least_eight_episodes": 10,
+    "pt1_final14_two_leg_episode_directories": 150,
+    "pt2_final14_two_leg_episode_directories": 0,
+    "scene_identities_printed": false
+  },
+  "repair_scope": "mount the immutable PT1 squashfs during source-manifest freeze and collection, bind the manifest episode root to /mp3d_revisit_v0/vln_n1/traj_data/mp3d_2leg, retain all 14 scenes and lexicographic first-eight rule",
+  "method_population_or_threshold_changed": false,
+  "protocol_rule_changed": false
+}

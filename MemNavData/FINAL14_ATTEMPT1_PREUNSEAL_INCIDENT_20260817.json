@@ -1,0 +1,17 @@
+{
+  "schema_version": "final14_preunseal_incident_v1_20260817",
+  "attempt": "final14_learned_20260817T0620Z_attempt1",
+  "stage": "remote_dependency_hash_preflight",
+  "status": "failed_closed_before_final14_access",
+  "reason": "immutable source bundle omitted MemNavData/strict_graph_blind_20260806.json required as the result-blind Final14 manifest template",
+  "source_bundle_receipt_sha256": "8204c29eaf99301a8c785f912d5f1bdb323f80aed4021b7a878f5f208de6fef9",
+  "process_exit_code": 1,
+  "final14_scene_budget_copied_remote": false,
+  "final14_scene_identity_read": false,
+  "final14_asset_read": false,
+  "final14_source_manifest_created": false,
+  "final14_policy_outcome_read": false,
+  "slurm_jobs_submitted": 0,
+  "scientific_attempt_started": false,
+  "repair_scope": "add the already-frozen base manifest to a new immutable bundle; no method, population, threshold, endpoint or protocol change"
+}

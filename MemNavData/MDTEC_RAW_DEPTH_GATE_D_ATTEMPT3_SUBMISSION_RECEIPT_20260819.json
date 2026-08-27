@@ -1,0 +1,26 @@
+{
+  "schema": "mdtec_raw_depth_gate_d_submission_receipt_v1_20260819",
+  "attempt": 3,
+  "repair_provenance": "MDTEC_RAW_DEPTH_GATE_D_ATTEMPT2_READONLY_PYCACHE_INCIDENT_20260819.json",
+  "submitted_at_utc": "2026-08-18T17:15:42Z",
+  "status_at_receipt": "submitted_pending_priority",
+  "source": {
+    "root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mdtec_gate_d_b8d2ffb55201a55b",
+    "receipt_sha256": "b8d2ffb55201a55b69eede8333c54d97b029ca18be9ec5be30d885bec2233bf2",
+    "immutable": true
+  },
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/mdtec_raw_depth_gate_d_20260819/formal_20260818T171542Z_b8d2ffb5",
+  "jobs": {
+    "gpu_array": "15960864",
+    "array_specification": "0-19%10",
+    "summary_and_independent_verification": "15960870",
+    "summary_dependency": "afterok:15960864"
+  },
+  "runtime_repairs_since_attempt1": [
+    "invoke read-only runner with bash",
+    "remove redundant on-node py_compile",
+    "set PYTHONDONTWRITEBYTECODE=1 for every Python process"
+  ],
+  "population_thresholds_seeds_and_analysis_unchanged": true,
+  "formal_outcome_read_before_attempt3": false
+}

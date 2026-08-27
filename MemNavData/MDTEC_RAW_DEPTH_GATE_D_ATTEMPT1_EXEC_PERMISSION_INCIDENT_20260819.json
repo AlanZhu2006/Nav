@@ -1,0 +1,26 @@
+{
+  "schema": "mdtec_raw_depth_gate_d_incident_v1_20260819",
+  "attempt": 1,
+  "array_job": "15960430",
+  "dependent_summary_job": "15960443",
+  "status": "infrastructure_failure_no_formal_outcome_consumed",
+  "observed": {
+    "first_failed_tasks": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "elapsed_seconds": 14,
+    "exit_code": "126:0",
+    "error": "immutable runner had no executable bit and was invoked directly"
+  },
+  "evaluator_started": false,
+  "formal_sr_read": false,
+  "action": {
+    "remaining_array_and_summary_cancelled": true,
+    "repair": "invoke the immutable read-only runner explicitly with bash from the Slurm wrapper",
+    "population_thresholds_and_analysis_unchanged": true,
+    "new_content_addressed_bundle_required": true
+  }
+}

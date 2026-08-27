@@ -1,0 +1,22 @@
+{
+  "schema": "mdtec_raw_depth_gate_d_submission_receipt_v1_20260819",
+  "attempt": 2,
+  "repair_provenance": "MDTEC_RAW_DEPTH_GATE_D_ATTEMPT1_EXEC_PERMISSION_INCIDENT_20260819.json",
+  "submitted_at_utc": "2026-08-18T17:09:19Z",
+  "status_at_receipt": "submitted_pending_priority",
+  "source": {
+    "root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mdtec_gate_d_b2fa16591ecb39d5",
+    "receipt_sha256": "b2fa16591ecb39d55659a6ea4d4b8ed52e01a053adcee2bb9eb10eba49094497",
+    "immutable": true
+  },
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/mdtec_raw_depth_gate_d_20260819/formal_20260818T170919Z_b2fa1659",
+  "jobs": {
+    "gpu_array": "15960619",
+    "array_specification": "0-19%10",
+    "summary_and_independent_verification": "15960624",
+    "summary_dependency": "afterok:15960619"
+  },
+  "sole_runtime_repair": "Slurm invokes immutable runner with bash instead of direct exec",
+  "population_thresholds_seeds_and_analysis_unchanged": true,
+  "formal_outcome_read_before_attempt2": false
+}

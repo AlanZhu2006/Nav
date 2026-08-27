@@ -4,8 +4,10 @@ Three goal pathways (see GL.md / memnav-project memory):
   (1) backbone current state      — frozen GCT (LingBotStream.window_forward)
   (2) revisit goal→history        — frozen GCT (LingBotStream.goal_append), visited goals
   (3) novel current→goal (DINO)   — TRAINABLE cross-attention, unseen goals
-Retrieval confidence biases the decoder cross-attention toward (2) vs (3) (no multiply,
-no goal_cls). NavDP DDPM decoder on top; NO critic (collision is geometric at eval).
+Retrieval confidence biases decoder cross-attention. Historical checkpoints use a
+complementary (2)-vs-(3) mask; residual checkpoints keep (3) as the visual base policy
+and gate only the added (2) memory columns (no readout multiply, no raw goal_cls).
+NavDP DDPM decoder on top; NO critic (collision is geometric at eval).
 Always goal-conditioned — no classifier-free "no-goal" branch (dropped: our goal-directed
 two-leg episodes can require a genuine U-turn, so masking the goal out of the label gave
 the unconditional branch contradictory supervision — same visual context, opposite action,
@@ -24,9 +26,8 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from transformers import PretrainedConfig, PreTrainedModel
 
 from internnav.model.basemodel.memnav.cache_schema import validate_cache_pair
-from internnav.model.basemodel.memnav.decgate_schedule import (
-    DECGATE_FUSIONS, Z_CLAMP, blend_decoder_gate_logit, branch_bias_values,
-    decgate_fusion_code)
+from internnav.model.basemodel.memnav.gate_curriculum import blend_decoder_gate
+from internnav.model.basemodel.memnav.gate_fusion import branch_log_weights, gate_fusion_code
 from internnav.model.basemodel.memnav.lingbot_stream import (
     LingBotStream, ground_scale_from_h_est, GROUND_SCALE_RANGE)
 from internnav.model.encoder.navdp_backbone import (
@@ -58,11 +59,6 @@ class RetrievalHead(nn.Module):
       - match_idx : argmax candidate frame (drives LingBotStream.goal_append)
       - gate_logit: [B] pre-sigmoid revisit logit (BCE target)
       - ret_logits: [B, L] cosine/temp over candidates (-inf elsewhere) for InfoNCE
-      - max_cos   : [B] the gate feature itself, so the decoder can apply its OWN
-                    affine (MemNavNet.dec_gate_a/b) — BCE calibrates gate_a/gate_b as
-                    a classifier, which is a different optimum than the attention-tilt
-                    scale the action loss wants (probe on ckpt-2600: classification
-                    boundary ~1 logit below where the shared gate put it).
     """
 
     def __init__(self, dino_dim=1024, proj_dim=256, temp_init=0.07):
@@ -94,7 +90,7 @@ class RetrievalHead(nn.Module):
         gate_logit = self.gate_a * max_cos + self.gate_b        # [B]
 
         match_idx = ret_logits.argmax(-1)                       # best candidate frame
-        return match_idx, gate_logit, ret_logits, max_cos
+        return match_idx, gate_logit, ret_logits
 
 
 # --------------------------------------------------------------------------- #
@@ -273,10 +269,9 @@ class MemNavNet(nn.Module):
     def __init__(self, lingbot_kwargs=None, dino_dim=1024, lingbot_dim=2048, depth_feat_dim=256,
                  token_dim=384, heads=8, m_rgbd=4, m_depth=4, m_revisit=4, m_novel=4,
                  predict_size=24, temporal_depth=8, num_diffusion_iters=10, goal_warm=64,
-                 aux_pose_calibration='empirical', scale_mode='ground', ground_scale_max=None,
-                 require_versioned_cache=False, dec_gate_fusion='symmetric',
-                 dec_gate_scale_novel=False, dec_gate_init=(0.0, 0.0),
-                 decgate_teacher_z=3.0, device="cuda"):
+                 aux_pose_calibration='empirical', scale_mode='ground', gate_fusion='complementary',
+                 ground_scale_max=None,
+                 require_versioned_cache=False, device="cuda"):
         super().__init__()
         # ground-scale gate ceiling (scale_mode='ground'): corrected estimates above this
         # fall back to the pooled constant. None -> module default GROUND_SCALE_RANGE[1].
@@ -336,36 +331,21 @@ class MemNavNet(nn.Module):
         self.register_buffer("tgt_mask",
                              tgt.float().masked_fill(tgt == 0, float("-inf")).masked_fill(tgt == 1, 0.0))
 
-        # Decoder-OWNED gate affine on the retrieval max-cos (SEPARATE from the head's
-        # gate_a/gate_b): BCE calibrates those as a classifier, but the decoder needs an
-        # attention *mixing temperature*, and the two optima differ (ckpt-2600 probe:
-        # classification-optimal boundary at P≈0.26 while the shared gate fed the decoder
-        # P≈0.54 on true revisits). dec_* is trained ONLY by the action loss, on
-        # max_cos.detach() — the projection space stays owned by the retrieval losses.
-        # Default init is NEUTRAL (0, 0), not the classifier's (10, -8): copying the
-        # classifier init gave z ≈ -5 with fresh projections, suppressing the revisit
-        # branch from step 0 and freezing the scalars at a routing-indifferent local
-        # optimum (diag_decgate_zsweep.py on ckpt-5570: loss flat in z at ±2, worse at
-        # ±4 — nothing to descend). A router should start agnostic, not closed.
-        self.dec_gate_a = nn.Parameter(torch.tensor(float(dec_gate_init[0])))
-        self.dec_gate_b = nn.Parameter(torch.tensor(float(dec_gate_init[1])))
-        # fusion mode + curriculum magnitude (see decgate_schedule.py). Buffers persist
-        # the mode in checkpoints; _sync_decgate_fusion() restores the python attrs
-        # after from_pretrained so a loaded checkpoint keeps its trained semantics.
-        self.dec_gate_fusion = str(dec_gate_fusion)
-        self.dec_gate_scale_novel = bool(dec_gate_scale_novel)
-        self.decgate_teacher_z = float(decgate_teacher_z)
-        self.register_buffer("dec_gate_fusion_code",
-                             torch.tensor(decgate_fusion_code(self.dec_gate_fusion)))
-        self.register_buffer("dec_gate_scale_novel_code",
-                             torch.tensor(float(self.dec_gate_scale_novel)))
+        # global prior on revisit vs novel, ADDED to the per-sample gate bias in the decoder
+        # cross-attention. [0]=revisit, [1]=novel; only the difference matters (softmax).
+        # Learnable by default (the model tunes the global balance); to force/ablate a weighting
+        # set `net.branch_bias.data = torch.tensor([r, n])` and `net.branch_bias.requires_grad_(False)`.
+        self.branch_bias = nn.Parameter(torch.zeros(2))
+        # Persistent checkpoint code: old checkpoints lack this key and therefore
+        # retain the constructor default (complementary); new residual checkpoints
+        # carry code=1 and restore their routing semantics automatically at inference.
+        self.register_buffer(
+            "gate_fusion_residual",
+            torch.tensor(gate_fusion_code(gate_fusion), dtype=torch.float32),
+            persistent=True,
+        )
 
         self.to(device)   # move trainable heads to device (lingbot.model already there)
-
-    def _sync_decgate_fusion(self):
-        """Restore fusion-mode python attrs from the checkpoint buffers after load."""
-        self.dec_gate_fusion = DECGATE_FUSIONS[int(self.dec_gate_fusion_code.item())]
-        self.dec_gate_scale_novel = bool(self.dec_gate_scale_novel_code.item())
 
     def build_current_state(self, current, depth_feat):
         """current [B,P,2C] (post-GCT), depth_feat [B,Pf,Cd] -> current_state [B, m_rgbd+m_depth, token_dim]."""
@@ -387,45 +367,33 @@ class MemNavNet(nn.Module):
         mem = torch.cat([time_emb, current_state, revisit, novel], dim=1)
         return mem + self.cond_pos_embed(mem)
 
-    def _gate_mask(self, dec_gate_logit):
-        """Per-sample cross-attention bias [B*heads, predict_size, mem_len].
+    def _gate_mask(self, gate, gate_fusion_residual=None):
+        """Per-sample cross-attention bias [B*heads, predict_size, mem_len] — directs
+        attention without scaling the readouts.
 
-        symmetric: revisit cols += +z/2, novel cols += -z/2 — zero common mode: only
-        the pair's difference (= z) shapes the revisit-vs-novel split, and the pair's
-        mean bias vs the ungated time/current_state (obstacle) columns is 0 regardless
-        of gate confidence. The old log(g)/log(1-g) form leaked common mode (an
-        uncertain gate suppressed BOTH direction branches vs current_state); softmax
-        invariance only removes constants added to ALL columns.
-        residual: revisit cols += z, novel cols += 0 — the visual-goal branch is the
-        always-on base policy and memory is strictly additive (the fixed-eval finding
-        that the visual branch has value even on GT revisits)."""
-        B = dec_gate_logit.shape[0]
-        bias = dec_gate_logit.new_zeros(B, self.mem_len)
+        Complementary routing uses ``[log(gate), log(1-gate)]``. Residual routing
+        keeps the visual-goal branch available and adds revisit memory with
+        ``[log(gate), 0]``. ``gate_fusion_residual`` is an evaluation-only override;
+        production calls use the persistent checkpoint buffer.
+        """
+        B = gate.shape[0]
+        bias = gate.new_zeros(B, self.mem_len)
         rs, re = 1 + self.n_cs, 1 + self.n_cs + self.n_rev
         ns, ne = re, re + self.n_nov
-        rev_bias, nov_bias = branch_bias_values(dec_gate_logit, self.dec_gate_fusion)
-        bias[:, rs:re] = rev_bias.unsqueeze(1)
-        bias[:, ns:ne] = nov_bias.unsqueeze(1)
+        fusion = self.gate_fusion_residual if gate_fusion_residual is None else gate_fusion_residual
+        revisit_log, visual_log = branch_log_weights(gate, fusion)
+        bias[:, rs:re] = revisit_log.unsqueeze(1) + self.branch_bias[0]       # revisit
+        bias[:, ns:ne] = visual_log.unsqueeze(1) + self.branch_bias[1]        # visual goal
         bias = bias[:, None, None, :].expand(B, self.heads, self.predict_size, self.mem_len)
         return bias.reshape(B * self.heads, self.predict_size, self.mem_len)
 
-    def predict_noise(self, noisy, timestep, current_state, revisit, novel, dec_gate_logit):
-        if self.dec_gate_fusion == 'value_scale':
-            # gate the token VALUES, not the attention logits: gradient to z scales
-            # with the readout magnitude instead of the attention weight on a
-            # suppressed column, so a closed gate still passes usable gradient
-            g = torch.sigmoid(dec_gate_logit.clamp(-Z_CLAMP, Z_CLAMP))
-            revisit = revisit * g[:, None, None]
-            if self.dec_gate_scale_novel:
-                novel = novel * (1.0 - g)[:, None, None]
-            mask = None
-        else:
-            mask = self._gate_mask(dec_gate_logit)
+    def predict_noise(self, noisy, timestep, current_state, revisit, novel, gate,
+                      gate_fusion_residual=None):
         a = self.input_embed(noisy)
         a = a + self.out_pos_embed(a)
         mem = self._memory(current_state, revisit, novel, timestep)
         out = self.decoder(tgt=a, memory=mem, tgt_mask=self.tgt_mask,
-                           memory_mask=mask)
+                           memory_mask=self._gate_mask(gate, gate_fusion_residual))
         return self.action_head(self.layernorm(out))
 
     def forward(self, batch):
@@ -434,27 +402,29 @@ class MemNavNet(nn.Module):
         current_state = self.build_current_state(enc["current"], enc["depth_feat"])
         revisit, aux_pose, R_rel = self.build_revisit(enc["cur_pose"], enc["goal_pose"],
                                                       enc["metric_scale"])
-        # An all-masked early Goal-A row has no revisit anchor by construction —
-        # keep its revisit feature exactly neutral instead of relying on a small
-        # gate tilt to suppress a fabricated pose token.
-        has_candidate = enc["has_candidate"].to(revisit.dtype)
-        revisit = revisit * has_candidate[:, None, None]
-        aux_pose = aux_pose * has_candidate[:, None]
+        # An all-masked early Goal-A row has no revisit anchor by construction.
+        # Keep its revisit feature exactly neutral instead of relying on a merely
+        # tiny sigmoid gate to suppress a fabricated pose token.
+        has_candidate = enc["has_candidate"].to(revisit).unsqueeze(-1)
+        revisit = revisit * has_candidate.unsqueeze(-1)
+        aux_pose = aux_pose * has_candidate
 
-        current_image = batch["batch_window_images"][:, -1].to(dev)       # current frame [B,3,H,W]
-        goal_image = batch["batch_goal_image"].to(dev)                    # goal frame
+        current_image = batch["batch_window_images"][:, -1].to(dev)
+        goal_image = batch["batch_goal_image"].to(dev)
         novel = self.novel(current_image, goal_image)
-        dec_gate_logit = enc["dec_gate_logit"]
-        # logit-space gate curriculum (train only): early on the decoder routes by the
-        # GT revisit label so it must LEARN to read the (teacher-anchored) revisit
-        # tokens before the predicted gate takes over — breaking the closed-gate
-        # deadlock diag_decgate_zsweep.py measured on ckpt-5570. Trainer injects the
-        # annealed ratio; absent key (eval / legacy callers) => pure predicted path.
-        teacher_ratio = float(batch.get("decgate_teacher_ratio", 0.0) or 0.0)
-        if self.training and teacher_ratio > 0.0:
-            dec_gate_logit = blend_decoder_gate_logit(
-                dec_gate_logit, batch["batch_is_revisit"].to(dev),
-                teacher_ratio, self.decgate_teacher_z)
+        predicted_gate = enc["revisit_gate"]
+        # Training-only curriculum: early action updates must actually see the
+        # teacher-forced revisit token.  Otherwise an initially low predicted gate
+        # suppresses that token in decoder cross-attention even though encode_memory
+        # already chose a GT-positive anchor.  The trainer linearly decays this scalar
+        # to zero; eval/inference ignores it unconditionally.
+        gate_teacher_ratio = float(batch.get("decoder_gate_teacher_ratio", 0.0))
+        gate = blend_decoder_gate(
+            predicted_gate,
+            batch["batch_is_revisit"],
+            gate_teacher_ratio,
+            training=self.training,
+        )
 
         labels = batch["batch_labels"].to(dev)          # [B, predict_size, 3]
         B = labels.shape[0]
@@ -462,13 +432,12 @@ class MemNavNet(nn.Module):
         timesteps = torch.randint(0, self.noise_scheduler.config.num_train_timesteps, (B,), device=dev)
         noisy = self.noise_scheduler.add_noise(labels, noise, timesteps)
 
-        noise_pred = self.predict_noise(noisy, timesteps, current_state, revisit, novel, dec_gate_logit)
+        noise_pred = self.predict_noise(noisy, timesteps, current_state, revisit, novel, gate)
 
-        # Optional counterfactual Novel pass (goal_swap.py): current state, history,
-        # timestep, diffusion noise and the (blended) decoder gate stay identical;
-        # only the goal image is replaced by a direction-filtered same-scene wrong
-        # goal. The trainer applies a ranking margin — no action label is ever
-        # invented for the wrong goal.
+        # Optional counterfactual Novel pass. Current state, history, timestep,
+        # diffusion noise and gate remain identical; only the goal image is rolled
+        # across the local batch. The trainer applies a ranking margin instead of
+        # inventing an action label for the wrong goal.
         noise_pred_swapped_goal = None
         goal_swap_valid = torch.zeros(B, device=dev, dtype=torch.bool)
         if self.training and bool(batch.get("compute_goal_swap", False)):
@@ -476,24 +445,27 @@ class MemNavNet(nn.Module):
                 swapped_goal_image = batch["batch_negative_goal_image"].to(dev)
                 goal_swap_valid = batch["batch_negative_goal_valid"].to(dev).bool()
             elif B > 1:
-                # backward-compatible synthetic/unit-test fallback; production
-                # training supplies direction-filtered same-scene negatives
+                # Backward-compatible synthetic/unit-test fallback. Production
+                # training supplies direction-filtered same-scene negatives.
                 swapped_goal_image = torch.roll(goal_image, shifts=1, dims=0)
                 goal_swap_valid = torch.ones(B, device=dev, dtype=torch.bool)
             else:
                 swapped_goal_image = None
             if swapped_goal_image is not None:
-                goal_swap_valid = goal_swap_valid & (
-                    (goal_image - swapped_goal_image).square().mean(dim=(1, 2, 3)) > 1e-8)
+                goal_swap_valid &= (
+                    (goal_image - swapped_goal_image).square().mean(dim=(1, 2, 3)) > 1e-8
+                )
                 swapped_novel = self.novel(current_image, swapped_goal_image)
                 noise_pred_swapped_goal = self.predict_noise(
-                    noisy, timesteps, current_state, revisit, swapped_novel, dec_gate_logit)
-
+                    noisy, timesteps, current_state, revisit, swapped_novel, gate
+                )
         return dict(
             noise_pred=noise_pred, noise=noise,
-            noise_pred_swapped_goal=noise_pred_swapped_goal, goal_swap_valid=goal_swap_valid,
+            noise_pred_swapped_goal=noise_pred_swapped_goal,
+            goal_swap_valid=goal_swap_valid,
             aux_pose=aux_pose, R_rel=R_rel, ret_logits=enc["ret_logits"],
-            revisit_gate=enc["revisit_gate"], dec_gate_logit=dec_gate_logit,
+            predicted_revisit_gate=predicted_gate, revisit_gate=gate,
+            gate_teacher_ratio=gate.new_tensor(gate_teacher_ratio if self.training else 0.0),
             gate_logit=enc["gate_logit"], match_idx=enc["match_idx"], anchor_idx=enc["anchor_idx"],
             goal_anchor_idx=enc["goal_anchor_idx"],
         )
@@ -572,13 +544,10 @@ class MemNavNet(nn.Module):
             goal_cls = self.lingbot.dino(batch["batch_goal_image"].to(dev))["cls"]  # [B, D']
         mem_cls = batch["batch_mem_cls"].to(dev)
         cand_mask = batch["batch_cand_mask"].to(dev)   # revisit candidates E(k) = [amargin..k-t]
-        has_candidate = cand_mask.any(-1)              # early Goal-A rows may be all-masked
+        has_candidate = cand_mask.any(-1)               # early Goal-A rows may be all-masked
         # (trainable) retrieval — match index + gate logit + ranking logits (over candidates)
-        match_idx, gate_logit, ret_logits, max_cos = self.retrieval(goal_cls, mem_cls, cand_mask)
-        revisit_gate = torch.sigmoid(gate_logit)       # calibrated P(revisit) — BCE/diagnostics
-        # decoder gate: separate affine on the SAME feature; detach() so the action loss
-        # trains dec_gate_a/b only, never the projections (see dec_gate_* in __init__)
-        dec_gate_logit = self.dec_gate_a * max_cos.detach() + self.dec_gate_b
+        match_idx, gate_logit, ret_logits = self.retrieval(goal_cls, mem_cls, cand_mask)
+        revisit_gate = torch.sigmoid(gate_logit)       # P(revisit) for the decoder soft-gate
 
         # goal_append anchor: at TRAIN time teacher-force it to a GT co-visible frame so the
         # goal_pose (-> aux + revisit token) is well-anchored from step 1, decoupling those
@@ -652,10 +621,11 @@ class MemNavNet(nn.Module):
                         if s is not None:
                             mscale[b] = s
                     if not bool(has_candidate[b].item()):
-                        # Pure early-Novel row (goal_a_min_k coverage): there is no
-                        # legal historical anchor, so do not fabricate one by clamping
-                        # argmax(all-masked)=0 to `lo` and running an expensive
-                        # goal-pose append. forward() zeroes the revisit feature.
+                        # Pure early-Novel row. There is no legal historical anchor,
+                        # so do not fabricate one by clamping argmax(all-masked)=0 to
+                        # ``lo`` and running an expensive goal-pose append. Inference
+                        # already skips this route when the revisit gate is negligible.
+                        m_of[b] = None
                         goal_m[b] = -1
                         goalp[b] = curp[b]
                         continue
@@ -670,7 +640,7 @@ class MemNavNet(nn.Module):
                 # camera_pose stays per-sample (cheap: one camera-head forward).
                 groups = {}
                 for jj, b in enumerate(idx):
-                    if b not in m_of:                  # no-candidate row: no goal append
+                    if m_of[b] is None:
                         continue
                     L = m_of[b] - max(S, m_of[b] - warm + 1) + 1
                     groups.setdefault(L, []).append((jj, b))
@@ -703,8 +673,8 @@ class MemNavNet(nn.Module):
             metric_scale=torch.tensor(mscale, device=dev, dtype=torch.float32),  # [B] lingbot->meters
 
             match_idx=match_idx, anchor_idx=anchor, revisit_gate=revisit_gate,
-            gate_logit=gate_logit, dec_gate_logit=dec_gate_logit, ret_logits=ret_logits,
-            has_candidate=has_candidate,             # [B] bool; False = all-masked E(k)
+            gate_logit=gate_logit, ret_logits=ret_logits,
+            has_candidate=has_candidate,
             goal_anchor_idx=torch.tensor(goal_m, device=dev, dtype=torch.long),  # [B] post-clamp m used for goal_pose
         )
 
@@ -730,17 +700,24 @@ class MemNavPolicy(PreTrainedModel):
             config = cls.config_class.from_pretrained(pretrained_model_name_or_path, **kwargs)
         if hasattr(config, 'model_dump'):                  # pydantic ExpCfg -> wrap
             config = cls.config_class(model_cfg=config)
-        model = cls(config)
         path = pretrained_model_name_or_path
-        if path and len(str(path)) > 0 and os.path.exists(path):
+        if path and len(str(path)) > 0 and not os.path.isfile(path):
+            raise FileNotFoundError(f"MemNav checkpoint not found: {path}")
+        model = cls(config)
+        if path and len(str(path)) > 0:
             sd = torch.load(path, map_location='cpu')
             sd = sd.get('state_dict', sd) if isinstance(sd, dict) else sd
             inc = model.load_state_dict(sd, strict=False)
-            # the checkpoint's persisted fusion mode wins over the config's (a legacy
-            # checkpoint without the buffers keeps the config/default mode)
-            model.core._sync_decgate_fusion()
-            print(f"[memnav] loaded {path}: missing={len(inc.missing_keys)} unexpected={len(inc.unexpected_keys)} "
-                  f"dec_gate_fusion={model.core.dec_gate_fusion}")
+            trainable = {name for name, param in model.named_parameters()
+                         if param.requires_grad}
+            missing_trainable = [name for name in inc.missing_keys
+                                 if name in trainable]
+            if missing_trainable:
+                preview = ', '.join(missing_trainable[:8])
+                raise RuntimeError(
+                    f"checkpoint {path} is missing {len(missing_trainable)} "
+                    f"trainable parameter(s): {preview}")
+            print(f"[memnav] loaded {path}: missing={len(inc.missing_keys)} unexpected={len(inc.unexpected_keys)}")
         return model
 
     def __init__(self, config: MemNavModelConfig):
@@ -766,21 +743,11 @@ class MemNavPolicy(PreTrainedModel):
             goal_warm=il.get('goal_warm', 64),
             aux_pose_calibration=il.get('aux_pose_calibration', 'empirical'),
             scale_mode=il.get('scale_mode', 'ground'),
+            gate_fusion=il.get('gate_fusion', 'complementary'),
             require_versioned_cache=bool(il.get('require_versioned_cache', False)),
             ground_scale_max=il.get('ground_scale_max'),
-            dec_gate_fusion=il.get('dec_gate_fusion', 'symmetric'),
-            dec_gate_scale_novel=bool(il.get('dec_gate_scale_novel', False)),
-            dec_gate_init=(il.get('dec_gate_init_a', 0.0), il.get('dec_gate_init_b', 0.0)),
-            decgate_teacher_z=il.get('decgate_teacher_z', 3.0),
             lingbot_kwargs=lingbot_kwargs or None, device=str(self._device),
         )
-        # Optional hard guarantee for the NavDP-warm-started novel backbone
-        # (warmstart_navdp.py): a frozen encoder cannot collapse to a constant
-        # under the contrast-free action MSE. The heads on top (proj/compress)
-        # and the decoder stay trainable — usage is the goal-swap loss's job.
-        if il.get('freeze_novel_backbone'):
-            for p in self.core.novel.backbone.parameters():
-                p.requires_grad_(False)
 
     def forward(self, batch):
         return self.core(batch)
@@ -800,7 +767,7 @@ if __name__ == "__main__":
     cand_mask = torch.ones(B, L, dtype=torch.bool)
     cand_mask[0, 40:] = False  # sample 0: fewer candidates
     cand_mask[1, :] = False    # sample 1: no candidate -> novel (gate floor)
-    m, gate_logit, logits, max_cos = rh(goal_cls, mem_cls, cand_mask)
+    m, gate_logit, logits = rh(goal_cls, mem_cls, cand_mask)
     gate = torch.sigmoid(gate_logit)
     print(f"RetrievalHead: match_idx={m.tolist()} gate={[round(x,3) for x in gate.tolist()]} logits={tuple(logits.shape)}")
     # decoupled losses: InfoNCE (ranking) + BCE (gate)

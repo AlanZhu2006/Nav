@@ -1,0 +1,110 @@
+{
+  "schema_version": "final14_learned_relocalizer_preflight_receipt_v1_20260817",
+  "created_at_utc": "2026-08-17T06:19:03Z",
+  "scope": "pre-unseal readiness receipt for the single prospective Final14 five-arm execution",
+  "authorization": {
+    "explicit_user_authorization_received": true,
+    "authorizing_message": "目前hpc跑的怎么样 可以继续",
+    "formal_submission_authorized": true
+  },
+  "sealed_state_at_receipt": {
+    "final14_scene_identities_displayed_or_inspected": false,
+    "final14_assets_opened": false,
+    "final14_source_manifest_created": false,
+    "final14_policy_outcomes_read": false,
+    "final14_jobs_submitted": false,
+    "scientific_final14_result_exists": false
+  },
+  "frozen_protocols": {
+    "parent": {
+      "path": "MemNavData/FINAL14_CEC_ROLE_FREE_CONFIRMATION_PROTOCOL_20260816.md",
+      "sha256": "3d1ebc6ef429fd16df4d550eda52eceb55d7b15fd181a5c00c0b8f971f7aaa32"
+    },
+    "learned_amendment": {
+      "path": "MemNavData/FINAL14_LEARNED_RELOCALIZER_PROSPECTIVE_AMENDMENT_20260817.md",
+      "sha256": "21189b7596403ab19d08576e509e2169a3c9a024d42fbe47e5faa3eb402afbf8"
+    },
+    "scene_budget": {
+      "path": ".diagnostics/mp3d_scene_budget_20260816/scene_budget.json",
+      "sha256": "779e2d7d63faa0f9b9e735680b1d620f04428c11a57ac83158933306b62407ef",
+      "content_not_displayed_during_preflight": true
+    }
+  },
+  "learned_method": {
+    "pi3x_model_sha256": "69972d6e1c4492cb4d737a84fe940e357087d81c52f5c9b7c160b49c1f41669a",
+    "proof_deployment_manifest_sha256": "1a05aaa7cf75296cb68e32f9ea57fba6bcce2b9f57313a8cede05b7c7b0cffdd",
+    "consensus": "2/4",
+    "residual_m": 2.5,
+    "dino_top_k": 8,
+    "pi3x_bridge_frames": 16,
+    "fallback": "exact native NavDP"
+  },
+  "execution_bundle": {
+    "local_path": ".diagnostics/learned_relocalizer_20260817/final14_learned_complete_8204c29eaf99301a",
+    "remote_path": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_learned_complete_8204c29eaf99301a",
+    "source_receipt_sha256": "8204c29eaf99301a8c785f912d5f1bdb323f80aed4021b7a878f5f208de6fef9",
+    "regular_files": 3998,
+    "manifest_entries": 3997,
+    "local_hash_verification": true,
+    "remote_hash_verification": true,
+    "local_writable_entries": 0,
+    "remote_writable_entries": 0,
+    "complete_final14_pipeline": true
+  },
+  "final14_source_layer": {
+    "freezer_sha256": "5e59e99d4ff9810908ae0e0dd3fb23109efe7fb1b126ea2866995034b4511196",
+    "validator_sha256": "83479153e83231bd3d89f2dde95314de6dc21b0098b4fbaf22f2d1c7a381bbe7",
+    "online_summary_sha256": "8b3b8c9fb5012affcf3cd7a854b85134ce212d723794d019882cd9bb2b7cdd6c",
+    "scene_runner_sha256": "793ae1813e2f8742b463a1d55864a9df918cf7ba9cae30ba066dd6ba4b5d2cdf",
+    "submitter_sha256": "d264211ddc62747853d7e3956b313849df51403226bbdd1e7293e3710df5735e",
+    "scene_count": 14,
+    "source_episode_target_per_scene": 8,
+    "scene_replacement_allowed": false,
+    "source_shortage_behavior": "retain scene and record attrition"
+  },
+  "consumed_preflight_evidence": {
+    "five_arm_result": "/home/cv/memnav_eval/results/final14_learned_five_arm_consumed_gxdo_attempt6_20260817",
+    "five_arm_independent_audit_sha256": "0f0a60a28cf42db787741bbcebf8be6c0fde83b3b3ddf15e7b151578c7ca154e",
+    "five_arm_output_receipt_sha256": "55ac91a902a2fb989ad0ae1eba76a2e186cd503bc533ef1ebdd0d7f61dda64c0",
+    "accepted_bearing_count": 15,
+    "maximum_accepted_bearing_error_deg": 16.319989591962152,
+    "accepted_bearing_errors_above_90_deg": 0,
+    "novel_accepts": 0,
+    "novel_exact_fallback_verified": true,
+    "consumed_final14_construction_receipt_sha256": "01061d5908b80463857e5ee49740ca2efa5ff1df8a847e0cbcda756070bac01f",
+    "consumed_final14_construction_audit_sha256": "a86f6cd423446c2a21b34d029c3b3c0db0339bbafed75eb0f1eb51a44010fbe7",
+    "consumed_finalizer_population_receipt_sha256": "457031957700fac5967eb20e3ea96bf596b78cea846dc60b3c833fee7515ae45",
+    "consumed_finalizer_audit_sha256": "da7bcf71e0fdac40e5b6285596a2c2d84067997a33cccd724bb769ad431b10cc"
+  },
+  "verification": {
+    "learned_source_summary_runtime_tests": {
+      "passed": 21,
+      "failed": 0,
+      "warnings": 2
+    },
+    "final14_construction_tests": {
+      "passed": 7,
+      "failed": 0,
+      "bundle_only_consumed_fixture_skipped": 1
+    },
+    "shell_syntax_verified": true,
+    "source_manifest_shortage_path_tested": true,
+    "legacy_summary_backward_compatibility_tested": true,
+    "formal_five_arm_summary_and_independent_verifier_tested": true,
+    "slurm_queue_rows_before_submission": 0
+  },
+  "rejected_preflight_bundles": [
+    {
+      "receipt_prefix": "600af02f4df5be36",
+      "reason": "missing build_graph_blind_manifest.py import in standalone bundle",
+      "submitted": false
+    },
+    {
+      "receipt_prefix": "205543f58570ce6a",
+      "reason": "missing validate_expanded_navdp_router_eval.py import in standalone bundle",
+      "submitted": false
+    }
+  ],
+  "decision": "authorized_to_unseal_once_and_submit_frozen_pipeline",
+  "scientific_claim_at_receipt": "none; Final14 has not run"
+}

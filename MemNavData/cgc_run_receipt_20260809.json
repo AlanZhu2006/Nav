@@ -1,0 +1,42 @@
+{
+  "formal_job": {
+    "begin_time_cst": "2026-08-09T20:00:00+08:00",
+    "begin_time_hpc": "2026-08-09T08:00:00-04:00",
+    "job_id": 15527318,
+    "partition": "h100_tandon",
+    "run_tag": "cgc_train40_v2",
+    "state_at_receipt": "PENDING_BEGINTIME",
+    "time_limit": "08:00:00"
+  },
+  "frozen_schedule": {
+    "epochs": 300,
+    "outer_scene_folds": 5,
+    "seeds": [
+      11,
+      29,
+      47
+    ],
+    "selection_order": [
+      "linear",
+      "ring_only_if_linear_fails"
+    ],
+    "sweep": false
+  },
+  "schema_version": "cgc_submission_receipt_v1",
+  "smoke": {
+    "artifact_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/cgc_observability_20260809/smoke_v15_gpu_job_15526905",
+    "exit_code": "0:0",
+    "feature_archive_sha256": "215dc2b924ad9db7aa1f19cbace272046c1d3261a87a5789c8976b2a1083d165",
+    "job_id": 15526905,
+    "oof_predictions_sha256": "7ec6f8084a92702b0b1a3b080f14d9dd7aa0e04c5fa428b09465c13e01aaae97",
+    "oof_report_sha256": "d6525fe13b85c48eed130acdba8e7e95dd53abc701211b83ab2b3fff82bd1803",
+    "scope": "two-scene, two-epoch integration check; its model gate is not an effect result",
+    "state": "COMPLETED",
+    "teacher_report_sha256": "e98d600d82280732bb90d6e45004a2008432025fee645af1ce9e24efb03f510f"
+  },
+  "source": {
+    "bundle_manifest_sha256": "bdadb86db45d7ede49f9e01270b776a1eaea74fc202a3b4f7a94207712000890",
+    "launcher_sha256": "8f718f75490082fabace9520894b2f4055f4ac68313eee23bc45ca8283094a38",
+    "remote_root": "/scratch/yz11502/Research/cgc_observability_20260809/source_bdadb86d"
+  }
+}

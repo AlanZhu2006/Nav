@@ -1,0 +1,73 @@
+{
+  "arm_order_policy": "history-index rotation over the five frozen arms",
+  "arms": [
+    {
+      "depth_source": "monocular_sidecar",
+      "name": "mono_native",
+      "revisit_authorization": "none",
+      "route": "native_sidecar"
+    },
+    {
+      "depth_source": "monocular_sidecar",
+      "name": "mono_raw_fixed",
+      "revisit_authorization": "raw_dino_top1_without_certificate",
+      "route": "raw_fixed_bearing"
+    },
+    {
+      "depth_source": "monocular_sidecar",
+      "name": "mono_cec",
+      "revisit_authorization": "atomic_geometric_certificate",
+      "route": "certified_fixed_bearing"
+    },
+    {
+      "depth_source": "metric_request",
+      "name": "metric_native",
+      "revisit_authorization": "none",
+      "route": "native_sidecar"
+    },
+    {
+      "depth_source": "metric_request",
+      "name": "metric_cec",
+      "revisit_authorization": "atomic_geometric_certificate",
+      "route": "certified_fixed_bearing"
+    }
+  ],
+  "benchmark_manifest_sha256": "7468703a9efbb10e801ffdd226911f696a30fa9432ef9ab486d3134f6e40fe6a",
+  "benchmark_relative_protocol": "natural_direction",
+  "bootstrap": {
+    "resamples": 100000,
+    "seed": 2026081902,
+    "unit": "scene"
+  },
+  "cec_runtime": {
+    "certified_cdec_rescue": false,
+    "certified_stagnation_graph": false,
+    "fixed_residual_m": 2.5,
+    "retrieval_override": false
+  },
+  "controller_contract": {
+    "deterministic_plan_seeds": true,
+    "execution_horizon": 8,
+    "max_query_steps": 600,
+    "success_distance_m": 1.0,
+    "terminal_uturn": false,
+    "terminal_visual_refine": false
+  },
+  "fresh_confirmation": false,
+  "histories": 21,
+  "history_contract": "replay the original causal online-A RGB stream for every arm",
+  "interpretation_boundary": "The original Final14 Goal-A histories were produced by metric-depth NavDP. This experiment changes depth only for the replayed query controller and is not a fully monocular Goal-A population.",
+  "primary_estimands": [
+    "mono_cec_minus_mono_native by Novel, Revisit, and balanced all queries",
+    "mono_cec_minus_mono_raw_fixed by Novel, Revisit, and balanced all queries"
+  ],
+  "role_visibility": "analysis labels are construction-only and never forwarded to runtime",
+  "scene_count": 10,
+  "schema_version": "final14_mono_factorial_protocol_v1_20260819",
+  "secondary_sensor_estimands": [
+    "mono_native_minus_metric_native",
+    "mono_cec_minus_metric_cec",
+    "difference-in-differences: (mono_cec-mono_native)-(metric_cec-metric_native)"
+  ],
+  "status": "frozen_before_query_execution"
+}

@@ -1,0 +1,9 @@
+{
+  "cause": "The new all-history preflight looked for a nonexistent receipt.source_parquet field. The frozen evaluator derives the parquet as receipt.source_episode/data/chunk-000/episode_000000.parquet.",
+  "failure_stage": "submission-side outcome-blind input audit, before sbatch",
+  "jobs_submitted": 0,
+  "method_result_produced": false,
+  "repair": "make the preflight derive the path exactly as eval_shared_online_role_pairs.py does; do not change any frozen input or evaluation behavior",
+  "schema_version": "final14_mono_factorial_attempt2_preflight_incident_v1_20260819",
+  "unused_read_only_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_4061f1bfe8553e02"
+}

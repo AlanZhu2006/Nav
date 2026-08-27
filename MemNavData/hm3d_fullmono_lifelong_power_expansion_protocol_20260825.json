@@ -1,0 +1,110 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_result_blind_power_expansion_v2_20260825",
+  "frozen_at": "2026-08-25T00:00:00+08:00",
+  "scope": "result-blind power expansion of consumed-scene HM3D actual-online full-monocular lifelong accumulation",
+  "amendment_of": {
+    "protocol": "hm3d_fullmono_lifelong_protocol_20260824.json",
+    "protocol_sha256": "759fa88464791f175e0985a6a82469ca40a35119dfb827bb8f48f7d31ca3493e",
+    "reason": "the frozen one-donor-last-frame construction yielded 2 supported histories; no query-arm outcome is used by this amendment"
+  },
+  "post_prefix_query_outcomes_read_before_freeze": false,
+  "parent": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+    "parent_manifest": "sealed_inputs/parent_manifest.json",
+    "parent_manifest_sha256": "a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5",
+    "fullmono_population_receipt": "benchmarks/population_receipt.json",
+    "fullmono_population_receipt_sha256": "4dd6b8dcb759dff1c0835bef8e755e7291a5f049c9adec88b954d1fda62e30d5"
+  },
+  "novel_b_construction": {
+    "recipient_population": "all_130_materialized_actual_online_A_histories",
+    "donor_pool": "other_actual_online_A_histories_in_the_same_scene",
+    "donor_must_differ_from_recipient": true,
+    "temporal_samples_per_donor": 8,
+    "temporal_sampling": "unique_rounded_linspace_over_the_complete_factual_donor_trace",
+    "maximum_candidates_per_recipient": 2,
+    "maximum_candidates_per_donor_history": 1,
+    "prefer_distinct_initial_direction_strata": true,
+    "recipient_A_to_B_geodesic_band_m": [2.0, 9.0],
+    "B_max_recipient_A_covis_exclusive": 0.1,
+    "B_to_C_geodesic_band_m": [2.0, 9.0],
+    "same_floor_tolerance_m": 0.2,
+    "selection_rank": [
+      "absolute_A_to_B_geodesic_minus_4m",
+      "B_max_recipient_A_covis",
+      "donor_episode_rank",
+      "donor_frame_index"
+    ],
+    "candidate_outcomes_read": false,
+    "old_query_outcomes_used_for_candidate_choice": false,
+    "synthetic_query_identity": "recipient_episode__bXX",
+    "source_online_A_identity_retained_separately": true
+  },
+  "factual_b_collection": {
+    "controller": "frozen NavDP native_sidecar",
+    "navdp_depth_source": "monocular_sidecar",
+    "maximum_steps": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "run_once_per_frozen_candidate": true,
+    "metric_depth_sensor_reads_allowed": 0,
+    "failed_B_prefixes_retained_in_attrition_ledger": true,
+    "successful_B_trace_is_canonical_and_hash_sealed": true,
+    "B_goal_support_by_factual_B_minimum_inclusive": 0.2,
+    "B_goal_support_strong_threshold_inclusive": 0.5,
+    "actual_B_end_to_C_geodesic_band_m": [2.0, 9.0],
+    "post_prefix_query_outcomes_read": false
+  },
+  "population": {
+    "selection_rule": "retain_every_frozen_candidate_whose_single_actual_mono_B_rollout_succeeds_and_has_at_least_0.20_factual_B_covis_support",
+    "minimum_target_histories": 24,
+    "minimum_target_scene_clusters": 15,
+    "underpowered_if_target_not_met": true,
+    "no_replacement_no_threshold_relaxation": true,
+    "C_B2_C2_outcomes_may_not_affect_population": true,
+    "cluster_unit": "scene",
+    "shared_recipient_A_dependencies_reported": true
+  },
+  "query_runtime": {
+    "maximum_steps_per_query": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "navdp_depth_source": "monocular_sidecar",
+    "factual_C_prefix": {
+      "controller": "frozen NavDP plus role-free CEC",
+      "candidate_ceiling": "end_of_A",
+      "executed_once_before_any_B2_treatment": true,
+      "must_reach_C_before_population_entry": true,
+      "selection_reads_B2_navigation_outcomes": false,
+      "replayed_by_exact_RGB_pose_and_goal_session_receipts": true
+    },
+    "primary_endpoint": "B2_success_after_the_same_sealed_factual_C_prefix",
+    "C2_is_not_part_of_the_power_expansion": true,
+    "arms": [
+      {
+        "name": "all_prior",
+        "B2_candidate_ceiling": "end_of_B",
+        "CEC_takeover_authority": true
+      },
+      {
+        "name": "initial_leg_only",
+        "B2_candidate_ceiling": "end_of_A",
+        "CEC_takeover_authority": true
+      },
+      {
+        "name": "forced_reject_native",
+        "B2_candidate_ceiling": "end_of_B",
+        "CEC_takeover_authority": false
+      }
+    ]
+  },
+  "guards": {
+    "no_training": true,
+    "no_threshold_tuning": true,
+    "no_metric_depth_for_control_or_CEC": true,
+    "no_runtime_role_label": true,
+    "no_post_prefix_outcome_filtering": true,
+    "no_claim_of_fresh_scene_generalization": true,
+    "independent_raw_file_verifier_required": true,
+    "immutable_source_bundle_and_receipt_required": true
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "allowed_repair": [
+    "mount the frozen PT1 squashfs read-only in the exact smoke/formal container command",
+    "pin and validate its byte size before launch",
+    "create a new immutable source bundle and fresh smoke/formal output roots"
+  ],
+  "cause": "The Final14 online-A receipt preserves an absolute source parquet path under /mp3d_revisit_v0, but the Attempt 1 Slurm wrapper omitted the read-only PT1 squashfs overlay that supplied this path in Final14 Attempt 7.",
+  "failed_job": "16020084_0",
+  "failure_stage": "before the first query rollout and before any mono/metric outcome existed",
+  "formal_jobs_cancelled": [
+    "16020085",
+    "16020087"
+  ],
+  "frozen_overlay": {
+    "bytes": 128854888448,
+    "episode_root": "/mp3d_revisit_v0/vln_n1/traj_data/mp3d_2leg",
+    "mode": "read_only",
+    "path": "/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf"
+  },
+  "forbidden_change": [
+    "benchmark population or manifest",
+    "arm definitions",
+    "controller, certificate, thresholds, seeds, budgets, or statistics",
+    "reuse of the partially written Attempt 1 output root"
+  ],
+  "method_result_produced": false,
+  "schema_version": "final14_mono_factorial_attempt1_overlay_incident_v1_20260819"
+}

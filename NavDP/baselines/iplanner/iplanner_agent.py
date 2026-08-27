@@ -1,10 +1,50 @@
 import math
+import hashlib
+import pickle
 import torch
 import yaml
 import numpy as np
 import torchvision.transforms as transforms
 import traj_opt
 from planner_net import PlannerNet
+
+
+# The official iPlanner release serializes ``(PlannerNet, best_loss)`` rather
+# than a plain state_dict.  Loading an arbitrary pickled module is unsafe, so
+# the legacy path is enabled only for the audited upstream checkpoint.
+_TRUSTED_LEGACY_CHECKPOINTS = {
+    "685f16cde28d05249d50d24ed79ab4bdc94b3fbbcb99c8dbaed31039d11633b9",
+}
+
+
+def _sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as checkpoint_file:
+        for chunk in iter(lambda: checkpoint_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_state_dict(model_path: str):
+    """Load a plain state_dict, or the hash-pinned official legacy release."""
+    try:
+        payload = torch.load(model_path, map_location="cpu", weights_only=True)
+    except pickle.UnpicklingError:
+        checkpoint_sha = _sha256(model_path)
+        if checkpoint_sha not in _TRUSTED_LEGACY_CHECKPOINTS:
+            raise RuntimeError(
+                "Refusing to unpickle an untrusted legacy iPlanner checkpoint "
+                f"with sha256={checkpoint_sha}"
+            )
+        payload = torch.load(model_path, map_location="cpu", weights_only=False)
+
+    if isinstance(payload, (tuple, list)):
+        payload = payload[0]
+    if hasattr(payload, "state_dict"):
+        payload = payload.state_dict()
+    if not isinstance(payload, dict):
+        raise TypeError(f"Unsupported iPlanner checkpoint payload: {type(payload)!r}")
+    return payload
 
 class IPlannerAgent():
     def __init__(
@@ -34,17 +74,15 @@ class IPlannerAgent():
         if math.hypot(self.sensor_offset_x, self.sensor_offset_y) > 1e-1:
             self.is_traj_shift = True
         self.net = PlannerNet(encoder_channel=16)
-        try:
-            model_state_dict, _ = torch.load(model_path, weights_only=True)
-        except ValueError:
-            model_state_dict = torch.load(model_path, weights_only=True)
+        model_state_dict = _load_state_dict(model_path)
         self.net.load_state_dict(model_state_dict, strict=True)
         self.net.eval()
-        if torch.cuda.is_available():
-            self.net = self.net.cuda()
+        self.net = self.net.to(self.device)
 
     def process_depth(self, depth: torch.Tensor) -> torch.Tensor:
-        depth = self.transform(depth).expand(1, 3, -1, -1)
+        # ``expand`` returns a shared-stride view; clone before the in-place
+        # sanitization below so future PyTorch releases do not reject it.
+        depth = self.transform(depth).expand(1, 3, -1, -1).clone()
         depth[depth > self.max_depth] = 0.0
         depth[~torch.isfinite(depth)] = 0  # set all inf or nan values to 0
         return depth

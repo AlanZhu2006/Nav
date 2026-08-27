@@ -34,6 +34,10 @@ _REQUIRE_VERSIONED_CACHE = os.environ.get(
 ).lower() in ('1', 'true', 'yes')
 # Restrict to episodes with n_legs <= MEMNAV_MAX_LEGS (unset or 0 = keep all; 2 = two-leg only).
 _MAX_LEGS = int(os.environ.get('MEMNAV_MAX_LEGS') or 0) or None
+# Optional early Goal-A coverage. Empty/unset preserves the historical k>=122
+# requirement; 40 matches the first valid W=32,num_scale=8 inference state.
+_GOAL_A_MIN_K_RAW = os.environ.get('MEMNAV_GOAL_A_MIN_K', '').strip()
+_GOAL_A_MIN_K = int(_GOAL_A_MIN_K_RAW) if _GOAL_A_MIN_K_RAW else None
 # Step-based checkpointing: save every N optimizer steps so a wall-clock timeout banks
 # recent progress (epoch-based saves never fired — runs die mid-epoch-0). Non-None here
 # switches train.py to save_strategy='steps' for memnav (other models stay on 'epoch').
@@ -49,6 +53,40 @@ _AUX_POSE_CALIBRATION = os.environ.get('MEMNAV_AUX_POSE_CALIBRATION', 'empirical
 # untouched; the ~4% above clamp to 6.0 (beats the old reject-to-constant in every band)
 # — see lingbot_stream.GROUND_SCALE_RANGE / diag_ground_scale_sweep.py.
 _GROUND_SCALE_MAX = float(os.environ.get('MEMNAV_GROUND_SCALE_MAX', '6.0'))
+# Decoder-gate curriculum. encode_memory already teacher-forces the goal_append anchor
+# to a GT-positive frame during training, but the old decoder immediately multiplied
+# its usefulness by an untrained predicted revisit gate. Start from the GT revisit
+# label, then linearly hand control to the predicted gate; at/after STEPS inference and
+# training are identical. Set START=END=0 (or STEPS=0 with END=0) for the old behavior.
+_GATE_TEACHER_START = float(os.environ.get('MEMNAV_GATE_TEACHER_START', '1.0'))
+_GATE_TEACHER_END = float(os.environ.get('MEMNAV_GATE_TEACHER_END', '0.0'))
+_GATE_TEACHER_STEPS = int(os.environ.get('MEMNAV_GATE_TEACHER_STEPS', '1000'))
+# Decoder branch fusion. ``complementary`` is the historical
+# [log(g), log(1-g)] mask. ``residual`` always preserves the visual-goal branch
+# and gates only the additional revisit-memory columns.
+_GATE_FUSION = os.environ.get('MEMNAV_GATE_FUSION', 'complementary')
+if _GATE_FUSION not in ('complementary', 'residual'):
+    raise ValueError(f"MEMNAV_GATE_FUSION must be complementary or residual, got {_GATE_FUSION!r}")
+# Optional deployment-consistent top-1 margin. It is implemented and logged in
+# every run, but weight zero preserves the exact historical objective so the
+# first residual-fusion A/B changes only one variable.
+_RETRIEVAL_TOP1_WEIGHT = float(os.environ.get('MEMNAV_RETRIEVAL_TOP1_WEIGHT', '0.0'))
+_RETRIEVAL_TOP1_MARGIN = float(os.environ.get('MEMNAV_RETRIEVAL_TOP1_MARGIN', '0.2'))
+if _RETRIEVAL_TOP1_WEIGHT < 0 or _RETRIEVAL_TOP1_MARGIN < 0:
+    raise ValueError('retrieval top-1 weight and margin must be non-negative')
+# Counterfactual Novel conditioning: same state/noise/timestep, same-scene wrong goal.
+# Weight zero is historical behavior; tonight's controlled run enables it explicitly.
+_GOAL_SWAP_WEIGHT = float(os.environ.get('MEMNAV_GOAL_SWAP_WEIGHT', '0.0'))
+_GOAL_SWAP_MARGIN = float(os.environ.get('MEMNAV_GOAL_SWAP_MARGIN', '0.05'))
+_GOAL_SWAP_MIN_ANGLE_DEG = float(os.environ.get('MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG', '30.0'))
+if _GOAL_SWAP_WEIGHT < 0 or _GOAL_SWAP_MARGIN < 0:
+    raise ValueError('goal-swap weight and margin must be non-negative')
+if not 0.0 <= _GOAL_SWAP_MIN_ANGLE_DEG <= 180.0:
+    raise ValueError('goal-swap minimum angle must be in [0,180] degrees')
+# Optional weights-only warm start.  Use a NEW NAME/output directory so HF does not
+# restore the old trainer global_step: the gate curriculum must begin at ratio START,
+# not be skipped because the source checkpoint happened to be at step > STEPS.
+_INIT_CKPT = os.environ.get('MEMNAV_INIT_CKPT', '')
 
 memnav_exp_cfg = ExpCfg(
     name='memnav_train',
@@ -83,9 +121,10 @@ memnav_exp_cfg = ExpCfg(
         save_interval_steps=_SAVE_STEPS,
         save_filter_frozen_weights=True,
         load_from_ckpt=False,
-        # optional init weights (e.g. NavDP warm-start from warmstart_navdp.py);
-        # loaded strict=False by MemNavPolicy.from_pretrained — unmapped heads stay fresh
-        ckpt_to_load=os.environ.get('MEMNAV_CKPT_TO_LOAD', ''),
+        # Training warm start (weights only). This must live under il: train.py
+        # constructs the policy from config.il.ckpt_to_load; eval.ckpt_to_load is
+        # unrelated and is consumed only by evaluation entrypoints.
+        ckpt_to_load=_INIT_CKPT,
         report_to=os.environ.get('MEMNAV_REPORT_TO', 'wandb'),
         # data + frozen-LingBot paths (override via MEMNAV_ROOT_DIR / LINGBOT_REPO / LINGBOT_WEIGHTS)
         root_dir=_ROOT_DIR,
@@ -102,6 +141,9 @@ memnav_exp_cfg = ExpCfg(
         max_frame_num=_MAX_FRAME_NUM,
         # episode leg filter (None = all legs; 2 = two-leg episodes only)
         max_legs=_MAX_LEGS,
+        goal_a_min_k=_GOAL_A_MIN_K,
+        goal_swap_negatives=_GOAL_SWAP_WEIGHT > 0,
+        goal_swap_min_angle_deg=_GOAL_SWAP_MIN_ANGLE_DEG,
         # goal_append_warm's live-recompute depth before streaming the goal (deeper than
         # window_size on purpose): window_size's cold start at the window boundary starves
         # the goal's pose estimate (no real predecessors); goal_warm=64 empirically matches
@@ -114,46 +156,6 @@ memnav_exp_cfg = ExpCfg(
         require_versioned_cache=_REQUIRE_VERSIONED_CACHE,
         # ground-scale gate ceiling (MEMNAV_GROUND_SCALE_MAX; scale_mode='ground')
         ground_scale_max=_GROUND_SCALE_MAX,
-        # Counterfactual Novel conditioning (goal-swap rank loss, goal_swap.py): the
-        # measured collapse (wrong-goal swap moves candidates by 0.13-3.16% of seed
-        # variation vs NavDP's 176.8%) is a shortcut the action MSE never penalizes.
-        # Same state/noise/timestep/gate, direction-filtered same-scene wrong goal
-        # must explain the expert action worse by the margin.
-        # MASTER SWITCH: MEMNAV_GOAL_SWAP=0 turns the whole feature off (no negative
-        # pool, no second decode); MEMNAV_GOAL_SWAP_WEIGHT tunes it when on.
-        w_goal_swap=(
-            float(os.environ.get('MEMNAV_GOAL_SWAP_WEIGHT', '0.25'))
-            if os.environ.get('MEMNAV_GOAL_SWAP', '1').lower() in ('1', 'true', 'yes')
-            else 0.0),
-        goal_swap_margin=float(os.environ.get('MEMNAV_GOAL_SWAP_MARGIN', '0.05')),
-        goal_swap_min_angle_deg=float(os.environ.get('MEMNAV_GOAL_SWAP_MIN_ANGLE_DEG', '30.0')),
-        # Early Goal-A coverage: empty/unset keeps the historical k>=amargin+83
-        # requirement; 40 matches the first valid W=32/S=8 inference state (empty
-        # E(k) rows skip the revisit goal-pose append and zero the revisit feature).
-        goal_a_min_k=(int(os.environ['MEMNAV_GOAL_A_MIN_K'])
-                      if os.environ.get('MEMNAV_GOAL_A_MIN_K', '').strip() else None),
-        # Freeze the NavDP-warm-started novel backbone (use with MEMNAV_CKPT_TO_LOAD
-        # from warmstart_navdp.py): a frozen encoder cannot collapse to a constant.
-        freeze_novel_backbone=os.environ.get(
-            'MEMNAV_FREEZE_NOVEL_BACKBONE', '').lower() in ('1', 'true', 'yes'),
-        # decoder-gate routing + curriculum (diag_retrieval/diag_decgate_zsweep.py on
-        # ckpt-5570: the action loss is locally optimal in z, so dec_gate_a/b had
-        # nothing to descend — the routing has to be scaffolded, not re-parameterized).
-        # fusion: symmetric (±z/2 tilt) | residual (revisit +z, novel untouched) |
-        #         value_scale (revisit values *= sigmoid(z); no attention bias)
-        dec_gate_fusion=os.environ.get('MEMNAV_DECGATE_FUSION', 'symmetric'),
-        dec_gate_scale_novel=os.environ.get(
-            'MEMNAV_DECGATE_SCALE_NOVEL', '').lower() in ('1', 'true', 'yes'),
-        # neutral router init (NOT the classifier's 10/-8, which starts the gate closed)
-        dec_gate_init_a=float(os.environ.get('MEMNAV_DECGATE_INIT_A', '0.0')),
-        dec_gate_init_b=float(os.environ.get('MEMNAV_DECGATE_INIT_B', '0.0')),
-        # logit-space teacher curriculum: decoder gate = ±teacher_z by GT label at
-        # ratio 1, annealed linearly to the predicted gate over teacher_steps
-        # (steps=0 disables; consumed by MemNavTrainer.compute_loss)
-        decgate_teacher_start=float(os.environ.get('MEMNAV_DECGATE_TEACHER_START', '1.0')),
-        decgate_teacher_end=float(os.environ.get('MEMNAV_DECGATE_TEACHER_END', '0.0')),
-        decgate_teacher_steps=int(os.environ.get('MEMNAV_DECGATE_TEACHER_STEPS', '500')),
-        decgate_teacher_z=float(os.environ.get('MEMNAV_DECGATE_TEACHER_Z', '3.0')),
         # policy / diffusion
         predict_size=24,
         temporal_depth=8,
@@ -164,6 +166,15 @@ memnav_exp_cfg = ExpCfg(
         w_retrieval=1.0,   # ranking InfoNCE (which candidate frame matches)
         w_gate=1.0,        # revisit/novel gate BCE (is there a match at all)
         w_aux_pose=0.5,
+        w_goal_swap=_GOAL_SWAP_WEIGHT,
+        goal_swap_margin=_GOAL_SWAP_MARGIN,
+        # training-only decoder gate teacher forcing -> predicted-gate handoff
+        gate_teacher_start=_GATE_TEACHER_START,
+        gate_teacher_end=_GATE_TEACHER_END,
+        gate_teacher_steps=_GATE_TEACHER_STEPS,
+        gate_fusion=_GATE_FUSION,
+        w_retrieval_top1=_RETRIEVAL_TOP1_WEIGHT,
+        retrieval_top1_margin=_RETRIEVAL_TOP1_MARGIN,
         ddp_find_unused_parameters=True,
     ),
     model=memnav_cfg,

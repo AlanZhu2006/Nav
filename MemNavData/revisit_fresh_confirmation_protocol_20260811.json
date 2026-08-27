@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "protocol_id": "revisit_fresh_episode_confirmation_v2_20260811",
+  "scope": "fresh episode replication on the consumed 20 scene clusters; not fresh-scene or blind confirmation",
+  "scenes": [
+    "s8pcmisQ38h",
+    "e9zR4mvMWw7",
+    "rqfALeAoiTq",
+    "zsNo4HB9uLZ",
+    "yqstnuAEVhm",
+    "gxdoqLR6rwA",
+    "pLe4wQe7qrG",
+    "cV4RVeZvu5T",
+    "mJXqzFtmKg4",
+    "gTV8FGcVJC9",
+    "oLBMNvg9in8",
+    "uNb9QFRL6hY",
+    "rPc6DW4iMge",
+    "ac26ZMwG7aT",
+    "dhjEzFoUFzH",
+    "qoiz87JEwZ2",
+    "b8cTxDM8gDG",
+    "i5noydFURQK",
+    "wc2JMjhGNzB",
+    "gZ6f7yhEvPG"
+  ],
+  "episodes_per_scene": 8,
+  "historical_consumed_episode_ids": [
+    "episode_0000",
+    "episode_0001"
+  ],
+  "generation": {
+    "base_seed": 2026081200,
+    "seed_rule": "base_seed_plus_scene_index",
+    "episode_attempt_multiplier": 600,
+    "n_legs": 2,
+    "dA_min": 3.0,
+    "dA_max": 9.0,
+    "window": 32,
+    "num_scale": 8,
+    "long_term_frac": 0.7,
+    "min_recall_gap": 32,
+    "covis_lo": 0.2,
+    "covis_hi": 1.0,
+    "head_max_deg": 45.0,
+    "goal_jitter_pos": 1.5,
+    "agent_radius": 0.3,
+    "max_frame_turn": 15.0,
+    "expected_gen_protocol": "multileg_v2_symmetric_20260807"
+  },
+  "evaluation": {
+    "base_seed": 2026081300,
+    "episode_seed_rule": "base_seed_plus_episode_index",
+    "success_dist_m": 1.0,
+    "max_steps_per_leg": 500,
+    "exec_horizon": 8,
+    "deterministic_plan_seeds": true,
+    "navdp_goal_switch_reset": "carry",
+    "trajectory_selector": "server",
+    "revisit_adapter": "legacy_metric",
+    "router_visual_floor": 0.88,
+    "router_min_matches": 20,
+    "router_min_inliers": 12,
+    "router_min_inlier_ratio": 0.5,
+    "router_confirm_plans": 2,
+    "router_verify_top_k": 8,
+    "trace_source": "native_imagegoal_via_hybrid_phase",
+    "arms": [
+      "geometry_router",
+      "known_revisit_direct",
+      "native"
+    ],
+    "arm_order_rule": "six_permutations_cycled_by_scene_index"
+  },
+  "analysis": {
+    "primary_population": "all generated episodes with the shared native Goal-A outcome retained",
+    "primary_contrast": "known_revisit_direct_minus_geometry_router",
+    "secondary_contrasts": [
+      "known_revisit_direct_minus_native",
+      "geometry_router_minus_native"
+    ],
+    "paired_test": "two_sided_exact_mcnemar",
+    "cluster_unit": "scene",
+    "cluster_bootstrap_seed": 20260811,
+    "cluster_bootstrap_resamples": 100000,
+    "decision_rule": {
+      "replace_geometry_hard_gate": "primary risk difference > 0, exact McNemar p < 0.05, scene-cluster 95% CI lower bound > 0, and direct is not worse than native",
+      "retain_geometry_hard_gate": "geometry significantly outperforms direct by the same paired and clustered criteria",
+      "otherwise": "inconclusive_keep_geometry_and_do_not_retune_on_these_episodes"
+    }
+  },
+  "data_role_guards": {
+    "development_allowed": false,
+    "blind_allowed": false,
+    "fresh_scene_claim_allowed": false,
+    "paper_claim_allowed": false
+  }
+}

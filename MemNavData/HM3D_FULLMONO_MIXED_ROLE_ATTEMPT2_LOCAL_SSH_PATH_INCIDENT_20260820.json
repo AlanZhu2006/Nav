@@ -1,0 +1,12 @@
+{
+  "schema_version": "hm3d_fullmono_mixed_role_infrastructure_incident_v1_20260820",
+  "attempt": 2,
+  "stage": "local_release_wrapper_initialization",
+  "scientific_tasks_submitted": false,
+  "query_outcomes_read": false,
+  "goal_a_outcomes_read": false,
+  "cause": "with pipefail enabled, awk exited after the first controlpath match and caused ssh -G to receive SIGPIPE",
+  "repair": "consume the complete ssh -G stream and print the final controlpath in awk END",
+  "method_population_threshold_seed_or_budget_changed": false
+}
+

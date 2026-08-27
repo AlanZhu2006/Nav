@@ -66,7 +66,11 @@ class NoMaDAgent(NoMadBaseAgent):
         self.ACTION_STATS = {}
         for key in data_config["action_stats"]:
             self.ACTION_STATS[key] = np.array(data_config["action_stats"][key])
-            
+
+    def observe(self, image):
+        """Advance only the causal RGB context without sampling an action."""
+        self.callback_obs(image)
+
     def get_action(self,diffusion_output, action_stats):
         # diffusion_output: (B, 2*T+1, 1)
         # return: (B, T-1)

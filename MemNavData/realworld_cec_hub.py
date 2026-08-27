@@ -1,0 +1,785 @@
+#!/usr/bin/env python3
+"""Single-entry monocular real-world bridge for CEC and frozen NavDP.
+
+The Go2 client sees the ordinary NavDP ``/navigator_reset`` and
+``/imagegoal_step`` contract, extended by an explicit two-phase episode
+protocol.  After reset the hub is in the memory-recording phase: the client
+may only call ``/memory_step`` to append causal RGB to the shared LingBot
+stream, and any goal-conditioned query is rejected.  At the revisit start
+point the client calls ``/begin_revisit``; only then does ``/imagegoal_step``
+become legal, so the first goal query -- which freezes MemNav's goal session
+and candidate ceiling -- happens after the recorded history instead of at
+frame zero.  The 2026-08-21 field failure (``no_causal_candidate`` on a valid
+613-frame memory) was caused exactly by issuing the goal from frame 0.
+
+Internally the query phase advances the same causal RGB stream, performs the
+frozen Certified Episodic Compass decision, and delegates control to either
+monocular-native ImageGoal NavDP or the mixed image/PointGoal controller.
+Client depth is accepted only for wire compatibility with the robot-side
+safety stack; it is never forwarded to the navigation policy.
+
+This process owns no actuator interface.  It is intended to listen on
+loopback and be reached through an SSH local-forward from the robot computer.
+"""
+
+from __future__ import annotations
+
+import argparse
+from collections import deque
+from dataclasses import dataclass
+import hashlib
+import io
+import json
+import math
+import os
+import threading
+from typing import Any, Mapping
+
+from flask import Flask, jsonify, request
+import requests
+
+from MemNavData.revisit_bearing_adapter import adapt_revisit_pointgoal
+
+
+PROTOCOL_VERSION = 4
+PHASE_RECORDING = "memory_recording"
+PHASE_REVISIT = "revisit_query"
+# NavDP observation-FIFO warm-up at the recording->revisit switch, mirroring
+# the simulator's shared-trace replay: the sim reconstructs NavDP's queue
+# from the leg-A frames at plan steps (one plan every exec_horizon=8 executed
+# steps, queue depth memory_size=8).  The real analog is a stride-8 tail of
+# the recorded frames, replayed oldest-first through /memory_replay_step.
+NAVDP_WARMUP_MAX_FRAMES = 8
+NAVDP_WARMUP_STRIDE = 8
+
+
+def select_warmup_frames(
+    tail: list[tuple[int, bytes]], stride: int, max_frames: int
+) -> list[tuple[int, bytes]]:
+    """Newest-anchored strided selection, returned in chronological order."""
+    picked = list(tail)[::-1][::max(1, int(stride))][: max(0, int(max_frames))]
+    return picked[::-1]
+POINTGOAL_UNITS = "lingbot_raw_direction_only"
+PROPOSAL_ORDER = "geometry_first"
+NAVIGATION_SENSOR_CONTRACT = "causal_monocular_rgb_v1"
+NAVDP_DEPTH_SOURCE = "monocular_sidecar"
+CLIENT_DEPTH_CONTRACT = "local_safety_only_not_forwarded"
+
+
+class HybridBackendError(RuntimeError):
+    """A stateful upstream failed and the session can no longer continue."""
+
+
+@dataclass(frozen=True)
+class UpstreamConfig:
+    memnav_url: str
+    navdp_url: str
+    camera_height_m: float
+    connect_timeout_s: float = 3.0
+    request_timeout_s: float = 180.0
+    navdp_depth_source: str = NAVDP_DEPTH_SOURCE
+
+    @property
+    def timeout(self) -> tuple[float, float]:
+        return (self.connect_timeout_s, self.request_timeout_s)
+
+
+def _json_object(response: requests.Response, label: str) -> dict[str, Any]:
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise HybridBackendError(f"{label} returned non-object JSON")
+    return payload
+
+
+def _file(name: str, payload: bytes, media_type: str) -> tuple[str, io.BytesIO, str]:
+    return (name, io.BytesIO(payload), media_type)
+
+
+def _finite_intrinsic(value: Any) -> list[list[float]]:
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError("intrinsic must be a finite 3x3 matrix")
+    matrix: list[list[float]] = []
+    for row in value:
+        if not isinstance(row, list) or len(row) != 3:
+            raise ValueError("intrinsic must be a finite 3x3 matrix")
+        parsed = [float(item) for item in row]
+        if not all(math.isfinite(item) for item in parsed):
+            raise ValueError("intrinsic must be a finite 3x3 matrix")
+        matrix.append(parsed)
+    return matrix
+
+
+class CecHybridRouter:
+    """Stateful exactly-one-probe CEC router with a native safety fallback."""
+
+    def __init__(
+        self,
+        config: UpstreamConfig,
+        *,
+        session: requests.Session | None = None,
+    ) -> None:
+        self.config = config
+        self.session = session or requests.Session()
+        self.initialized = False
+        self.memory_degraded = False
+        self.native_state_uncertain = False
+        self.step_index = 0
+        self.phase: str | None = None
+        self.frames_recorded = 0
+        self.revisit_started_after_frame: int | None = None
+        self.goal_candidates: list[dict[str, Any]] = []
+        self.goal_candidate_dir: str | None = None
+        self.recorded_tail: deque[tuple[int, bytes]] = deque(
+            maxlen=NAVDP_WARMUP_MAX_FRAMES * NAVDP_WARMUP_STRIDE)
+        self.goal_session_count = 0
+
+    def reset(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        intrinsic = _finite_intrinsic(payload.get("intrinsic"))
+        navdp_payload = dict(payload)
+        navdp_payload["intrinsic"] = intrinsic
+        # The robot client cannot silently switch the deployed navigation
+        # policy back to sensor depth.  D435i depth remains local to the
+        # collision safety layer and is not part of this upstream contract.
+        navdp_payload["depth_source"] = self.config.navdp_depth_source
+        camera_height_m = float(self.config.camera_height_m)
+        if not math.isfinite(camera_height_m) or not 0.1 <= camera_height_m <= 2.0:
+            raise ValueError("camera_height_m must be finite and in [0.1, 2.0]")
+        memnav_payload = {
+            "camera_height": camera_height_m,
+            "camera_intrinsic": intrinsic,
+            "seed": payload.get("seed"),
+            "episode_len": payload.get("episode_len"),
+        }
+        self.initialized = False
+        self.memory_degraded = False
+        self.native_state_uncertain = False
+        self.step_index = 0
+        self.phase = None
+        self.frames_recorded = 0
+        self.revisit_started_after_frame = None
+        self.goal_candidates = []
+        self.recorded_tail.clear()
+        self.goal_session_count = 0
+        try:
+            memnav = _json_object(
+                self.session.post(
+                    f"{self.config.memnav_url}/navigator_reset",
+                    json=memnav_payload,
+                    timeout=self.config.timeout,
+                ),
+                "MemNav reset",
+            )
+            navdp = _json_object(
+                self.session.post(
+                    f"{self.config.navdp_url}/navigator_reset",
+                    json=navdp_payload,
+                    timeout=self.config.timeout,
+                ),
+                "NavDP reset",
+            )
+        except Exception as error:
+            raise HybridBackendError(
+                f"atomic reset failed: {type(error).__name__}: {error}"
+            ) from error
+        certificate_status = memnav.get("certified_relocalization")
+        certificate_enabled = (
+            bool(certificate_status.get("enabled"))
+            if isinstance(certificate_status, dict)
+            else bool(certificate_status)
+        )
+        monocular_status = memnav.get("monocular_depth")
+        monocular_enabled = (
+            isinstance(monocular_status, dict)
+            and monocular_status.get("enabled") is True
+            and monocular_status.get("metric_depth_sensor_consumed") is False
+        )
+        navdp_monocular = (
+            navdp.get("depth_source") == self.config.navdp_depth_source
+            and navdp.get("metric_depth_sensor_consumed_by_config") is False
+            and navdp.get("monocular_depth_url_configured") is True
+        )
+        if not certificate_enabled or not monocular_enabled or not navdp_monocular:
+            self.native_state_uncertain = True
+            raise HybridBackendError(
+                "upstream reset did not establish the frozen monocular CEC contract"
+            )
+        self.initialized = True
+        self.phase = PHASE_RECORDING
+        return {
+            "algo": "cec_hybrid_navdp",
+            "protocol_version": PROTOCOL_VERSION,
+            "phase": self.phase,
+            "frames_recorded": self.frames_recorded,
+            "memnav_algo": memnav.get("algo"),
+            "navdp_algo": navdp.get("algo", "navdp"),
+            "certificate_enabled": certificate_enabled,
+            "navigation_sensor_contract": NAVIGATION_SENSOR_CONTRACT,
+            "navdp_depth_source": self.config.navdp_depth_source,
+            "metric_depth_sensor_consumed_by_policy": False,
+            "client_depth_contract": CLIENT_DEPTH_CONTRACT,
+            "camera_height_m": camera_height_m,
+        }
+
+    def _validate_monocular_plan(self, result: dict[str, Any]) -> dict[str, Any]:
+        if (
+            result.get("depth_source") != self.config.navdp_depth_source
+            or result.get("metric_depth_sensor_consumed") is not False
+            or not isinstance(result.get("monocular_depth_receipt"), dict)
+        ):
+            self.native_state_uncertain = True
+            raise HybridBackendError(
+                "NavDP plan did not prove monocular depth consumption; reset is required"
+            )
+        result.update({
+            "navigation_sensor_contract": NAVIGATION_SENSOR_CONTRACT,
+            "metric_depth_sensor_consumed_by_policy": False,
+            "client_metric_depth_forwarded": False,
+        })
+        return result
+
+    def _native_plan(
+        self,
+        image: bytes,
+        goal: bytes,
+        form: Mapping[str, str],
+    ) -> dict[str, Any]:
+        try:
+            result = _json_object(
+                self.session.post(
+                    f"{self.config.navdp_url}/imagegoal_step",
+                    files={
+                        "image": _file("image.jpg", image, "image/jpeg"),
+                        "goal": _file("goal.jpg", goal, "image/jpeg"),
+                    },
+                    data=dict(form),
+                    timeout=self.config.timeout,
+                ),
+                "native NavDP step",
+            )
+            return self._validate_monocular_plan(result)
+        except Exception as error:
+            self.native_state_uncertain = True
+            raise HybridBackendError(
+                "native NavDP state is uncertain; reset is required: "
+                f"{type(error).__name__}: {error}"
+            ) from error
+
+    def _mixed_plan(
+        self,
+        image: bytes,
+        goal: bytes,
+        pointgoal: tuple[float, float],
+        form: Mapping[str, str],
+    ) -> dict[str, Any]:
+        data = dict(form)
+        data["goal_data"] = json.dumps({
+            "goal_x": [float(pointgoal[0])],
+            "goal_y": [float(pointgoal[1])],
+        })
+        try:
+            result = _json_object(
+                self.session.post(
+                    f"{self.config.navdp_url}/navdp_step_ip_mixgoal",
+                    files={
+                        "image": _file("image.jpg", image, "image/jpeg"),
+                        "image_goal": _file("goal.jpg", goal, "image/jpeg"),
+                    },
+                    data=data,
+                    timeout=self.config.timeout,
+                ),
+                "mixed NavDP step",
+            )
+            return self._validate_monocular_plan(result)
+        except Exception as error:
+            self.native_state_uncertain = True
+            raise HybridBackendError(
+                "mixed NavDP state is uncertain; reset is required: "
+                f"{type(error).__name__}: {error}"
+            ) from error
+
+    def memory_step(self, image: bytes) -> dict[str, Any]:
+        """Append one causal RGB frame to the shared stream, with no goal."""
+        if not self.initialized:
+            raise HybridBackendError("router is not initialized")
+        if self.native_state_uncertain:
+            raise HybridBackendError("native state is uncertain; reset is required")
+        if self.memory_degraded:
+            raise HybridBackendError(
+                "monocular geometry stream is degraded; reset is required"
+            )
+        if self.phase != PHASE_RECORDING:
+            raise ValueError(
+                "memory_step is only valid during memory recording; "
+                "reset to start a new episode"
+            )
+        if not image:
+            raise ValueError("image is required")
+        try:
+            payload = _json_object(
+                self.session.post(
+                    f"{self.config.memnav_url}/memory_step",
+                    files={"image": _file("image.jpg", image, "image/jpeg")},
+                    timeout=self.config.timeout,
+                ),
+                "memory step",
+            )
+        except Exception as error:
+            self.memory_degraded = True
+            raise HybridBackendError(
+                "monocular geometry stream update failed; reset is required: "
+                f"{type(error).__name__}: {error}"
+            ) from error
+        self.frames_recorded += 1
+        self.recorded_tail.append((self.frames_recorded, image))
+        return {
+            "phase": self.phase,
+            "frame_idx": payload.get("frame_idx"),
+            "frames_recorded": self.frames_recorded,
+        }
+
+    def goal_candidate(self, image: bytes) -> dict[str, Any]:
+        """Register one goal-candidate photo that is NOT appended to memory.
+
+        Mirrors the simulator's outcome-blind goal construction: the revisit
+        goal must be captured during the recording walk, excluded from the
+        memory stream, and later scored for weak covisibility against the
+        recorded history before it may be used as the query goal.
+        """
+        if not self.initialized:
+            raise HybridBackendError("router is not initialized")
+        if self.native_state_uncertain:
+            raise HybridBackendError("native state is uncertain; reset is required")
+        if self.memory_degraded:
+            raise HybridBackendError(
+                "monocular geometry stream is degraded; reset is required"
+            )
+        if self.phase != PHASE_RECORDING:
+            raise ValueError(
+                "goal candidates must be captured during memory recording, "
+                "before begin_revisit"
+            )
+        if not image:
+            raise ValueError("image is required")
+        digest = hashlib.sha256(image).hexdigest()
+        record = {
+            "candidate_id": len(self.goal_candidates),
+            "captured_after_frame": self.frames_recorded,
+            "sha256": digest,
+            "appended_to_memory": False,
+        }
+        self.goal_candidates.append(dict(record, image=image))
+        if self.goal_candidate_dir is not None:
+            path = (
+                f"{self.goal_candidate_dir}/candidate_"
+                f"{record['candidate_id']:03d}_{digest[:16]}.jpg"
+            )
+            with open(path, "wb") as handle:
+                handle.write(image)
+            record["path"] = path
+        return record
+
+    def begin_recording(self) -> dict[str, Any]:
+        """Return to record-only mode between goals (multi-goal episodes).
+
+        The causal stream and all long-term memory persist; only control
+        authority changes.  The next ``begin_revisit`` starts a fresh MemNav
+        goal session, so a goal image reused later is re-anchored against
+        the full history available at that moment (the A->B->A fix).
+        """
+        if not self.initialized:
+            raise HybridBackendError("router is not initialized")
+        if self.native_state_uncertain:
+            raise HybridBackendError("native state is uncertain; reset is required")
+        if self.memory_degraded:
+            raise HybridBackendError(
+                "monocular geometry stream is degraded; reset is required"
+            )
+        if self.phase != PHASE_REVISIT:
+            raise ValueError(
+                "begin_recording is only valid during a revisit/query phase"
+            )
+        self.phase = PHASE_RECORDING
+        return {
+            "phase": self.phase,
+            "frames_recorded": self.frames_recorded,
+            "goal_session_count": self.goal_session_count,
+            "long_term_memory_preserved": True,
+        }
+
+    def begin_revisit(self) -> dict[str, Any]:
+        """Switch to the query phase; the next goal query freezes the session."""
+        if not self.initialized:
+            raise HybridBackendError("router is not initialized")
+        if self.native_state_uncertain:
+            raise HybridBackendError("native state is uncertain; reset is required")
+        if self.memory_degraded:
+            raise HybridBackendError(
+                "monocular geometry stream is degraded; reset is required"
+            )
+        if self.phase != PHASE_RECORDING:
+            raise ValueError(
+                "begin_revisit requires the memory recording phase; "
+                "reset to start a new episode"
+            )
+        if self.frames_recorded < 1:
+            raise ValueError(
+                "begin_revisit requires at least one recorded memory frame"
+            )
+        # Mirror the simulator's shared-trace boundary: reconstruct NavDP's
+        # observation FIFO from a stride-8 tail of the recorded frames, and
+        # hard-verify the resulting queue length exactly as the simulator
+        # replay does.  A partial warm-up leaves NavDP state unknown, so any
+        # failure latches native_state_uncertain and requires a reset.
+        warmup = select_warmup_frames(
+            list(self.recorded_tail),
+            NAVDP_WARMUP_STRIDE,
+            NAVDP_WARMUP_MAX_FRAMES,
+        )
+        queue_lengths = None
+        memory_size = None
+        for _, frame in warmup:
+            try:
+                payload = _json_object(
+                    self.session.post(
+                        f"{self.config.navdp_url}/memory_replay_step",
+                        files={"image": _file("image.jpg", frame, "image/jpeg")},
+                        timeout=self.config.timeout,
+                    ),
+                    "NavDP warm-up replay",
+                )
+            except Exception as error:
+                self.native_state_uncertain = True
+                raise HybridBackendError(
+                    "NavDP observation warm-up failed; reset is required: "
+                    f"{type(error).__name__}: {error}"
+                ) from error
+            queue_lengths = payload.get("queue_lengths")
+            memory_size = payload.get("memory_size")
+        if not isinstance(memory_size, int) or memory_size <= 0:
+            self.native_state_uncertain = True
+            raise HybridBackendError(
+                "NavDP warm-up omitted memory size; reset is required"
+            )
+        if queue_lengths != [min(len(warmup), memory_size)]:
+            self.native_state_uncertain = True
+            raise HybridBackendError(
+                "NavDP warm-up queue length mismatch; reset is required"
+            )
+        self.phase = PHASE_REVISIT
+        self.revisit_started_after_frame = self.frames_recorded
+        self.goal_session_count += 1
+        return {
+            "phase": self.phase,
+            "goal_session_count": self.goal_session_count,
+            "frames_recorded": self.frames_recorded,
+            "revisit_started_after_frame": self.revisit_started_after_frame,
+            "goal_session_contract": "first_goal_query_after_begin_revisit",
+            "navdp_warmup_frames": len(warmup),
+            "navdp_warmup_frame_indices": [index for index, _ in warmup],
+            "navdp_queue_lengths": queue_lengths,
+            "navdp_memory_size": memory_size,
+        }
+
+    def plan_imagegoal(
+        self,
+        *,
+        image: bytes,
+        goal: bytes,
+        depth: bytes | None = None,
+        form: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        if not self.initialized:
+            raise HybridBackendError("router is not initialized")
+        if self.native_state_uncertain:
+            raise HybridBackendError("native state is uncertain; reset is required")
+        if self.phase != PHASE_REVISIT:
+            raise ValueError(
+                "goal queries are forbidden during memory recording: the first "
+                "goal query freezes the MemNav goal session and candidate "
+                "ceiling, so call /begin_revisit at the query start point first"
+            )
+        if not image or not goal:
+            raise ValueError("image and goal are required")
+        form = dict(form or {})
+        self.step_index += 1
+
+        # In the monocular system the same causal LingBot stream provides both
+        # CEC proof and current-frame depth.  Missing a stream update therefore
+        # cannot be disguised as an exact native fallback: fail closed and let
+        # the robot-side stale-plan/watchdog layers stop motion.
+        if self.memory_degraded:
+            raise HybridBackendError(
+                "monocular geometry stream is degraded; reset is required"
+            )
+
+        try:
+            probe = _json_object(
+                self.session.post(
+                    f"{self.config.memnav_url}/retrieval_probe_step",
+                    files={
+                        "image": _file("image.jpg", image, "image/jpeg"),
+                        "goal": _file("goal.jpg", goal, "image/jpeg"),
+                    },
+                    data=form,
+                    timeout=self.config.timeout,
+                ),
+                "CEC retrieval probe",
+            )
+        except Exception as error:
+            self.memory_degraded = True
+            raise HybridBackendError(
+                "monocular geometry stream update failed; reset is required: "
+                f"{type(error).__name__}: {error}"
+            ) from error
+
+        candidates = probe.get("certified_visual_candidates")
+        if not isinstance(candidates, list):
+            candidates = []
+        try:
+            certificate = _json_object(
+                self.session.post(
+                    f"{self.config.memnav_url}/certified_relocalize",
+                    files={"goal": _file("goal.jpg", goal, "image/jpeg")},
+                    data={
+                        "candidates": json.dumps(candidates),
+                        "proposal_order": PROPOSAL_ORDER,
+                        "graph_rescue": "0",
+                        "learned_rescue": "0",
+                    },
+                    timeout=self.config.timeout,
+                ),
+                "CEC certificate",
+            )
+        except Exception as error:
+            certificate = {
+                "ok": False,
+                "accepted": False,
+                "reason": "certificate_endpoint_failure",
+                "error": f"{type(error).__name__}: {error}",
+            }
+
+        active = bool(certificate.get("ok") is True and certificate.get("accepted") is True)
+        units = certificate.get("pointgoal_units")
+        if active and units != POINTGOAL_UNITS:
+            active = False
+            certificate["reason"] = "invalid_scale_free_output_contract"
+        decision = adapt_revisit_pointgoal(
+            mode="verified_bearing_v1",
+            router_active=active,
+            pointgoal=certificate.get("aux_pose"),
+            source="lightglue_lingbot_pnp_v2_scale_free",
+            pointgoal_units=POINTGOAL_UNITS,
+        )
+        if decision.takeover:
+            assert decision.controller_pointgoal is not None
+            result = self._mixed_plan(
+                image, goal, decision.controller_pointgoal, form
+            )
+            controller = "navdp_image_point_mix"
+        else:
+            result = self._native_plan(image, goal, form)
+            controller = "navdp_image_router"
+        result.update(decision.audit_dict())
+        result.update({
+            "cec_takeover": decision.takeover,
+            "cec_reason": certificate.get("reason", decision.reason),
+            "cec_controller": controller,
+            "cec_step_index": self.step_index,
+            "cec_frame_idx": probe.get("frame_idx"),
+            "cec_goal_session_index": probe.get("goal_session_index"),
+            "cec_goal_session_started": probe.get("goal_session_started"),
+            "cec_goal_start_frame": probe.get("goal_start_frame"),
+            "cec_candidate_ceiling": probe.get("candidate_ceiling"),
+            "cec_selected_anchor": certificate.get("selected_anchor"),
+            "cec_certificate": certificate.get("certificate"),
+            "cec_relocalization_ms": certificate.get("relocalization_ms"),
+        })
+        if certificate.get("error"):
+            result["cec_error"] = certificate["error"]
+        return result
+
+
+def create_app(router: CecHybridRouter) -> Flask:
+    app = Flask(__name__)
+    call_lock = threading.Lock()
+
+    @app.get("/healthz")
+    def healthz():
+        return jsonify({
+            "ok": True,
+            "algo": "cec_hybrid_navdp",
+            "protocol_version": PROTOCOL_VERSION,
+            "initialized": router.initialized,
+            "phase": router.phase,
+            "frames_recorded": router.frames_recorded,
+            "revisit_started_after_frame": router.revisit_started_after_frame,
+            "goal_candidates_captured": len(router.goal_candidates),
+            "goal_session_count": router.goal_session_count,
+            "memory_degraded": router.memory_degraded,
+            "native_state_uncertain": router.native_state_uncertain,
+            "navigation_sensor_contract": NAVIGATION_SENSOR_CONTRACT,
+            "navdp_depth_source": router.config.navdp_depth_source,
+            "metric_depth_sensor_consumed_by_policy": False,
+            "client_depth_contract": CLIENT_DEPTH_CONTRACT,
+            "camera_height_m": float(router.config.camera_height_m),
+        })
+
+    @app.post("/navigator_reset")
+    def navigator_reset():
+        if not call_lock.acquire(blocking=False):
+            return jsonify({"error": "hub_busy"}), 409
+        try:
+            try:
+                return jsonify(router.reset(request.get_json(silent=True) or {}))
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+            except HybridBackendError as error:
+                return jsonify({"error": str(error), "reset_required": True}), 503
+        finally:
+            call_lock.release()
+
+    @app.post("/memory_step")
+    def memory_step():
+        if "image" not in request.files:
+            return jsonify({"error": "missing files: image"}), 400
+        if not call_lock.acquire(blocking=False):
+            return jsonify({"error": "hub_busy"}), 409
+        try:
+            try:
+                return jsonify(router.memory_step(request.files["image"].read()))
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+            except HybridBackendError as error:
+                return jsonify({"error": str(error), "reset_required": True}), 503
+        finally:
+            call_lock.release()
+
+    @app.post("/goal_candidate")
+    def goal_candidate():
+        if "image" not in request.files:
+            return jsonify({"error": "missing files: image"}), 400
+        if not call_lock.acquire(blocking=False):
+            return jsonify({"error": "hub_busy"}), 409
+        try:
+            try:
+                return jsonify(
+                    router.goal_candidate(request.files["image"].read())
+                )
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+            except HybridBackendError as error:
+                return jsonify({"error": str(error), "reset_required": True}), 503
+        finally:
+            call_lock.release()
+
+    @app.post("/begin_recording")
+    def begin_recording():
+        if not call_lock.acquire(blocking=False):
+            return jsonify({"error": "hub_busy"}), 409
+        try:
+            try:
+                result = router.begin_recording()
+                app.logger.info(
+                    "cec_begin_recording goal_sessions=%s frames=%s",
+                    result.get("goal_session_count"),
+                    result.get("frames_recorded"),
+                )
+                return jsonify(result)
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+            except HybridBackendError as error:
+                return jsonify({"error": str(error), "reset_required": True}), 503
+        finally:
+            call_lock.release()
+
+    @app.post("/begin_revisit")
+    def begin_revisit():
+        if not call_lock.acquire(blocking=False):
+            return jsonify({"error": "hub_busy"}), 409
+        try:
+            try:
+                result = router.begin_revisit()
+                app.logger.info(
+                    "cec_begin_revisit frames_recorded=%s",
+                    result.get("frames_recorded"),
+                )
+                return jsonify(result)
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+            except HybridBackendError as error:
+                return jsonify({"error": str(error), "reset_required": True}), 503
+        finally:
+            call_lock.release()
+
+    @app.post("/imagegoal_step")
+    def imagegoal_step():
+        missing = [name for name in ("image", "goal") if name not in request.files]
+        if missing:
+            return jsonify({"error": f"missing files: {', '.join(missing)}"}), 400
+        if not call_lock.acquire(blocking=False):
+            return jsonify({"error": "hub_busy"}), 409
+        try:
+            try:
+                result = router.plan_imagegoal(
+                    image=request.files["image"].read(),
+                    goal=request.files["goal"].read(),
+                    depth=(
+                        request.files["depth"].read()
+                        if "depth" in request.files else None
+                    ),
+                    form=request.form.to_dict(flat=True),
+                )
+                app.logger.info(
+                    "cec_plan step=%s takeover=%s controller=%s reason=%s "
+                    "frame=%s anchor=%s relocalization_ms=%s",
+                    result.get("cec_step_index"),
+                    result.get("cec_takeover"),
+                    result.get("cec_controller"),
+                    result.get("cec_reason"),
+                    result.get("cec_frame_idx"),
+                    result.get("cec_selected_anchor"),
+                    result.get("cec_relocalization_ms"),
+                )
+                return jsonify(result)
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+            except HybridBackendError as error:
+                return jsonify({"error": str(error), "reset_required": True}), 503
+        finally:
+            call_lock.release()
+
+    return app
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=18889)
+    parser.add_argument("--memnav-url", default="http://127.0.0.1:18888")
+    parser.add_argument("--navdp-url", default="http://127.0.0.1:8888")
+    parser.add_argument("--connect-timeout-s", type=float, default=3.0)
+    parser.add_argument("--request-timeout-s", type=float, default=180.0)
+    parser.add_argument("--camera-height-m", type=float, required=True)
+    parser.add_argument(
+        "--goal-candidate-dir", default=None,
+        help=("directory for goal-candidate photos captured during memory "
+              "recording; they are never appended to the memory stream"))
+    args = parser.parse_args()
+    if args.host not in {"127.0.0.1", "::1", "localhost"}:
+        parser.error("real-world hub must bind to loopback; use an SSH tunnel")
+    router = CecHybridRouter(UpstreamConfig(
+        memnav_url=args.memnav_url.rstrip("/"),
+        navdp_url=args.navdp_url.rstrip("/"),
+        connect_timeout_s=args.connect_timeout_s,
+        request_timeout_s=args.request_timeout_s,
+        camera_height_m=args.camera_height_m,
+    ))
+    if args.goal_candidate_dir:
+        os.makedirs(args.goal_candidate_dir, exist_ok=True)
+        router.goal_candidate_dir = args.goal_candidate_dir
+    create_app(router).run(host=args.host, port=args.port, threaded=True)
+
+
+if __name__ == "__main__":
+    main()

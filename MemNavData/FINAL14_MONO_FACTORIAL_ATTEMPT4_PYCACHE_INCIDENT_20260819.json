@@ -1,0 +1,9 @@
+{
+  "cause": "The newly added pinned-Python-3.9 release py_compile tried to create MemNavData/__pycache__ inside the intentionally read-only immutable source bundle.",
+  "failure_stage": "submission-side release gate after all-history asset audit, before sbatch",
+  "jobs_submitted": 0,
+  "method_result_produced": false,
+  "repair": "set PYTHONPYCACHEPREFIX to a receipt-specific /tmp directory for remote py_compile and unittest; retain the read-only source bundle",
+  "schema_version": "final14_mono_factorial_attempt4_pycache_incident_v1_20260819",
+  "unused_read_only_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_cb63eacf8552dd66"
+}

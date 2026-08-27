@@ -1,0 +1,46 @@
+{
+  "schema_version": "hm3d_fullmono_zero_history_repair_v1_20260824",
+  "frozen_at": "2026-08-24T13:40:32+08:00",
+  "scope": "infrastructure-only completion of parent-certified zero-history AB construction fragments",
+  "original_build_job_id": 16265026,
+  "original_seal_job_id": 16265034,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_20260824/formal_20260824T041000Z_cbef63fd",
+  "original_task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_lifelong_cbef63fd46d88451",
+  "original_task_receipt_sha256": "cbef63fd46d88451296fbfcb88ee605861497795c916c28deffbac2f1fdee909",
+  "parent_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+  "parent_manifest_sha256": "a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5",
+  "parent_population_receipt_sha256": "4dd6b8dcb759dff1c0835bef8e755e7291a5f049c9adec88b954d1fda62e30d5",
+  "protocol_sha256": "759fa88464791f175e0985a6a82469ca40a35119dfb827bb8f48f7d31ca3493e",
+  "selection_reads_navigation_outcomes": false,
+  "scientific_thresholds_changed": false,
+  "population_rule_changed": false,
+  "repair_rule": "write a zero-row, hash-bound construction fragment only when both the frozen parent population receipt and its sealed per-scene completion prove zero materialized histories and no online_a manifest",
+  "indices": [11, 15, 34, 40, 44],
+  "fragments": [
+    {
+      "scene_index": 11,
+      "scene": "kJJyRFXVpx2",
+      "parent_construction_completion_sha256": "f5d798329823afb8014200f703ece30323ef8b3beae47d8d0edc829e382ecfcd"
+    },
+    {
+      "scene_index": 15,
+      "scene": "c3WKCnkEdha",
+      "parent_construction_completion_sha256": "ff1c50a04897ed6939baa864794edf84b3dbc3df346b58aef51d469fb48b44ad"
+    },
+    {
+      "scene_index": 34,
+      "scene": "F7EAMsdDASd",
+      "parent_construction_completion_sha256": "29def34d28ce4c96ba28017777b6b98792fa8fcbdaf0198d6d2242f47f231f36"
+    },
+    {
+      "scene_index": 40,
+      "scene": "u8ug2rtNARf",
+      "parent_construction_completion_sha256": "8238ede2b6dd695ec6a63063fb4e69b66eae87af4631182455672be6e20ac11d"
+    },
+    {
+      "scene_index": 44,
+      "scene": "hyFzGGJCSYs",
+      "parent_construction_completion_sha256": "20db129bd7d096b8018372b67cf22f4c8578965954dcab06a6385fcb3d6e3a6a"
+    }
+  ]
+}

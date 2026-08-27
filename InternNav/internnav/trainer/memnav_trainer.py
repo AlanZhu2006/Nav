@@ -6,8 +6,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, DistributedSampler
 
 from internnav.dataset.memnav_dataset_lerobot import memnav_collate_fn
-from internnav.model.basemodel.memnav.decgate_schedule import linear_teacher_ratio
+from internnav.model.basemodel.memnav.gate_curriculum import linear_teacher_ratio
 from internnav.model.basemodel.memnav.goal_swap import goal_swap_margin_metrics
+from internnav.model.basemodel.memnav.retrieval_losses import multi_positive_retrieval_losses
 from internnav.trainer.base import BaseTrainer
 
 
@@ -22,14 +23,34 @@ class MemNavTrainer(BaseTrainer):
         super().__init__(**kwargs)
         self.config = config
         self.w_retr = getattr(config.il, "w_retrieval", 1.0)     # ranking InfoNCE
+        self.w_retr_top1 = float(getattr(config.il, "w_retrieval_top1", 0.0))
+        self.retr_top1_margin = float(getattr(config.il, "retrieval_top1_margin", 0.2))
         self.w_gate = getattr(config.il, "w_gate", 1.0)          # revisit/novel BCE
         self.w_aux = getattr(config.il, "w_aux_pose", 0.5)
-        # counterfactual Novel conditioning (goal_swap.py); weight 0 = historical behavior
-        self.w_goal_swap = float(getattr(config.il, "w_goal_swap", 0.0) or 0.0)
+        self.w_goal_swap = float(getattr(config.il, "w_goal_swap", 0.0))
         self.goal_swap_margin = float(getattr(config.il, "goal_swap_margin", 0.05))
         if self.w_goal_swap < 0 or self.goal_swap_margin < 0:
             raise ValueError("goal-swap weight and margin must be non-negative")
-        self.model_device = (self.model.module if hasattr(self.model, "module") else self.model).device
+        self.gate_teacher_start = float(getattr(config.il, "gate_teacher_start", 1.0))
+        self.gate_teacher_end = float(getattr(config.il, "gate_teacher_end", 0.0))
+        self.gate_teacher_steps = int(getattr(config.il, "gate_teacher_steps", 1000))
+        # Validate once at startup instead of discovering a bad setting after the
+        # expensive frozen front-end has already processed a batch.
+        linear_teacher_ratio(
+            0, self.gate_teacher_start, self.gate_teacher_end, self.gate_teacher_steps)
+        root_model = self.model.module if hasattr(self.model, "module") else self.model
+        self.model_device = root_model.device
+        # An empirical aux head and its frozen LingBot inputs have no gradient
+        # path. Keep aux metrics, but do not add a detached constant to the
+        # optimized scalar and mistake its batch fluctuations for learning.
+        aux_head = root_model.core.revisit_merge.aux_pose_head
+        self.aux_optimization_active = any(p.requires_grad for p in aux_head.parameters())
+        self.w_aux_effective = self.w_aux if self.aux_optimization_active else 0.0
+        if self.w_aux and not self.aux_optimization_active:
+            print(
+                "[MemNavTrainer] aux pose is diagnostic-only: aux_pose_head is frozen; "
+                "effective optimization weight=0"
+            )
         # Rotation-specific local-frame correction for the rotation-accuracy diagnostic
         # (compute_loss, R_rel vs batch_goal_rel_rotation). NOT RevisitMerge.aux_pose_head's
         # _R_CONV/_SCALE — empirically, translation and rotation need DIFFERENT corrections;
@@ -70,21 +91,16 @@ class MemNavTrainer(BaseTrainer):
     _WB_TARGET = {
         # (1) retrieval
         'retrieval_loss': 'retrieval/retrieval_loss',
+        'retrieval_top1_loss': 'retrieval/retrieval_top1_margin_loss',
         'gate_loss': 'retrieval/gate_loss',
         'gate_acc': 'retrieval/gate_acc',
         'gate_seen': 'retrieval/gate_seen',
         'gate_unseen': 'retrieval/gate_unseen',
         'gate_sep': 'retrieval/gate_sep',
-        'gate_a': 'retrieval/gate_a',
-        'gate_b': 'retrieval/gate_b',
+        'decoder_gate_seen': 'retrieval/decoder_gate_seen',
+        'decoder_gate_unseen': 'retrieval/decoder_gate_unseen',
+        'decoder_gate_sep': 'retrieval/decoder_gate_sep',
         'seen_match_acc': 'retrieval/seen_match_acc',
-        'dec_gate_a': 'action/dec_gate_a',
-        'dec_gate_b': 'action/dec_gate_b',
-        'decgate_teacher_ratio': 'action/decgate_teacher_ratio',
-        'goal_swap_loss': 'action/goal_swap_margin_loss',
-        'goal_swap_gap': 'action/goal_swap_error_gap',
-        'goal_swap_rms': 'action/goal_swap_output_rms',
-        'goal_swap_active': 'action/goal_swap_active_rows',
         # (2) camera pose
         'aux_loss': 'pose/aux_loss',
         'aux_loss_shallow': 'pose/aux_loss_shallow',
@@ -104,12 +120,17 @@ class MemNavTrainer(BaseTrainer):
         'action_loss_novel': 'action/action_loss_novel',
         'action_loss_leg2': 'action/action_loss_leg2',
         'action_loss_leg3': 'action/action_loss_leg3',
+        'goal_swap_loss': 'action/goal_swap_margin_loss',
+        'goal_swap_gap': 'action/goal_swap_error_gap',
+        'goal_swap_rms': 'action/goal_swap_output_rms',
+        'goal_swap_active': 'action/goal_swap_active_rows',
         # (4) training config / system
         'learning_rate': 'config/learning_rate',
         'grad_norm': 'config/grad_norm',
         'epoch': 'config/epoch',
         'mem_alloc_gb': 'config/mem_alloc_gb',
         'mem_reserved_gb': 'config/mem_reserved_gb',
+        'gate_teacher_ratio': 'config/gate_teacher_ratio',
     }
 
     def log(self, logs, *args, **kwargs):
@@ -135,25 +156,23 @@ class MemNavTrainer(BaseTrainer):
     # ------------------------------------------------------------------ #
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         dev = next(model.parameters()).device
-        # decoder-gate curriculum ratio for this optimizer step (see decgate_schedule /
-        # MemNavNet.forward; steps=0 in the config disables the blend entirely)
-        il_cfg = self.config.il
-        decgate_ratio = linear_teacher_ratio(
-            int(self.state.global_step),
-            float(getattr(il_cfg, 'decgate_teacher_start', 0.0) or 0.0),
-            float(getattr(il_cfg, 'decgate_teacher_end', 0.0) or 0.0),
-            int(getattr(il_cfg, 'decgate_teacher_steps', 0) or 0),
+        gate_teacher_ratio = linear_teacher_ratio(
+            self.state.global_step,
+            self.gate_teacher_start,
+            self.gate_teacher_end,
+            self.gate_teacher_steps,
         )
-        inputs['decgate_teacher_ratio'] = decgate_ratio
-        # counterfactual pass only when it can produce active rows: weight on, at
-        # least one novel row, and either real filtered negatives or a rollable batch
-        inputs['compute_goal_swap'] = bool(
+        # Do not mutate the collator-owned dictionary: callbacks or future diagnostic
+        # passes may reuse it.  Only MemNavNet consumes this training-only scalar.
+        model_inputs = dict(inputs)
+        model_inputs["decoder_gate_teacher_ratio"] = gate_teacher_ratio
+        model_inputs["compute_goal_swap"] = bool(
             self.w_goal_swap > 0
-            and (inputs['batch_is_revisit'] < 0.5).any().item()
-            and (inputs.get('batch_negative_goal_image') is not None
-                 or inputs['batch_is_revisit'].numel() > 1)
+            and (inputs["batch_is_revisit"] < 0.5).any().item()
+            and (inputs.get("batch_negative_goal_image") is not None
+                 or inputs["batch_is_revisit"].numel() > 1)
         )
-        fwd = model(inputs)                                       # forward(batch) moves tensors internally
+        fwd = model(model_inputs)                                 # forward(batch) moves tensors internally
 
         # --- diffusion action loss (always goal-conditioned). Kept per-sample first
         # (mean over predict_size/action-dim only) so it can be bucketed by
@@ -164,55 +183,11 @@ class MemNavTrainer(BaseTrainer):
         per_action_loss = (fwd["noise_pred"] - noise).square().mean(dim=(-2, -1))  # [B]
         action_loss = per_action_loss.mean()
 
-        # --- retrieval: DECOUPLED ranking (InfoNCE) + revisit gate (BCE) ---
-        # A joint softmax with a null slot collapses to always-null (the easy shortcut),
-        # so the two jobs are split: (a) InfoNCE ranks the true co-visible frame above the
-        # other candidates on REVISIT rows; (b) an affine-on-max-cosine gate (in the head)
-        # is trained by BCE to decide revisit vs novel. The candidate set E(k) already
-        # excludes the recent approach window, which is what makes both signals separable.
-        # NOTE the decoder does NOT consume this BCE-calibrated gate: it applies its own
-        # affine of the same (detached) max-cos, trained only by the action loss
-        # (MemNavNet.dec_gate_a/b + _gate_mask) — classifier calibration and attention
-        # mixing temperature are different optima, so the params are separated.
-        ret_logits = fwd["ret_logits"]                           # [B, L] cos/temp over candidates
-        gate_logit = fwd["gate_logit"]                           # [B] pre-sigmoid revisit logit
-        pos = inputs["batch_pos_mask"].to(dev).bool()            # [B, L]
-        neg = inputs["batch_neg_mask"].to(dev).bool()            # [B, L]
-        is_rev = inputs["batch_is_revisit"].to(dev)              # [B] float (1=revisit, 0=novel)
-        NEG_INF = torch.finfo(ret_logits.dtype).min
-        # (a) ranking: -log Σ_pos e^s / Σ_{pos∪neg} e^s, over revisit rows carrying a negative
-        lse_pn = ret_logits.masked_fill(~(pos | neg), NEG_INF).logsumexp(-1)
-        lse_p = ret_logits.masked_fill(~pos, NEG_INF).logsumexp(-1)
-        rank_rows = pos.any(-1) & neg.any(-1)                    # [B] revisit rows w/ contrastive signal
-        # Index first. On novel rows lse_p is the finite dtype floor; forming the
-        # difference and multiplying by zero later creates a value near float32 max
-        # that overflows to inf/NaN under mixed-precision backward.
-        rank_loss = (lse_pn[rank_rows] - lse_p[rank_rows]).sum() / rank_rows.sum().clamp(min=1.0)
-        # (b) gate BCE over ALL rows; pos_weight offsets the novel-heavy class mix
-        n_rev = is_rev.sum()
-        pos_weight = ((1.0 - is_rev).sum() / n_rev.clamp(min=1.0)).clamp(0.1, 10.0)
-        gate_loss = F.binary_cross_entropy_with_logits(gate_logit, is_rev, pos_weight=pos_weight)
-
-        # --- aux pose (x,y only — θ dropped, see RevisitMerge docstring): MSE on REVISIT
-        # rows only (relocalization branch). aux_pose_head is FROZEN (pre-calibrated, not
-        # trainable — cur_pose/goal_pose come from the frozen camera head under no_grad,
-        # so this contributes zero gradient today); kept in the loss sum as a no-op so a
-        # future LoRA fine-tune of the frozen branch can unfreeze aux_pose_head and have
-        # this term start training with no other code changes.
-        gt_pose = inputs["batch_goal_rel_pose"][..., :2].to(dev)  # [B,2]
-        revisit = is_rev                                         # 1 = goal is in memory
-        per = (fwd["aux_pose"] - gt_pose).square().mean(-1)      # [B]
-        aux_loss = (per * revisit).sum() / revisit.sum().clamp(min=1.0)
-        R_rel = fwd["R_rel"]                                      # [B,3,3] predicted relative rotation
-
-        # --- counterfactual goal-conditioned denoising: same current/history/noise/
-        # timestep/gate, but a direction-filtered wrong goal must explain this row's
-        # expert action WORSE than the correct goal by goal_swap_margin. Directly
-        # penalizes the measured "goal image has nearly no effect" collapse without
-        # fabricating a wrong-goal action label. Novel rows only — on revisit rows
-        # the swapped pass shares the (correct) memory pathway, so a similar action
-        # is legitimate there and ranking it would fight memory use. ---
-        if inputs['compute_goal_swap']:
+        # Counterfactual goal-conditioned denoising. Same current/history/noise/timestep,
+        # but a direction-filtered wrong goal must explain this row's expert action worse than the
+        # correct goal by ``goal_swap_margin``. This directly penalizes the measured
+        # "goal image has nearly no effect" shortcut without fabricating a wrong-goal GT.
+        if model_inputs["compute_goal_swap"]:
             if fwd["noise_pred_swapped_goal"] is None:
                 raise RuntimeError("goal-swap objective requested but model returned no swapped pass")
             novel_rows = inputs["batch_is_revisit"].to(dev) < 0.5
@@ -233,8 +208,42 @@ class MemNavTrainer(BaseTrainer):
             }
         goal_swap_loss = swap_metrics["loss"]
 
+        # --- retrieval: DECOUPLED ranking (InfoNCE) + revisit gate (BCE) ---
+        # A joint softmax with a null slot collapses to always-null (the easy shortcut),
+        # so the two jobs are split: (a) InfoNCE ranks the true co-visible frame above the
+        # other candidates on REVISIT rows; (b) an affine-on-max-cosine gate (in the head)
+        # is trained by BCE to decide revisit vs novel. The candidate set E(k) already
+        # excludes the recent approach window, which is what makes both signals separable.
+        ret_logits = fwd["ret_logits"]                           # [B, L] cos/temp over candidates
+        gate_logit = fwd["gate_logit"]                           # [B] pre-sigmoid revisit logit
+        pos = inputs["batch_pos_mask"].to(dev).bool()            # [B, L]
+        neg = inputs["batch_neg_mask"].to(dev).bool()            # [B, L]
+        is_rev = inputs["batch_is_revisit"].to(dev)              # [B] float (1=revisit, 0=novel)
+        # (a) set ranking + optional deployment-consistent top-1 margin. Indexing
+        # invalid rows before subtraction avoids finite-floor overflow under AMP.
+        rank_loss, retrieval_top1_loss, _rank_rows = multi_positive_retrieval_losses(
+            ret_logits, pos, neg, top1_margin=self.retr_top1_margin
+        )
+        # (b) gate BCE over ALL rows; pos_weight offsets the novel-heavy class mix
+        n_rev = is_rev.sum()
+        pos_weight = ((1.0 - is_rev).sum() / n_rev.clamp(min=1.0)).clamp(0.1, 10.0)
+        gate_loss = F.binary_cross_entropy_with_logits(gate_logit, is_rev, pos_weight=pos_weight)
+
+        # --- aux pose (x,y only — θ dropped, see RevisitMerge docstring): MSE on REVISIT
+        # rows only (relocalization branch). aux_pose_head is FROZEN (pre-calibrated, not
+        # trainable — cur_pose/goal_pose come from the frozen camera head under no_grad,
+        # so this contributes zero gradient today); kept in the loss sum as a no-op so a
+        # future LoRA fine-tune of the frozen branch can unfreeze aux_pose_head and have
+        # this term start training with no other code changes.
+        gt_pose = inputs["batch_goal_rel_pose"][..., :2].to(dev)  # [B,2]
+        revisit = is_rev                                         # 1 = goal is in memory
+        per = (fwd["aux_pose"] - gt_pose).square().mean(-1)      # [B]
+        aux_loss = (per * revisit).sum() / revisit.sum().clamp(min=1.0)
+        R_rel = fwd["R_rel"]                                      # [B,3,3] predicted relative rotation
+
         loss = (action_loss + self.w_retr * rank_loss
-                + self.w_gate * gate_loss + self.w_aux * aux_loss
+                + self.w_retr_top1 * retrieval_top1_loss
+                + self.w_gate * gate_loss + self.w_aux_effective * aux_loss
                 + self.w_goal_swap * goal_swap_loss)
 
         with torch.no_grad():
@@ -260,6 +269,7 @@ class MemNavTrainer(BaseTrainer):
             action_loss_leg2 = (per_action_loss * is_leg2).sum() / n_leg2
             action_loss_leg3 = (per_action_loss * is_leg3).sum() / n_leg3
             gate_prob = torch.sigmoid(gate_logit)                # [B] P(revisit)
+            decoder_gate = fwd["revisit_gate"]                   # [B] gate actually seen by decoder
             n_revisit_raw = revisit.sum()                         # UNclamped — 0 iff this batch has no revisit rows
             has_revisit = bool(n_revisit_raw.item() > 0.5)
             ns = n_revisit_raw.clamp(min=1.0)
@@ -267,6 +277,9 @@ class MemNavTrainer(BaseTrainer):
             gate_seen = (gate_prob * revisit).sum() / ns          # → 1 (visited)
             gate_unseen = (gate_prob * (1.0 - revisit)).sum() / nu  # → 0 (novel)
             gate_sep = gate_seen - gate_unseen                    # → large + (the separation)
+            decoder_gate_seen = (decoder_gate * revisit).sum() / ns
+            decoder_gate_unseen = (decoder_gate * (1.0 - revisit)).sum() / nu
+            decoder_gate_sep = decoder_gate_seen - decoder_gate_unseen
             gate_acc = ((gate_prob > 0.5).float() == revisit).float().mean()
             pred = ret_logits.argmax(-1)                          # [B] best candidate frame
             hit = pos.gather(1, pred[:, None]).squeeze(1).float()
@@ -327,12 +340,20 @@ class MemNavTrainer(BaseTrainer):
             aux_loss_deep = (per * is_deep).sum() / n_deep
             aux_loss_shallow = (per * is_shallow).sum() / n_shallow
         outputs = dict(loss=loss, action_loss=action_loss,
-                       retrieval_loss=rank_loss, gate_loss=gate_loss, aux_loss=aux_loss,
+                       retrieval_loss=rank_loss, retrieval_top1_loss=retrieval_top1_loss,
+                       gate_loss=gate_loss, aux_loss=aux_loss,
                        gate_seen=gate_seen, gate_unseen=gate_unseen, gate_sep=gate_sep,
+                       decoder_gate_seen=decoder_gate_seen,
+                       decoder_gate_unseen=decoder_gate_unseen,
+                       decoder_gate_sep=decoder_gate_sep,
+                       gate_teacher_ratio=fwd["gate_teacher_ratio"],
                        gate_acc=gate_acc, seen_match_acc=seen_match, rot_err_deg=rot_err,
                        pos_err_m=pos_err_m, pos_dir_err_deg=pos_dir_err,
                        action_loss_novel=action_loss_novel, action_loss_leg2=action_loss_leg2,
-                       action_loss_leg3=action_loss_leg3)
+                       action_loss_leg3=action_loss_leg3,
+                       goal_swap_loss=goal_swap_loss,
+                       goal_swap_gap=swap_metrics["error_gap"],
+                       goal_swap_rms=swap_metrics["output_rms"])
         if (dist.get_rank() if dist.is_initialized() else 0) == 0:
             revisit_part = (f"pos_err={pos_err_m.item():.2f}m dir_err={pos_dir_err.item():.1f}deg "
                             f"rot_err={rot_err.item():.1f}deg aux={aux_loss.item():.4f} "
@@ -350,42 +371,42 @@ class MemNavTrainer(BaseTrainer):
                 f"leg3(n={int(n_leg3_raw.item())})={action_loss_leg3.item():.4f}" if has_leg3 else '',
             ]))
             print(f"[Step {self.state.global_step}] loss={loss.item():.4f} act={action_loss.item():.4f} "
-                  f"rank={rank_loss.item():.4f} gate={gate_loss.item():.4f} | "
+                  f"rank={rank_loss.item():.4f} top1={retrieval_top1_loss.item():.4f} "
+                  f"gate={gate_loss.item():.4f} | "
                   f"gate seen={gate_seen.item():.2f} unseen={gate_unseen.item():.2f} sep={gate_sep.item():+.2f} "
-                  f"acc={gate_acc.item():.2f} | {revisit_part}"
+                  f"acc={gate_acc.item():.2f} | decoder seen={decoder_gate_seen.item():.2f} "
+                  f"unseen={decoder_gate_unseen.item():.2f} mix={gate_teacher_ratio:.2f} | {revisit_part}"
                   + (f" | {depth_part}" if depth_part else "")
-                  + (f" | act: {action_part}" if action_part else ""))
+                  + (f" | act: {action_part}" if action_part else "")
+                  + (f" | goal_swap(n={int(swap_metrics['active_count'].item())}) "
+                     f"loss={goal_swap_loss.item():.4f} gap={swap_metrics['error_gap'].item():+.4f} "
+                     f"rms={swap_metrics['output_rms'].item():.4f}"
+                     if int(swap_metrics["active_count"].item()) > 0 else ""))
 
         # Per-component metrics → wandb/tb. self.log is rank-0-only inside HF Trainer;
         # gate by logging_steps to match train/loss cadence and avoid extra .item() syncs.
         if self.state.global_step % self.args.logging_steps == 0:
             # Bare metric names; log() re-sections them for wandb (see _WB_TARGET).
-            # compute_loss receives DDP(DDP(policy)): train.py wraps once, accelerate
-            # wraps again — unwrap until we hit the policy.
-            mm = model
-            while isinstance(mm, torch.nn.parallel.DistributedDataParallel):
-                mm = mm.module
             log_payload = {
                 'action_loss': action_loss.item(),
                 'retrieval_loss': rank_loss.item(),
+                'retrieval_top1_loss': retrieval_top1_loss.item(),
                 'gate_loss': gate_loss.item(),
                 'gate_acc': gate_acc.item(),
                 'gate_seen': gate_seen.item(),
                 'gate_unseen': gate_unseen.item(),
                 'gate_sep': gate_sep.item(),
-                # calibration scalars (the flowgate stall was invisible without these)
-                'gate_a': mm.core.retrieval.gate_a.item(),
-                'gate_b': mm.core.retrieval.gate_b.item(),
-                'dec_gate_a': mm.core.dec_gate_a.item(),
-                'dec_gate_b': mm.core.dec_gate_b.item(),
-                'decgate_teacher_ratio': decgate_ratio,
+                'decoder_gate_seen': decoder_gate_seen.item(),
+                'decoder_gate_unseen': decoder_gate_unseen.item(),
+                'decoder_gate_sep': decoder_gate_sep.item(),
+                'gate_teacher_ratio': gate_teacher_ratio,
             }
-            if self.w_goal_swap > 0:
+            if int(swap_metrics["active_count"].item()) > 0:
                 log_payload.update({
                     'goal_swap_loss': goal_swap_loss.item(),
                     'goal_swap_gap': swap_metrics['error_gap'].item(),
                     'goal_swap_rms': swap_metrics['output_rms'].item(),
-                    'goal_swap_active': float(swap_metrics['active_count'].item()),
+                    'goal_swap_active': int(swap_metrics['active_count'].item()),
                 })
             # revisit-only metrics (aux_loss, rot_err_deg, pos_err_m, pos_dir_err_deg,
             # seen_match_acc): only logged when this batch actually contains revisit rows
@@ -442,46 +463,36 @@ class MemNavTrainer(BaseTrainer):
         return (loss, outputs) if return_outputs else loss
 
     # ------------------------------------------------------------------ #
-    # Gate-calibration scalars get their own 10x-lr param group. With Adam the per-step
-    # displacement is ~lr regardless of gradient magnitude, so at lr=1e-4 a scalar can
-    # drift at most ~0.26 over 2.6k steps — exactly the stall measured on the flowgate
-    # run (gate_a/gate_b moved +0.16/+0.14 from init while the classification-optimal
-    # boundary sat ~1 logit away; ckpt-2600 probe).
-    _CALIB_SUFFIXES = ("retrieval.gate_a", "retrieval.gate_b", "dec_gate_a", "dec_gate_b")
-
     def create_optimizer(self):
         rank = dist.get_rank() if dist.is_initialized() else 0
-        lr = getattr(self.config.il, "lr", 1e-4)
-        m = self.model.module if hasattr(self.model, "module") else self.model
-        base, calib = [], []                                          # frozen LingBot excluded
-        for name, p in m.named_parameters():
-            if not p.requires_grad:
-                continue
-            (calib if name.endswith(self._CALIB_SUFFIXES) else base).append(p)
-        self.optimizer = torch.optim.Adam(
-            [dict(params=base, lr=lr), dict(params=calib, lr=10 * lr)])
+        self.optimizer = super().create_optimizer()
         if rank == 0:
-            n = sum(p.numel() for p in base) + sum(p.numel() for p in calib)
-            print(f"[Rank 0] Adam lr={lr} ({len(calib)} calib scalars @ {10 * lr:g}); "
-                  f"trainable params: {n:,} ({len(base) + len(calib)} tensors)")
+            m = self.model.module if hasattr(self.model, "module") else self.model
+            params = [p for p in m.parameters() if p.requires_grad]
+            n = sum(p.numel() for p in params)
+            print(
+                f"[Rank 0] {type(self.optimizer).__name__} lr={self.args.learning_rate} "
+                f"weight_decay={self.args.weight_decay}; trainable params: "
+                f"{n:,} ({len(params)} tensors)"
+            )
         return self.optimizer
 
-    def create_scheduler(self, optimizer, num_training_steps: int):
-        # Cosine decay with linear warmup over the ACTUAL run length (num_training_steps
-        # comes from HF: epochs x steps/epoch). The previous LinearLR(1.0 -> 0.5 over a
-        # fixed 10k iters) barely decayed inside a 5.6k-step run — the flowgate run sat
-        # at near-peak lr the whole time (wandb's lr_scheduler_type=cosine was a stale
-        # TrainingArguments record, not what actually ran). The multiplicative lambda
-        # applies to BOTH param groups, so the calib group keeps its 10x ratio throughout.
-        from transformers import get_cosine_schedule_with_warmup
-        warmup = int(getattr(self.config.il, "warmup_ratio", 0.05) * num_training_steps)
-        self.lr_scheduler = get_cosine_schedule_with_warmup(
-            optimizer, num_warmup_steps=warmup, num_training_steps=num_training_steps)
+    def create_scheduler(self, num_training_steps: int, optimizer=None):
+        self.lr_scheduler = super().create_scheduler(
+            num_training_steps=num_training_steps,
+            optimizer=optimizer or self.optimizer,
+        )
+        if (dist.get_rank() if dist.is_initialized() else 0) == 0:
+            print(
+                f"[Rank 0] scheduler={self.args.lr_scheduler_type} "
+                f"warmup_steps={self.args.get_warmup_steps(num_training_steps)} "
+                f"total_steps={num_training_steps}"
+            )
         return self.lr_scheduler
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):
         self.create_optimizer()
-        self.create_scheduler(self.optimizer, num_training_steps)
+        self.create_scheduler(num_training_steps, optimizer=self.optimizer)
         return self.optimizer, self.lr_scheduler
 
     def get_train_dataloader(self):

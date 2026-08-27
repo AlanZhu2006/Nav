@@ -110,3 +110,13 @@ NavDP/checkpoints/
 # --- Workspace-local repos and generated MemNav diagnostics ---
 /IsaacLab/
 /memnav_viz/
+/eval_terminal_ab/
+/eval2leg_results*/
+/.diagnostics/
+/.worktrees/
+
+# --- Workspace-owned artifacts maintained outside AlanZhu2006/Nav ---
+/paper/
+/goal.jpg
+/image.jpg
+/input_image.jpg

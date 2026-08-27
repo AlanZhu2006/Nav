@@ -1,0 +1,8 @@
+{
+  "cause": "The pycache repair changed only the local submit script, which was not included in the immutable source receipt. The resulting content hash matched the unused Attempt 4 bundle and the fail-closed test ! -e remote_root check stopped the release.",
+  "failure_stage": "local/remote bundle identity gate before upload and sbatch",
+  "jobs_submitted": 0,
+  "method_result_produced": false,
+  "repair": "include the submit script and all factorial incident receipts in the immutable source bundle so execution-dependency repairs also change and document the source receipt",
+  "schema_version": "final14_mono_factorial_attempt5_bundle_identity_incident_v1_20260819"
+}

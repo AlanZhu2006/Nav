@@ -1,0 +1,64 @@
+{
+  "schema_version": "hpc_runtime_repair_submission_v1_20260821",
+  "query_outcomes_read_before_repair": false,
+  "repair_scope": [
+    "hm3d_fresh_fullmono_parent_manifest_and_downstream_resume",
+    "cec_controller_portability_pilot_resubmit"
+  ],
+  "root_causes": {
+    "hm3d_original_parent_16080319": "legacy source Revisit carrier recall_gap=22 was incorrectly used as a Goal-A eligibility gate even though collection stops after leg1",
+    "controller_original_16085641_0": "submitted expected base receipt SHA had an extra trailing character and was 65 rather than 64 hexadecimal characters",
+    "hm3d_repair_16120180": "parent builder completed, but the post-build auditor PYTHONPATH omitted the immutable base source root"
+  },
+  "immutable_inputs": {
+    "hm3d_original_task_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fresh_fullmono_mixed_role_e6dd44c66eb72d90",
+    "hm3d_original_task_receipt_sha256": "e6dd44c66eb72d905f4db96db9f604c042cc0d89c77a16cd4dc92eabb99c8f01",
+    "controller_original_source_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/cec_controller_portability_a9ec7146bce7",
+    "controller_original_source_receipt_sha256": "a9ec7146bce72da8c5d2df413ab2292c0cab2caca0d861bf41dbedee416ff92c",
+    "base_source_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_5690569a4373f2d2",
+    "base_source_receipt_sha256": "5690569a4373f2d2768671418f0c604c4a03aa4b0ffe01baf70b288af03ba216"
+  },
+  "hm3d_parent": {
+    "seal_resume_repair_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hpc_runtime_repair_747b1ef1ebbf68c9",
+    "seal_resume_repair_receipt_sha256": "747b1ef1ebbf68c97a66434db8544ce0c38380e90866c4096b6c1c4ab4e6f6f8",
+    "parent_manifest_sha256": "a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5",
+    "seal_job": 16120300,
+    "seal_state": "COMPLETED",
+    "seal_exit_code": "0:0",
+    "constructible_scenes": 49,
+    "source_episodes": 196,
+    "scene_level_constructibility_attrition": 5,
+    "unused_carriers_below_32_frame_gap": 1
+  },
+  "hm3d_downstream_jobs": {
+    "goal_a_collection_array": 16120334,
+    "role_pair_construction_array": 16120335,
+    "population_finalize": 16120336,
+    "query_smoke": 16120337,
+    "query_evaluation_array": 16120338,
+    "summary": 16120339,
+    "independent_verification": 16120340,
+    "state_at_receipt_write": "PENDING_QOS_OR_DEPENDENCY"
+  },
+  "controller_pilot": {
+    "repair_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hpc_runtime_repair_405e9b1f70fff8e5",
+    "repair_receipt_sha256": "405e9b1f70fff8e57c59d5c670b97b80c7244b6a48daefcf0afecfa41faba5ce",
+    "job": "16120181_0",
+    "state_at_receipt_write": "PENDING_QOSGrpGRES",
+    "maximum_steps": 80,
+    "controllers": [
+      "navdp",
+      "vint",
+      "iplanner",
+      "viplanner"
+    ]
+  },
+  "scientific_guards": {
+    "source_generation_rerun": false,
+    "source_episode_modified": false,
+    "controller_or_checkpoint_changed": false,
+    "threshold_changed": false,
+    "query_outcome_based_filtering": false,
+    "hash_gates_relaxed": false
+  }
+}

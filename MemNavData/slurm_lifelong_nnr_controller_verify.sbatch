@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=lifeNNRctlVerify
+#SBATCH --output=/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs/%x_%j.out
+#SBATCH --error=/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs/%x_%j.err
+#SBATCH --time=00:30:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#SBATCH --partition=cpu_short
+#SBATCH --account=torch_pr_769_tandon_advanced
+#SBATCH --export=ALL
+
+set -euo pipefail
+umask 0022
+export PYTHONDONTWRITEBYTECODE=1
+: "${SOURCE_ROOT:?set immutable task source root}"
+: "${SOURCE_RECEIPT:?set source receipt}"
+: "${EXPECTED_SOURCE_RECEIPT_SHA:?set source receipt SHA}"
+: "${ORIGINAL_RUN_ROOT:?set the navdp-line run root (read-only population source)}"
+: "${RUN_ROOT:?set controller-arm run root}"
+PY=/scratch/lg154/conda-envs/memnav/bin/python
+OUT=${RUN_ROOT}/independent_verification.json
+[[ ! -e "${OUT}" ]]
+[[ "$(sha256sum "${SOURCE_RECEIPT}" | awk '{print $1}')" == \
+   "${EXPECTED_SOURCE_RECEIPT_SHA}" ]]
+(cd "${SOURCE_ROOT}" && sha256sum -c --quiet "${SOURCE_RECEIPT}")
+(cd "${ORIGINAL_RUN_ROOT}/factual_b_support" && \
+  sha256sum -c --quiet population.json.sha256)
+export PYTHONPATH=${SOURCE_ROOT}:${SOURCE_ROOT}/MemNavData
+export PYTHONPYCACHEPREFIX=${SLURM_TMPDIR:-/tmp}/life_ctlverify_${SLURM_JOB_ID}
+"${PY}" -u \
+  "${SOURCE_ROOT}/MemNavData/independent_verify_shared_online_lifelong_nnr.py" \
+  --all_prior "${RUN_ROOT}/aggregate/all_prior" \
+  --initial_leg_only "${RUN_ROOT}/aggregate/initial_leg_only" \
+  --forced_reject_native "${RUN_ROOT}/aggregate/forced_reject_native" \
+  --population "${ORIGINAL_RUN_ROOT}/factual_b_support/population.json" \
+  --out "${OUT}"
+"${PY}" - "${OUT}" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+if p.get("verified") is not True: raise SystemExit("verification is false")
+if "forced_reject_native" not in p: raise SystemExit("forced arm missing")
+if p["forced_reject_native"]["zero_takeover_decisions"] < 1:
+    raise SystemExit("forced arm recorded no decisions")
+PY
+sha256sum "${OUT}" > "${OUT}.sha256"
+chmod a-w "${OUT}" "${OUT}.sha256"
+printf 'verified=true\n' > "${RUN_ROOT}/VERIFIED"
+chmod a-w "${RUN_ROOT}/VERIFIED"
+echo "COMPLETE verification=${OUT}"

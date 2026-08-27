@@ -1,0 +1,25 @@
+{
+  "failure": {
+    "error": "ModuleNotFoundError: No module named 'quaternion'",
+    "job_id": 16266719,
+    "scientific_output_created": false,
+    "stage": "import"
+  },
+  "preseal_raw_receipts_verified": true,
+  "replacement_jobs": {
+    "aggregate": 16267437,
+    "collect_factual_B_array": 16267426,
+    "construct_actual_prefix_array": 16267429,
+    "formal_three_arm_evaluation": 16267435,
+    "independent_verification": 16267438,
+    "remote_true_stack_smoke": 16267433,
+    "seal_AB_population": 16267425,
+    "seal_query_population": 16267432
+  },
+  "schema_version": "hm3d_fullmono_lifelong_seal_runtime_repair_v1_20260824",
+  "scientific_thresholds_changed": false,
+  "seal_runtime": "Habitat Python inside frozen CUDA Singularity image on cpu_short",
+  "selection_reads_navigation_outcomes": false,
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_sealfix_b9b7cc41c729c3e5",
+  "wrapper_bundle_receipt_sha256": "b9b7cc41c729c3e525402798f37689049631acacaab2ef110b8e488f9a0dd7c1"
+}

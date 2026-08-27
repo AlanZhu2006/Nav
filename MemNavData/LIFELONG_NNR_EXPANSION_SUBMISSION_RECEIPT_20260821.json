@@ -1,0 +1,38 @@
+{
+  "schema": "lifelong_nnr_submission_receipt_v1_20260821",
+  "submitted_at_local": "2026-08-21T14:15:00+08:00",
+  "status_at_verification": "submitted_support_audit_pending_gpu_qos",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/lifelong_nnr_20260821/lifelong_nnr_factual_b_pair_20260821T101500Z",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/lifelong_nnr_51adf5128b500d60",
+  "source_receipt_sha256": "9f7670537912308efa8dc843a05e74682d161c2e160f1cf5a9ba9b6846c1fb00",
+  "source_population": {
+    "sealed_nnr_episodes": 19,
+    "sealed_nnr_scenes": 8,
+    "support_rule": "factual online-B maximum GT co-visibility >= 0.20",
+    "strong_support_rule": "factual online-B maximum GT co-visibility >= 0.50",
+    "selection_reads_C_B2_C2_navigation_outcomes": false
+  },
+  "paired_design": {
+    "arms": [
+      "all_prior",
+      "initial_leg_only"
+    ],
+    "same_slurm_job_per_episode": true,
+    "balanced_arm_order_by_array_parity": true,
+    "maximum_array_population": 19,
+    "array_concurrency": 4,
+    "time_limit_per_pair": "01:00:00"
+  },
+  "jobs": {
+    "factual_b_support_audit": 16121493,
+    "paired_evaluation_array": 16121506,
+    "aggregate": 16121515,
+    "independent_verification": 16121524
+  },
+  "dependencies": {
+    "paired_evaluation_array": "afterok:16121493",
+    "aggregate": "afterok:16121506_*",
+    "independent_verification": "afterok:16121515"
+  },
+  "claim_scope": "Internal lifelong-memory accumulation mechanism on consumed NNR scenes; not an external paper-confirmation population."
+}

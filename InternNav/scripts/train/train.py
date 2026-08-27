@@ -3,42 +3,20 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 import logging
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import torch.distributed as dist
 
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 import tyro
 from pydantic import BaseModel
 from transformers import TrainerCallback, TrainingArguments
 
-from internnav.dataset.cma_lerobot_dataset import CMALerobotDataset, cma_collate_fn
-from internnav.dataset.rdp_lerobot_dataset import RDP_LerobotDataset, rdp_collate_fn
-from internnav.dataset.navdp_dataset_lerobot import NavDP_Base_Datset, navdp_collate_fn
-from internnav.dataset.logoplanner_dataset_lerobot import LoGoPlanner_Dataset, logoplanner_collate_fn
-from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset, memnav_collate_fn
-from internnav.model.basemodel.cma.cma_policy import CMAModelConfig, CMANet
-from internnav.model.basemodel.rdp.rdp_policy import RDPModelConfig, RDPNet
-from internnav.model.basemodel.seq2seq.seq2seq_policy import Seq2SeqModelConfig, Seq2SeqNet
-from internnav.model.basemodel.navdp.navdp_policy import NavDPModelConfig, NavDPNet
-from internnav.model.basemodel.logoplanner.logoplanner_policy import LoGoPlannerModelConfig, LoGoPlannerNet
-from internnav.model.basemodel.memnav.memnav_policy import MemNavModelConfig, MemNavPolicy
 from internnav.model.utils.logger import MyLogger
 from internnav.model.utils.utils import load_dataset
-from internnav.trainer import CMATrainer, RDPTrainer, NavDPTrainer, LoGoPlannerTrainer, MemNavTrainer
-from scripts.train.configs import (
-    cma_exp_cfg,
-    cma_plus_exp_cfg,
-    rdp_exp_cfg,
-    seq2seq_exp_cfg,
-    seq2seq_plus_exp_cfg,
-    navdp_exp_cfg,
-    logoplanner_exp_cfg,
-    memnav_exp_cfg,
-)
-import sys
-from datetime import datetime
 
 class TrainCfg(BaseModel):
     """Training configuration class.
@@ -64,6 +42,86 @@ class TrainCfg(BaseModel):
     # exp-level overrides
     torch_gpu_ids: Optional[list[int]] = None
     seed: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class TrainRuntime:
+    """Imports and constructors needed by exactly one selected model family."""
+
+    exp_cfg: Any
+    model_class: type
+    model_config_class: type
+    dataset_class: type
+    collate_fn: Any
+    trainer_class: type
+
+
+def _load_runtime(model_name: str) -> TrainRuntime:
+    """Load only the selected model's dependencies.
+
+    RDP/CMA use the optional Long-CLIP checkout; MemNav does not.  Keeping these
+    imports inside the selected branch makes a clean MemNav checkout reproducible
+    without silently relying on another worktree's ignored Long-CLIP symlink.
+    """
+    if model_name in ("cma", "cma_plus"):
+        from internnav.dataset.cma_lerobot_dataset import CMALerobotDataset, cma_collate_fn
+        from internnav.model.basemodel.cma.cma_policy import CMAModelConfig, CMANet
+        from internnav.trainer import CMATrainer
+        if model_name == "cma":
+            from scripts.train.configs.cma import cma_exp_cfg as exp_cfg
+        else:
+            from scripts.train.configs.cma_plus import cma_plus_exp_cfg as exp_cfg
+        return TrainRuntime(exp_cfg, CMANet, CMAModelConfig,
+                            CMALerobotDataset, cma_collate_fn, CMATrainer)
+
+    if model_name in ("seq2seq", "seq2seq_plus"):
+        from internnav.dataset.cma_lerobot_dataset import CMALerobotDataset, cma_collate_fn
+        from internnav.model.basemodel.seq2seq.seq2seq_policy import Seq2SeqModelConfig, Seq2SeqNet
+        from internnav.trainer import CMATrainer
+        if model_name == "seq2seq":
+            from scripts.train.configs.seq2seq import seq2seq_exp_cfg as exp_cfg
+        else:
+            from scripts.train.configs.seq2seq_plus import seq2seq_plus_exp_cfg as exp_cfg
+        return TrainRuntime(exp_cfg, Seq2SeqNet, Seq2SeqModelConfig,
+                            CMALerobotDataset, cma_collate_fn, CMATrainer)
+
+    if model_name == "rdp":
+        from internnav.dataset.rdp_lerobot_dataset import RDP_LerobotDataset, rdp_collate_fn
+        from internnav.model.basemodel.rdp.rdp_policy import RDPModelConfig, RDPNet
+        from internnav.trainer import RDPTrainer
+        from scripts.train.configs.rdp import rdp_exp_cfg
+        return TrainRuntime(rdp_exp_cfg, RDPNet, RDPModelConfig,
+                            RDP_LerobotDataset, rdp_collate_fn, RDPTrainer)
+
+    if model_name == "navdp":
+        from internnav.dataset.navdp_dataset_lerobot import NavDP_Base_Datset, navdp_collate_fn
+        from internnav.model.basemodel.navdp.navdp_policy import NavDPModelConfig, NavDPNet
+        from internnav.trainer import NavDPTrainer
+        from scripts.train.configs.navdp import navdp_exp_cfg
+        return TrainRuntime(navdp_exp_cfg, NavDPNet, NavDPModelConfig,
+                            NavDP_Base_Datset, navdp_collate_fn, NavDPTrainer)
+
+    if model_name == "logoplanner":
+        from internnav.dataset.logoplanner_dataset_lerobot import LoGoPlanner_Dataset, logoplanner_collate_fn
+        from internnav.model.basemodel.logoplanner.logoplanner_policy import (
+            LoGoPlannerModelConfig, LoGoPlannerNet,
+        )
+        from internnav.trainer import LoGoPlannerTrainer
+        from scripts.train.configs.logoplanner import logoplanner_exp_cfg
+        return TrainRuntime(logoplanner_exp_cfg, LoGoPlannerNet, LoGoPlannerModelConfig,
+                            LoGoPlanner_Dataset, logoplanner_collate_fn, LoGoPlannerTrainer)
+
+    if model_name == "memnav":
+        from internnav.dataset.memnav_dataset_lerobot import MemNav_Dataset, memnav_collate_fn
+        from internnav.model.basemodel.memnav.memnav_policy import MemNavModelConfig, MemNavPolicy
+        from internnav.trainer import MemNavTrainer
+        from scripts.train.configs.memnav import memnav_exp_cfg
+        return TrainRuntime(memnav_exp_cfg, MemNavPolicy, MemNavModelConfig,
+                            MemNav_Dataset, memnav_collate_fn, MemNavTrainer)
+
+    supported = ("cma", "cma_plus", "seq2seq", "seq2seq_plus",
+                 "rdp", "navdp", "logoplanner", "memnav")
+    raise ValueError(f"Invalid model name: {model_name}. Supported models are: {list(supported)}")
 
 
 def _apply_overrides(exp_cfg, cli: 'TrainCfg') -> None:
@@ -120,10 +178,13 @@ def _make_dir(config):
         os.makedirs(config.log_dir,exist_ok=True)
 
 
-def main(config, model_class, model_config_class):
+def main(config, runtime: TrainRuntime):
     try:
         """Main training function."""
         _make_dir(config)
+
+        model_class = runtime.model_class
+        model_config_class = runtime.model_config_class
 
         print(f"=== Start training ===")
         print(f"Current time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -220,7 +281,7 @@ def main(config, model_class, model_config_class):
 
         # ------------ load dataset ------------
         if config.model_name == "navdp":
-            train_dataset_data = NavDP_Base_Datset(config.il.root_dir,
+            train_dataset_data = runtime.dataset_class(config.il.root_dir,
                                     config.il.dataset_navdp,
                                     config.il.memory_size,
                                     config.il.predict_size,
@@ -231,7 +292,7 @@ def main(config, model_class, model_config_class):
                                     random_digit = config.il.random_digit,
                                     prior_sample = config.il.prior_sample)
         elif config.model_name == "logoplanner":
-            train_dataset_data = LoGoPlanner_Dataset(
+            train_dataset_data = runtime.dataset_class(
                 config.il.root_dir,
                 preload_path=config.il.dataset_navdp,
                 memory_size=config.il.memory_size,
@@ -249,7 +310,7 @@ def main(config, model_class, model_config_class):
                 depth_min=config.il.depth_min,
             )
         elif config.model_name == "memnav":
-            train_dataset_data = MemNav_Dataset(
+            train_dataset_data = runtime.dataset_class(
                 config.il.root_dir,
                 predict_size=config.il.predict_size,
                 image_size=config.il.image_size,
@@ -258,9 +319,9 @@ def main(config, model_class, model_config_class):
                 window_size=getattr(config.il, 'window_size', 8),
                 num_scale=getattr(config.il, 'num_scale', 8),
                 max_legs=getattr(config.il, 'max_legs', None),
-                goal_swap_negatives=float(getattr(config.il, 'w_goal_swap', 0.0) or 0.0) > 0,
-                goal_swap_min_angle_deg=getattr(config.il, 'goal_swap_min_angle_deg', 30.0),
                 goal_a_min_k=getattr(config.il, 'goal_a_min_k', None),
+                goal_swap_negatives=getattr(config.il, 'goal_swap_negatives', False),
+                goal_swap_min_angle_deg=getattr(config.il, 'goal_swap_min_angle_deg', 30.0),
             )
         else:
             if '3dgs' in config.il.lmdb_features_dir or '3dgs' in config.il.lmdb_features_dir:
@@ -276,9 +337,9 @@ def main(config, model_class, model_config_class):
             global_batch_size = config.il.batch_size * len(config.torch_gpu_ids)
 
         # ------------ data_loader ------------
+        policy_trainer = runtime.trainer_class
         if config.model_name in ['cma', 'seq2seq']:
-            policy_trainer = CMATrainer
-            train_dataset = CMALerobotDataset(
+            train_dataset = runtime.dataset_class(
                 config,
                 config.il.lerobot_features_dir,
                 config.il.use_iw,
@@ -287,29 +348,25 @@ def main(config, model_class, model_config_class):
                 lmdb_map_size=config.il.lmdb_map_size,
                 batch_size=config.il.batch_size,
             )
-            collate_fn = cma_collate_fn
+            collate_fn = runtime.collate_fn
 
         elif config.model_name == 'rdp':
-            policy_trainer = RDPTrainer
-            train_dataset = RDP_LerobotDataset(
+            train_dataset = runtime.dataset_class(
                 config,
                 config.il.lerobot_features_dir,
                 dataset_data=train_dataset_data,
                 batch_size=config.il.batch_size,  
             )
-            collate_fn = rdp_collate_fn(global_batch_size=global_batch_size)
+            collate_fn = runtime.collate_fn(global_batch_size=global_batch_size)
         elif config.model_name == 'navdp':
-            policy_trainer = NavDPTrainer
             train_dataset = train_dataset_data
-            collate_fn = navdp_collate_fn
+            collate_fn = runtime.collate_fn
         elif config.model_name == 'logoplanner':
-            policy_trainer = LoGoPlannerTrainer
             train_dataset = train_dataset_data
-            collate_fn = logoplanner_collate_fn
+            collate_fn = runtime.collate_fn
         elif config.model_name == 'memnav':
-            policy_trainer = MemNavTrainer
             train_dataset = train_dataset_data
-            collate_fn = memnav_collate_fn
+            collate_fn = runtime.collate_fn
 
         # ------------ training args ------------
         training_args = TrainingArguments(
@@ -326,9 +383,14 @@ def main(config, model_class, model_config_class):
             dataloader_pin_memory=False,
             optim='adamw_torch',
             learning_rate=config.il.lr,
+            weight_decay=float(config.il.weight_decay or 0.0),
+            warmup_ratio=float(config.il.warmup_ratio or 0.0),
             lr_scheduler_type='cosine',
             logging_steps=10.0,
             num_train_epochs=config.il.epochs,
+            # The guarded Slurm preflight sets this to 1 and runs this exact
+            # production entrypoint. Normal jobs explicitly use -1 (epoch based).
+            max_steps=int(os.environ.get('MEMNAV_TRAIN_MAX_STEPS', '-1')),
             # step-based saving when the model config sets save_interval_steps (memnav),
             # else fall back to the original per-epoch saving (cma/navdp/rdp/...).
             save_strategy='steps' if getattr(config.il, 'save_interval_steps', None) else 'epoch',
@@ -393,22 +455,8 @@ if __name__ == '__main__':
         print(f'{key}: {value}')
     print('=' * 50 + '\n')
 
-    # Select configuration based on model_name
-    supported_cfg = {
-        'seq2seq': [seq2seq_exp_cfg, Seq2SeqNet, Seq2SeqModelConfig],
-        'seq2seq_plus': [seq2seq_plus_exp_cfg, Seq2SeqNet, Seq2SeqModelConfig],
-        'cma': [cma_exp_cfg, CMANet, CMAModelConfig],
-        'cma_plus': [cma_plus_exp_cfg, CMANet, CMAModelConfig],
-        'rdp': [rdp_exp_cfg, RDPNet, RDPModelConfig],
-        'navdp': [navdp_exp_cfg, NavDPNet, NavDPModelConfig],
-        'logoplanner': [logoplanner_exp_cfg, LoGoPlannerNet, LoGoPlannerModelConfig],
-        'memnav': [memnav_exp_cfg, MemNavPolicy, MemNavModelConfig],
-    }
-
-    if config.model_name not in supported_cfg:
-        raise ValueError(f'Invalid model name: {config.model_name}. Supported models are: {list(supported_cfg.keys())}')
-
-    exp_cfg, model_class, model_config_class = supported_cfg[config.model_name]
+    runtime = _load_runtime(config.model_name)
+    exp_cfg = runtime.exp_cfg
     exp_cfg.name = config.name
     _apply_overrides(exp_cfg, config)
     exp_cfg.num_gpus = len(exp_cfg.torch_gpu_ids)
@@ -423,4 +471,4 @@ if __name__ == '__main__':
     assert exp_cfg.num_gpus > 0, 'Number of GPUs must be greater than 0'
     print(f'Using {exp_cfg.num_gpus} GPUs')
 
-    main(exp_cfg, model_class, model_config_class)
+    main(exp_cfg, runtime)

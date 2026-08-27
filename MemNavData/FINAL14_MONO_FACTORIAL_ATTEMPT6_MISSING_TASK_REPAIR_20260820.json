@@ -1,0 +1,30 @@
+{
+  "completed_histories_preserved": 19,
+  "failed_exclusion_submission": {
+    "job_submitted": false,
+    "message": "HPC rejected user-side --exclude=gh011 and requested reporting the node to hpc@nyu.edu"
+  },
+  "formal_result_available_before_repair": false,
+  "missing_original_tasks": {
+    "16020636_2": {
+      "elapsed": "00:02:03",
+      "node": "gh011",
+      "output_created": false,
+      "state": "CANCELLED by 0"
+    },
+    "16020636_4": {
+      "elapsed": "00:02:04",
+      "node": "gh011",
+      "output_created": false,
+      "state": "CANCELLED by 0"
+    }
+  },
+  "repair": {
+    "array_indices": [2, 4],
+    "job": "16026422",
+    "same_formal_root": true,
+    "same_immutable_source_receipt": "5690569a4373f2d2768671418f0c604c4a03aa4b0ffe01baf70b288af03ba216",
+    "summary_and_verifier_job": "16026423"
+  },
+  "schema_version": "final14_mono_factorial_attempt6_missing_task_repair_v1_20260820"
+}

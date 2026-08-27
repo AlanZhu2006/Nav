@@ -1,0 +1,29 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_constructibility_audit_submission_v1_20260827",
+  "submitted_at": "2026-08-27T07:35:22+08:00",
+  "scope": "result-blind geometric waterfall after the sealed v3 construction gate",
+  "source_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/formal_20260826T141733Z_375f0b68",
+  "source_task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_lifelong_375f0b6879b2ff87",
+  "source_task_receipt_sha256": "375f0b6879b2ff87b7019dae4727880d1b03fd3185a1862e6239942a76b5bcc8",
+  "audit_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_constructibility_audit_9954e16eadbc7c0d",
+  "audit_bundle_receipt_sha256": "9954e16eadbc7c0df71fda2a8fc0e2b7322e4b30d6d812e48c7a5586c95baea7",
+  "jobs": {
+    "scene_array": 16440094,
+    "aggregate_and_seal": 16440095
+  },
+  "superseded_unstarted_jobs": {
+    "scene_array": 16439983,
+    "aggregate_and_seal": 16439984,
+    "reason": "the audit was proven renderer-free and moved from GPU to CPU before either job started"
+  },
+  "scene_array": "0-53%8",
+  "scene_time_limit": "00:15:00",
+  "scene_partitions": [
+    "cpu_short"
+  ],
+  "habitat_renderer_created": false,
+  "query_policy_outcomes_read": false,
+  "navigation_outcomes_read": false,
+  "navigation_rollouts_authorized": false,
+  "required_invariant": "every scene must reproduce the immutable v3 selected donor identities exactly"
+}

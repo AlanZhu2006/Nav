@@ -1,0 +1,40 @@
+{
+  "schema_version": "final14_attempt4_pi3x_portability_incident_v1_20260817",
+  "classification": "infrastructure_only_before_policy_runtime",
+  "attempt": 4,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T0715Z_attempt4",
+  "jobs": {
+    "evaluation_array": 15885125,
+    "policy_summary": 15885128,
+    "independent_verification": 15885139
+  },
+  "observed_states": {
+    "0": "FAILED exit 2 before scene/model/runtime load",
+    "1": "FAILED exit 2 before scene/model/runtime load",
+    "2": "FAILED exit 2 before scene/model/runtime load",
+    "3": "cancelled after 20 seconds during the same preflight",
+    "4": "cancelled after 20 seconds during the same preflight",
+    "5-83": "cancelled before start",
+    "summary": "cancelled before start",
+    "verification": "cancelled before start"
+  },
+  "root_cause": {
+    "component": "pi3x_deployment/OUTPUTS.sha256",
+    "error": "nested checksum entries embedded the absolute 5090 producer path /home/cv/memnav_eval/results/...",
+    "why_outer_receipt_passed": "SOURCE_BUNDLE.sha256 authenticated the malformed nested receipt as bytes but did not execute it after relocation",
+    "missing_gate": "no pre-submission relocated nested-receipt verification"
+  },
+  "scientific_outcomes": {
+    "evaluation_files_written": 0,
+    "arm_outcomes_read": false,
+    "new_sr_available": false,
+    "population_or_method_contaminated": false
+  },
+  "failed_stderr_sha256": "d0fe14f3127f307302f18cf66bd94b37409b104dc7e6d822ab8171de52a2f0fc",
+  "authorized_repair_boundary": [
+    "rewrite only nested checksum path names from absolute to relative",
+    "retain all six Pi3X deployment payload hashes exactly",
+    "add portable checksum validation and fail-fast dependency gating",
+    "do not change model, checkpoint, threshold, consensus, population, benchmark, controller, or outcome code"
+  ]
+}

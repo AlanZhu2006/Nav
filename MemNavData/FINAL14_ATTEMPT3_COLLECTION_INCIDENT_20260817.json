@@ -1,0 +1,53 @@
+{
+  "schema_version": "final14_attempt3_collection_incident_v1_20260817",
+  "attempt": "final14_learned_20260817T0710Z_attempt3",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_learned_20260817/final14_learned_20260817T0710Z_attempt3",
+  "source_bundle_receipt_sha256": "27160f1a9903de17c43c85dcd1eec698000b6cd43bff4b0ad4e64efac66a4e6c",
+  "final14_source_manifest_sha256": "ecbc7cf9049ea2c2dcbd85c725742c4c229f20ced2c18f8757bbd934ca7c4ddd",
+  "source_manifest_aggregate": {
+    "scenes": 14,
+    "source_episode_target": 112,
+    "source_episodes_available": 80,
+    "scenes_below_target": 4,
+    "policy_outcomes_read_during_freeze": false
+  },
+  "status": "cancelled_after_two_independent_collection_packaging_failures",
+  "failures": [
+    {
+      "array_index": 0,
+      "stage": "empty role-pair fragment construction",
+      "root_cause": "the role-pair builder rejected a protocol-valid frozen scene with zero materialized histories even though the collector had correctly emitted an empty audited online-A container",
+      "scientific_records": 0
+    },
+    {
+      "array_index": 1,
+      "stage": "online-A history materialization import",
+      "root_cause": "the immutable source bundle included materialize_paper_online_a_scene.py but omitted its local dependency materialize_online_a_traces.py",
+      "role_pair_or_query_records": 0
+    }
+  ],
+  "jobs": {
+    "collect_array": 15884771,
+    "construction_summary": 15884775,
+    "evaluation_array": 15884777,
+    "policy_summary": 15884778,
+    "independent_verification": 15884817,
+    "pending_elements_and_dependencies_cancelled": true
+  },
+  "result_integrity": {
+    "goal_a_trace_files_written_before_cancellation": 8,
+    "materialized_online_histories": 0,
+    "role_pair_records": 0,
+    "query_metric_files": 0,
+    "policy_summary_exists": false,
+    "valid_method_comparison_records": 0,
+    "all_partial_files_and_logs_preserved": true
+  },
+  "repair": {
+    "empty_scene": "bind an empty fragment to the already validated frozen scene identity and emit empty natural/hard manifests plus a construction receipt",
+    "bundle_closure": "add materialize_online_a_traces.py and recursively audit every bundled Python module for missing repository-local imports",
+    "method_population_or_threshold_changed": false,
+    "scene_replacement_or_borrowing": false
+  },
+  "correction_to_prior_receipt": "FINAL14_ATTEMPT3_FINAL_EXECUTION_RECEIPT_20260817.json claimed required import closure based on the then-used test; runtime disproved that claim. This incident receipt supersedes that single preflight assertion without changing the immutable Attempt 3 record."
+}

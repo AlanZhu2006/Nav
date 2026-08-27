@@ -1,0 +1,27 @@
+{
+  "C_B2_C2_jobs_submitted_at_repair": false,
+  "array": "0-58%4",
+  "candidate_histories": 99,
+  "concurrency": 4,
+  "deferred_prefix_dependency": "afterany:16472222",
+  "deferred_prefix_launcher_job": 16472263,
+  "failure": "server-bundle script directory shadowed the v4 protocol parser",
+  "protocol_or_threshold_changed": false,
+  "query_navigation_outcomes_read_at_repair": false,
+  "repair": "byte-identical collector/prefix/finalizer copied into v4 overlay so script directory and protocol parser are coherent",
+  "replacement_factual_B_array_job": 16472222,
+  "runtime_attempt_prefix": "parserfix1_shard",
+  "schema_version": "hm3d_fullmono_lifelong_natural_v4_factual_b_parser_repair_v1_20260828",
+  "shard_count": 59,
+  "shard_manifest": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/factual_b_schedule/shards.json",
+  "shard_manifest_sha256": "5b89096c613893a3963d34079b382140d1a8cd4e1fb648968da65f93f6eafbef",
+  "superseded_array_job": 16471189,
+  "superseded_factual_B_completions": 0,
+  "superseded_task_states": {
+    "cancelled_before_outcome": 4,
+    "failed_same_parser_error": 4,
+    "not_started": 51
+  },
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_v4_parserfix_14316838b2bec0c9",
+  "task_bundle_receipt_sha256": "14316838b2bec0c9e2c4714ffc8aae247650aa3c796a75f1ace288e86b1b9d60"
+}

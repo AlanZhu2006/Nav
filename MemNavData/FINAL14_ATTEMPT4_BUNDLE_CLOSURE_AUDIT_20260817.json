@@ -1,0 +1,31 @@
+{
+  "schema_version": "final14_attempt4_bundle_closure_audit_v1_20260817",
+  "scope": "all Python files in the proposed immutable Attempt 4 source bundle",
+  "python_files_scanned": 122,
+  "repository_local_import_roots": [
+    ".",
+    "MemNavData",
+    "NavDP",
+    "NavDP/baselines/navdp",
+    "NavDP/baselines/memnav"
+  ],
+  "missing_repository_local_imports": [],
+  "newly_closed_dependencies": [
+    "MemNavData/materialize_online_a_traces.py",
+    "MemNavData/cdec_pairwise_runtime.py",
+    "MemNavData/phase_b_runtime.py",
+    "MemNavData/patch_temporal_router.py",
+    "MemNavData/phase_b_feature_schema.py",
+    "MemNavData/phase_b_model.py"
+  ],
+  "dynamic_import_smoke": [
+    "materialize_paper_online_a_scene",
+    "materialize_online_a_traces",
+    "build_final14_role_pair_scene",
+    "validate_paper_online_a_scene"
+  ],
+  "dynamic_import_smoke_passed": true,
+  "final14_construction_unittest": "8 passed in repository; 7 passed plus 1 consumed-fixture skip from proposed standalone bundle",
+  "bundle_source_tree_modified_by_test": false,
+  "scientific_method_changed": false
+}

@@ -25,6 +25,14 @@ app = Flask(__name__)
 nomad_navigator = None
 nomad_fps_writer = None
 
+def with_zero_heading(waypoints):
+    """NoMaD's native action space is (x, y) only, with no heading channel.
+    The shared HTTP contract represents every trajectory as (x, y, heading)
+    waypoints, so append an honest zero heading rather than claiming a
+    prediction NoMaD never made."""
+    zeros = np.zeros(waypoints.shape[:-1] + (1,), dtype=waypoints.dtype)
+    return np.concatenate([waypoints, zeros], axis=-1)
+
 @app.route("/navigator_reset",methods=['POST'])
 def nomad_reset():
     global nomad_navigator,nomad_fps_writer
@@ -55,6 +63,18 @@ def nomad_reset_env():
     nomad_navigator.reset_env(int(request.get_json().get('env_id')))
     return jsonify({"algo":"nomad"})
 
+@app.route("/observation_step", methods=['POST'])
+def nomad_observation_step():
+    """Advance NoMaD's short RGB context without producing an action."""
+    global nomad_navigator
+    image_file = request.files['image']
+    image = Image.open(image_file.stream).convert('RGB')
+    image = np.asarray(image)
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    image = image.reshape((nomad_navigator.batch_size, -1, image.shape[1], 3))
+    nomad_navigator.observe(image)
+    return jsonify({"algo": "nomad", "observed": True})
+
 @app.route("/nogoal_step",methods=['POST'])
 def nomad_step_nogoal():
     global nomad_navigator,nomad_fps_writer
@@ -75,31 +95,27 @@ def nomad_step_nogoal():
     
     _,trajectory,all_trajectory = nomad_navigator.step_nogoal(image,sample_num=args.sample_num)
     all_values = np.zeros((nomad_navigator.batch_size,all_trajectory.shape[1]))
-    nomad_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
-    
-    return jsonify({'trajectory': trajectory.cpu().numpy().tolist(),
-                    'all_trajectory': all_trajectory.cpu().numpy().tolist(),
+    try:
+        nomad_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
+    except Exception:
+        pass  # debug MP4 writer is best-effort, not part of the returned trajectory
+
+    return jsonify({'trajectory': with_zero_heading(trajectory.cpu().numpy()).tolist(),
+                    'all_trajectory': with_zero_heading(all_trajectory.cpu().numpy()).tolist(),
                     'all_values': all_values.tolist()})
     
 @app.route("/imagegoal_step",methods=['POST'])
 def nomad_step_imagegoal():
     global nomad_navigator,nomad_fps_writer
     image_file = request.files['image']
-    depth_file = request.files['depth']
     goal_file = request.files['goal']
-    
+
     image = Image.open(image_file.stream)
     image = image.convert('RGB')
     image = np.asarray(image)
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     image = image.reshape((nomad_navigator.batch_size, -1, image.shape[1], 3))
-    
-    depth = Image.open(depth_file.stream)
-    depth = depth.convert('I')
-    depth = np.asarray(depth)[:,:,np.newaxis]
-    depth = depth.astype(np.float32)/10000.0
-    depth = depth.reshape((nomad_navigator.batch_size, -1, depth.shape[1], 1))
-    
+
     goal = Image.open(goal_file.stream)
     goal = goal.convert('RGB')
     goal = np.asarray(goal)
@@ -108,10 +124,13 @@ def nomad_step_imagegoal():
     
     _,trajectory,all_trajectory = nomad_navigator.step_imagegoal(goal,image,sample_num=args.sample_num) #gnm_fps_writerm.step_pointgoal(image,depth,goal)
     all_values = np.zeros((nomad_navigator.batch_size,all_trajectory.shape[1]))
-    nomad_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
-    
-    return jsonify({'trajectory': trajectory.cpu().numpy().tolist(),
-                    'all_trajectory': all_trajectory.cpu().numpy().tolist(),
+    try:
+        nomad_fps_writer.append_data(image.reshape(-1,image.shape[2],3))
+    except Exception:
+        pass  # debug MP4 writer is best-effort, not part of the returned trajectory
+
+    return jsonify({'trajectory': with_zero_heading(trajectory.cpu().numpy()).tolist(),
+                    'all_trajectory': with_zero_heading(all_trajectory.cpu().numpy()).tolist(),
                     'all_values': all_values.tolist()})
 
 if __name__ == "__main__":

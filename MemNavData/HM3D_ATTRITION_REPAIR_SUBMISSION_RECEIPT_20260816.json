@@ -1,0 +1,29 @@
+{
+  "schema_version": "hm3d_heldout_val10_attrition_repair_local_receipt_v1_20260816",
+  "scope": "outcome-blind construction attrition repair submitted before any policy evaluation",
+  "parent_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_heldout_val10_revisit_20260816/hm3d_heldout_val10_20260816T0448Z",
+  "repair_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_heldout_val10_attrition_repair_e89eda740d3b4fb9",
+  "repair_bundle_receipt_sha256": "1bbd86b4bb790821e87956ad757dc38918f17928d3adf1e40ff23099c06bc996",
+  "repair_bundle_manifest_sha256": "e89eda740d3b4fb92a447ca9852399a941baff5f16639dbb7e3cc24c9a104e6f",
+  "repair_protocol_sha256": "1f8dec4288dac6bde198ecd219ef023ed0c5eb2fe94418f2117a1f2a4ec452e9",
+  "parent_protocol_sha256": "a019a49248950a537b14c651b7a812ba7ccb421504901f8a8de030d63ae3a230",
+  "failed_generation_summary_sha256": "672055791985b4199a6c60e6ce639bfa0e45d4abdbdd840f66e5207e40fc39b7",
+  "selected_scene_count": 10,
+  "constructible_scene_count": 9,
+  "episode_count": 36,
+  "evaluation_scene_indices": [0, 1, 2, 3, 4, 5, 6, 7, 9],
+  "jobs": {
+    "manifest": 15826322,
+    "evaluation_array": 15826323,
+    "summary": 15826324,
+    "independent_verification": 15826325
+  },
+  "guards": {
+    "navigation_outcomes_read_before_repair": false,
+    "scene_replacement": false,
+    "generation_retry": false,
+    "generator_constraints_changed": false,
+    "method_or_threshold_changed": false,
+    "original_scene_indices_and_arm_orders_preserved": true
+  }
+}

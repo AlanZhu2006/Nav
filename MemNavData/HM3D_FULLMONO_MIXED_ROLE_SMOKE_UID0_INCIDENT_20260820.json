@@ -1,0 +1,31 @@
+{
+  "affected_array_element": "16066788_0",
+  "cancelled_by_uid": 0,
+  "elapsed_before_cancellation": "00:02:02",
+  "event": "external_slurm_cancellation_before_any_smoke_output",
+  "job_id_raw": 16066788,
+  "node": "ga043",
+  "population": {
+    "goal_a_successes": 24,
+    "queries": 16,
+    "retained_histories": 8,
+    "retained_scenes": 7,
+    "source_goal_a_episodes": 36,
+    "target_histories": 18,
+    "target_met": false,
+    "target_scenes": 8
+  },
+  "preserved_evidence": {
+    "benchmark_manifest_sha256": "b70d53557d5fb656badf1311d19b3f643583a1ab5fad782b542b66e4647c5948",
+    "benchmark_sealed": true,
+    "formal_query_artifacts_present": false,
+    "smoke_artifacts_present": false,
+    "smoke_slurm_stderr_present": false,
+    "smoke_slurm_stdout_present": false
+  },
+  "repair_policy": "Keep the sealed population byte-identical, use a new isolated smoke root, then create a new eval-summary-verify dependency chain. Do not rerun Goal-A, construction, or population finalization.",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_mixed_role_20260820/formal_20260819T182657Z_0e587874",
+  "schema_version": "hm3d_fullmono_mixed_role_external_smoke_cancellation_incident_v1_20260820",
+  "scientific_query_outcomes_read": false,
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_mixed_role_0e587874d5b89531"
+}

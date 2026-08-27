@@ -1,0 +1,41 @@
+{
+  "schema_version": "final14_attempt3_execution_receipt_v1_20260817",
+  "authorization_inherited_from": "MemNavData/FINAL14_LEARNED_RELOCALIZER_PREFLIGHT_RECEIPT_20260817.json",
+  "repair_provenance": [
+    "MemNavData/FINAL14_ATTEMPT1_PREUNSEAL_INCIDENT_20260817.json",
+    "MemNavData/FINAL14_ATTEMPT2_OVERLAY_INCIDENT_20260817.json",
+    "MemNavData/FINAL14_ATTEMPT3_OVERLAY_REPAIR_RECEIPT_20260817.json",
+    "MemNavData/FINAL14_ATTEMPT3_ZERO_SOURCE_RECEIPT_REPAIR_20260817.json"
+  ],
+  "execution_bundle": {
+    "local_path": ".diagnostics/learned_relocalizer_20260817/final14_learned_complete_27160f1a9903de17",
+    "remote_path": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_learned_complete_27160f1a9903de17",
+    "source_receipt_sha256": "27160f1a9903de17c43c85dcd1eec698000b6cd43bff4b0ad4e64efac66a4e6c",
+    "regular_files": 4002,
+    "manifest_entries": 4001,
+    "writable_entries": 0,
+    "local_and_remote_hash_verification": true
+  },
+  "frozen_data_mount": {
+    "overlay": "/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf",
+    "overlay_bytes": 128854888448,
+    "episode_root_inside_overlay": "/mp3d_revisit_v0/vln_n1/traj_data/mp3d_2leg",
+    "mode": "read_only"
+  },
+  "zero_source_contract": {
+    "retain_scene": true,
+    "borrow_or_replace_scene": false,
+    "empty_episode_list_parsed_as_zero": true,
+    "navigation_policy_called": false
+  },
+  "pre_submission_tests": {
+    "learned_source_summary_runtime": "21 passed",
+    "final14_construction": "7 passed",
+    "source_bundle_hash": true,
+    "required_import_and_runtime_file_closure": true,
+    "shell_syntax": true,
+    "overlay_mount_and_root_override": true
+  },
+  "status": "ready_for_attempt3_single_prospective_execution",
+  "scientific_results_available_at_receipt": false
+}

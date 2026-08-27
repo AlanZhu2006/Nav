@@ -1,111 +1,168 @@
-# MemNav decoder-gate + Novel-conditioning fixes — 2026-08-04
+# MemNav 长任务提交检查清单
 
-Working tree: `/home/asus/Research/Nav` (main). All commits this date; diagnostics
-that motivated each fix are committed under `InternNav/scripts/diag_retrieval/` and
-their result JSON under `Nav/eval2leg_results/`.
+每次提交训练都要验证代码、环境、数据、cache、权重和输出路径。不能因为
+`sbatch` 返回了 JobID 就认为任务可运行。
 
-## 1. What was diagnosed (checkpoint-5570, `memnav_mp3d_decgate`, W&B `l3bhs8i8`)
+## 提交前
 
-| Finding | Evidence |
-|---|---|
-| `dec_gate_a/b` do not train: random walk at init (net +0.009/+0.165 over 5.5k steps) while the BCE pair in the SAME 10x-LR group moves monotonically (+1.47/+1.08) | W&B scalars |
-| The action loss is **locally optimal in the decoder gate logit z** — flat at ±2, significantly worse at ±4 in BOTH directions, on BOTH revisit and novel rows. Nothing to descend; more steps/LR cannot fix an equilibrium | `diag_decgate_zsweep.py` (`eval2leg_results/zsweep_decgate5570/`) |
-| The **novel branch is used but content-dead**: zeroing its tokens hurts (+0.0094 on novel rows) but swapping in a different episode's goal changes the output by ~nothing (RMS 0.0023 vs 0.08) — it collapsed to constant "register" tokens carrying no goal information | `diag_branch_ablation.py` (`eval2leg_results/ablation_decgate5570/`) |
-| The revisit branch IS read and content-sensitive (swap hurts more than zero: +0.0141 vs +0.0120) — but amplifying it never helps (saturation) | same |
-| A **fresh** DINOv2-init model is goal-sensitive (swap output-RMS 0.169) — the collapse is trained-in by the contrast-free action MSE, not innate | port smoke test |
-| Independent confirmation (student worktree `Nav-axis-uturn`): same-state same-seed goal swap moves MemNav candidates by 0.13–3.16% of seed variation vs **NavDP 176.8%**; unseen-scene closed loop NavDP 9/10 SR vs MemNav pure-Novel 2–4/10 | `MemNavData/NOVEL_ROOT_CAUSE_AUDIT_20260804.md`, `NOVEL_NAVDP_PAIRED_EVAL_20260804.md` |
+1. 在独立工作树完成修改、测试、commit 和 push，记录完整 commit SHA。
+2. 运行：
 
-Root cause, one paragraph: NavDP avoids goal-collapse via data-level contrast
-(same state, different goals, different expert actions), aux goal-position heads,
-and a separate no-goal branch. MemNav's two-leg data has none of that — "continue
-forward" explains most frames, so ignoring the goal image is a low-loss shortcut
-(classic imitation-learning causal confusion), and the closed-at-init decoder gate
-(z = 10·max_cos − 8 ≈ −5 with fresh projections) additionally prevented the decoder
-from ever learning to read the teacher-anchored revisit tokens.
+   ```bash
+   git diff --check
+   bash -n scripts/train_memnav/train_memnav_mp3d.sbatch
+   python -m py_compile <所有改动的 Python 文件>
+   python -m pytest -q tests/unit_test
+   ```
 
-## 2. Fixes applied (all on main)
+3. 确认自己账号下的独立部署目录（例如
+   `/scratch/<user>/Research/Nav-axis-uturn/InternNav`）指向该 commit，不从其他人
+   正在修改的共享主工作树启动；提交时显式导出同一路径的 `REPO_ROOT`。日志和
+   新 checkpoint 写入该目录，共享数据/权重仅只读复用。
+4. 核对 `MEMNAV_ROOT_DIR`、`MEMNAV_FEATURE_ROOT`、`LINGBOT_REPO`、
+   `LINGBOT_WEIGHTS`、`MEMNAV_INIT_CKPT` 和输出目录。
+5. sparse cache 训练必须设置 `MEMNAV_REQUIRE_VERSIONED_CACHE=1`，且
+   `MEMNAV_WINDOW/NUM_SCALE/MAX_FRAME_NUM` 与预计算一致。
 
-### 2.1 Decoder-gate curriculum + neutral init + selectable fusion
-(`decgate_schedule.py`, `memnav_policy.py`, `memnav_trainer.py`)
+正式脚本会自动运行 `dependency_preflight.py` 和 `gpu_preflight.py`。前者检查
+真实 Python import（包括生产 `train.py` 的 MemNav 模型选择路径）、路径、一个 cache
+pair 的 header/schema、`MEMNAV_INIT_CKPT -> il.ckpt_to_load` 配置接线、warm-start 权重
+结构及写权限；后者检查每张可见 GPU 能否创建 CUDA context。真实 batch 阶段还会将
+模型内四个关键 tensor 与源 checkpoint 逐值比较，防止“文件存在但训练没有加载”。
 
-* **Logit-space teacher curriculum**: decoder uses `z_used = z_pred + r·(±teacher_z − z_pred)`,
-  r annealed 1→0; grad to `z_pred` scales by 1−r; BCE-free scaffold; eval path
-  untouched at r=0. `teacher_z=3` ≈ cos 0.9 through a converged calibration, NOT
-  the ±9.2 rail (the visual branch has value even on GT revisits).
-* **Neutral `dec_gate_a/b` init (0,0)** instead of the classifier's (10,−8): a
-  router should start agnostic, not closed.
-* **Fusion modes** (`MEMNAV_DECGATE_FUSION`, persisted in checkpoint buffers, synced
-  on load — legacy checkpoints keep `symmetric`): `symmetric` ±z/2 tilt (current),
-  `residual` (revisit +z, novel untouched — visual branch as always-on base policy),
-  `value_scale` (revisit token values ×σ(z); gradient scales with readout magnitude,
-  not attention weight on a suppressed column; `MEMNAV_DECGATE_SCALE_NOVEL` also
-  scales novel by 1−σ(z)).
+## 先提交真实 batch 预检
 
-### 2.2 NavDP warm start for the novel backbone (`warmstart_navdp.py`)
-
-`NovelBranch` wraps the SAME image-goal encoder NavDP trains (DINOv2-S/14,
-6-channel early fusion) — verified 174/174 key/shape match. The script remaps
-`image_encoder.*` → `core.novel.backbone.*` and writes an init checkpoint for
-`MEMNAV_CKPT_TO_LOAD` (loaded strict=False). `MEMNAV_FREEZE_NOVEL_BACKBONE=1`
-pins the encoder (a frozen encoder cannot collapse); heads/decoder stay trainable.
-Initialization alone does NOT remove the shortcut — pair with 2.3.
-
-### 2.3 Goal-swap counterfactual loss (`goal_swap.py`, dataset, trainer)
-Ported from the student worktree (`edca2dd`) onto the decgate architecture.
-
-* Negatives: same scene, same goal type (A↔A, B↔B; type relaxed only on pool
-  exhaustion, scene never), per-sampled-k direction filter — most bearing-divergent
-  wrong goal, ≥30° and ≥0.5 m (world coords select only, never model inputs).
-* Loss: two decodes differing ONLY in the goal image (same state/history/noise/
-  timestep/blended gate); hinge `relu(margin − (mse_wrong − mse_correct))`,
-  margin 0.05 — the true goal must explain its own expert action better than a
-  divergent wrong goal. No action label is invented for the wrong goal. Novel rows
-  only (on revisit rows the shared memory pathway makes a similar action legitimate).
-* Cost: ~0.1–0.3 s on a measured ~30 s step (<1%).
-
-### 2.4 Early-Novel coverage + no-candidate hygiene (from the same port)
-
-* `MEMNAV_GOAL_A_MIN_K=40` starts Goal-A rows at the real inference boundary
-  (k=40) instead of the historical k≥122; E(k) may be empty.
-* All-masked rows skip the (expensive, fabricated) revisit goal-pose append in
-  `encode_memory` and get an exactly-zero revisit feature in `forward` — no longer
-  relying on a small gate tilt to suppress a made-up pose token.
-
-## 3. Switches (all env, read by `scripts/train/configs/memnav.py`)
-
-| Env | Default | Meaning |
-|---|---|---|
-| `MEMNAV_GOAL_SWAP` | `1` | **master switch** for 2.3 (0 = no negative pool, no second decode) |
-| `MEMNAV_GOAL_SWAP_WEIGHT` / `_MARGIN` / `_MIN_ANGLE_DEG` | 0.25 / 0.05 / 30 | tuning when on |
-| `MEMNAV_GOAL_A_MIN_K` | unset (=122 behavior) | 40 = train Novel from the inference boundary |
-| `MEMNAV_CKPT_TO_LOAD` | unset | warm-start init ckpt (use `warmstart_navdp.py` output) |
-| `MEMNAV_FREEZE_NOVEL_BACKBONE` | off | freeze the warm-started encoder |
-| `MEMNAV_DECGATE_FUSION` | `symmetric` | `symmetric` \| `residual` \| `value_scale` |
-| `MEMNAV_DECGATE_TEACHER_START/END/STEPS/Z` | 1.0 / 0.0 / 500 / 3.0 | gate curriculum (`STEPS=0` = off = control arm) |
-| `MEMNAV_DECGATE_INIT_A/B` | 0.0 / 0.0 | decoder-gate affine init |
-
-Recommended first run (one fix per broken link, attributable):
+预检和正式训练必须使用同一份 `.sbatch`、容器、overlay、Conda、数据、cache 与
+权重。预检先构造完整模型并执行一个真实 revisit batch 的前向和反向，然后再通过
+正式 `scripts/train/train.py` 入口运行一个 optimizer step。这样既验证 gate 梯度，
+也覆盖正式入口、Trainer、DataLoader 和模型选择式依赖：
 
 ```bash
-python scripts/train_memnav/warmstart_navdp.py \
-    --navdp_ckpt <navdp_checkpoint.ckpt> \
-    --out checkpoints/navdp_warmstart/memnav_novel_init.ckpt
-export MEMNAV_CKPT_TO_LOAD=$PWD/checkpoints/navdp_warmstart/memnav_novel_init.ckpt
-export MEMNAV_FREEZE_NOVEL_BACKBONE=1
-export MEMNAV_GOAL_A_MIN_K=40
-# goal swap + gate curriculum are ON by default; MEMNAV_GOAL_SWAP=0 /
-# MEMNAV_DECGATE_TEACHER_STEPS=0 are the ablation off-switches
+PREFLIGHT_JOB=$(REPO_ROOT=/scratch/<user>/Research/Nav-axis-uturn/InternNav \
+  NAME=<run>_preflight \
+  MEMNAV_PREFLIGHT_ONLY=1 MEMNAV_TRAIN_MAX_STEPS=1 \
+  MEMNAV_REPORT_TO=none NPROC=1 BATCH_SIZE=1 NUM_WORKERS=0 \
+  sbatch --parsable --time=00:30:00 --gres=gpu:1 --export=ALL \
+  scripts/train_memnav/train_memnav_mp3d.sbatch)
+PREFLIGHT_JOB=${PREFLIGHT_JOB%%;*}
 ```
 
-## 4. Acceptance metrics (before/after instruments already exist)
+只有 `sacct` 显示 `COMPLETED` 且 `ExitCode=0:0`、日志同时包含
+`[full-preflight] PASS` 与 `ENTRYPOINT-PREFLIGHT PASS`，才允许长任务开始。
 
-* W&B `action/goal_swap_error_gap` → should climb past +0.05;
-  `action/goal_swap_output_rms` → from ~0.002 toward ~0.08 (the `zero_novel` level).
-* Re-run `diag_branch_ablation.py` on the new checkpoint: `swap_novel` RMS/Δloss
-  should approach `zero_novel`'s.
-* Re-run `diag_decgate_zsweep.py`: success = revisit rows develop a genuine
-  downward slope toward +z while novel rows stay closed (curves separate).
-* `action/dec_gate_a`, `dec_gate_b`, `retrieval/gate_*` scalars: dec pair should
-  move directionally once the branches carry signal.
-* Closed loop: `MemNavData/eval_2leg_habitat.py` paired A/B, and the student's
-  unseen-scene pure-Novel protocol vs NavDP (target: close the 2–4/10 vs 9/10 gap).
+## 长任务必须依赖预检成功
+
+```bash
+TRAIN_JOB=$(REPO_ROOT=/scratch/<user>/Research/Nav-axis-uturn/InternNav \
+  NAME=<run> MEMNAV_PREFLIGHT_ONLY=0 \
+  sbatch --parsable --time=08:00:00 --dependency="afterok:${PREFLIGHT_JOB}" \
+  --export=ALL scripts/train_memnav/train_memnav_mp3d.sbatch)
+TRAIN_JOB=${TRAIN_JOB%%;*}
+```
+
+提交后用以下命令核对依赖、时限、资源和状态：
+
+```bash
+scontrol show job "${TRAIN_JOB}"
+squeue -j "${PREFLIGHT_JOB},${TRAIN_JOB}" -o '%.18i %.28j %.10T %.10M %.9l %.28R'
+sacct -j "${PREFLIGHT_JOB},${TRAIN_JOB}" -X --format=JobID,State,Elapsed,ExitCode,NodeList -P
+```
+
+必须记录：commit、部署目录、数据/cache/权重路径、预检 JobID 与最终状态、长任务
+JobID、W&B run、stdout/stderr 路径，以及第一个完整 checkpoint。`PENDING
+(Dependency)` 是正常等待；`RUNNING` 仍需检查日志、GPU 利用率和 W&B 是否真正更新。
+
+本次 gate curriculum 的固定 all-leg 8 小时实验可直接运行：
+
+```bash
+bash scripts/train_memnav/submit_gate_curriculum_8h.sh
+```
+
+它封装的仍是上述 preflight/`afterok` 流程，不会跳过任何检查。
+
+固定评测确认 complementary gate curriculum 只改善 gate 分类、没有改善 action 后，
+residual-gate 的单变量 A/B 使用：
+
+```bash
+bash scripts/train_memnav/submit_residual_gate_8h.sh
+```
+
+该脚本仍从同一个 flowgate checkpoint-2600 暖启动、仍跑 all-leg 和相同的 500-step
+teacher handoff，唯一启用的结构变化是 `MEMNAV_GATE_FUSION=residual`：visual image-goal
+列始终可见，revisit memory 作为 gated residual 加入。脚本明确保持
+`MEMNAV_RETRIEVAL_TOP1_WEIGHT=0`，防止把 top-1 loss 和 fusion 同时改变。fusion mode
+会作为 persistent buffer 写进 checkpoint；旧 checkpoint 缺少该 buffer 时按历史
+`complementary` 解释，避免评测加载顺序污染语义。
+
+可选 top-1 margin 已作为独立开关实现：
+
+```bash
+export MEMNAV_RETRIEVAL_TOP1_WEIGHT=0.25
+export MEMNAV_RETRIEVAL_TOP1_MARGIN=0.2
+```
+
+它约束 `max_positive > max_negative + margin`，对应部署时的 live argmax；默认权重为
+零，只记录诊断值。`dependency_preflight.py` 会核对 fusion/top-1 环境变量确实进入
+训练配置，真实 batch preflight 还会检查 fusion buffer、top-1 loss 及梯度有限性。
+
+## Novel goal-collapse 修复训练
+
+同 state/same seed 的因果诊断确认，旧 MemNav 换目标图产生的候选变化仅为换
+diffusion seed 的 `0.13%--3.16%`。本轮用两个显式开关做受控修复：
+
+```bash
+export MEMNAV_GOAL_A_MIN_K=40
+export MEMNAV_GOAL_SWAP_WEIGHT=0.25
+export MEMNAV_GOAL_SWAP_MARGIN=0.05
+```
+
+第一项让 Goal-A 覆盖真实推理起点；k=40 时 retrieval candidate 允许全空，模型会跳过
+无意义的 revisit goal-pose append，并把 revisit token 置为 neutral。第二项固定当前
+state、history、diffusion noise、timestep 与 gate，从同一 MP3D 场景的其他 episode
+选择方位差至少 30° 的错误 goal，
+约束：
+
+```text
+MSE(wrong goal, expert noise) - MSE(correct goal, expert noise) >= 0.05
+```
+
+这是 ranking constraint，不为错误目标伪造动作标签。W&B 新增：
+
+- `action/goal_swap_margin_loss`；
+- `action/goal_swap_error_gap`（目标 >= `+0.05`）；
+- `action/goal_swap_output_rms`；
+- `action/goal_swap_active_rows`。
+
+权重默认仍为 0，旧实验不受影响。固定的八小时任务使用 residualgate1000 warm-start、
+all-leg、关闭重复 gate teacher curriculum，并通过真实双样本 preflight 后启动：
+
+```bash
+bash scripts/train_memnav/submit_novel_goalswap_8h.sh
+```
+
+同时 MemNav optimizer 已改为读取 `TrainingArguments` 中的 AdamW、weight decay、cosine
+schedule 与 warmup；提交日志必须出现 `AdamW ... weight_decay=0.0001` 和非零
+`warmup_steps`，否则视为配置未接通。
+
+## 固定 checkpoint A/B 评测
+
+训练曲线来自不同随机 batch，不能单独证明新 checkpoint 泛化更好。使用
+`fixed_checkpoint_eval.py` 做 checkpoint 对照时，两个模型必须共享完全相同的：
+
+- 独立 episode 清单、当前帧 `k`、目标和标签；
+- diffusion noise 与 timestep（每个样本重复多次后取均值）；
+- W32/schema-v2 cache、LingBot 权重、坐标与 metric-scale 配置；
+- 推理路径：`model.eval()`，不使用 GT-positive anchor，也不使用 teacher gate。
+
+正式 A/B 默认平衡抽取 novel Goal-A、novel covis、2/3-leg shallow/deep 六组，
+每条轨迹最多一个样本，并保存逐样本 JSONL、分组 summary 和 paired-bootstrap
+置信区间。提交仍采用真实路径预检 `--afterok` 正式评测：
+
+```bash
+bash scripts/train_memnav/submit_fixed_checkpoint_eval.sh
+```
+
+预检会用两个真实 checkpoint 跑六组各一个样本，覆盖容器依赖、GPU、dataloader、
+cache schema、LingBot、两次权重装载、真实 retrieval anchor、pose 和 diffusion decoder；
+只有预检 `COMPLETED 0:0` 后，72-sample/8-trial 的正式任务才启动。评测结果写入个人
+`/scratch/<user>/Research/...-results/`，不会写共享主仓库。

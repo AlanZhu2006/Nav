@@ -1,0 +1,30 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_deferred_resume_v1_20260825",
+  "scope": "result-blind actual-full-mono lifelong power expansion with shared-C B2-only evaluation",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_20260824/formal_20260824T171704Z_2ce2ae67",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_20260824/formal_20260824T171704Z_2ce2ae67_smoke",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_lifelong_2ce2ae67e7a6d65b",
+  "task_receipt_sha256": "2ce2ae67e7a6d65b5793d7870c8be53a199b3b23834f3d5ce1ecf2a59c5daaec",
+  "deferred_launcher_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_shared_c_deferred_bc6c6238864ae752/deferred.sbatch",
+  "deferred_launcher_sha256": "bc6c6238864ae75284b0fbd2079551cc7be229a0b1c7aebcc409d7572deb054f",
+  "reason_for_deferred_submission": "Torch gpu48 QOSMaxSubmitJobPerUserLimit counts dependency-held array elements; collection and evaluation arrays are therefore resident sequentially",
+  "one_large_array_resident_per_stage": true,
+  "jobs": {
+    "construct_AB_array": 16289393,
+    "seal_AB_population": 16289398,
+    "collect_factual_B_array": 16289422,
+    "construct_actual_prefix_array": 16289433,
+    "seal_query_population": 16289438,
+    "deferred_shared_C_launcher": 16289882
+  },
+  "deferred_launcher_contract": {
+    "stage_1": "after population seal, submit shared-C collection then factual-C seal and true-stack smoke",
+    "stage_2": "only after smoke success, submit B2 evaluation then aggregate and independent verification",
+    "downstream_job_ids_written_at_runtime": [
+      "deferred_submission/collect.json",
+      "deferred_submission/evaluate.json"
+    ]
+  },
+  "query_outcomes_read_at_submission": false,
+  "fresh_scene_generalization_claim": false
+}

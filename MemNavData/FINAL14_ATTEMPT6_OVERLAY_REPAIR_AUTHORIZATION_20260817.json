@@ -1,0 +1,25 @@
+{
+  "schema_version": "final14_attempt6_overlay_repair_authorization_v1_20260817",
+  "authorization_basis": "Attempt 5 failed before rollout because the already-frozen PT1 data overlay was not mounted by the evaluation sbatch",
+  "allowed_changes": [
+    "mount /scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf read-only in formal evaluation",
+    "export the frozen overlay path, byte size, and internal episode root as explicit submission dependencies",
+    "make the CPU preflight mount the exact container/overlay pair and open all 21 referenced source parquets",
+    "create a fresh output root while reusing the unchanged sealed benchmark and read-only Goal-A traces",
+    "retain one formal task as a gate before releasing the remaining array"
+  ],
+  "forbidden_changes": [
+    "episode or scene population",
+    "Pi3X model or proof checkpoints",
+    "proof thresholds or 2-of-4 consensus",
+    "retrieval, certificate, or controller behavior",
+    "arm definitions or success criterion",
+    "reading formal policy outcomes before the frozen evaluation completes"
+  ],
+  "frozen_overlay": {
+    "path": "/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sqf",
+    "bytes": 128854888448,
+    "mode": "read_only",
+    "episode_root": "/mp3d_revisit_v0/vln_n1/traj_data/mp3d_2leg"
+  }
+}

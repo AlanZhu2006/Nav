@@ -1,0 +1,60 @@
+{
+  "schema": "mdtec_raw_depth_gate_d_submission_receipt_v1_20260819",
+  "submitted_at_utc": "2026-08-18T17:03:55Z",
+  "status_at_receipt": "submitted_pending_priority",
+  "source": {
+    "root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mdtec_gate_d_758c3fdb7a3f1c43",
+    "receipt_sha256": "758c3fdb7a3f1c43b175a213309b2a7531e94b654567c52fb46e18acf1b9b46a",
+    "immutable": true
+  },
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/mdtec_raw_depth_gate_d_20260819/formal_20260818T170355Z_758c3fdb",
+  "jobs": {
+    "gpu_array": "15960430",
+    "array_specification": "0-19%10",
+    "summary_and_independent_verification": "15960443",
+    "summary_dependency": "afterok:15960430"
+  },
+  "resources_per_scene": {
+    "partitions": [
+      "h100_tandon",
+      "a100_tandon",
+      "h200_public"
+    ],
+    "gpu": 1,
+    "cpus": 10,
+    "memory_gb": 64,
+    "time_limit": "01:00:00"
+  },
+  "frozen_inputs": {
+    "protocol_sha256": "8deb4e13bd169bb39c7696a777656c3e4912f985f48ee364111b4a9a76cf9413",
+    "analysis_sha256": "636b79d1eff9db42a4c3141438c3c469020363e60ab366171b0fdfa2aa639380",
+    "manifest_sha256": "ba8f72cb504768c801e6c9c386436ccdc66dea07a5e5fac2d7b4248738946a61",
+    "goal_overlay_sha256": "401d43723a37465fa00778fd21b27eecbe46cf114abb074a3582b524451ce901"
+  },
+  "local_release_gates": {
+    "unit_tests_passed": 49,
+    "specialized_same_process_smoke": ".diagnostics/mdtec_gate_d_habitat_smoke_20260819/specialized_v3",
+    "smoke_metric_sensor_consumed_by_raw": false,
+    "smoke_raw_bootstrap_plans": 5,
+    "smoke_raw_active_plans": 5,
+    "smoke_scale_valid": true
+  },
+  "pre_submission_incidents": [
+    {
+      "stage": "staged_dependency_closure",
+      "effect": "no upload completion and no Slurm submission",
+      "repair": "bundle all top-level MemNavData Python modules and NavDP depth_anything_v2 sources"
+    },
+    {
+      "stage": "remote_receipt_command_expansion",
+      "effect": "no Slurm submission",
+      "repair": "replace nested awk positional expansion with cut"
+    },
+    {
+      "stage": "self-referential_source_receipt",
+      "effect": "remote verification failed before Slurm submission",
+      "repair": "write receipt outside bundle, remove test pycache, then atomically move receipt into bundle"
+    }
+  ],
+  "outcome_read_before_submission": false
+}

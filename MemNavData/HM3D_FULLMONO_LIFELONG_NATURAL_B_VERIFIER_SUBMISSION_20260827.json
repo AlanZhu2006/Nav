@@ -1,0 +1,12 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_natural_b_verifier_submission_v1_20260827",
+  "scope": "read-only independent constructibility recount",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/natural_b_audit_formal_20260827T125748Z_e2832e17",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_verifier_7980b5934d94f193",
+  "source_bundle_receipt_sha256": "7980b5934d94f193d009fadae994f7c552f22d330d1a2a821e39ec1f88b1d0a2",
+  "seal_job": 16464407,
+  "verifier_job": 16464666,
+  "dependency": "afterok:16464407",
+  "navigation_rollouts_authorized": false,
+  "evaluation_authorized": false
+}

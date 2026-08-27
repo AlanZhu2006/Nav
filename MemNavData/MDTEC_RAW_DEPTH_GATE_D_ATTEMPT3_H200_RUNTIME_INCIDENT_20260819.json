@@ -1,0 +1,58 @@
+{
+  "schema_version": "mdtec_gate_d_h200_runtime_incident_v1_20260819",
+  "formal_array": 15960864,
+  "failed_array_task": 11,
+  "slurm_job_record": 15962955,
+  "scene": "uNb9QFRL6hY",
+  "node": "gh127",
+  "gpu": "NVIDIA H200",
+  "state": "FAILED",
+  "elapsed": "00:19:12",
+  "exit_code": "6:0",
+  "failure_class": "runtime_infrastructure_before_first_arm_record",
+  "evidence": {
+    "python_traceback_present": false,
+    "depth_arms_csv_present": false,
+    "per_arm_plan_json_count": 0,
+    "contract_exception_present": false,
+    "process_end": "SIGABRT/core dumped",
+    "observed_memnav_update_latency_seconds_approx": 19,
+    "other_completed_attempt3_scenes_before_incident": 12
+  },
+  "preserved_partial_output": "/scratch/yz11502/Research/Nav-axis-uturn-results/mdtec_raw_depth_gate_d_20260819/formal_20260818T171542Z_b8d2ffb5/INFRA_FAILURES/attempt3_task11_h200_signal6",
+  "repair": {
+    "job": 15964844,
+    "array_task": 11,
+    "allowed_partitions": [
+      "a100_tandon",
+      "h100_tandon"
+    ],
+    "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mdtec_gate_d_b8d2ffb55201a55b",
+    "source_receipt_sha256": "b8d2ffb55201a55b69eede8333c54d97b029ca18be9ec5be30d885bec2233bf2",
+    "run_root_unchanged": true,
+    "scene_seed_arms_thresholds_and_statistics_unchanged": true
+  },
+  "superseded_summary_job": 15960870,
+  "preventive_partition_isolation": {
+    "original_tasks_cancelled_before_outcome": [
+      16,
+      17,
+      18,
+      19
+    ],
+    "task16_node_before_cancel": "gh114",
+    "task16_gpu_family": "NVIDIA H200",
+    "task16_arm_records_before_cancel": 0,
+    "task16_preserved_startup_output": "/scratch/yz11502/Research/Nav-axis-uturn-results/mdtec_raw_depth_gate_d_20260819/formal_20260818T171542Z_b8d2ffb5/INFRA_FAILURES/attempt3_task16_h200_preemptive",
+    "replacement_array_job": 15965119,
+    "replacement_array_tasks": "16-19%4",
+    "allowed_partitions": [
+      "a100_tandon",
+      "h100_tandon"
+    ]
+  },
+  "superseded_replacement_summary_job": 15964864,
+  "replacement_summary_job": 15965120,
+  "replacement_summary_dependency": "afterany:15960864,afterok:15964844,afterok:15965119",
+  "interpretation": "No method outcome was produced for task 11. The preserved H200 process failure is excluded from SR and the identical immutable task is rerun on an established runtime partition. A new summary may run only after all 20 scene records, including the repair, exist."
+}

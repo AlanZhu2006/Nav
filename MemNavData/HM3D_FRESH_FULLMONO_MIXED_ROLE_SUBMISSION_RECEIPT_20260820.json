@@ -1,0 +1,24 @@
+{
+  "data_root": "/scratch/yz11502/Research/datasets/hm3d_fresh_fullmono_v0.2_20260820",
+  "jobs": {
+    "asset_prepare": 16080295,
+    "construction_array": 16080332,
+    "goal_a_collection_array": 16080320,
+    "independent_verification": 16080360,
+    "parent_manifest": 16080319,
+    "population_finalize": 16080338,
+    "query_evaluation_array": 16080342,
+    "query_smoke": 16080339,
+    "source_generation_array": 16080301,
+    "summary": 16080348
+  },
+  "query_outcomes_read_at_submission": false,
+  "reserve_scenes": 54,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+  "schema_version": "hm3d_fresh_fullmono_submission_v1_20260820",
+  "scope": "fresh-scene HM3D actual-online Full-Mono mixed-role confirmation",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6_smoke",
+  "target_source_episodes": 216,
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fresh_fullmono_mixed_role_e6dd44c66eb72d90",
+  "task_receipt_sha256": "e6dd44c66eb72d905f4db96db9f604c042cc0d89c77a16cd4dc92eabb99c8f01"
+}

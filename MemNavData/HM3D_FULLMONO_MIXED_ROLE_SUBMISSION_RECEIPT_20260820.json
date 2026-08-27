@@ -1,0 +1,20 @@
+{
+  "fresh_scene_generalization": false,
+  "jobs": {
+    "construction_array": 16032656,
+    "goal_a_collection_array": 16032636,
+    "independent_verification": 16032721,
+    "population_finalize": 16032668,
+    "query_evaluation_array": 16032690,
+    "query_smoke": 16032673,
+    "summary": 16032711
+  },
+  "query_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_mixed_role_20260820/formal_20260819T182657Z_0e587874",
+  "schema_version": "hm3d_fullmono_mixed_role_submission_v1_20260820",
+  "scope": "same-scene HM3D actual-online full-monocular mixed-role",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_mixed_role_20260820/formal_20260819T182657Z_0e587874_smoke",
+  "source_goal_a_episodes": 36,
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_mixed_role_0e587874d5b89531",
+  "task_receipt_sha256": "0e587874d5b8953176a49a77345f6bde8733c2d31930ab3547d8c238a857b372"
+}

@@ -1,0 +1,28 @@
+{
+  "jobs": {
+    "replacement_aggregate": 16130126,
+    "replacement_independent_verification": 16130140,
+    "task5_additive_repair": 16130123
+  },
+  "missing_pair_label": "005_e9zR4mvMWw7_episode_0007",
+  "missing_task": 5,
+  "observed_slurm_reason": "QOSGrpGRES",
+  "observed_slurm_state": "CANCELLED by 0",
+  "original_array": 16126310,
+  "repair_dependency": "afterany:16126310",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/lifelong_nnr_20260821/lifelong_nnr_runtime_repair_20260821T083000Z",
+  "schema_version": "lifelong_nnr_task5_repair_submission_v1_20260821",
+  "scientific_guards": {
+    "aggregate_requires_all_19_frozen_pairs": true,
+    "existing_pair_output_overwrite_allowed": false,
+    "method_threshold_checkpoint_or_seed_changed": false,
+    "population_or_selection_changed": false,
+    "query_outcomes_used_to_select_repair": false
+  },
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/lifelong_nnr_15b2e9c4d2ab9ed6",
+  "source_receipt_sha256": "3be9f426dd7d34cc7cd3a51959ec2dc4436b81a323645fe51ea3468fd3c21266",
+  "superseded_jobs": [
+    16126345,
+    16126347
+  ]
+}

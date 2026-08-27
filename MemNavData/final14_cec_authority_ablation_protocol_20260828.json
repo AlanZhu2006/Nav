@@ -1,0 +1,31 @@
+{
+  "arms": [
+    {
+      "authority_policy": "strict_certificate",
+      "hybrid_route": "certified_relocalization",
+      "name": "mono_cec"
+    },
+    {
+      "authority_policy": "pnp_pose_available",
+      "hybrid_route": "certified_unthresholded_witness",
+      "name": "mono_unthresholded_witness"
+    }
+  ],
+  "benchmark_manifest_sha256": "7468703a9efbb10e801ffdd226911f696a30fa9432ef9ab486d3134f6e40fe6a",
+  "fixed_components": [
+    "causal Goal-A RGB replay",
+    "monocular_sidecar query-controller depth",
+    "DINO temporally diverse top-8",
+    "SuperPoint + LightGlue correspondences",
+    "Fundamental-MAGSAC candidate ranking",
+    "LingBot historical depth",
+    "PnP-RANSAC pose witness",
+    "verified_bearing_v1 fixed 2.5 m adapter",
+    "frozen NavDP"
+  ],
+  "formal_history_count": 21,
+  "runtime_role_visibility": "none",
+  "schema_version": "final14_cec_authority_ablation_protocol_v1_20260828",
+  "sole_intervention": "operational authority policy",
+  "success_distance_m": 1.0
+}

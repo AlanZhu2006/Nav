@@ -1,0 +1,60 @@
+{
+  "arms": [
+    "metric_teacher",
+    "zero_depth",
+    "raw_first40"
+  ],
+  "arm_order": {
+    "rotation": "(scene_index + episode_index_within_scene) mod 3"
+  },
+  "benchmark_role": "consumed_mp3d_closed_loop_development_gate_not_confirmation",
+  "created_at": "2026-08-19T00:00:00+08:00",
+  "decision": {
+    "engineering_authorization": {
+      "all_raw_metric_sensor_consumed_false": true,
+      "max_loss_minus_gain": 4,
+      "minimum_raw_minus_metric_risk_difference": -0.1,
+      "raw_must_strictly_improve_over_zero": "SR, or equal SR with higher SPL",
+      "receipt_or_scale_contract_failures": 0
+    },
+    "paper_noninferiority": {
+      "cluster_bootstrap_confidence": 0.95,
+      "margin": -0.1,
+      "required_lower_bound_strictly_greater_than_margin": true
+    }
+  },
+  "evaluation": {
+    "base_seed": 20260803,
+    "deterministic_plan_seeds": true,
+    "episodes": 40,
+    "episodes_per_scene": 2,
+    "execution_horizon": 8,
+    "goal": "Novel_A_only",
+    "max_steps": 500,
+    "scenes": 20,
+    "success_distance_m": 1.0,
+    "trajectory_selector": "server"
+  },
+  "goal_input_overlay": {
+    "path": "MemNavData/novel_a_bearing_inputs_20260808.json",
+    "sha256": "401d43723a37465fa00778fd21b27eecbe46cf114abb074a3582b524451ce901"
+  },
+  "manifest": {
+    "path": "MemNavData/expanded_navdp_router_eval_20260805.json",
+    "sha256": "ba8f72cb504768c801e6c9c386436ccdc66dea07a5e5fac2d7b4248738946a61"
+  },
+  "method_contract": {
+    "active_from_frame_index": 40,
+    "depth_contract": "raw_lingbot_depth_first40_v1",
+    "metric_depth_sensor_consumed": false,
+    "scale_evidence_contract": "causal_first_prefix_rgb_only_v1",
+    "whole_episode_ground_cache_consumed": false
+  },
+  "navdp_checkpoint_sha256": "3bb3ad4ab241e857bb57a4021cc6aab76d5263e81fbf80298d579053ef011947",
+  "primary_contrast": "raw_first40_vs_metric_teacher",
+  "protocol_version": 1,
+  "secondary_contrasts": [
+    "zero_depth_vs_metric_teacher",
+    "raw_first40_vs_zero_depth"
+  ]
+}

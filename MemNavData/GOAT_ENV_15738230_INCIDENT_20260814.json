@@ -1,0 +1,78 @@
+{
+  "schema_version": "goat_environment_incident_v1_20260814",
+  "recorded_at": "2026-08-14T20:45:50+08:00",
+  "failed_environment_job": {
+    "elapsed": "00:16:56",
+    "exit_code": "1:0",
+    "job_id": "15738230",
+    "state": "FAILED"
+  },
+  "cancelled_downstream_smoke": {
+    "elapsed": "00:00:00",
+    "job_id": "15738231",
+    "reason": "afterok dependency failed",
+    "state": "CANCELLED"
+  },
+  "outcome_boundary": {
+    "environment_receipt_written": false,
+    "method_or_threshold_changed_from_outcomes": false,
+    "navigation_episodes_run": 0,
+    "navigation_metrics_produced": false
+  },
+  "observed_failure": {
+    "package": "safetensors",
+    "stage": "optional transformers dependency resolution under Python 3.7",
+    "terminal_error": "No matching distribution found for puccinialin"
+  },
+  "postmortem_preflight": {
+    "latent_host_runtime_issue": "libOpenGL.so.0 absent on the HPC host",
+    "habitat_lab_installed": true,
+    "habitat_sim_installed": true,
+    "goat_bench_installed": true
+  },
+  "repair": {
+    "environment_source_bundle": "/scratch/yz11502/Research/source_bundles/goat_env_setup_08c5a75bfaa58107",
+    "cancelled_cpu_queue_environment_job": "15739808",
+    "cancelled_cpu_queue_smoke_job": "15739821",
+    "replacement_environment_job": "15740152",
+    "environment_job_state": "COMPLETED",
+    "environment_receipt_written": true,
+    "python37_readonly_bundle_smoke_failure": {
+      "elapsed": "00:00:13",
+      "job_id": "15740159",
+      "navigation_episodes_run": 0,
+      "reason": "explicit py_compile attempted to create __pycache__ in the immutable source bundle",
+      "state": "FAILED"
+    },
+    "egl_smoke_failures_before_root_cause": {
+      "elapsed": "00:00:38",
+      "job_ids": [
+        "15740384",
+        "15740638"
+      ],
+      "navigation_episodes_run": 0,
+      "nodes": [
+        "gl016",
+        "gh012"
+      ],
+      "reason": "Habitat-Sim 0.2.3 could not create an EGL device for CUDA device 0",
+      "state": "FAILED"
+    },
+    "egl_root_cause": {
+      "default_singularity_nv_resolution": "libEGL.so.1 => /.singularity.d/libs/libEGL.so.1",
+      "overridden_resolution": "libEGL.so.1 => /lib/x86_64-linux-gnu/libEGL.so.1",
+      "wrapper_error": "explicit LD_LIBRARY_PATH replacement removed the NVIDIA EGL injection path",
+      "node_family_specific": false
+    },
+    "replacement_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/goat_benchmark_20260814/contract_smoke_20260814T135549Z_v7_nvlibs",
+    "replacement_smoke_job": "15746123",
+    "smoke_source_bundle": "/scratch/yz11502/Research/source_bundles/goat_contract_smoke_26462619d0c26df9",
+    "steps": [
+      "remove policy-only transformers/safetensors from the simulator-contract environment",
+      "pin NumPy 1.21.6 and OpenCV 4.7.0.72",
+      "run native-library imports and the smoke inside the established immutable NavDP Singularity system image",
+      "replace py_compile with a read-only AST syntax audit and disable Python bytecode writes",
+      "preserve the Singularity --nv injected NVIDIA EGL library path instead of replacing LD_LIBRARY_PATH"
+    ]
+  }
+}

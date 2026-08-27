@@ -1,0 +1,29 @@
+{
+  "schema_version": "final14_attempt4_collection_repair_v1_20260817",
+  "trigger": "Attempt 3 failed before role-pair/query evaluation because of two source-collection packaging defects",
+  "incident": "MemNavData/FINAL14_ATTEMPT3_COLLECTION_INCIDENT_20260817.json",
+  "repairs": [
+    {
+      "scope": "protocol-valid empty Final14 source/materialization scene",
+      "change": "the per-scene builder now accepts zero materialized histories only when the already validated frozen scene identity is supplied; it writes empty natural/hard manifests and a fail-closed construction receipt",
+      "scientific_effect": "retains frozen asset or rollout attrition without scene replacement and without invoking a query controller"
+    },
+    {
+      "scope": "immutable source bundle closure",
+      "change": "include materialize_online_a_traces.py and recursively compare imports from every bundled Python module against repository-local modules",
+      "scientific_effect": "packaging only"
+    }
+  ],
+  "tests": {
+    "final14_construction_unittest": "8 passed",
+    "learned_source_summary_contract_pytest": "16 passed",
+    "shell_syntax": true,
+    "empty_scene_natural_and_hard_manifests": true,
+    "repository_local_import_closure_required": true
+  },
+  "method_population_or_threshold_changed": false,
+  "scene_identity_or_order_changed": false,
+  "source_manifest_rule_changed": false,
+  "reuse_attempt3_goal_a_outcomes_for_selection": false,
+  "authorization": "inherits the user's authorization for the single prospective Final14 learned-arm run; this is an infrastructure-only re-execution after zero valid method-comparison records"
+}

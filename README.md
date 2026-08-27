@@ -24,13 +24,15 @@ path to NavDP.
 
 ## Start here
 
-- [Current project source of truth](MemNavData/STATUS_20260825_GIT_RELEASE.md)
+- [Current workspace and release source of truth](MemNavData/STATUS_20260828_WORKSPACE_MAIN_RELEASE.md)
+- [Previous full project ledger](MemNavData/STATUS_20260825_GIT_RELEASE.md)
 - [Architecture and claim boundaries](MemNavData/ARCHITECTURE_20260819_PAPER_SOURCE_OF_TRUTH.md)
 - [Final14 formal result](MemNavData/FINAL14_CEC_PI3X_FORMAL_RESULT_20260818.md)
 - [Fresh HM3D protocol](MemNavData/HM3D_FRESH_FULLMONO_MIXED_ROLE_PROTOCOL_20260820.md)
 - [Real-world deployment guide](MemNavData/REALWORLD_GO2_FULLMONO_DEPLOYMENT_20260820.md)
 - [Scale-free real-world arrival calibration](MemNavData/REALWORLD_SCALE_FREE_ARRIVAL_CALIBRATION_PROTOCOL_20260825.md)
 - [HPC operational hardening](MemNavData/HPC_HARDENING_20260821.md)
+- [Shared SSH and Slurm operations](MemNavData/HPC_SHARED_SSH_OPERATIONS_20260816.md)
 
 ## Main implementation
 

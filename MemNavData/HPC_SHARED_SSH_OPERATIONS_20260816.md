@@ -131,6 +131,32 @@ forward，并用原 benchmark/manifest 中的哈希验证每个文件。本次�
 `621,086` bytes 的 NNR 最小镜像，benchmark、A/B trace、metadata、parquet 和三个
 goal assets 全部逐项哈希一致。
 
+### 1.5 2026-08-28：socket 可响应仍不代表账户正确
+
+`ssh -S SOME_SOCKET alantorch ...` 会直接附着到 `SOME_SOCKET` 对应的 master；命令行
+上的 alias 不会把这个 master 重新认证成 `ssh -G alantorch` 所声明的用户。因此，
+“遍历 `~/.ssh/cm-*` 并选择第一个能运行命令的 socket”是错误且危险的做法。
+
+本次同时存在两个可通过 `ssh -O check` 的 socket：默认 `yz11502` master 的新 no-PTY
+channel 卡住，而较新的另一个 socket 可以立即执行命令，但远端 `id -un` 实际是
+`yz11445`。后者能遍历 `/scratch/yz11502` 的部分目录，却不能读取 owner-only 的冻结
+bundle，于是表现为数百个 `sha256sum: Permission denied`。这不是 bundle 损坏，也不是
+Slurm 或文件系统故障；准备链在上传和 `sbatch` 前已 fail closed。
+
+自动化必须同时验证连通性和身份：
+
+```bash
+expected_user=yz11502
+socket=/home/asus/.ssh/cm-e3ce4155ccb925413d599e13706baddf79fddff3
+actual_user=$(timeout 15 ssh -n -T -o BatchMode=yes \
+  -o ControlMaster=no -S "$socket" alantorch 'id -un' 2>/dev/null || true)
+test "$actual_user" = "$expected_user"
+```
+
+禁止把另一个账户的 responsive socket 当作 fallback，禁止关闭或修改它，也禁止在身份
+未核对时执行远端写入、rsync 或 sbatch。`ssh -O check` 只能证明本地 master 进程接受
+control 命令，不能证明它属于目标账户，也不能证明新 session channel 可用。
+
 ## 2. Slurm 常用命令
 
 项目账户：`torch_pr_769_tandon_advanced`。当前 GPU workflow 使用 QOS：`gpu48`。

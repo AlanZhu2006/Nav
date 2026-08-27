@@ -8,7 +8,7 @@ This file covers `MemNavData/` specifically; the repo-root `/home/asus/Research/
 
 Research working directory for the MemNav / **Certified Episodic Compass (CEC)** project: image-goal navigation with causal online episodic memory on top of a frozen NavDP controller. It contains episode generation, frozen benchmark manifests, closed-loop Habitat evaluation clients, statistical summarizers/verifiers, forensic audits, and HPC orchestration. It is intentionally **flat** (~500 Python files, ~200 shell/sbatch, ~140 markdown): one file per experiment stage, suffixed `_<YYYYMMDD>`. The five small subdirs (`analysis/`, `manifests/`, `posthoc/`, `viz/`, `data_download/`) are pre-2026-08-06 legacy.
 
-**Before doing anything substantive, read the newest `STATUS_*.md` ledger** (Chinese-language running ledgers; as of 2026-08-17 the head is `STATUS_20260817_PI3X_LEARNED_RELOCALIZER_FINAL14.md`, which lists its predecessors). Each ledger's opening section names which file supersedes it. `HPC_SHARED_SSH_OPERATIONS_20260816.md` is the mandatory SSH operating procedure. Older method context: `STATUS_20260814_PAPER_EVAL.md` (CEC architecture, evidence table, what may / may not be claimed in the paper).
+**Before doing anything substantive, read the newest `STATUS_*.md` ledger** (as of 2026-08-28 the release/navigation head is `STATUS_20260828_WORKSPACE_MAIN_RELEASE.md`, with `STATUS_20260825_GIT_RELEASE.md` retained as the preceding full evidence snapshot). Each ledger's opening section names which file supersedes it. `HPC_SHARED_SSH_OPERATIONS_20260816.md` is the mandatory SSH operating procedure. Older method context: `STATUS_20260814_PAPER_EVAL.md` (CEC architecture, evidence table, what may / may not be claimed in the paper).
 
 Results use a strict status vocabulary — `confirmed` / `strong internal` / `underpowered` / `mechanism (oracle)` / `prospective` / `null-negative` / `infrastructure failure`. Never upgrade a label, never present an infrastructure failure or an oracle as a method result.
 
@@ -51,6 +51,46 @@ submit_*_hpc.sh (local: py_compile + tests + bash -n → content-addressed immut
 ```
 
 Bundles land in `/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/`, run roots in `/scratch/yz11502/Research/Nav-axis-uturn-results/<experiment>/<RUN_TAG>` (must not pre-exist), logs in `…/slurm_logs/`. Never reuse an SSH socket that resolves to another user; a hung no-PTY mux channel does not mean auth is dead (see `HPC_SHARED_SSH_OPERATIONS_20260816.md`).
+
+### Mandatory HPC operating gate
+
+For every HPC status check, transfer, submission, cancellation, or repair, treat
+`HPC_SHARED_SSH_OPERATIONS_20260816.md` and `HPC_HARDENING_20260821.md` as the
+authoritative operating procedures. Re-read the relevant sections before acting; do not
+replace them with an improvised SSH, Slurm, bundle, partition, or repair workflow.
+
+The default operational assumption is that the user's shared `alantorch` SSH master is
+already authenticated and available. Use that shared connection directly and do not ask
+the user to log in again merely because one scripted/no-PTY channel stalls. A failed
+automated channel is first a channel, PTY, stdin/job-control, ControlPath, or execution-
+profile problem—not evidence that SSH, Torch HPC, or Slurm is unavailable. Follow the
+manual's shared-master, explicit-PTY, SFTP/SCP, and bounded-timeout paths before reporting
+an access problem. Do not create a new Microsoft device login or a competing master while
+the documented shared connection is available.
+
+Before any remote write, `rsync`/`scp`, or `sbatch`:
+
+1. Resolve the effective alias with `ssh -G alantorch` and use its documented control
+   socket; never select a socket merely because it responds.
+2. Open a real session through that same socket and verify `id -un` is exactly
+   `yz11502`. `ssh -O check` alone is insufficient. Never fall back to a responsive
+   socket owned by another account, and never close or modify that other account's
+   connection.
+3. If the expected master accepts control commands but a new no-PTY channel hangs, use
+   the documented PTY/SFTP path or stop fail-closed. Do not infer MFA expiry, HPC
+   outage, Slurm-controller failure, or permission corruption from that symptom.
+4. Use the documented immutable-bundle chain and all local/remote self-tests,
+   `contract_dry_run`, hash checks, safe partition/QOS checks, exact frozen indices,
+   bounded time limit, paired same-process execution, summary, and independent
+   verification. Repairs target only sealed failed indices and create a new receipt;
+   frozen inputs and completed scientific outputs are never overwritten.
+
+Identity verification is an automatic safety check, not a reason to question the shared
+SSH or repeatedly involve the user. If a required write-side gate genuinely cannot be
+verified after the documented shared-connection paths are exhausted, perform no state-
+changing HPC action and report the exact failed check without generalizing it to “SSH is
+down.” The latest frozen experiment protocol governs scientific design; the two HPC
+manuals govern how it is transported and run.
 
 ## Architecture
 

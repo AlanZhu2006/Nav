@@ -1,5 +1,9 @@
 # Nav / MemNav 项目权威总账与 Git release（2026-08-25）
 
+> **版本说明（2026-08-28）：**本文件保留为 8 月 25 日完整证据快照；当前 workspace、
+> Natural-v4、ViNT 正式对照、Final14 新消融与 `main` release 状态由
+> `STATUS_20260828_WORKSPACE_MAIN_RELEASE.md` 继续维护。
+
 更新时间：2026-08-25 19:06（Asia/Shanghai）
 
 目标远端：`AlanZhu2006/Nav`
@@ -350,6 +354,21 @@ Git 中的 deferred launcher 已修复为精确 sealed-population array，但不
 - paired B2 job `16289955_[0-17%2]` 尚未启动，reason=`QOSMaxGRESPerUser`；
 - aggregate/verify 等待依赖；
 - 无正式 SR，而且即使完成也只能视为极小机制样本。
+
+### 8.3 2026-08-26 completion addendum
+
+上述两个队列均已结束并通过独立审计：
+
+- HM3D actual-full-mono shared-C 最终为 5 histories / 4 scenes：`all_prior 4/5`、
+  `initial-leg-only 2/5`、`forced-reject 2/5`；两项 paired 比较均为 `+2/-0, p=.5`。
+  all-prior 的 3 次接管全部使用 factual-B anchor。方向明确但仍是 underpowered pilot；
+- ViNT shared-C 最终只有 4 histories / 1 scene，三臂均 `4/4`，只证明接口运行；
+- 当前已提交新的 v3 construction-only power gate：job `16401203_[0-53%4]`，seal
+  `16401233`。只有结果盲候选达到 `96 histories / 15 scenes` 才允许创建 factual-B job；
+  当前没有任何 v3 B、C 或 B2 outcome job。
+
+v3 的协议、收据和完整归因见
+`MemNavData/HM3D_FULLMONO_LIFELONG_STATUS_20260824.md` 第 9--10 节。
 
 ## 9. 真机状态与证据边界
 

@@ -20,6 +20,10 @@ from pathlib import Path
 import re
 from typing import Any
 
+from MemNavData.cec_bearing_alignment import (
+    certified_alignment_turn,
+    validate_bounded_turn_trace,
+)
 from MemNavData.cec_handoff_contract import verify_handoff_packet_envelope
 
 
@@ -140,8 +144,11 @@ def audit_pair(root: Path) -> dict[str, Any]:
     contract_path = root / "authority_pair_contract.json"
     require(contract_path.is_file(), "authority-pair contract is missing")
     contract = json.loads(contract_path.read_text())
-    require(contract.get("schema_version")
-            == "cec_authority_pair_contract_v2_20260828",
+    contract_schema = contract.get("schema_version")
+    require(contract_schema in {
+                "cec_authority_pair_contract_v2_20260828",
+                "cec_authority_pair_contract_v3_20260829",
+            },
             "authority-pair contract schema changed")
     require(contract.get("controller") == "vint"
             and contract.get("reject_policy") == "controller_native_exact",
@@ -152,6 +159,14 @@ def audit_pair(root: Path) -> dict[str, Any]:
     require(order in (["grant", "forced_reject_native"],
                       ["forced_reject_native", "grant"]),
             "authority order is invalid")
+    if contract_schema == "cec_authority_pair_contract_v3_20260829":
+        grant_alignment = contract.get("grant_bearing_alignment")
+        forced_alignment = contract.get("forced_reject_bearing_alignment")
+        require(grant_alignment in {"off", "first_certified_bounded"}
+                and forced_alignment == "off",
+                "authority-pair bearing alignment contract is invalid")
+    else:
+        grant_alignment = forced_alignment = "off"
 
     grant = _load_arm(root / "grant", "grant")
     forced = _load_arm(
@@ -178,6 +193,20 @@ def audit_pair(root: Path) -> dict[str, Any]:
             require(row.get("metric_depth_sensor_consumed_any") == "0"
                     and row.get("runtime_failure_plans") == "0",
                     f"{scope}/{query_id}: sensor/runtime contract failed")
+            if contract_schema == "cec_authority_pair_contract_v3_20260829":
+                expected_alignment = (
+                    grant_alignment if scope == "grant" else forced_alignment
+                )
+                require(row.get("cec_initial_bearing_alignment_mode")
+                        == expected_alignment,
+                        f"{scope}/{query_id}: bearing alignment mode changed")
+                count = int(row["cec_initial_bearing_alignment_count"])
+                actions = int(row["cec_initial_bearing_alignment_action_count"])
+                require(count in {0, 1} and actions >= 0,
+                        f"{scope}/{query_id}: invalid bearing alignment counts")
+                if expected_alignment == "off":
+                    require(count == 0 and actions == 0,
+                            f"{scope}/{query_id}: disabled alignment executed")
             plans = arm["payloads"][query_id].get("query_leg")
             require(isinstance(plans, list) and plans,
                     f"{scope}/{query_id}: query has no controller decisions")
@@ -259,6 +288,71 @@ def audit_pair(root: Path) -> dict[str, Any]:
 
         grant_takeovers = sum(
             plan.get("cec_takeover") is True for plan in grant_plans)
+        alignment_receipt: dict[str, Any] = {
+            "mode": grant_alignment,
+            "required": False,
+            "validated": grant_alignment == "off",
+            "expected_turn_deg": None,
+            "action_count": 0,
+            "fresh_observation_receipts": 0,
+        }
+        if contract_schema == "cec_authority_pair_contract_v3_20260829":
+            grant_trace = grant_payload.get(
+                "cec_initial_bearing_alignment_trace")
+            forced_trace = forced_payload.get(
+                "cec_initial_bearing_alignment_trace")
+            require(isinstance(grant_trace, list)
+                    and isinstance(forced_trace, list) and not forced_trace,
+                    f"{query_id}: bounded-turn trace receipt is invalid")
+            grant_count = int(
+                grant_row["cec_initial_bearing_alignment_count"])
+            grant_actions = int(
+                grant_row["cec_initial_bearing_alignment_action_count"])
+            require(len(grant_trace) == grant_actions,
+                    f"{query_id}: bounded-turn action count changed")
+            if grant_alignment == "off":
+                require(grant_count == 0 and grant_actions == 0,
+                        f"{query_id}: disabled grant alignment executed")
+            else:
+                first_authorized = next((
+                    plan for plan in grant_plans
+                    if plan.get("cec_shadow_takeover") is True
+                ), None)
+                if first_authorized is None:
+                    require(grant_count == 0 and grant_actions == 0,
+                            f"{query_id}: all-reject query executed alignment")
+                    alignment_receipt["validated"] = True
+                else:
+                    alignment = certified_alignment_turn(first_authorized)
+                    require(alignment is not None,
+                            f"{query_id}: accepted proof lost its bearing")
+                    expected_turn = float(alignment.turn_rad)
+                    alignment_receipt["expected_turn_deg"] = math.degrees(
+                        expected_turn)
+                    if abs(expected_turn) <= 1e-9:
+                        require(grant_count == 0 and grant_actions == 0,
+                                f"{query_id}: zero bearing executed a turn")
+                        alignment_receipt["validated"] = True
+                    else:
+                        require(grant_count == 1 and grant_actions > 0,
+                                f"{query_id}: certified bearing was not consumed")
+                        try:
+                            validated = validate_bounded_turn_trace(
+                                grant_trace, expected_turn_rad=expected_turn,
+                            )
+                        except ValueError as error:
+                            raise RuntimeError(
+                                f"{query_id}: invalid bounded-turn trace: {error}"
+                            ) from error
+                        alignment_receipt.update({
+                            "required": True,
+                            "validated": True,
+                            "action_count": int(validated["action_count"]),
+                            "fresh_observation_receipts": int(
+                                validated["fresh_observation_receipts"]),
+                            "max_abs_action_deg": float(
+                                validated["max_abs_action_deg"]),
+                        })
         exact_fallback_trace_match = None
         if grant_takeovers == 0:
             exact_fallback_trace_match = bool(
@@ -287,6 +381,7 @@ def audit_pair(root: Path) -> dict[str, Any]:
             "first_packet_verified": packet_verified,
             "first_packet_sha256": packet_sha,
             "grant_takeover_plans": int(grant_takeovers),
+            "grant_bearing_alignment": alignment_receipt,
             "forced_takeover_plans": 0,
             "grant_success": grant_success,
             "native_success": forced_success,
@@ -315,6 +410,7 @@ def audit_pair(root: Path) -> dict[str, Any]:
         "verified": True,
         "controller": "vint",
         "reject_policy": "controller_native_exact",
+        "grant_bearing_alignment": grant_alignment,
         "scene": str(contract["scene"]),
         "episode": str(contract["episode"]),
         "authority_order": order,

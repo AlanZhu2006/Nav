@@ -32,6 +32,18 @@ nonfinite turn, nonmonotonic observation receipt, or exhausted step budget
 fails closed.  The initial CEC-bearing decision is evidence/authorization only;
 its pre-turn ViNT trajectory is never executed.
 
+The held-out authority-pair runner now closes this interface explicitly with
+`PORTABILITY_CEC_ACCEPT_ALIGNMENT=first_certified_bounded`. Only the `grant`
+arm receives that evaluator mode; `forced_reject_native` is pinned to `off`.
+The runner rejects this mode unless the controller is ViNT, the query protocol
+is complete-population `paper_heldout`, the reject branch is
+`controller_native_exact`, and no outcome-selected query manifest is supplied.
+Its v3 authority receipt records both arm modes. The per-cell auditor then
+reconstructs the signed turn from the proof packet and verifies every
+zero-translation action, fresh-observation hash, monotonic memory index, and
+the summed turn angle. This closes the implementation path but does not by
+itself authorize or constitute a formal SR result.
+
 ## Why the previous 28-history result cannot be reused
 
 The anchor-only formal run and its five selected losses have already been

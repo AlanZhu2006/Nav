@@ -72,6 +72,11 @@ history.  The current source of truth is
   was opened.
 - The ViNT ideal-bearing alignment loss-five result passed its mechanism gates
   but remains outcome-aware and nonphysical; no formal ViNT SR was submitted.
+- The physical ViNT bearing executor is now wired into the same-process
+  authority-pair runner rather than existing only inside the low-level
+  evaluator. It is fail-closed to complete held-out populations, leaves the
+  forced-reject arm at exact native ViNT, and emits an auditable bounded-turn /
+  fresh-observation receipt. This is implementation readiness, not a result.
 - A read-only audit of the 2026-08-20 HM3D parent population closed the apparent
   Table-1 "reserve" loophole.  All 130 materialized histories had already been
   attempted by the original constructor: 28 were retained, 52 lacked its

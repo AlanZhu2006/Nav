@@ -192,6 +192,14 @@ HM3D continual underpowered amendment
 `py_compile`。ViNT bounded executor 已完成实现与本地 dry-run，但没有新鲜、
 outcome-blind population，因此仍是 `prepared only`，未提交正式 SR。
 
+2026-08-29 的接口闭包复查发现，旧 authority-pair runner 的正式分支没有把底层已实现的
+`first_certified_bounded` 传入 evaluator，若直接复用会再次退化为 anchor-only。现在
+`grant` 分支已显式接入物理 bounded turns，`forced_reject_native` 显式固定为 `off`；v3
+contract 记录两臂 mode，cell auditor 从 proof packet 复算 signed bearing，并验证每个
+`<=30°` 零平移动作、fresh RGB hash、连续 memory frame index 与累计角度。11 个相关单元
+测试、shell syntax 和两类 fail-closed preflight 均通过。该修改尚未进入任何 formal
+rollout，也不改变正在运行的 construction-only bundle。
+
 ### 5.7 Table-1 fresh-query reserve 构造门（2026-08-29）
 
 对 HM3D parent population 的只读审计确认，所谓“剩余约 102 条 history”并不是现成

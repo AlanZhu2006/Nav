@@ -37,6 +37,11 @@ FORCED_HUB_PORT=${FORCED_HUB_PORT:-21845}
 # cross-machine CUDA confound that invalidated older controller tables.
 PORTABILITY_AUTHORITY_PAIR=${PORTABILITY_AUTHORITY_PAIR:-0}
 PORTABILITY_AUTHORITY_ORDER=${PORTABILITY_AUTHORITY_ORDER:-grant,forced_reject_native}
+# The default preserves every prior authority-pair run.  A separately frozen
+# held-out ViNT protocol may opt into the physical proof-bearing executor; the
+# forced-reject arm remains byte-for-byte native and therefore always receives
+# ``off`` below.
+PORTABILITY_CEC_ACCEPT_ALIGNMENT=${PORTABILITY_CEC_ACCEPT_ALIGNMENT:-off}
 PORTABILITY_DIRECTION_TRIPLE=${PORTABILITY_DIRECTION_TRIPLE:-0}
 PORTABILITY_DIRECTION_ORDER=${PORTABILITY_DIRECTION_ORDER:-anchor_unaligned,native_bearing_aligned,anchor_bearing_aligned}
 ROLE_PAIR_QUERY_ROLE=${ROLE_PAIR_QUERY_ROLE:-all}
@@ -100,6 +105,10 @@ case "${PORTABILITY_AUTHORITY_PAIR}" in
   0|1) ;;
   *) fail "PORTABILITY_AUTHORITY_PAIR must be 0 or 1" ;;
 esac
+case "${PORTABILITY_CEC_ACCEPT_ALIGNMENT}" in
+  off|first_certified_bounded) ;;
+  *) fail "PORTABILITY_CEC_ACCEPT_ALIGNMENT must be off or first_certified_bounded" ;;
+esac
 case "${PORTABILITY_DIRECTION_TRIPLE}" in
   0|1) ;;
   *) fail "PORTABILITY_DIRECTION_TRIPLE must be 0 or 1" ;;
@@ -115,6 +124,8 @@ if [[ "${PORTABILITY_DIRECTION_TRIPLE}" == 1 ]]; then
     fail "direction triple is consumed development only"
   [[ -n "${ROLE_PAIR_QUERY_MANIFEST}" ]] || \
     fail "direction triple requires a frozen query manifest"
+  [[ "${PORTABILITY_CEC_ACCEPT_ALIGNMENT}" == off ]] || \
+    fail "direction triple owns its alignment treatments"
   case "${PORTABILITY_DIRECTION_ORDER}" in
     anchor_unaligned,native_bearing_aligned,anchor_bearing_aligned|\
     native_bearing_aligned,anchor_bearing_aligned,anchor_unaligned|\
@@ -137,6 +148,18 @@ if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
   [[ "${PORTABILITY_AUTHORITY_ORDER}" == grant,forced_reject_native \
      || "${PORTABILITY_AUTHORITY_ORDER}" == forced_reject_native,grant ]] || \
     fail "invalid PORTABILITY_AUTHORITY_ORDER"
+fi
+if [[ "${PORTABILITY_CEC_ACCEPT_ALIGNMENT}" == first_certified_bounded ]]; then
+  [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 \
+     && "${CONTROLLER}" == vint \
+     && "${EVAL_KIND}" == role_pair_mixed ]] || \
+    fail "bounded CEC alignment requires a paired ViNT role-pair run"
+  [[ "${CEC_REJECT_POLICY}" == controller_native_exact ]] || \
+    fail "bounded CEC alignment requires exact native ViNT rejection"
+  [[ "${ROLE_PAIR_SCOPE}" == paper_heldout ]] || \
+    fail "bounded CEC alignment is restricted to a frozen held-out population"
+  [[ -z "${ROLE_PAIR_QUERY_MANIFEST}" ]] || \
+    fail "bounded held-out formal must run the complete population"
 fi
 if [[ -n "${ROLE_PAIR_QUERY_MANIFEST}" ]]; then
   [[ "${EVAL_KIND}" == role_pair_mixed ]] || \
@@ -253,14 +276,17 @@ if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
     "${CONTROLLER}" "${SCENE}" "${EPISODE}" "${MAX_STEPS}" \
     "${PORTABILITY_AUTHORITY_ORDER}" "${ROLE_PAIR_QUERY_MANIFEST}" \
     "${BENCHMARK_ROOT}/../manifest.json" "${CEC_REJECT_POLICY}" \
-    "${ROLE_PAIR_SCOPE}" <<'PY'
+    "${ROLE_PAIR_SCOPE}" "${PORTABILITY_CEC_ACCEPT_ALIGNMENT}" <<'PY'
 import hashlib,json,sys
 (path,controller,scene,episode,max_steps,order,query_manifest,
- benchmark_manifest,reject_policy,role_pair_scope)=sys.argv[1:]
+ benchmark_manifest,reject_policy,role_pair_scope,accept_alignment)=sys.argv[1:]
 def digest(path):
  return hashlib.sha256(open(path,"rb").read()).hexdigest()
 payload={
- "schema_version":"cec_authority_pair_contract_v2_20260828",
+ "schema_version":(
+   "cec_authority_pair_contract_v3_20260829"
+   if accept_alignment == "first_certified_bounded"
+   else "cec_authority_pair_contract_v2_20260828"),
  "controller":controller,"scene":scene,"episode":episode,
  "max_steps":int(max_steps),"authority_order":order.split(","),
  "same_loaded_processes":True,"runtime_role_visibility":"none",
@@ -271,6 +297,11 @@ payload={
  "benchmark_manifest_path":benchmark_manifest,
  "benchmark_manifest_sha256":digest(benchmark_manifest),
 }
+if accept_alignment == "first_certified_bounded":
+ payload.update({
+   "grant_bearing_alignment":accept_alignment,
+   "forced_reject_bearing_alignment":"off",
+ })
 open(path,"x").write(json.dumps(payload,indent=2,sort_keys=True)+"\n")
 PY
 fi
@@ -887,10 +918,13 @@ elif [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
   IFS=',' read -r -a authority_order <<<"${PORTABILITY_AUTHORITY_ORDER}"
   for authority in "${authority_order[@]}"; do
     if [[ "${authority}" == grant ]]; then
-      run_evaluator "${RUN_ROOT}/grant" grant "${HUB_PORT}" "${hub_pid}"
+      run_evaluator "${RUN_ROOT}/grant" grant "${HUB_PORT}" "${hub_pid}" \
+        --cec_initial_bearing_alignment \
+        "${PORTABILITY_CEC_ACCEPT_ALIGNMENT}"
     else
       run_evaluator "${RUN_ROOT}/forced_reject_native" \
-        forced_reject_native "${FORCED_HUB_PORT}" "${forced_hub_pid}"
+        forced_reject_native "${FORCED_HUB_PORT}" "${forced_hub_pid}" \
+        --cec_initial_bearing_alignment off
     fi
   done
 elif [[ -n "${HM3D_LIFELONG_PAIRED_SCOPES}" ]]; then

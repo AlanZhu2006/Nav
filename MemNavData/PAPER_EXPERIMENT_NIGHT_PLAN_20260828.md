@@ -192,6 +192,44 @@ HM3D continual underpowered amendment
 `py_compile`。ViNT bounded executor 已完成实现与本地 dry-run，但没有新鲜、
 outcome-blind population，因此仍是 `prepared only`，未提交正式 SR。
 
+### 5.7 Table-1 fresh-query reserve 构造门（2026-08-29）
+
+对 HM3D parent population 的只读审计确认，所谓“剩余约 102 条 history”并不是现成
+的 mixed-role reserve。旧 constructor 已尝试全部 130 条 materialized history：28 条
+保留；52 条缺指定方向的 Natural-Novel；50 条同时缺 standard Revisit 与该 Novel。
+因此不能直接从中挑一批跑新的 ViNT formal。
+
+新冻结协议只回答 constructibility，不读取或产生 query policy outcome：
+
+```text
+排除旧 28 条 consumed scene/episode identities
+  -> 每条剩余 history 先尝试原 preassigned direction
+  -> 结构失败时按 identity hash 尝试另外两个方向
+  -> 仍要求 Novel covis < 0.10、Revisit covis 0.55--0.90、距离 2--9 m
+  -> >=24 histories、>=15 scenes、front/side/rear 各 >=4
+  -> independent verifier
+```
+
+只有全部功效门通过才允许后续四臂 `NavDP / NavDP+CEC / ViNT / ViNT+CEC`；否则停止，
+不提交闭环。它只能支持 fresh-query、scene-overlap controller portability，不能写成
+fresh-scene generalization。
+
+权威 construction-only DAG：
+
+```text
+16525112 smoke
+  -> 16525114 construction array 0-53%2
+  -> 16525132 population finalize
+  -> 16525152 independent construction verifier
+```
+
+smoke 已完成，scene 0 的两条未消费 history 均被尝试、保留 0 条；formal array 已正常
+启动。这个 early structural count 不改变 seed、方向 fallback、功效门或 scene schedule。
+前两次预检均在 `sbatch` 前停止：第一次人工中断了正常的远端 Habitat/Pillow 冷导入；
+第二次发现最小 bundle 错带一个会导入无关 lifelong 模块的旧测试。权威第三次 bundle
+为 `bb7579140a19cf03b9fc6aa586564773fc2cfe23021fb615dbd19dff29af88e8`，两次预检均未
+产生 Slurm job 或科学 outcome。
+
 ### 5.1 端口竞争后的权威 replacement DAG
 
 原 zero array 的 index 19 在 evaluator 启动前发生 TCP 端口竞争；其 partial 目录已

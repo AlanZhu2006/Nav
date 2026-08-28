@@ -1,0 +1,16 @@
+{
+  "future_policy_evaluation_submitted": false,
+  "jobs": {
+    "construction_array": 16525114,
+    "construction_smoke": 16525112,
+    "independent_verification": 16525152,
+    "population_finalize": 16525132
+  },
+  "query_policy_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_fresh_query_reserve_20260829/construction_20260828T212552Z_bb757914",
+  "schema_version": "hm3d_table1_fresh_query_submission_v1_20260829",
+  "scope": "construction-only power gate; no navigation rollout",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_fresh_query_reserve_20260829/construction_20260828T212552Z_bb757914_smoke",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_fresh_query_bb7579140a19cf03",
+  "task_receipt_sha256": "bb7579140a19cf03b9fc6aa586564773fc2cfe23021fb615dbd19dff29af88e8"
+}

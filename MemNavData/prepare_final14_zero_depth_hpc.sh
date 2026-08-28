@@ -20,30 +20,18 @@ SOURCE_OVERLAY=/scratch/lg154/Research/datasets/_overlays/mp3d_revisit_v0_pt1.sq
 EXPECTED_SOURCE_OVERLAY_BYTES=128854888448
 cd "${ROOT}"
 fail() { echo "ABORT: $*" >&2; exit 2; }
-select_control_path() {
-  local candidate
-  local remote_user
-  local candidates=()
-  if [[ -n "${SSH_CONTROL_PATH:-}" ]]; then
-    candidates+=("${SSH_CONTROL_PATH}")
-  fi
-  while IFS= read -r candidate; do candidates+=("${candidate}"); done < <(
-    find /home/asus/.ssh -maxdepth 1 -type s -name 'cm-*' \
-      -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk '{print $2}')
-  for candidate in "${candidates[@]}"; do
-    [[ -S "${candidate}" ]] || continue
-    remote_user=$(timeout 12 ssh -n -T -o BatchMode=yes \
-      -o ControlMaster=no -S "${candidate}" "${SSH_ALIAS}" \
-      'id -un' 2>/dev/null || true)
-    if [[ "${remote_user}" == "${EXPECTED_SSH_USER}" ]]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
-  return 1
-}
-SSH_CONTROL_PATH=$(select_control_path) || \
-  fail "no shared SSH socket is both responsive and authenticated as ${EXPECTED_SSH_USER}"
+SSH_CONTROL_PATH=${SSH_CONTROL_PATH:-$(
+  ssh -G "${SSH_ALIAS}" 2>/dev/null |
+    awk '$1=="controlpath"{value=$2} END{print value}'
+)}
+[[ -S "${SSH_CONTROL_PATH}" ]] || fail "authoritative shared SSH socket missing"
+timeout 15 ssh -O check -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" \
+  >/dev/null 2>&1 || fail "authoritative shared SSH master is not responsive"
+remote_user=$(timeout 20 ssh -n -T -o BatchMode=yes \
+  -o ControlMaster=no -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" \
+  'id -un' 2>/dev/null || true)
+[[ "${remote_user}" == "${EXPECTED_SSH_USER}" ]] || \
+  fail "authoritative shared SSH identity is ${remote_user:-unavailable}, expected ${EXPECTED_SSH_USER}"
 remote() {
   timeout 180 ssh -n -T -o BatchMode=yes -o ControlMaster=no \
     -o ServerAliveInterval=15 -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" "$@"
@@ -59,6 +47,8 @@ files=(
   MemNavData/test_final14_zero_depth.py
   MemNavData/run_final14_zero_depth_episode.py
   MemNavData/run_final14_zero_depth_history.sh
+  MemNavData/slurm_port_pair.sh
+  MemNavData/test_slurm_port_pair.sh
   MemNavData/summarize_final14_zero_depth.py
   MemNavData/independent_verify_final14_zero_depth.py
   MemNavData/slurm_final14_zero_depth.sbatch
@@ -71,6 +61,7 @@ for path in "${files[@]}"; do
 done
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT}" "${LOCAL_PY}" \
   -m unittest -q MemNavData.test_final14_zero_depth
+bash MemNavData/test_slurm_port_pair.sh
 "${LOCAL_PY}" -m py_compile \
   MemNavData/final14_zero_depth.py \
   MemNavData/run_final14_zero_depth_episode.py \
@@ -78,6 +69,8 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT}" "${LOCAL_PY}" \
   MemNavData/independent_verify_final14_zero_depth.py
 bash -n \
   MemNavData/run_final14_zero_depth_history.sh \
+  MemNavData/slurm_port_pair.sh \
+  MemNavData/test_slurm_port_pair.sh \
   MemNavData/slurm_final14_zero_depth.sbatch \
   MemNavData/slurm_final14_zero_depth_analysis.sbatch \
   MemNavData/prepare_final14_zero_depth_hpc.sh
@@ -142,6 +135,7 @@ else
 fi
 repair_receipt=${repair_root}/SOURCE_BUNDLE.sha256
 remote "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${repair_root}:${BASE_SOURCE_ROOT}' '${REMOTE_PY}' -m unittest -q MemNavData.test_final14_zero_depth"
+remote "ROOT='${repair_root}' bash '${repair_root}/MemNavData/test_slurm_port_pair.sh'"
 
 common="ALL,REPAIR_ROOT=${repair_root},REPAIR_RECEIPT=${repair_receipt},EXPECTED_REPAIR_RECEIPT_SHA=${receipt_sha},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_SOURCE_RECEIPT=${BASE_SOURCE_RECEIPT},EXPECTED_BASE_SOURCE_RECEIPT_SHA=${EXPECTED_BASE_SOURCE_RECEIPT_SHA},REFERENCE_ROOT=${REFERENCE_ROOT},BENCH_ROOT=${BENCH_ROOT},SOURCE_OVERLAY=${SOURCE_OVERLAY},EXPECTED_SOURCE_OVERLAY_BYTES=${EXPECTED_SOURCE_OVERLAY_BYTES}"
 gpu_script=${repair_root}/MemNavData/slurm_final14_zero_depth.sbatch

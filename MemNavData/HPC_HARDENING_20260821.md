@@ -170,3 +170,84 @@ array 的 finalizer。
 当前已经提交的 job `16318975` 来自旧 immutable bundle，不能在原地用新源码改写；其
 多余 pending indices 属于基础设施空任务，不是导航 episode。后续新 bundle 必须使用
 `slurm_hm3d_fullmono_shared_c_deferred.sbatch` 的 v2 精确数组合约。
+
+## 7. 远端复合预检必须自身 fail-fast
+
+2026-08-28 的 ViNT--CEC mechanism submit 暴露了一个 shell 边界：本地 submit 脚本虽然
+有 `set -euo pipefail`，但通过 SSH 发送的多行复合命令是在另一个远端 shell 中执行，
+不会继承本地 shell 选项。一次 Habitat `requests` 导入自检失败后，远端后续 checksum
+和发布命令仍继续，导致只提交了一个不带完整 submission receipt 的 gate。
+
+所有包含两条以上命令、且后面可能触发 bundle publish 或 `sbatch` 的远端命令必须以
+下面一行开头：
+
+```bash
+set -euo pipefail
+```
+
+另外，环境自检必须复刻正式 runner 的完整、显式 `PYTHONPATH`。若依赖来自解释器自带
+的 vendored 路径（本次为 Habitat 环境中 `pip/_vendor/requests`），应先解析真实
+`site-packages`、验证目标文件可读，再通过 `SELFTEST_EXTRA_PYTHONPATH` 传给
+`bundle_selftest.sh`；不能因为登录节点的默认 import path 不同而放宽自检。
+
+本次事故、旧 gate 和唯一权威 retry DAG 的逐项收据见
+`VINT_CEC_BEARING_ALIGNMENT_SUBMISSION_INCIDENT_20260828.md`。
+
+## 8. 不依赖交互 shell 的解释器别名
+
+2026-08-28 的最终本地预检发现，项目的 Habitat Python 3.9 存在于
+`/home/asus/miniconda3/envs/habitat/bin/python3.9`，但裸命令 `python3.9` 不在登录
+shell 的 `PATH`。这不是代码错误，但如果批处理脚本依赖交互式 conda 初始化，会在
+不同节点或非交互 SSH 中表现为 `command not found`。
+
+因此所有正式脚本和 bundle self-test 必须：
+
+1. 使用 receipt 固定的解释器绝对路径；
+2. 在提交前检查该路径 `-x`；
+3. 对需要 Habitat 语法兼容性的入口，显式用该解释器执行 `py_compile`；
+4. 不把 `conda activate`、用户 `.bashrc` 或裸 `python`/`python3.9` 当成运行时依赖。
+
+本轮 modified/untracked 源码已用显式 Habitat Python 3.9 完成 21 个文件的
+`py_compile`；9 个 shell 入口均通过 `bash -n`。
+
+## 9. 共享多 GPU 节点上的 TCP 端口不是 job-private
+
+2026-08-28 的 Final14 zero-depth array 中，index 19 与同节点另一进程竞争
+`35756`，NavDP server 在 evaluator 启动前以 `Address already in use` 退出。其余
+20 个单元完成，失败单元没有 query outcome。单纯用 PID/Slurm job ID 取模再做一次
+`ss` 检查仍存在 TOCTOU race；GPU allocation 也不隔离宿主机 TCP namespace。
+
+后续多进程 cell 使用 `slurm_port_pair.sh`：
+
+- job-keyed 候选顺序；
+- `/tmp` node-local `flock`，父 shell 全程持有；
+- 对连续 2-port 或 5-port block 逐端口检查 listener；
+- 最多 128 个候选，失败则 fail closed；
+- server 退出后再释放锁。
+
+旧 partial 只读归档，未删除；exact repair 只补 index 19。repair job `16502265`
+和 replacement verifier `16502270` 均为 `COMPLETED 0:0`。已知仍使用旧端口算法但尚未
+运行的 authority/lifelong bundle 被废弃并以 portsafe immutable bundle 重提。
+
+## 10. Namespace package 会掩盖不完整的 source bundle
+
+2026-08-28 的 portsafe authority smoke `16502418` 暴露了一个不同于“缺少第三方包”
+的问题。启动脚本的 `PYTHONPATH` 同时包含新 overlay 和旧 base bundle；两边的
+`MemNavData` 都是可合并的 namespace package。新 overlay 漏装
+`monocular_depth_runtime.py` 时，普通 import 仍然成功，但实际解析到旧 bundle。
+结果是新 `memnav_server.py` 在第一次 retrieval transaction 才发现旧模块没有
+`bind_monocular_depth_transaction`。38 个不覆盖该延迟路径的启动测试均通过，说明
+“import 成功”本身不是依赖闭包证明。
+
+正式 bundle 现在执行以下约束：
+
+1. 所有 overlay 修改过或直接调用的运行时模块及其测试必须显式进入 files manifest；
+2. 对会被 base bundle 同名模块掩盖的关键 import，启动前检查 `module.__file__` 的
+   resolved path 必须等于当前 immutable bundle 中的预期文件；
+3. 同一个 provenance check 在本地 staging、HPC 登录节点和 GPU runner 内都执行；
+4. delayed endpoint 所需 API 至少有一个启动前单元测试覆盖，不能只测 server import；
+5. provenance 不符时必须在模型加载和 episode outcome 写入前 fail closed。
+
+修复后的 authority bundle receipt 前缀为 `18fe24537b840871`；replacement DAG 是
+`16503212 -> 16503217 -> 16503241`。失败 smoke 没有产生 arm outcome，其下游由
+`afterok` 自动取消。

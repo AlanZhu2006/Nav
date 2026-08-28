@@ -28,6 +28,11 @@
 # subdirectories appended to PYTHONPATH, mirroring job scripts that put both
 # the bundle root and a package subdirectory on the path
 # (e.g. SELFTEST_BUNDLE_SUBPATHS=MemNavData).
+# SELFTEST_EXTRA_PYTHONPATH (optional): colon-separated, already-resolved
+# external dependency paths.  This is used only when the production runner
+# deliberately vendors a dependency outside the immutable source bundle, such
+# as Habitat's ``pip/_vendor/requests`` fallback.  Callers must resolve and
+# verify these paths before invoking the self-test.
 set -uo pipefail
 
 STAGING=${1:?usage: bundle_selftest.sh <staging_root> <entries_file>}
@@ -40,6 +45,10 @@ _subpaths=${SELFTEST_BUNDLE_SUBPATHS:-}
 for sub in ${_subpaths//:/ }; do
   SELFTEST_PYTHONPATH+=":$STAGING/$sub"
 done
+_external=${SELFTEST_EXTRA_PYTHONPATH:-}
+if [[ -n "$_external" ]]; then
+  SELFTEST_PYTHONPATH+=":$_external"
+fi
 
 failures=0
 restore() { chmod -R u+w "$STAGING" 2>/dev/null || true; }

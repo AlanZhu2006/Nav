@@ -1,0 +1,13 @@
+{
+  "failed_array_index": 19,
+  "failed_raw_job": 16501938,
+  "navigation_outcomes_read_before_repair": false,
+  "original_array": 16499701,
+  "repair_job": 16502265,
+  "replacement_analysis_job": 16502270,
+  "schema_version": "final14_zero_depth_port_repair_submission_v1_20260828",
+  "scope": "infrastructure-only exact repair; no scientific variable changed",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_zero_depth_bc558014eda61a94",
+  "source_bundle_receipt_sha256": "bc558014eda61a94ecd158aa982775552fc5525f6a529bf5516fc542791fe5a3",
+  "superseded_analysis_job": 16499709
+}

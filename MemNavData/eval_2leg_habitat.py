@@ -68,6 +68,7 @@ from deterministic_eval_protocol import (
 from arrival_shadow import ArrivalShadowConfig, ArrivalShadowDetector
 from bearing_diagnostics import evaluation_geodesic_bearing_error_deg
 from cec_bearing_alignment import bounded_turn_delta, certified_alignment_turn
+from cec_authority_receipt import authority_plan_receipt_fields
 from navdp_goal_switch import (
     RESET_MODES,
     TRAJECTORY_SELECTOR_SCOPES,
@@ -3437,6 +3438,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                   certified_relocalization_certificate=(
                                       response.get(
                                           "certified_relocalization_certificate")),
+                                  **authority_plan_receipt_fields(response),
                                   certified_relocalization_pnp=response.get(
                                       "certified_relocalization_pnp"),
                                   certified_relocalization_metric_scale=(

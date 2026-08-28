@@ -65,6 +65,8 @@ files=(
   MemNavData/cec_handoff_contract.py
   MemNavData/cec_bearing_alignment.py
   MemNavData/test_cec_bearing_alignment.py
+  MemNavData/cec_authority_receipt.py
+  MemNavData/test_cec_authority_receipt.py
   MemNavData/monocular_depth_runtime.py
   MemNavData/test_monocular_depth_runtime.py
   MemNavData/final14_authority_ablation.py
@@ -96,6 +98,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT}:${ROOT}/MemNavData" \
     MemNavData/test_certified_relocalization_runtime.py \
     MemNavData/test_final14_authority_ablation.py \
     MemNavData/test_cec_bearing_alignment.py \
+    MemNavData/test_cec_authority_receipt.py \
     MemNavData/test_monocular_depth_runtime.py
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT}:${ROOT}/MemNavData" \
   "${LOCAL_PY}" -m unittest -q \
@@ -108,6 +111,7 @@ bash MemNavData/test_slurm_port_pair.sh
   MemNavData/controller_portability_contract.py \
   MemNavData/cec_handoff_contract.py \
   MemNavData/cec_bearing_alignment.py \
+  MemNavData/cec_authority_receipt.py \
   MemNavData/monocular_depth_runtime.py \
   MemNavData/final14_authority_ablation.py \
   MemNavData/run_final14_authority_ablation_episode.py \
@@ -184,7 +188,7 @@ else
   remote "cd '${repair_stage}' && sha256sum -c --quiet SOURCE_BUNDLE.sha256 && chmod -R a-w '${repair_stage}' && mv '${repair_stage}' '${repair_root}'"
 fi
 repair_receipt=${repair_root}/SOURCE_BUNDLE.sha256
-remote "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${repair_root}:${repair_root}/MemNavData:${repair_root}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav' '${REMOTE_PY}' -m pytest -q -p no:cacheprovider '${repair_root}/MemNavData/test_certified_relocalization_runtime.py' '${repair_root}/MemNavData/test_final14_authority_ablation.py' '${repair_root}/MemNavData/test_cec_bearing_alignment.py' '${repair_root}/MemNavData/test_monocular_depth_runtime.py'"
+remote "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${repair_root}:${repair_root}/MemNavData:${repair_root}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav' '${REMOTE_PY}' -m pytest -q -p no:cacheprovider '${repair_root}/MemNavData/test_certified_relocalization_runtime.py' '${repair_root}/MemNavData/test_final14_authority_ablation.py' '${repair_root}/MemNavData/test_cec_bearing_alignment.py' '${repair_root}/MemNavData/test_cec_authority_receipt.py' '${repair_root}/MemNavData/test_monocular_depth_runtime.py'"
 remote "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${repair_root}:${repair_root}/MemNavData:${repair_root}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav' '${REMOTE_PY}' -m unittest -q MemNavData.test_policy_agent_graph MemNavData.test_router_candidates"
 remote "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${repair_root}:${repair_root}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData' '${REMOTE_PY}' - '${repair_root}' <<'PY'
 import pathlib, sys

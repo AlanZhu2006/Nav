@@ -251,3 +251,25 @@ shell 的 `PATH`。这不是代码错误，但如果批处理脚本依赖交互�
 修复后的 authority bundle receipt 前缀为 `18fe24537b840871`；replacement DAG 是
 `16503212 -> 16503217 -> 16503241`。失败 smoke 没有产生 arm outcome，其下游由
 `afterok` 自动取消。
+
+## 11. 执行成功不等于收据字段完整
+
+provenance 修复后的 smoke `16503212` 完整执行两臂后，在 post-run audit 发现
+authority policy 字段为 `None`。HTTP response 与内部 proposal-attempt authority
+均正确，缺失发生在 generic evaluator 的显式 `plans.append(...)` 序列化白名单。
+因此模型、route 和 trajectory 都运行成功，但无法证明唯一干预变量，正式数组仍必须
+阻止。
+
+预防规则：
+
+1. 新增决策变量时，必须同时测试 endpoint response、episode plan receipt 和独立
+   verifier 三层 schema；
+2. 审计关键字段用一个 dependency-free helper 显式复制，不在多个长字典中手写；
+3. receipt helper 必须能在最小 Habitat 解释器中导入，不能为了两行 JSON 复制引入
+   OpenCV、PyTorch 或其他 server-only 依赖；
+4. smoke 必须跑到 completion/verifier 前置审计，而不是只以 server 健康或 episode
+   rollout 退出码作为通过条件。
+
+修复只新增 `certified_relocalization_authority` 和
+`certified_relocalization_authority_policy` 两个诊断字段，不改变控制。当前 replacement
+DAG 是 `16504303 -> 16504304 -> 16504307`。

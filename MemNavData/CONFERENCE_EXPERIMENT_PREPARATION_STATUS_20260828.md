@@ -91,12 +91,14 @@ history.  The current source of truth is
   rollout is part of this submission.  The smoke completed with `0/2`
   constructible reserve histories in scene 0, and the formal construction
   array started normally.  This early count is not used to alter the protocol.
-- At the latest result-blind structural read, `38/54` scene receipts were
-  complete. They contain `25` retained histories from `18` scene clusters,
-  with direction strata `front/side/rear = 3/4/18`. Thus the history and scene
-  thresholds already pass, but the front stratum remains one below its frozen
-  minimum. Finalizer `16525132` and verifier `16525152` remain dependency-held;
-  no policy evaluation has been submitted.
+- The fresh-query construction array, finalizer, and independent verifier have
+  now completed. The frozen selected prefix contains `28` histories from `21`
+  scene clusters, with direction strata `front/side/rear = 4/5/19`; it passes
+  every pre-registered power gate. The benchmark manifest SHA is
+  `f82dbcbc6255219aae94b6d77bffdfa454f36835cf803a70df5cf8616193ad01`,
+  and the independent verification SHA is
+  `2a7b8f86f61a6f55762640dcbaef4b975539ec3d93cfb06649bddd6fa4c96dc8`.
+  No policy outcome existed or was read during prefix selection.
 - The post-gate controller evaluation is now prepared as a single fail-closed
   submission. NavDP runs `mono_native` versus `mono_cec`; ViNT runs exact
   native versus CEC with the audited `first_certified_bounded` physical-turn
@@ -107,6 +109,18 @@ history.  The current source of truth is
   job. The frozen estimands and claim boundary are recorded in
   `HM3D_TABLE1_CONTROLLER_PORTABILITY_PROTOCOL_20260829.md` and its JSON
   companion.
+- The gate-authorized controller evaluation was subsequently submitted. ViNT
+  smoke `16526696` passed and formal array `16526731` is active; its aggregate
+  and verifier are `16526745` and `16526759`. NavDP smoke `16526559` failed
+  before a completed arm because the evaluator required the 2026-08-21
+  SHA/frame/depth transaction while the wrapper launched the older Final14
+  server that omitted those receipt fields. Only infrastructure logs were
+  inspected. A minimal additive repair binds the already-verified transaction
+  server overlay without changing population, checkpoints, thresholds, seeds,
+  budgets, or controllers. Replacement NavDP jobs are smoke `16527714`, formal
+  `16527718`, aggregate `16527722`, verifier `16527860`; replacement joint seal
+  is `16527863`. Full diagnosis and guards are in
+  `HM3D_TABLE1_NAVDP_TRANSACTION_REPAIR_20260829.md`.
 
 ## 1. Current priority order
 

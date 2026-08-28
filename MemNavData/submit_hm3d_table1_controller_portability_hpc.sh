@@ -15,12 +15,16 @@ SOURCE_RUN_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_full
 NAVDP_BASE_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_5690569a4373f2d2
 NAVDP_BASE_RECEIPT=${NAVDP_BASE_SOURCE_ROOT}/source_inputs.sha256
 EXPECTED_NAVDP_BASE_RECEIPT_SHA=5690569a4373f2d2768671418f0c604c4a03aa4b0ffe01baf70b288af03ba216
+NAVDP_SERVER_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_transaction_repair_67e1132783ce2cb1
+NAVDP_SERVER_RECEIPT=${NAVDP_SERVER_SOURCE_ROOT}/SOURCE_BUNDLE.sha256
+EXPECTED_NAVDP_SERVER_RECEIPT_SHA=05ce401aac8c2e7e31e8a8d820613d30b3a03856a35c8750085b93d5a1539a97
 VINT_BASE_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/certified_relocalization_closed_loop_d3bd281fc374cc80
 VINT_BASE_RECEIPT_SHA=74001a9e0150c38c599a206fa0f4dd5e1279b9bed5d167119f4d14cb77995e98
 DEPENDENCY_RECEIPT=/scratch/yz11502/Research/Nav-axis-uturn-results/shared_online_double_revisit_fresh_20260813/double_revisit_fresh40_20260813T200121Z/dependency_receipt.json
 EXPECTED_DEPENDENCY_RECEIPT_SHA=4eb0ca6479a26f8e04f85a31d906cee4e68b1785f66cfd3ac23bf65424d36e5e
 PORTABILITY_ENV_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-envs/controller_portability_a9ec7146bce7_v1
 PORTABILITY_CHECKPOINT_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-checkpoints/controller_portability_50387aa89be8
+HAB_REQUESTS_VENDOR=/scratch/lg154/conda-envs/habitat/lib/python3.9/site-packages/pip/_vendor
 NAVDP_CONCURRENCY=${NAVDP_CONCURRENCY:-2}
 VINT_CONCURRENCY=${VINT_CONCURRENCY:-2}
 RUN_TAG=${RUN_TAG:-formal_$(date -u +%Y%m%dT%H%M%SZ)}
@@ -44,6 +48,7 @@ done
 
 required=(
   MemNavData/HM3D_TABLE1_CONTROLLER_PORTABILITY_PROTOCOL_20260829.md
+  MemNavData/HM3D_TABLE1_NAVDP_TRANSACTION_REPAIR_20260829.md
   MemNavData/hm3d_table1_controller_portability_protocol_20260829.json
   MemNavData/hm3d_fullmono_mixed_role_protocol_20260820.json
   MemNavData/hm3d_fullmono_mixed_role.py
@@ -61,6 +66,7 @@ required=(
   MemNavData/slurm_hm3d_table1_vint_analysis.sbatch
   MemNavData/slurm_hm3d_table1_controller_seal.sbatch
   MemNavData/test_hm3d_table1_navdp_pair.py
+  MemNavData/test_hm3d_table1_navdp_transport_contract.py
   MemNavData/test_aggregate_vint_controller_native_hm3d.py
   MemNavData/test_audit_vint_controller_native_pair.py
 )
@@ -84,6 +90,7 @@ export PYTHONPATH=${ROOT}:${ROOT}/MemNavData${PYTHONPATH:+:${PYTHONPATH}}
   MemNavData/eval_2leg_habitat.py
 "${LOCAL_MEMNAV_PY}" -m pytest -q \
   MemNavData/test_hm3d_table1_navdp_pair.py \
+  MemNavData/test_hm3d_table1_navdp_transport_contract.py \
   MemNavData/test_aggregate_vint_controller_native_hm3d.py \
   MemNavData/test_audit_vint_controller_native_pair.py \
   MemNavData/test_hm3d_fullmono_mixed_role.py \
@@ -222,6 +229,8 @@ remote_identity=$(remote 'id -un' | tr -d '\r')
 remote "set -euo pipefail
 test \"\$(sha256sum '${NAVDP_BASE_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_NAVDP_BASE_RECEIPT_SHA}'
 cd '${NAVDP_BASE_SOURCE_ROOT}' && sha256sum -c --quiet '${NAVDP_BASE_RECEIPT}'
+test \"\$(sha256sum '${NAVDP_SERVER_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_NAVDP_SERVER_RECEIPT_SHA}'
+cd '${NAVDP_SERVER_SOURCE_ROOT}' && sha256sum -c --quiet '${NAVDP_SERVER_RECEIPT}'
 test \"\$(sha256sum '${VINT_BASE_SOURCE_ROOT}/SOURCE_BUNDLE.sha256' | awk '{print \$1}')\" = '${VINT_BASE_RECEIPT_SHA}'
 test \"\$(sha256sum '${DEPENDENCY_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_DEPENDENCY_RECEIPT_SHA}'
 test -r '${PORTABILITY_ENV_ROOT}/environment_receipt.json'
@@ -250,7 +259,7 @@ sha256sum '${bench_root}/manifest.json' '${construction_verification}' '${CONSTR
 chmod -R a-w '${run_root}/sealed_inputs'"
 
 common="ALL,TASK_ROOT=${task_root},TASK_RECEIPT=${task_receipt},EXPECTED_TASK_RECEIPT_SHA=${task_receipt_sha},FORMAL_RUN_ROOT=${run_root},BENCH_ROOT=${bench_root},CONSTRUCTION_VERIFICATION=${construction_verification},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${construction_verification_sha}"
-nav_common="${common},BASE_SOURCE_ROOT=${NAVDP_BASE_SOURCE_ROOT},BASE_RECEIPT=${NAVDP_BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_NAVDP_BASE_RECEIPT_SHA},SOURCE_RUN_ROOT=${SOURCE_RUN_ROOT},PARENT_MANIFEST=${parent_manifest},PROTOCOL=${protocol}"
+nav_common="${common},BASE_SOURCE_ROOT=${NAVDP_BASE_SOURCE_ROOT},BASE_RECEIPT=${NAVDP_BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_NAVDP_BASE_RECEIPT_SHA},SERVER_SOURCE_ROOT=${NAVDP_SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${NAVDP_SERVER_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_NAVDP_SERVER_RECEIPT_SHA},SOURCE_RUN_ROOT=${SOURCE_RUN_ROOT},PARENT_MANIFEST=${parent_manifest},PROTOCOL=${protocol}"
 vint_common="${common},BASE_SOURCE_ROOT=${VINT_BASE_SOURCE_ROOT},BASE_SOURCE_RECEIPT_SHA=${VINT_BASE_RECEIPT_SHA},DEPENDENCY_RECEIPT=${DEPENDENCY_RECEIPT},EXPECTED_DEPENDENCY_RECEIPT_SHA=${EXPECTED_DEPENDENCY_RECEIPT_SHA},PORTABILITY_ENV_ROOT=${PORTABILITY_ENV_ROOT},PORTABILITY_CHECKPOINT_ROOT=${PORTABILITY_CHECKPOINT_ROOT}"
 nav_pair=${task_root}/MemNavData/slurm_hm3d_table1_navdp_pair.sbatch
 nav_analysis=${task_root}/MemNavData/slurm_hm3d_table1_navdp_analysis.sbatch
@@ -259,7 +268,7 @@ vint_analysis=${task_root}/MemNavData/slurm_hm3d_table1_vint_analysis.sbatch
 seal=${task_root}/MemNavData/slurm_hm3d_table1_controller_seal.sbatch
 
 echo '[gate] remote imports and Slurm test-only'
-remote "singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${task_root}:${task_root}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData' /scratch/lg154/conda-envs/habitat/bin/python -c 'import MemNavData.run_hm3d_fullmono_query_history,MemNavData.eval_shared_online_role_pairs'"
+remote "test -r '${HAB_REQUESTS_VENDOR}/requests/__init__.py' && singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${task_root}:${task_root}/MemNavData:${NAVDP_SERVER_SOURCE_ROOT}:${NAVDP_SERVER_SOURCE_ROOT}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData:${HAB_REQUESTS_VENDOR}' /scratch/lg154/conda-envs/habitat/bin/python -c 'from pathlib import Path; [compile(Path(path).read_bytes(),path,\"exec\") for path in (\"${task_root}/MemNavData/eval_shared_online_role_pairs.py\",\"${task_root}/MemNavData/eval_2leg_habitat.py\",\"${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/memnav/memnav_server.py\",\"${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py\")]' && grep -q 'def append_request_frame' '${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/memnav/memnav_server.py' && grep -q 'require_monocular_depth_transaction' '${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py' && singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${task_root}:${task_root}/MemNavData:${NAVDP_SERVER_SOURCE_ROOT}:${NAVDP_SERVER_SOURCE_ROOT}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData:${HAB_REQUESTS_VENDOR}' /scratch/lg154/conda-envs/habitat/bin/python -c 'import MemNavData.run_hm3d_fullmono_query_history'"
 remote "sbatch --test-only --array=0 --export='${nav_common},PHASE=smoke' '${nav_pair}' >/dev/null"
 remote "sbatch --test-only --array=0-53%${NAVDP_CONCURRENCY} --export='${nav_common},PHASE=formal' '${nav_pair}' >/dev/null"
 remote "sbatch --test-only --export='${common},MODE=aggregate' '${nav_analysis}' >/dev/null"

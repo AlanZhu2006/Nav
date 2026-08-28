@@ -1,0 +1,24 @@
+{
+  "benchmark_manifest_sha256": "f82dbcbc6255219aae94b6d77bffdfa454f36835cf803a70df5cf8616193ad01",
+  "construction_verification_sha256": "2a7b8f86f61a6f55762640dcbaef4b975539ec3d93cfb06649bddd6fa4c96dc8",
+  "histories": 28,
+  "jobs": {
+    "controller_portability_seal": 16526765,
+    "navdp_aggregate": 16526739,
+    "navdp_formal": 16526715,
+    "navdp_smoke": 16526559,
+    "navdp_verify": 16526740,
+    "vint_aggregate": 16526745,
+    "vint_formal": 16526731,
+    "vint_smoke": 16526696,
+    "vint_verify": 16526759
+  },
+  "partial_policy_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829/formal_20260828T231109Z",
+  "scene_clusters": 21,
+  "schema_version": "hm3d_table1_controller_portability_submission_v1_20260829",
+  "scope": "fresh-query scene-overlap within-controller paired evaluation",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_controller_portability_c0c373bf2ed63087",
+  "task_receipt_sha256": "c0c373bf2ed630873751e72769643c7d52ee0493f17a8a7bece381f9d52ff955",
+  "vint_grant_bearing_alignment": "first_certified_bounded"
+}

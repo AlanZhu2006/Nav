@@ -109,7 +109,7 @@ estimand 中：B2 treatment 后 C2 起点已分叉，不能再冒充严格 paire
 | Real robot | transport/hash/fail-stop 和静态接口证据 | 不做无人值守运动 | 现场 paired Novel/Revisit、自动 arrival/STOP、视频与路径口径 |
 | Depth ablation | 同一 Final14 上 metric native、mono native、metric CEC、mono CEC | 正式运行 zero native | verifier 通过后即可形成五行 SR/SPL/path 表；必须注明 Goal-A history 来自 metric replay |
 | CEC mechanism | raw/CEC、certificate ladder、known-role diagnostics 已有 | 正式运行 matched authority arm | verifier 后再决定主表用 raw / unthresholded / CEC / known-role 哪些行，不把不同信息 oracle 混为一谈 |
-| Length bins | 当前任务构造距离主要为 2--9 m，episode raw receipt 可审计 | 不提交 GPU | 20--30 m 与 30--50 m 目前不可构造/样本为空；先报告 constructibility，不制造小分母表 |
+| Length bins | Fresh HM3D sealed manifest 已审计：0--20/20--30/30--50 m 为 56/0/0 | 不提交 GPU | 现有人口不可填写 Table 3；需另冻 20--50 m benchmark，不制造空桶或小分母表 |
 
 ## 3. ViNT：为何今晚不再提交正式 SR
 

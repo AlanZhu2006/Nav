@@ -1,0 +1,113 @@
+{
+  "schema_version": "hm3d_lifelong_underpowered_collect_repair_v1_20260828",
+  "frozen_at": "2026-08-28T21:45:00+08:00",
+  "scope": "result-blind exact repair of interrupted factual-C collection and node-affine continuation to paired B2",
+  "source_authority": {
+    "amendment": "hm3d_fullmono_lifelong_underpowered_amendment_20260828.json",
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d",
+    "population_relative_path": "population/population.json",
+    "population_sha256": "ec11c0dbc43a4abe585330c1ce52a8c14ad1d4b1da6fd8397e1d15592707a6d5",
+    "histories": 22,
+    "scene_clusters": 15,
+    "upstream_authority_verifier_job": 16504307
+  },
+  "freeze_boundary": {
+    "successful_factual_C_navigation_outcomes_read_before_repair": false,
+    "B2_navigation_outcomes_read_before_repair": false,
+    "scheduler_states_and_failure_logs_read": true,
+    "filesystem_completeness_read": true,
+    "repair_selection_uses_navigation_outcomes": false
+  },
+  "incident": {
+    "failed_deferred_launcher_job": 16504366,
+    "launcher_failure": "safe_sbatch prepended the default GPU partition before the caller's cpu_short partition; this Slurm installation retained the first partition option",
+    "orphan_factual_C_array_job": 16505696,
+    "completed_indices": [2, 3, 4, 5, 6, 8, 10, 12, 14, 15, 16, 17, 18, 19, 20, 21],
+    "failed_indices": [0, 1, 7, 9, 11, 13]
+  },
+  "repair_items": [
+    {
+      "index": 0,
+      "label": "000_rJhMRvNn4DS_episode_0000__natural_b_03",
+      "source_AB_history_index": 0,
+      "failure_class": "invalid_empty_fifo_assumption",
+      "failed_node": "gh009",
+      "source_factual_B_node": "gh005",
+      "retry_partition": "h100_tandon",
+      "retry_node": "gh005"
+    },
+    {
+      "index": 1,
+      "label": "001_5jp3fCRSRjc_episode_0000__natural_b_00",
+      "source_AB_history_index": 4,
+      "failure_class": "cross_node_RGB_replay_mismatch",
+      "failed_node": "gh013",
+      "source_factual_B_node": "gh001",
+      "retry_partition": "h100_tandon",
+      "retry_node": "gh001"
+    },
+    {
+      "index": 7,
+      "label": "007_hkr2MGpHD6B_episode_0002__natural_b_03",
+      "source_AB_history_index": 22,
+      "failure_class": "cross_node_RGB_replay_mismatch",
+      "failed_node": "gh009",
+      "source_factual_B_node": "ga005",
+      "retry_partition": "a100_tandon",
+      "retry_node": "ga005"
+    },
+    {
+      "index": 9,
+      "label": "009_FnSn2KSrALj_episode_0002__natural_b_02",
+      "source_AB_history_index": 33,
+      "failure_class": "cross_node_RGB_replay_mismatch",
+      "failed_node": "gh009",
+      "source_factual_B_node": "ga003",
+      "retry_partition": "a100_tandon",
+      "retry_node": "ga003"
+    },
+    {
+      "index": 11,
+      "label": "011_b28CWbpQvor_episode_0000__natural_b_02",
+      "source_AB_history_index": 45,
+      "failure_class": "cross_node_RGB_replay_mismatch",
+      "failed_node": "gh009",
+      "source_factual_B_node": "ga028",
+      "retry_partition": "a100_tandon",
+      "retry_node": "ga028"
+    },
+    {
+      "index": 13,
+      "label": "013_QHhQZWdMpGJ_episode_0002__natural_b_03",
+      "source_AB_history_index": 53,
+      "failure_class": "invalid_empty_fifo_assumption",
+      "failed_node": "ga005",
+      "source_factual_B_node": "ga002",
+      "retry_partition": "a100_tandon",
+      "retry_node": "ga002"
+    }
+  ],
+  "repair_contract": {
+    "preserve_completed_outputs_byte_for_byte": true,
+    "archive_failed_partial_outputs": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/failed_attempts/shared_c_16505696_replay_contract_20260828",
+    "retry_exact_failed_indices_only": true,
+    "retry_on_source_factual_B_node": true,
+    "maximum_concurrent_GPU_jobs": 2,
+    "controller_changed": false,
+    "weights_changed": false,
+    "dataset_or_benchmark_changed": false,
+    "random_seeds_changed": false,
+    "navigation_or_certificate_thresholds_changed": false,
+    "queue_patch_changes_actions_or_memory_contents": false,
+    "queue_patch_scope": "validate relative one-append FIFO growth from the first observed post-append length instead of assuming Goal-B starts from an empty FIFO"
+  },
+  "downstream_contract": {
+    "seal_only_after_all_six_repair_jobs_terminate": true,
+    "B2_only_after_successful_population_seal_and_smoke": true,
+    "B2_replay_node": "the compute_identity.host that produced each sealed factual-C prefix",
+    "B2_node_affinity_uses_navigation_outcomes": false,
+    "two_deterministic_submission_lanes": true,
+    "independent_raw_file_verifier_required": true,
+    "powered_confirmation_claim": false
+  }
+}

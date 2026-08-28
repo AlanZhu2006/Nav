@@ -1,0 +1,80 @@
+{
+  "B2_smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_B2_smoke_attempt2_20260828",
+  "attempt1_cancelled_jobs": [
+    16509627,
+    16509636,
+    16509642,
+    16509644,
+    16509648,
+    16509649
+  ],
+  "attempt1_failed_jobs": [
+    16509621,
+    16509634,
+    16509637
+  ],
+  "attempt1_startup_archive_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/failed_attempts/shared_c_repair_16509621_16509634_16509637_legacy_hub_cli_20260828",
+  "attempt2_protocol_sha256": "4c6267d49f7019d141261a8004210743fc6e379bcbaeb017870e5fbaeb8632c6",
+  "collect_smoke_job": 16514058,
+  "collect_smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_collect_repair_attempt2_smoke_20260828",
+  "collect_smoke_verifier_job": 16514066,
+  "factual_C_seal_job": 16514162,
+  "maximum_concurrent_scientific_GPU_jobs": 2,
+  "node_affine_B2_resume_launcher_job": 16514165,
+  "outcome_blind_repair_selection": true,
+  "powered_confirmation_claim": false,
+  "repair_integrity_barrier_job": 16514159,
+  "repair_jobs": [
+    {
+      "index": 0,
+      "job": 16514071,
+      "lane": 0,
+      "node": "gh005",
+      "partition": "h100_tandon"
+    },
+    {
+      "index": 1,
+      "job": 16514101,
+      "lane": 1,
+      "node": "gh001",
+      "partition": "h100_tandon"
+    },
+    {
+      "index": 7,
+      "job": 16514136,
+      "lane": 0,
+      "node": "ga005",
+      "partition": "a100_tandon"
+    },
+    {
+      "index": 9,
+      "job": 16514150,
+      "lane": 1,
+      "node": "ga003",
+      "partition": "a100_tandon"
+    },
+    {
+      "index": 11,
+      "job": 16514153,
+      "lane": 0,
+      "node": "ga028",
+      "partition": "a100_tandon"
+    },
+    {
+      "index": 13,
+      "job": 16514157,
+      "lane": 1,
+      "node": "ga002",
+      "partition": "a100_tandon"
+    }
+  ],
+  "repair_receipt_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_collect_repair_attempt2_20260828",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d",
+  "schema_version": "hm3d_lifelong_underpowered_collect_repair_attempt2_submission_v1_20260828",
+  "smoke_result_enters_scientific_denominator": false,
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_collect_repair2_899141ad23b4ff0c",
+  "source_bundle_receipt_sha256": "899141ad23b4ff0ca3012bb68b9bc6aa0e5a8e1ee45bbfe4abcf8fa98ab89f26",
+  "submitted": true,
+  "submitted_at": "2026-08-28T15:42:41.306140+00:00",
+  "underpowered": true
+}

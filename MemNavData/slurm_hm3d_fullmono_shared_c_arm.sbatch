@@ -17,9 +17,13 @@ set -euo pipefail
 umask 0022
 export PYTHONDONTWRITEBYTECODE=1
 : "${SLURM_ARRAY_TASK_ID:?}" "${TASK_ROOT:?}" "${BASE_SOURCE_ROOT:?}"
-: "${AMENDMENT_ROOT:?}"
+: "${AMENDMENT_ROOT:?}" "${AMENDMENT_RECEIPT:?}"
+: "${EXPECTED_AMENDMENT_RECEIPT_SHA:?}"
 : "${RUN_ROOT:?}" "${DEPENDENCY_RECEIPT:?}" "${STAGE:?collect|evaluate}"
 case "${STAGE}" in collect|evaluate) ;; *) echo "bad STAGE" >&2; exit 2;; esac
+[[ "$(sha256sum "${AMENDMENT_RECEIPT}" | awk '{print $1}')" == \
+   "${EXPECTED_AMENDMENT_RECEIPT_SHA}" ]]
+(cd "${AMENDMENT_ROOT}" && sha256sum -c --quiet "${AMENDMENT_RECEIPT}")
 [[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_TASK_RECEIPT_SHA}" ]]
 (cd "${TASK_ROOT}" && sha256sum -c --quiet "${TASK_RECEIPT}")
@@ -28,6 +32,12 @@ case "${STAGE}" in collect|evaluate) ;; *) echo "bad STAGE" >&2; exit 2;; esac
 (cd "${BASE_SOURCE_ROOT}" && sha256sum -c --quiet "${BASE_RECEIPT}")
 [[ "$(sha256sum "${DEPENDENCY_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_DEPENDENCY_RECEIPT_SHA}" ]]
+if [[ -n "${EXPECTED_REPLAY_NODE:-}" ]]; then
+  [[ "$(hostname -s)" == "${EXPECTED_REPLAY_NODE}" ]] || {
+    echo "replay node mismatch: expected=${EXPECTED_REPLAY_NODE} actual=$(hostname -s)" >&2
+    exit 2
+  }
+fi
 
 BASE_POP_ROOT=${RUN_ROOT}/population
 SHARED_C_ROOT=${RUN_ROOT}/shared_c_population
@@ -84,7 +94,7 @@ LIGHTGLUE_REPO=${BASE_SOURCE_ROOT}/third_party/LightGlue
 DEPENDENCY_ROOT=${BASE_SOURCE_ROOT}/third_party/python
 INTERNNAV_ROOT=${BASE_SOURCE_ROOT}/InternNav
 LINGBOT_REPO=/scratch/lg154/Research/Nav/NavDP/baselines/memnav/lingbot-map
-RUNNER=${TASK_ROOT}/MemNavData/run_cec_controller_portability_smoke_local.sh
+RUNNER=${AMENDMENT_ROOT}/MemNavData/run_cec_controller_portability_smoke_local.sh
 pycache=${SLURM_TMPDIR:-/tmp}/h3shared_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 mkdir -p "${pycache}"
 
@@ -95,6 +105,7 @@ run_one() {
     pair_env+=(HM3D_LIFELONG_PAIRED_SCOPES="${paired}")
   singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
     "${BASE_SIF}" env ROOT="${TASK_ROOT}" CONTROLLER=navdp \
+    CODE_OVERLAY_ROOT="${AMENDMENT_ROOT}" \
     EVAL_KIND="${kind}" LIFELONG_HISTORY_SCOPE="${scope}" \
     LIFELONG_SHARED_C_ROOT="${SHARED_C_ROOT}" \
     SCENE="${SCENE}" EPISODE="${EPISODE}" MAX_STEPS="${MAX_STEPS:-600}" \
@@ -110,7 +121,7 @@ run_one() {
     "${pair_env[@]}" bash "${RUNNER}"
 }
 
-echo "host=$(hostname) stage=${STAGE} index=${INDEX} scene=${SCENE} episode=${EPISODE}"
+echo "host=$(hostname) expected_replay_node=${EXPECTED_REPLAY_NODE:-unbound} stage=${STAGE} index=${INDEX} scene=${SCENE} episode=${EPISODE}"
 nvidia-smi --query-gpu=name,uuid,memory.total --format=csv,noheader
 if [[ "${STAGE}" == collect ]]; then
   [[ "${MAX_STEPS:-600}" -eq 600 ]] || { echo "C collection requires 600 steps" >&2; exit 2; }

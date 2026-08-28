@@ -27,26 +27,59 @@ history.  The current source of truth is
   `16503597` were dependency-cancelled.
 - A dependency-free receipt helper now copies those two diagnostics into every
   persisted plan and is tested in both memnav and Habitat interpreters.  The
-  current submitted DAG is `16504303 -> 16504304 -> 16504307`; smoke
-  `16504303` completed `0:0`, all proposal/prefix audits passed, and the formal
-  array has started.  No partial formal outcome has been read.
+  replacement authority DAG `16504303 -> 16504304 -> 16504307` is complete:
+  all 21 cells and 42 proposal pairs passed independent verification.  Strict
+  CEC versus the proposal-matched finite-PnP witness is `28/42` versus `25/42`
+  overall (`+4/-1`, +7.14 percentage points, exact McNemar `p=0.375`); on
+  Novel it is `8/21` versus `5/21` (`+4/-1`), while Revisit is identical at
+  `20/21` in both arms.  These are matched authority-ablation results, not a
+  fresh-generalization table.
 - Natural-V4 factual B and population sealing are complete and independently
   verified: 22 supported histories in 15 scenes, population SHA
   `ec11c0dbc43a4abe585330c1ce52a8c14ad1d4b1da6fd8397e1d15592707a6d5`.
   Because the original 40-history gate was not met, a separate result-blind
-  underpowered amendment was frozen.  Replacement CPU launcher `16504366` is
-  dependency-held behind authority verifier `16504307`; it will submit
-  factual-C and paired-B2 arrays one stage at a time.
+  underpowered amendment was frozen.  CPU launcher `16504366` failed on a
+  duplicate-partition submission bug after creating factual-C array
+  `16505696`.  That array left 16 complete and six failed indices.  The six
+  failed partials were archived without deletion.  The first exact repair then
+  exposed a source-closure defect before evaluator startup: its overlay runner
+  passed `--reject-policy shared_native_exact` to the older frozen hub, whose
+  `ComparisonPlan` already hard-coded the same policy/NavDP fallback but did
+  not declare that CLI.  Jobs `16509621,16509634,16509637` failed before any
+  navigation step; the other lane and downstream jobs were cancelled before
+  start.  A fail-closed AST compatibility audit now preserves the frozen hub
+  and omits only that proved-redundant legacy option.  Attempt-2 bundle receipt
+  is `899141ad23b4ff0ca3012bb68b9bc6aa0e5a8e1ee45bbfe4abcf8fa98ab89f26`;
+  its submitted chain is collect smoke `16514058`, smoke verifier `16514066`,
+  exact repairs `16514071,16514101,16514136,16514150,16514153,16514157`,
+  integrity barrier `16514159`, seal `16514162`, and B2 resume launcher
+  `16514165`.  No successful factual-C navigation outcome and no B2 outcome
+  was read to select either repair.
+- Attempt-2 smoke `16514058` completed, but gate `16514066` exposed one more
+  receipt-only mismatch: the immutable legacy `/healthz` schema did not emit
+  `reject_policy/reject_controller`, although its hash-bound compute identity
+  and the pre-start AST audit already proved `shared_native_exact` with NavDP
+  fallback.  All six scientific jobs and B2 descendants were dependency-
+  cancelled before start.  The verifier now accepts the legacy health fields
+  only together with those two independent authority receipts; navigation
+  code and the frozen scientific contract are unchanged.  Local 25-test and
+  remote 10-pass/1-skip preflights plus five Slurm test-only checks passed.
+  The active exact-recovery chain is gate `16521565`, repairs
+  `16521578,16521597,16521614,16521638,16521647,16521653`, integrity
+  `16521666`, seal `16521671`, and B2 resume `16521679`.  At the latest audit,
+  the gate and indices 0/1 were complete, index 9 was running on its frozen
+  source node, and index 7 was waiting only for group GPU capacity; no outcome
+  was opened.
 - The ViNT ideal-bearing alignment loss-five result passed its mechanism gates
   but remains outcome-aware and nonphysical; no formal ViNT SR was submitted.
 
 ## 1. Current priority order
 
-1. Let the receipt-complete proposal-matched authority ablation pass smoke,
-   complete all 21 paired cells, and independently verify (`16504303 ->
-   16504304 -> 16504307`).
-2. Let the already-submitted HM3D shared-C/B2 continual test start only after
-   that verifier (`16504366`, then dynamically submitted stages).
+1. Preserve the completed and independently verified proposal-matched
+   authority ablation (`16504303 -> 16504304 -> 16504307`) as a sealed result.
+2. Let the health-receipt-gated HM3D factual-C exact repair finish, then require the
+   retained-output/runtime barrier, population seal, node-affine B2 smoke,
+   formal paired B2, aggregation, and independent verifier in that order.
 3. Do not interpret either formal array while it is partial; only frozen raw
    receipts plus the independent verifier can promote a number to the paper.
 4. Keep ViNT formal SR blocked until the bounded physical-turn executor has a

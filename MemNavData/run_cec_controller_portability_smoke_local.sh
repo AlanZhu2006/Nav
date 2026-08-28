@@ -11,6 +11,10 @@ set -euo pipefail
 umask 0022
 
 ROOT=${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+CODE_OVERLAY_ROOT=${CODE_OVERLAY_ROOT:-}
+HUB_SCRIPT=${ROOT}/MemNavData/cec_controller_portability_hub.py
+HUB_CLI_COMPAT_ROOT=${CODE_OVERLAY_ROOT:-${ROOT}}
+HUB_CLI_COMPAT=${HUB_CLI_COMPAT_ROOT}/MemNavData/cec_hub_cli_compat.py
 CONTROLLER=${CONTROLLER:-navdp}
 EVAL_KIND=${EVAL_KIND:-nnr_revisit}
 HM3D_LIFELONG_PAIRED_SCOPES=${HM3D_LIFELONG_PAIRED_SCOPES:-}
@@ -159,7 +163,8 @@ required=(
   "${NAVDP_CKPT}"
   "${LINGBOT_WEIGHTS}"
   "${SCENE_FILE}"
-  "${ROOT}/MemNavData/cec_controller_portability_hub.py"
+  "${HUB_SCRIPT}"
+  "${HUB_CLI_COMPAT}"
   "${ROOT}/MemNavData/controller_portability_proxy.py"
 )
 if [[ "${EVAL_KIND}" == nnr_revisit \
@@ -338,7 +343,19 @@ wait_for_port() {
 hab_site_packages=$("${HAB_PY}" -c \
   'import sysconfig; print(sysconfig.get_paths()["purelib"])')
 hab_requests_vendor=${hab_site_packages}/pip/_vendor
-hab_pythonpath=${ROOT}:${hab_requests_vendor}
+source_pythonpath=${ROOT}
+if [[ -n "${CODE_OVERLAY_ROOT}" ]]; then
+  [[ -d "${CODE_OVERLAY_ROOT}/MemNavData" ]] || \
+    fail "missing CODE_OVERLAY_ROOT=${CODE_OVERLAY_ROOT}"
+  for overlay_file in cec_hub_cli_compat.py navdp_replay_contract.py \
+    eval_3leg_habitat.py \
+    collect_hm3d_lifelong_shared_c.py eval_hm3d_lifelong_shared_c_b2.py; do
+    [[ -r "${CODE_OVERLAY_ROOT}/MemNavData/${overlay_file}" ]] || \
+      fail "missing overlay module ${overlay_file}"
+  done
+  source_pythonpath=${CODE_OVERLAY_ROOT}/MemNavData:${CODE_OVERLAY_ROOT}:${ROOT}/MemNavData:${ROOT}
+fi
+hab_pythonpath=${source_pythonpath}:${hab_requests_vendor}
 requests_init=${hab_requests_vendor}/requests/__init__.py
 requests_version=${hab_requests_vendor}/requests/__version__.py
 [[ -r "${requests_init}" && -r "${requests_version}" ]] || \
@@ -373,7 +390,7 @@ fi
 "${MEMNAV_PY}" -m py_compile \
   "${ROOT}/MemNavData/controller_portability_contract.py" \
   "${ROOT}/MemNavData/controller_portability_proxy.py" \
-  "${ROOT}/MemNavData/cec_controller_portability_hub.py"
+  "${HUB_SCRIPT}" "${HUB_CLI_COMPAT}"
 "${HAB_PY}" -m py_compile \
   "${ROOT}/MemNavData/eval_2leg_habitat.py" \
   "${ROOT}/MemNavData/eval_3leg_habitat.py" \
@@ -386,8 +403,50 @@ fi
   "${ROOT}/MemNavData/eval_hm3d_lifelong_shared_c_b2.py" \
   "${ROOT}/MemNavData/eval_shared_online_novel_revisit.py" \
   "${ROOT}/MemNavData/eval_shared_online_role_pairs.py"
+if [[ -n "${CODE_OVERLAY_ROOT}" ]]; then
+  "${HAB_PY}" -m py_compile \
+    "${CODE_OVERLAY_ROOT}/MemNavData/navdp_replay_contract.py" \
+    "${CODE_OVERLAY_ROOT}/MemNavData/eval_3leg_habitat.py" \
+    "${CODE_OVERLAY_ROOT}/MemNavData/collect_hm3d_lifelong_shared_c.py" \
+    "${CODE_OVERLAY_ROOT}/MemNavData/eval_hm3d_lifelong_shared_c_b2.py"
+  env PYTHONPATH="${hab_pythonpath}" "${HAB_PY}" - \
+    "${CODE_OVERLAY_ROOT}" <<'PY'
+import importlib.util
+import pathlib
+import sys
 
-server_pythonpath=${ROOT}:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy
+root = pathlib.Path(sys.argv[1]).resolve()
+for name in (
+    "navdp_replay_contract", "eval_3leg_habitat",
+    "collect_hm3d_lifelong_shared_c", "eval_hm3d_lifelong_shared_c_b2",
+):
+    spec = importlib.util.find_spec(name)
+    assert spec is not None and spec.origin is not None, name
+    actual = pathlib.Path(spec.origin).resolve()
+    expected = (root / "MemNavData" / f"{name}.py").resolve()
+    assert actual == expected, (name, actual, expected)
+PY
+fi
+
+hub_cli_mode=$("${MEMNAV_PY}" "${HUB_CLI_COMPAT}" \
+  --hub-script "${HUB_SCRIPT}" --reject-policy "${CEC_REJECT_POLICY}") || \
+  fail "hub reject-policy CLI contract could not be proved"
+hub_reject_policy_args=()
+case "${hub_cli_mode}" in
+  explicit_cli)
+    hub_reject_policy_args=(--reject-policy "${CEC_REJECT_POLICY}")
+    ;;
+  legacy_shared_native_exact)
+    [[ "${PORTABILITY_AUTHORITY_PAIR}" == 0 \
+       && "${PORTABILITY_DIRECTION_TRIPLE}" == 0 ]] || \
+      fail "legacy hub cannot emit sealed authority/direction handoff packets"
+    ;;
+  *) fail "unknown hub CLI compatibility mode: ${hub_cli_mode}" ;;
+esac
+printf 'hub_cli_contract=%s reject_policy=%s\n' \
+  "${hub_cli_mode}" "${CEC_REJECT_POLICY}"
+
+server_pythonpath=${source_pythonpath}:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy
 (
   cd "${runtime_root}/memnav"
   exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
@@ -415,7 +474,7 @@ memnav_pid=$!
 (
   cd "${runtime_root}/fallback"
   exec env NAVDP_DISABLE_VIDEO=1 PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT}" \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${source_pythonpath}" \
     "${MEMNAV_PY}" -u \
       "${ROOT}/NavDP/baselines/navdp/navdp_server.py" \
       --port "${FALLBACK_PORT}" --checkpoint "${NAVDP_CKPT}" \
@@ -506,7 +565,7 @@ if [[ "${CONTROLLER}" != navdp ]]; then
   (
     cd "${runtime_root}/proxy"
     exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
-      PYTHONPATH="${ROOT}" "${MEMNAV_PY}" -u \
+      PYTHONPATH="${source_pythonpath}" "${MEMNAV_PY}" -u \
       "${ROOT}/MemNavData/controller_portability_proxy.py" \
         --controller "${CONTROLLER}" --protocol cec_proof_hybrid \
         --depth-source "${proxy_depth}" --query-population mixed_role \
@@ -534,15 +593,15 @@ if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 \
 fi
 (
   cd "${runtime_root}/hub"
-  exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT}" \
+  exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${source_pythonpath}" \
     "${MEMNAV_PY}" -u \
-      "${ROOT}/MemNavData/cec_controller_portability_hub.py" \
+      "${HUB_SCRIPT}" \
       --host 127.0.0.1 --port "${HUB_PORT}" \
       --controller "${CONTROLLER}" \
       --memnav-url "http://127.0.0.1:${MEMNAV_PORT}" \
       --controller-url "${controller_url}" \
       --fallback-navdp-url "http://127.0.0.1:${FALLBACK_PORT}" \
-      --camera-height-m 0.5 --reject-policy "${CEC_REJECT_POLICY}" \
+      --camera-height-m 0.5 "${hub_reject_policy_args[@]}" \
       "${hub_extra[@]}"
 ) >"${RUN_ROOT}/logs/server_hub.log" 2>&1 &
 hub_pid=$!
@@ -553,15 +612,15 @@ if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 \
    || "${PORTABILITY_DIRECTION_TRIPLE}" == 1 ]]; then
   (
     cd "${runtime_root}/forced_hub"
-    exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT}" \
+    exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${source_pythonpath}" \
       "${MEMNAV_PY}" -u \
-        "${ROOT}/MemNavData/cec_controller_portability_hub.py" \
+        "${HUB_SCRIPT}" \
         --host 127.0.0.1 --port "${FORCED_HUB_PORT}" \
         --controller "${CONTROLLER}" \
         --memnav-url "http://127.0.0.1:${MEMNAV_PORT}" \
         --controller-url "${controller_url}" \
         --fallback-navdp-url "http://127.0.0.1:${FALLBACK_PORT}" \
-        --camera-height-m 0.5 --reject-policy "${CEC_REJECT_POLICY}" \
+        --camera-height-m 0.5 "${hub_reject_policy_args[@]}" \
         --force-reject-native \
         --emit-handoff-packets
   ) >"${RUN_ROOT}/logs/server_forced_hub.log" 2>&1 &
@@ -643,6 +702,9 @@ elif [[ "${EVAL_KIND}" == hm3d_lifelong ]]; then
   )
 elif [[ "${EVAL_KIND}" == hm3d_shared_c_collect ]]; then
   evaluator=${ROOT}/MemNavData/collect_hm3d_lifelong_shared_c.py
+  if [[ -n "${CODE_OVERLAY_ROOT}" ]]; then
+    evaluator=${CODE_OVERLAY_ROOT}/MemNavData/collect_hm3d_lifelong_shared_c.py
+  fi
   eval_extra=(
     --navdp_goal_switch_reset before_c
     --shared_leg1_trace_root "${BENCHMARK_ROOT}"
@@ -652,6 +714,9 @@ elif [[ "${EVAL_KIND}" == hm3d_shared_c_collect ]]; then
   )
 elif [[ "${EVAL_KIND}" == hm3d_shared_c_b2 ]]; then
   evaluator=${ROOT}/MemNavData/eval_hm3d_lifelong_shared_c_b2.py
+  if [[ -n "${CODE_OVERLAY_ROOT}" ]]; then
+    evaluator=${CODE_OVERLAY_ROOT}/MemNavData/eval_hm3d_lifelong_shared_c_b2.py
+  fi
   eval_extra=(
     --navdp_goal_switch_reset before_c
     --shared_leg1_trace_root "${BENCHMARK_ROOT}"
@@ -765,11 +830,12 @@ run_evaluator() {
     "${upstream_pid}" "${upstream_start}" \
     "${proxy_pid}" "${proxy_start}" \
     "${HM3D_LIFELONG_PAIRED_SCOPES}" \
-    "${CUDA_VISIBLE_DEVICES:-}" "${runtime_hub_port}" <<'PY'
+    "${CUDA_VISIBLE_DEVICES:-}" "${runtime_hub_port}" \
+    "${hub_cli_mode}" "${CEC_REJECT_POLICY}" <<'PY'
 import json,sys
 (path,host,gpu,scope,memnav_pid,memnav_start,navdp_pid,navdp_start,
  hub_pid,hub_start,controller_pid,controller_start,proxy_pid,proxy_start,
- pair_order,cuda_visible,hub_port)=sys.argv[1:]
+ pair_order,cuda_visible,hub_port,hub_cli_mode,reject_policy)=sys.argv[1:]
 def process(pid,start):
  return None if not pid else {"pid":int(pid),"process_start_ticks":int(start)}
 payload={
@@ -779,7 +845,8 @@ payload={
  "memnav":{"pid":int(memnav_pid),"process_start_ticks":int(memnav_start)},
  "navdp":{"pid":int(navdp_pid),"process_start_ticks":int(navdp_start)},
  "cec_hub":{"pid":int(hub_pid),"process_start_ticks":int(hub_start),
-            "port":int(hub_port)},
+            "port":int(hub_port),"cli_contract":hub_cli_mode,
+            "reject_policy":reject_policy},
  "accepted_controller":process(controller_pid,controller_start),
  "controller_proxy":process(proxy_pid,proxy_start),
  "paired_scope_order":pair_order.split(",") if pair_order else [],

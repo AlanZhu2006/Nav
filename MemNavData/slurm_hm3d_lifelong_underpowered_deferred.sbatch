@@ -18,7 +18,7 @@ set -euo pipefail
 umask 0022
 export PYTHONDONTWRITEBYTECODE=1
 
-: "${DEFERRED_MODE:?collect|evaluate}" "${AMENDMENT_ROOT:?}"
+: "${DEFERRED_MODE:?collect|resume|evaluate}" "${AMENDMENT_ROOT:?}"
 : "${AMENDMENT_RECEIPT:?}" "${EXPECTED_AMENDMENT_RECEIPT_SHA:?}"
 : "${TASK_ROOT:?}" "${TASK_RECEIPT:?}" "${EXPECTED_TASK_RECEIPT_SHA:?}"
 : "${BASE_SOURCE_ROOT:?}" "${BASE_RECEIPT:?}" "${EXPECTED_BASE_RECEIPT_SHA:?}"
@@ -28,7 +28,7 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${SOURCE_SCENE_COUNT:?}" "${EVAL_CONCURRENCY:?}" "${GPU_TIME_LIMIT:?}"
 : "${UPSTREAM_POPULATION_SEAL_JOB_ID:?}"
 
-case "${DEFERRED_MODE}" in collect|evaluate) ;; *) exit 2 ;; esac
+case "${DEFERRED_MODE}" in collect|resume|evaluate) ;; *) exit 2 ;; esac
 [[ "${EVAL_CONCURRENCY}" =~ ^[1-9][0-9]*$ ]]
 [[ "${GPU_TIME_LIMIT}" =~ ^0[01]:[0-5][0-9]:[0-5][0-9]$ ]]
 [[ "${SOURCE_POPULATION_COUNT}" == 22 ]]
@@ -53,7 +53,9 @@ safe_submit=${AMENDMENT_ROOT}/MemNavData/slurm_safe_submit.sh
 arm=${AMENDMENT_ROOT}/MemNavData/slurm_hm3d_fullmono_shared_c_arm.sbatch
 finalize=${TASK_ROOT}/MemNavData/slurm_hm3d_fullmono_shared_c_finalize.sbatch
 analysis=${TASK_ROOT}/MemNavData/slurm_hm3d_fullmono_shared_c_analysis.sbatch
-for path in "${audit}" "${safe_submit}" "${arm}" "${finalize}" "${analysis}"; do
+node_affinity=${AMENDMENT_ROOT}/MemNavData/hm3d_lifelong_node_affinity.py
+for path in "${audit}" "${safe_submit}" "${arm}" "${finalize}" "${analysis}" \
+  "${node_affinity}"; do
   [[ -r "${path}" ]]
 done
 
@@ -118,6 +120,45 @@ PY
   sha256sum "${path}" >"${path}.sha256"
 }
 
+node_plan() {
+  "${REMOTE_PY:-/scratch/lg154/conda-envs/memnav/bin/python}" \
+    "${node_affinity}" \
+    --source-population "${RUN_ROOT}/population/population.json" \
+    --shared-population "${RUN_ROOT}/shared_c_population/population.json" \
+    --collection-root "${RUN_ROOT}/shared_c_collection" --lanes 2 --format tsv
+}
+
+write_node_receipt() {
+  local path=$1 count=$2 aggregate=$3 verify=$4
+  shift 4
+  /scratch/lg154/conda-envs/memnav/bin/python - "${path}" "${count}" \
+    "${RUN_ROOT}" "${AMENDMENT_ROOT}" "${aggregate}" "${verify}" "$@" <<'PY'
+import json,sys
+path,count,run,bundle,aggregate,verify,*records=sys.argv[1:]
+jobs=[]
+for record in records:
+ fields=record.split(":")
+ if len(fields)!=7: raise SystemExit("node-affine receipt record changed")
+ evaluation,source,node,partition,lane,job,label=fields
+ jobs.append({
+  "evaluation_index":int(evaluation),"source_population_index":int(source),
+  "node":node,"partition":partition,"lane":int(lane),"job":int(job),
+  "collection_label":label,
+ })
+payload={
+ "schema_version":"hm3d_lifelong_underpowered_node_affine_submission_v1_20260828",
+ "mode":"evaluate","run_root":run,"amendment_bundle":bundle,
+ "sealed_population_count":int(count),"formal_B2_jobs":jobs,
+ "aggregate_job":int(aggregate),"independent_verification_job":int(verify),
+ "maximum_concurrent_GPU_jobs":2,"replay_bound_to_collection_node":True,
+ "underpowered":True,"powered_confirmation_claim":False,
+}
+with open(path,"x") as f:
+ json.dump(payload,f,indent=2,sort_keys=True); f.write("\n")
+PY
+  sha256sum "${path}" >"${path}.sha256"
+}
+
 case "${DEFERRED_MODE}" in
   collect)
     [[ ! -e "${RUN_ROOT}/shared_c_collection" ]]
@@ -129,42 +170,82 @@ case "${DEFERRED_MODE}" in
       --export="${common},STAGE=collect" "${arm}")
     collect=$(job_id "${raw}")
     raw=$(safe_sbatch --lint-fatal --parsable --dependency="afterany:${collect}" \
+      --partition=cpu_short \
       --export="${common}" "${finalize}")
     seal=$(job_id "${raw}")
-    raw=$(safe_sbatch --lint-fatal --parsable --qos=gpu48 \
-      --time="${GPU_TIME_LIMIT}" --array=0 \
-      --dependency="afterok:${seal}" --kill-on-invalid-dep=yes \
-      --export="${common},STAGE=evaluate,OUTPUT_ROOT=${SMOKE_ROOT},MAX_STEPS=80" \
-      "${arm}")
-    smoke=$(job_id "${raw}")
-    raw=$(safe_sbatch --lint-fatal --parsable --dependency="afterok:${smoke}" \
+    raw=$(safe_sbatch --lint-fatal --parsable --dependency="afterok:${seal}" \
+      --partition=cpu_short \
       --kill-on-invalid-dep=yes \
-      --export="${continuation},DEFERRED_MODE=evaluate" "$0")
+      --export="${continuation},DEFERRED_MODE=resume" "$0")
     next=$(job_id "${raw}")
     write_receipt "${receipt_root}/collect.json" collect "${count}" \
       factual_C_collection "${collect}" factual_C_seal "${seal}" \
-      B2_true_stack_smoke "${smoke}" B2_launcher "${next}"
+      node_affine_resume_launcher "${next}"
+    ;;
+  resume)
+    [[ -f "${RUN_ROOT}/shared_c_population/SEALED" ]]
+    [[ ! -e "${RUN_ROOT}/shared_c_evaluation" ]]
+    count=$(sealed_population_count \
+      "${RUN_ROOT}/shared_c_population/population.json")
+    mapfile -t plan < <(node_plan)
+    [[ "${#plan[@]}" -eq "${count}" && "${count}" -gt 0 ]]
+    IFS=$'\t' read -r evaluation source node partition label lane <<<"${plan[0]}"
+    [[ "${evaluation}" == 0 ]]
+    raw=$(safe_sbatch --lint-fatal --parsable --qos=gpu48 \
+      --partition="${partition}" --nodelist="${node}" \
+      --time="${GPU_TIME_LIMIT}" --array=0 \
+      --kill-on-invalid-dep=yes \
+      --export="${common},STAGE=evaluate,OUTPUT_ROOT=${SMOKE_ROOT},MAX_STEPS=80,EXPECTED_REPLAY_NODE=${node}" \
+      "${arm}")
+    smoke=$(job_id "${raw}")
+    raw=$(safe_sbatch --lint-fatal --parsable --dependency="afterok:${smoke}" \
+      --partition=cpu_short --kill-on-invalid-dep=yes \
+      --export="${continuation},DEFERRED_MODE=evaluate" "$0")
+    next=$(job_id "${raw}")
+    write_receipt "${receipt_root}/resume.json" resume "${count}" \
+      B2_true_stack_smoke "${smoke}" B2_node_affine_launcher "${next}"
     ;;
   evaluate)
     [[ -f "${RUN_ROOT}/shared_c_population/SEALED" ]]
     [[ ! -e "${RUN_ROOT}/shared_c_evaluation" ]]
     count=$(sealed_population_count \
       "${RUN_ROOT}/shared_c_population/population.json")
-    array="0-$((count - 1))%${EVAL_CONCURRENCY}"
-    raw=$(safe_sbatch --lint-fatal --parsable --qos=gpu48 \
-      --time="${GPU_TIME_LIMIT}" --array="${array}" \
-      --export="${common},STAGE=evaluate,MAX_STEPS=600" "${arm}")
-    evaluate=$(job_id "${raw}")
+    mapfile -t plan < <(node_plan)
+    [[ "${#plan[@]}" -eq "${count}" && "${count}" -gt 0 ]]
+    lane_tail=("" "")
+    records=()
+    for record in "${plan[@]}"; do
+      IFS=$'\t' read -r evaluation source node partition label lane <<<"${record}"
+      [[ "${lane}" =~ ^[01]$ ]]
+      dependency=()
+      if [[ -n "${lane_tail[${lane}]}" ]]; then
+        dependency=(--dependency="afterany:${lane_tail[${lane}]}")
+      fi
+      raw=$(safe_sbatch --lint-fatal --parsable --qos=gpu48 \
+        --partition="${partition}" --nodelist="${node}" \
+        --time="${GPU_TIME_LIMIT}" --array="${evaluation}" \
+        "${dependency[@]}" \
+        --export="${common},STAGE=evaluate,MAX_STEPS=600,EXPECTED_REPLAY_NODE=${node}" \
+        "${arm}")
+      evaluate=$(job_id "${raw}")
+      lane_tail[${lane}]=${evaluate}
+      records+=("${evaluation}:${source}:${node}:${partition}:${lane}:${evaluate}:${label}")
+    done
+    terminal_dependency="afterany:${lane_tail[0]}"
+    if [[ -n "${lane_tail[1]}" ]]; then
+      terminal_dependency+=":${lane_tail[1]}"
+    fi
     raw=$(safe_sbatch --lint-fatal --parsable \
-      --dependency="afterany:${evaluate}" --export="${common},MODE=aggregate" \
+      --partition=cpu_short \
+      --dependency="${terminal_dependency}" --export="${common},MODE=aggregate" \
       "${analysis}")
     aggregate=$(job_id "${raw}")
     raw=$(safe_sbatch --lint-fatal --parsable \
+      --partition=cpu_short \
       --dependency="afterok:${aggregate}" --kill-on-invalid-dep=yes \
       --export="${common},MODE=verify" "${analysis}")
     verify=$(job_id "${raw}")
-    write_receipt "${receipt_root}/evaluate.json" evaluate "${count}" \
-      formal_B2_evaluation "${evaluate}" aggregate "${aggregate}" \
-      independent_verification "${verify}"
+    write_node_receipt "${receipt_root}/evaluate.json" "${count}" \
+      "${aggregate}" "${verify}" "${records[@]}"
     ;;
 esac

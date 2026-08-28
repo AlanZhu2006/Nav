@@ -105,7 +105,7 @@ estimand 中：B2 treatment 后 C2 起点已分叉，不能再冒充严格 paire
 | 论文项目 | 已有可用证据 | 今晚动作 | 仍缺什么 |
 |---|---|---|---|
 | Cross-controller / cross-dataset | NavDP+CEC 已有 fresh full-mono HM3D；MP3D 有受控 Final14 | 不提交新的 ViNT SR | ViNT 必须先实现可部署 bearing consumption，再用 fresh outcome-blind population；协议匹配的 MP3D 四行仍缺 |
-| HM3D continual by leg | MP3D 18 条 retained-history dose response 已成立；HM3D A/B population 已封存 | 提交 HM3D shared-C/B2 underpowered test | 若会议坚持完整 Leg-3 Novel/Revisit 主表，仍需单独冻结相同前缀的 Novel-C 对照；当前 B2 只回答 accumulation |
+| HM3D continual by leg | MP3D 18 条 retained-history dose response 已成立；HM3D A/B population 已封存 | attempt-2 smoke-gated 精确修复 DAG 已提交 | 先完成 factual-C seal、node-affine B2 与独立 verifier；若会议坚持完整 Leg-3 Novel/Revisit 主表，仍需另冻相同前缀的 Novel-C 对照 |
 | Real robot | transport/hash/fail-stop 和静态接口证据 | 不做无人值守运动 | 现场 paired Novel/Revisit、自动 arrival/STOP、视频与路径口径 |
 | Depth ablation | 同一 Final14 上 metric native、mono native、metric CEC、mono CEC | 正式运行 zero native | verifier 通过后即可形成五行 SR/SPL/path 表；必须注明 Goal-A history 来自 metric replay |
 | CEC mechanism | raw/CEC、certificate ladder、known-role diagnostics 已有 | 正式运行 matched authority arm | verifier 后再决定主表用 raw / unthresholded / CEC / known-role 哪些行，不把不同信息 oracle 混为一谈 |
@@ -264,6 +264,143 @@ success。序列化逻辑被拆成无 NumPy/OpenCV 等第三方依赖的
 新 smoke `16504303` 已 `COMPLETED 0:0`，并确认 prefix equality、两种 role 的
 proposal equality 与 runtime role invisibility；formal `16504304` 已自动开始。未读取
 任何 partial formal outcome。
+
+### 5.4 authority 完成与 HM3D factual-C 精确续跑
+
+authority replacement DAG 已全部完成并由 `16504307` 独立验证。21 个 history 的
+42 对 proposal 全部一致；strict CEC 与 unthresholded finite-PnP witness 的 overall
+SR 分别为 `28/42` 与 `25/42`（paired `+4/-1`，+7.14 pp，exact McNemar
+`p=0.375`）。Novel 为 `8/21` 与 `5/21`（`+4/-1`），Revisit 两臂均为
+`20/21`。这个结果只回答 certificate authority 的 matched ablation，不提升为新的
+fresh-generalization claim。
+
+下游 launcher `16504366` 因 `safe_sbatch` 把默认 GPU partition 放在显式
+`cpu_short` 之前而失败；它此前已创建 factual-C array `16505696`。该 array 有 16 个
+index 完成，失败集合精确为 `0,1,7,9,11,13`。其中 `0,13` 是 Goal-B 前已有
+Goal-A FIFO 时的错误空队列审计假设，`1,7,9,11` 是跨节点 Habitat RGB 哈希漂移。
+没有读取成功 factual-C 的导航 outcome，也没有产生或读取 B2 outcome。
+
+修复 bundle receipt 为
+`250a4891728ee4c784f86b73e292e846c679c0a13f7fb66f95c5437d0da28631`。
+6 个失败 partial 已移动到只读 incident archive，16 个完成目录保持原位；当前 DAG：
+
+```text
+lane 0: 16509621 index 0 @ gh005
+          -> 16509634 index 7 @ ga005
+          -> 16509637 index 11 @ ga028
+lane 1: 16509627 index 1 @ gh001
+          -> 16509636 index 9 @ ga003
+          -> 16509642 index 13 @ ga002
+both lanes -> 16509644 retained-output SHA barrier
+           -> 16509648 factual-C seal
+           -> 16509649 node-affine smoke/evaluation launcher
+```
+
+B2 的每个 sealed-C 样本必须回到其 collection `compute_identity.host` 执行；动态
+launcher 用两条确定性 lane 保证最多并发 2 个 GPU job。最终仍必须经过 aggregate 与
+independent raw-file verifier，且无论数值如何都只能报告为 underpowered external
+continual-memory mechanism test。
+
+所有 job 创建后，首次远端 submission-receipt heredoc 因 shell 引号丢失而失败；它没有
+修改或重复提交 DAG。本地已先生成的权威 receipt 随后通过已验证的 `yz11502` socket
+逐字节复制到远端并锁为只读，SHA-256 为
+`fff95fb18a6bfc17046f970607577e8c6badd039a0aa6c3a81dadf63b97b8501`。
+该纯收据修复记录在
+`HM3D_LIFELONG_UNDERPOWERED_COLLECT_REPAIR_RECEIPT_REPAIR_20260828.json`。
+
+### 5.5 HM3D repair attempt 1 启动闭包故障与 attempt 2 提交
+
+独立复查发现，attempt-1 lane 0 的 `16509621/16509634/16509637` 均在 evaluator
+启动前以 `2:0` 退出，日志完全相同：旧 frozen hub 不认识 runner 传入的
+`--reject-policy shared_native_exact`。它们分别对应 index `0/7/11`，运行节点仍严格为
+`gh005/ga005/ga028`，所以不是新的跨节点漂移，也没有产生导航 outcome。lane 1 和下游
+当时尚未开始；`16509627/16509636/16509642/16509644/16509648/16509649` 已按精确
+job ID 于 2026-08-28 11:08:55 EDT 取消，没有终止任何 running job。
+
+根因是 immutable dependency closure 不完整：repair overlay 提供了新 runner，但 runner
+仍从旧 task bundle 启动 hub。旧 hub SHA-256 为
+`fb249dae4f865bd17e12bd1673156403651592b870ac1a216de1ffca3d36b7d5`；它没有该 CLI
+参数，却已在同一 `ComparisonPlan` 中字面冻结
+`reject_policy="shared_native_exact"` 与 `fallback_controller="navdp"`。attempt 2 不替换
+hub，只加入 dependency-free AST 审计：新 hub 显式传参；旧 hub 仅在证明上述两个
+literal 同时成立时省略冗余参数；其他 policy、无法证明的旧 hub 或旧 hub 的 handoff
+模式一律在模型启动前 fail closed。controller、hub 行为、weights、数据、seed、动作、
+memory、导航阈值与 certificate 阈值均未改变。
+
+本地 27 个针对性测试、Slurm wrapper/port 测试和 shell/compile 门通过；远端为 26
+passed、1 个 minimal-overlay expected skip，并通过真实 frozen hub AST、容器 overlay
+来源、pre-archive audit 与六类 `sbatch --test-only`。新的 immutable bundle receipt 为
+`899141ad23b4ff0ca3012bb68b9bc6aa0e5a8e1ee45bbfe4abcf8fa98ab89f26`。
+三个 attempt-1 启动 partial 已移动到独立只读 archive（恰好 `0/7/11`，mode `0555`）；
+原 6 个失败 partial archive 和 16 个完成 factual-C 目录均未改动。
+
+正式 attempt-2 DAG 为：
+
+```text
+16514058 index-0 collect compatibility smoke @ gh005
+  -> 16514066 outcome-blind structural smoke verifier
+     -> lane 0: 16514071 index 0 @ gh005
+                  -> 16514136 index 7 @ ga005
+                  -> 16514153 index 11 @ ga028
+     -> lane 1: 16514101 index 1 @ gh001
+                  -> 16514150 index 9 @ ga003
+                  -> 16514157 index 13 @ ga002
+both lane tails -> 16514159 retained-output/runtime integrity barrier
+                -> 16514162 factual-C population seal
+                -> 16514165 node-affine B2 resume launcher
+                -> B2 smoke -> two formal lanes -> aggregate -> raw verifier
+```
+
+collect smoke 写入独立 root，不进入科学分母；只有 `16514066` 验证结构、hash、节点、
+hub health 与 policy 后，六个正式 repair 才能开始。每条 lane 使用 `afterok` 和
+invalid-dependency cancellation fail fast，最大科学 GPU 并发为 2。提交后独立
+`squeue/sacct` 复核 11 个 job 和全部依赖边均正确；截至 2026-08-28 23:46
+（Asia/Shanghai），`16514058` 因 `Priority` 等待，Slurm 的非承诺预测启动时间为
+2026-08-30 02:33（Asia/Shanghai），其余均为依赖等待。submission receipt 本地/远端
+一致且只读，SHA-256 为
+`85fef2876e71ca80d5327b1be66621357b70942a1ea836ba2fc5e87c14f09d5a`。
+
+### 5.6 attempt-2 health receipt 误判与 2026-08-29 精确恢复
+
+collect smoke `16514058` 最终在冻结节点 `gh005` 完整结束，但 CPU gate `16514066`
+只因 `/healthz` 缺少 `reject_policy/reject_controller` 两个字段而 fail closed。只读检查
+表明这是旧 hub 的既有 schema：它报告 `schema=cec_controller_portability_hub_v2`、
+`controller=navdp`、`initialized=true`、`reset_required=false`；同一 smoke 的
+hash-bound `compute_identity.json` 已记录
+`cli_contract=legacy_shared_native_exact` 与 `reject_policy=shared_native_exact`，启动前
+AST audit 又证明同一 `ComparisonPlan` 中的 fallback 为 NavDP。因此失败属于 verifier
+重复要求新 health schema 字段，不是运行时 authority 改变。
+
+在此判断前后均未读取 factual-C success/SPL/distance/action outcome，也没有任何 B2
+outcome。六个 scientific repair 和 seal/B2 下游均由依赖取消，未开始。修复只让 verifier
+接受“legacy health + compute identity + AST”这一等价收据组合；hub、controller、weights、
+population、seed、threshold、budget、node map 与六个 repair index 全部不变。已完成 smoke
+不重跑且不进入科学分母。
+
+本机 25 个相关测试、远端 10 passed/1 expected skip、旧 smoke 实物审计、bundle 全量
+hash 和五类 Slurm `--test-only` 均通过。新 verifier bundle receipt 为
+`0facfeadd85286e783a52b44af2f553275c8225dbb70166eaddd10d5256ff896`。正式恢复链为：
+
+```text
+16521565 health-receipt smoke gate (COMPLETED 0:0)
+  -> lane 0: 16521578 index 0 @ gh005
+               -> 16521614 index 7 @ ga005
+               -> 16521647 index 11 @ ga028
+  -> lane 1: 16521597 index 1 @ gh001
+               -> 16521638 index 9 @ ga003
+               -> 16521653 index 13 @ ga002
+both lane tails -> 16521666 22/22 retained/runtime integrity barrier
+                -> 16521671 factual-C seal
+                -> 16521679 node-affine B2 resume launcher
+                -> B2 true-stack smoke -> paired formal lanes
+                -> aggregate -> independent raw verifier
+```
+
+提交后复核时，`16521578/16521597` 已在各自冻结节点 `COMPLETED 0:0`，index 9
+正在 `ga003` 运行，index 7 正常等待 QOS，其余等待依赖；没有新的 early failure。机器可读边界见
+`hm3d_lifelong_underpowered_collect_health_receipt_repair_20260829.json`，收据修复说明见
+`HM3D_LIFELONG_UNDERPOWERED_COLLECT_HEALTH_RECEIPT_REPAIR_20260829.md`。无论最终数值，
+本链仍只能作为 22-history/15-scene underpowered continual-memory mechanism test。
 
 ## 6. 结果晋级规则
 

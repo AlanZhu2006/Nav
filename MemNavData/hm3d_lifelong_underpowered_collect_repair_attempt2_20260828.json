@@ -1,0 +1,99 @@
+{
+  "schema_version": "hm3d_lifelong_underpowered_collect_repair_attempt2_v1_20260828",
+  "frozen_at": "2026-08-28T23:14:50+08:00",
+  "scope": "result-blind runtime-closure repair of the exact six factual-C items, followed by the already-frozen node-affine B2 chain",
+  "source_authority": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d",
+    "population_relative_path": "population/population.json",
+    "population_sha256": "ec11c0dbc43a4abe585330c1ce52a8c14ad1d4b1da6fd8397e1d15592707a6d5",
+    "histories": 22,
+    "scene_clusters": 15,
+    "base_repair_protocol": "hm3d_lifelong_underpowered_collect_repair_20260828.json",
+    "base_repair_protocol_sha256": "416ce31982b7c7ee1d1ab4904f428e7045775241c6fe1a00aae056152e0ea708",
+    "base_repair_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_collect_repair_250a4891728ee4c7",
+    "base_repair_bundle_receipt_sha256": "250a4891728ee4c784f86b73e292e846c679c0a13f7fb66f95c5437d0da28631",
+    "base_repair_submission_receipt_sha256": "fff95fb18a6bfc17046f970607577e8c6badd039a0aa6c3a81dadf63b97b8501",
+    "completed_output_baseline_audit": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_collect_repair_20260828/pre_archive_audit.json",
+    "completed_output_baseline_audit_sha256": "458273805637a0db5e0b2b03f4d1c2b9ae38df2d8428b3368b58d4e320295922"
+  },
+  "freeze_boundary": {
+    "successful_factual_C_navigation_outcomes_read": false,
+    "B2_navigation_outcomes_read": false,
+    "attempt1_navigation_outcomes_exist": false,
+    "scheduler_states_and_startup_logs_read": true,
+    "filesystem_completeness_read": true,
+    "repair_selection_uses_navigation_outcomes": false
+  },
+  "attempt1_incident": {
+    "failed_jobs": [16509621, 16509634, 16509637],
+    "failed_indices": [0, 7, 11],
+    "failed_nodes": ["gh005", "ga005", "ga028"],
+    "exit_codes": ["2:0", "2:0", "2:0"],
+    "failure_stage": "hub startup before evaluator launch",
+    "failure_message": "unrecognized arguments: --reject-policy shared_native_exact",
+    "cancelled_before_start_jobs": [16509627, 16509636, 16509642],
+    "cancelled_before_start_indices": [1, 9, 13],
+    "cancelled_downstream_jobs": [16509644, 16509648, 16509649],
+    "cancelled_at": "2026-08-28T11:08:55-04:00"
+  },
+  "root_cause": {
+    "classification": "immutable bundle dependency-closure mismatch",
+    "runner_location": "attempt1 repair overlay",
+    "hub_location": "frozen base task bundle",
+    "legacy_hub_sha256": "fb249dae4f865bd17e12bd1673156403651592b870ac1a216de1ffca3d36b7d5",
+    "legacy_runner_sha256": "5b6a7213362fc870cebcd02b2bca431ba8eddb0fbf1b0892832d1869f4f81982",
+    "legacy_hub_has_reject_policy_cli": false,
+    "legacy_hub_comparison_plan_reject_policy": "shared_native_exact",
+    "legacy_hub_comparison_plan_fallback_controller": "navdp"
+  },
+  "runtime_closure": {
+    "compatibility_helper": "cec_hub_cli_compat.py",
+    "compatibility_rule": "pass --reject-policy when the hub declares that CLI; otherwise omit it only if AST inspection proves a literal shared_native_exact policy and navdp fallback in the same ComparisonPlan",
+    "legacy_non_shared_policy_action": "fail closed before model startup",
+    "legacy_authority_or_direction_packet_action": "fail closed before model startup",
+    "controller_code_changed": false,
+    "hub_code_changed": false,
+    "controller_or_model_weights_changed": false,
+    "dataset_benchmark_or_population_changed": false,
+    "random_seeds_changed": false,
+    "navigation_actions_memory_contents_or_thresholds_changed": false,
+    "queue_contract_patch_unchanged_from_attempt1": true
+  },
+  "repair_contract": {
+    "all_repair_indices": [0, 1, 7, 9, 11, 13],
+    "attempt1_partial_indices_to_archive": [0, 7, 11],
+    "attempt1_nonstarted_indices": [1, 9, 13],
+    "preserved_completed_indices": [2, 3, 4, 5, 6, 8, 10, 12, 14, 15, 16, 17, 18, 19, 20, 21],
+    "attempt1_archive_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/failed_attempts/shared_c_repair_16509621_16509634_16509637_legacy_hub_cli_20260828",
+    "repair_receipt_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_collect_repair_attempt2_20260828",
+    "collect_smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_collect_repair_attempt2_smoke_20260828",
+    "B2_smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_B2_smoke_attempt2_20260828",
+    "smoke_index": 0,
+    "smoke_node": "gh005",
+    "smoke_partition": "h100_tandon",
+    "smoke_result_enters_scientific_denominator": false,
+    "scientific_repair_starts_only_after_structural_smoke_verifier": true,
+    "retry_exact_six_indices_only": true,
+    "retry_nodes_and_partitions_unchanged_from_base_protocol": true,
+    "maximum_concurrent_GPU_jobs": 2,
+    "lane_failure_policy": "afterok with kill-on-invalid-dep; terminal integrity barrier runs after lane terminals and fails closed if any item is incomplete"
+  },
+  "repair_items": [
+    {"index": 0, "label": "000_rJhMRvNn4DS_episode_0000__natural_b_03", "node": "gh005", "partition": "h100_tandon", "lane": 0},
+    {"index": 1, "label": "001_5jp3fCRSRjc_episode_0000__natural_b_00", "node": "gh001", "partition": "h100_tandon", "lane": 1},
+    {"index": 7, "label": "007_hkr2MGpHD6B_episode_0002__natural_b_03", "node": "ga005", "partition": "a100_tandon", "lane": 0},
+    {"index": 9, "label": "009_FnSn2KSrALj_episode_0002__natural_b_02", "node": "ga003", "partition": "a100_tandon", "lane": 1},
+    {"index": 11, "label": "011_b28CWbpQvor_episode_0000__natural_b_02", "node": "ga028", "partition": "a100_tandon", "lane": 0},
+    {"index": 13, "label": "013_QHhQZWdMpGJ_episode_0002__natural_b_03", "node": "ga002", "partition": "a100_tandon", "lane": 1}
+  ],
+  "downstream_contract": {
+    "factual_C_seal_requires_all_22_structurally_complete_items": true,
+    "B2_replay_node": "the compute_identity.host that produced each sealed factual-C prefix",
+    "B2_node_affinity_uses_navigation_outcomes": false,
+    "two_deterministic_submission_lanes": true,
+    "aggregate_after_all_B2_lane_terminals": true,
+    "independent_raw_file_verifier_required": true,
+    "underpowered": true,
+    "powered_confirmation_claim": false
+  }
+}

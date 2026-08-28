@@ -1,0 +1,80 @@
+{
+  "archive_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/failed_attempts/shared_c_16505696_replay_contract_20260828",
+  "factual_C_seal_job": 16509648,
+  "maximum_concurrent_GPU_jobs": 2,
+  "node_affine_resume_launcher_job": 16509649,
+  "original_array_job": 16505696,
+  "outcome_blind_repair_selection": true,
+  "powered_confirmation_claim": false,
+  "preserved_completed_indices": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    8,
+    10,
+    12,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "repair_integrity_barrier_job": 16509644,
+  "repair_jobs": [
+    {
+      "index": 0,
+      "job": 16509621,
+      "lane": 0,
+      "node": "gh005",
+      "partition": "h100_tandon"
+    },
+    {
+      "index": 1,
+      "job": 16509627,
+      "lane": 1,
+      "node": "gh001",
+      "partition": "h100_tandon"
+    },
+    {
+      "index": 7,
+      "job": 16509634,
+      "lane": 0,
+      "node": "ga005",
+      "partition": "a100_tandon"
+    },
+    {
+      "index": 9,
+      "job": 16509636,
+      "lane": 1,
+      "node": "ga003",
+      "partition": "a100_tandon"
+    },
+    {
+      "index": 11,
+      "job": 16509637,
+      "lane": 0,
+      "node": "ga028",
+      "partition": "a100_tandon"
+    },
+    {
+      "index": 13,
+      "job": 16509642,
+      "lane": 1,
+      "node": "ga002",
+      "partition": "a100_tandon"
+    }
+  ],
+  "repair_receipt_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_collect_repair_20260828",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d",
+  "schema_version": "hm3d_lifelong_underpowered_collect_repair_submission_v1_20260828",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_smoke_collect_repair_20260828",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_collect_repair_250a4891728ee4c7",
+  "source_bundle_receipt_sha256": "250a4891728ee4c784f86b73e292e846c679c0a13f7fb66f95c5437d0da28631",
+  "submitted": true,
+  "underpowered": true
+}

@@ -1,0 +1,72 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_natural_b_expansion_audit_v1_20260828",
+  "frozen_at": "2026-08-28T09:36:00+08:00",
+  "scope": "result-blind additional Natural-B candidate audit for the underpowered HM3D full-monocular lifelong population",
+  "trigger": {
+    "original_candidate_histories": 99,
+    "original_supported_histories": 22,
+    "original_scene_clusters": 15,
+    "target_histories": 40,
+    "target_scene_clusters": 15,
+    "target_met": false,
+    "population_sha256": "ec11c0dbc43a4abe585330c1ce52a8c14ad1d4b1da6fd8397e1d15592707a6d5",
+    "population_verification_sha256": "d9ce97df4b0687969090e710ef719f6da56fc5d39a0535a7e8afd6c5d852499b",
+    "factual_C_B2_C2_executed": false,
+    "query_navigation_outcomes_read": false,
+    "sample_size_reestimation_uses_only_pre_treatment_factual_B_attrition": true
+  },
+  "frozen_sources": {
+    "parent_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+    "source_construction_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/formal_20260826T141733Z_375f0b68/construct_ab/scenes",
+    "source_construction_protocol": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_lifelong_375f0b6879b2ff87/MemNavData/hm3d_fullmono_lifelong_power_expansion_protocol_20260826.json",
+    "source_construction_protocol_sha256": "127a6796c64eeafd4b48906baad09c48c41edb925fefe0fa964ccb584d4af228",
+    "original_v4_protocol": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_v4_d85fc50df19b1384/MemNavData/hm3d_fullmono_lifelong_direct_natural_protocol_20260827.json",
+    "original_v4_protocol_sha256": "2bfc62c08cbee1dffd3c5a3f627b1cb58a7c5076a9c9b2e2554e28843564492f",
+    "original_v4_source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_v4_d85fc50df19b1384",
+    "original_v4_source_receipt_sha256": "d85fc50df19b138499e07bb9555d9f9a0088da0f5040e32f78f24b74a975c59a",
+    "original_v4_manifest": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/ab_population/role_pairs/manifest.json",
+    "original_v4_manifest_sha256": "e5c97dad42b26c67032c5b42a8467d857ce57f4b627a3f4851616a159ecef978",
+    "expected_scene_fragments": 54,
+    "expected_materialized_A_histories": 130,
+    "expected_controlled_revisit_histories": 80
+  },
+  "candidate_expansion": {
+    "recipient_population": "all 80 frozen controlled-Revisit histories, irrespective of prior factual-B outcome",
+    "slot_start_inclusive": 4,
+    "slot_stop_exclusive": 16,
+    "maximum_new_candidates_per_recipient": 2,
+    "legacy_episode_rank_multiplier": 4,
+    "candidate_identity": "recipient_episode__natural_b_SLOT",
+    "minimum_candidate_planar_separation_m": 2.0,
+    "separation_reference": "all original v4 candidates for the recipient plus earlier accepted expansion candidates",
+    "A_to_B_geodesic_m": [2.0, 9.0],
+    "B_to_C_geodesic_m": [2.0, 9.0],
+    "B_max_online_A_covis_exclusive": 0.1,
+    "same_scene_navmesh": true,
+    "goal_rendered_at_frozen_camera_height": true,
+    "materialize_every_constructible_expansion_candidate": true,
+    "run_factual_B_once_for_every_materialized_expansion_candidate": true
+  },
+  "future_population_rule": {
+    "union_original_and_expansion_populations": true,
+    "retain_original_22_without_rerun": true,
+    "expansion_eligibility_identical_to_v4": true,
+    "B_goal_support_by_factual_B_minimum_inclusive": 0.2,
+    "actual_B_end_to_C_geodesic_band_m": [2.0, 9.0],
+    "minimum_target_histories": 40,
+    "minimum_target_scene_clusters": 15,
+    "halt_before_factual_C_if_target_not_met": true,
+    "no_replacement_no_threshold_relaxation": true
+  },
+  "guards": {
+    "no_C_B2_C2_outcome_access": true,
+    "no_candidate_selection_by_factual_B_outcome": true,
+    "no_navigation_threshold_change": true,
+    "no_certificate_change": true,
+    "no_controller_change": true,
+    "no_metric_depth": true,
+    "no_runtime_role_label": true,
+    "independent_raw_fragment_verification_required": true,
+    "audit_does_not_authorize_navigation": true
+  }
+}

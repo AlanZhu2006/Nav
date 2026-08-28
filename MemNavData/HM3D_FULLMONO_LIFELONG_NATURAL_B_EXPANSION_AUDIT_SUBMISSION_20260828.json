@@ -1,0 +1,17 @@
+{
+  "C_B2_C2_authorized": false,
+  "aggregate_job": 16494508,
+  "audit_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_expansion_994cfe9585d2467c",
+  "audit_bundle_receipt_sha256": "994cfe9585d2467c1c214e923bfd080408b5c8c23f9229d2be57f3c5e15a25a4",
+  "evaluation_authorized": false,
+  "factual_B_authorized": false,
+  "independent_verifier_job": 16494512,
+  "navigation_outcomes_read": false,
+  "query_policy_outcomes_read": false,
+  "remote_submission_sha256": "1f132e013d4bce62a76a00cbeaae30c39559cd2410c60808c9160d5c9b8ab792",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_b_expansion_20260828/natural_b_expansion_audit_20260828T014626Z_994cfe95",
+  "scene_array": "0-53%4",
+  "scene_array_job": 16494505,
+  "schema_version": "hm3d_fullmono_lifelong_natural_b_expansion_audit_submission_v1_20260828",
+  "scope": "result-blind additional Natural-B constructibility audit only"
+}

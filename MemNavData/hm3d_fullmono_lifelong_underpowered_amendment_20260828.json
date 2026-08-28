@@ -1,0 +1,110 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_underpowered_amendment_v1_20260828",
+  "frozen_at": "2026-08-28T12:00:00+08:00",
+  "scope": "result-blind underpowered HM3D shared-C test of online episodic-memory accumulation",
+  "amends": {
+    "protocol": "hm3d_fullmono_lifelong_power_expansion_protocol_20260826.json",
+    "reason": "the prospectively sealed factual-B population contains 22 histories in 15 scenes and therefore did not meet the original 40-history power gate",
+    "original_powered_confirmation_claim_permanently_withheld": true
+  },
+  "freeze_boundary": {
+    "factual_B_outcomes_read": true,
+    "factual_B_outcomes_used_only_for_the_original_prespecified_population_rule": true,
+    "factual_C_outcomes_read": false,
+    "B2_outcomes_read": false,
+    "C2_outcomes_read": false,
+    "navigation_or_certificate_thresholds_changed": false
+  },
+  "source_population": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d",
+    "relative_path": "population/population.json",
+    "sha256": "ec11c0dbc43a4abe585330c1ce52a8c14ad1d4b1da6fd8397e1d15592707a6d5",
+    "histories": 22,
+    "scene_clusters": 15,
+    "strong_support_histories": 18,
+    "selection_reads_query_outcomes": false,
+    "independent_population_verification": "independent_natural_v4_population_verification.json",
+    "independent_population_verified": true
+  },
+  "causal_sequence": [
+    "sealed actual-mono A",
+    "sealed actual-mono factual B",
+    "one factual C rollout with end-of-A memory ceiling",
+    "paired B2 treatments from the same sealed successful C prefix"
+  ],
+  "scientific_question": "After a previously Novel B has actually been experienced, does allowing CEC to address the newly accumulated B history improve the later B2 revisit over an otherwise identical memory frozen at the end of A?",
+  "runtime": {
+    "controller": "frozen NavDP",
+    "depth_source": "monocular_sidecar",
+    "metric_depth_sensor_reads_allowed": 0,
+    "runtime_role_visibility": "none",
+    "maximum_steps_per_query": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "factual_C_executed_once_before_any_B2_treatment": true,
+    "B2_arms_share_exact_C_RGB_pose_action_and_goal_session_receipts": true,
+    "same_process_pairing": true,
+    "order_balance": "all_prior first for even population index and initial_leg_only first for odd population index"
+  },
+  "arms": [
+    {
+      "name": "all_prior",
+      "B2_candidate_ceiling": "end_of_factual_B",
+      "CEC_takeover_authority": true
+    },
+    {
+      "name": "initial_leg_only",
+      "B2_candidate_ceiling": "end_of_actual_A",
+      "CEC_takeover_authority": true
+    },
+    {
+      "name": "forced_reject_native",
+      "B2_candidate_ceiling": "end_of_factual_B",
+      "CEC_takeover_authority": false
+    }
+  ],
+  "population_after_C": {
+    "rule": "retain every one of the 22 sealed histories whose single factual C rollout succeeds",
+    "minimum_for_execution": 1,
+    "no_replacement": true,
+    "no_threshold_relaxation": true,
+    "selection_reads_B2_outcomes": false
+  },
+  "analysis": {
+    "primary_endpoint": "B2 success after the same sealed factual C prefix",
+    "primary_comparison": "all_prior versus initial_leg_only",
+    "secondary_comparison": "all_prior versus forced_reject_native",
+    "pairing_key": [
+      "scene",
+      "episode"
+    ],
+    "cluster_unit": "scene",
+    "report": [
+      "paired gain/loss",
+      "risk difference",
+      "two-sided exact McNemar",
+      "scene-cluster bootstrap 95 percent confidence interval",
+      "B2 factual-B anchor provenance",
+      "C attrition and causal denominators"
+    ],
+    "interpretation": "underpowered external continual-memory mechanism result regardless of p-value; never relabel as the original powered confirmation"
+  },
+  "excluded_from_this_amendment": {
+    "C2": "not run because B2 treatment changes the C2 start state and cannot provide the same clean paired accumulation estimand",
+    "Novel_navigation_improvement": true,
+    "fresh_scene_generalization_claim": true,
+    "threshold_tuning": true,
+    "learned_model_selection": true
+  },
+  "compute_contract": {
+    "partitions": [
+      "h100_tandon",
+      "a100_tandon"
+    ],
+    "maximum_GPU_time_per_array_element": "01:00:00",
+    "maximum_concurrency": 2,
+    "one_large_GPU_array_resident_at_a_time": true,
+    "immutable_source_bundle_required": true,
+    "independent_raw_file_verifier_required": true
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "deferred_launcher_job": 16502570,
+  "histories": 22,
+  "one_large_GPU_array_resident_per_stage": true,
+  "powered_confirmation_claim": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d",
+  "scene_clusters": 15,
+  "schema_version": "hm3d_lifelong_underpowered_submission_v1_20260828",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_smoke_9207614aadf20b62",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_underpowered_9207614aadf20b62",
+  "source_bundle_receipt_sha256": "9207614aadf20b62b9b75ee5e82f1cc48042da39d31d6c5d9c680cc911c08dae",
+  "submitted": true,
+  "underpowered": true,
+  "upstream_afterok_job": 16502421
+}

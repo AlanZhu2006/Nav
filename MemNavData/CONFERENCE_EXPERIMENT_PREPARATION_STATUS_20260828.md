@@ -20,27 +20,33 @@ history.  The current source of truth is
   resolved from the older base namespace package.  Formal `16502420`, verifier
   `16502421`, and lifelong launcher `16502570` were therefore cancelled by
   dependency as intended.
-- A provenance-locked replacement authority bundle now contains the complete
-  monocular runtime and test.  Local, remote, port-lock, exact-import-path, and
-  two production-container route checks pass.  The authoritative submitted DAG
-  is `16503212 -> 16503217 -> 16503241`.
+- The provenance-locked smoke `16503212` then completed both arms but failed
+  its post-run audit because the generic plan serializer omitted the already
+  computed authority policy/evidence fields.  This was a receipt-schema defect,
+  not a controller change; formal `16503217`, verifier `16503241`, and launcher
+  `16503597` were dependency-cancelled.
+- A dependency-free receipt helper now copies those two diagnostics into every
+  persisted plan and is tested in both memnav and Habitat interpreters.  The
+  current submitted DAG is `16504303 -> 16504304 -> 16504307`; smoke
+  `16504303` completed `0:0`, all proposal/prefix audits passed, and the formal
+  array has started.  No partial formal outcome has been read.
 - Natural-V4 factual B and population sealing are complete and independently
   verified: 22 supported histories in 15 scenes, population SHA
   `ec11c0dbc43a4abe585330c1ce52a8c14ad1d4b1da6fd8397e1d15592707a6d5`.
   Because the original 40-history gate was not met, a separate result-blind
-  underpowered amendment was frozen.  Replacement CPU launcher `16503597` is
-  dependency-held behind authority verifier `16503241`; it will submit
+  underpowered amendment was frozen.  Replacement CPU launcher `16504366` is
+  dependency-held behind authority verifier `16504307`; it will submit
   factual-C and paired-B2 arrays one stage at a time.
 - The ViNT ideal-bearing alignment loss-five result passed its mechanism gates
   but remains outcome-aware and nonphysical; no formal ViNT SR was submitted.
 
 ## 1. Current priority order
 
-1. Let the provenance-locked proposal-matched authority ablation pass smoke,
-   complete all 21 paired cells, and independently verify (`16503212 ->
-   16503217 -> 16503241`).
+1. Let the receipt-complete proposal-matched authority ablation pass smoke,
+   complete all 21 paired cells, and independently verify (`16504303 ->
+   16504304 -> 16504307`).
 2. Let the already-submitted HM3D shared-C/B2 continual test start only after
-   that verifier (`16503597`, then dynamically submitted stages).
+   that verifier (`16504366`, then dynamically submitted stages).
 3. Do not interpret either formal array while it is partial; only frozen raw
    receipts plus the independent verifier can promote a number to the paper.
 4. Keep ViNT formal SR blocked until the bounded physical-turn executor has a
@@ -145,11 +151,12 @@ Primary output is strict CEC minus unthresholded witness SR by Novel, Revisit,
 and all queries.  Secondary outputs are Novel authorization, Revisit rejection,
 and first-decision authority discordance.
 
-The original and first portsafe DAGs are retained only as incident records.
+The original, first portsafe, and provenance-only DAGs are retained only as
+incident records.
 The current formal DAG was submitted through the verified `yz11502` shared
-master: smoke `16503212`, formal array `16503217`, and analysis/verifier
-`16503241`.  Its provenance-locked immutable bundle receipt begins
-`18fe24537b840871`.
+master: smoke `16504303`, formal array `16504304`, and analysis/verifier
+`16504307`.  Its receipt-complete immutable bundle receipt begins
+`3f5783aca521b0a5`.
 
 One earlier preparation attempt stopped before upload because a manually
 selected responsive socket belonged to another account; the identity gate

@@ -238,6 +238,33 @@ Authority bundle receipt 为
 继续使用已验证的 portsafe bundle `9207614aadf20b62`。旧任务及失败 smoke 只作为
 基础设施审计记录，不进入科学分母。
 
+### 5.3 authority receipt-schema repair
+
+`16503212` 成功执行了两个 80-step smoke arms，证明依赖 provenance 修复有效，但在
+post-run proposal audit 处 fail closed。两个 endpoint 实际分别使用
+`strict_certificate` 和 `pnp_pose_available`，proposal 顺序、anchor 与候选列表也一致；
+问题是 `eval_2leg_habitat.py` 的 generic plan serializer 没有把 response 中已有的
+`certified_relocalization_authority{,_policy}` 写入 JSON，审计因此读到 `None`。
+
+修复仅增加收据字段，不改变 matcher、PnP、authority decision、bearing、trajectory 或
+success。序列化逻辑被拆成无 NumPy/OpenCV 等第三方依赖的
+`cec_authority_receipt.py`，并分别用 memnav 与 Habitat Python 测试；这避免为 evaluator
+引入新的 `cv2` 依赖。当前链为：
+
+```text
+16504303 receipt-complete authority smoke
+  -> 16504304 formal array 0-20%2
+  -> 16504307 summary + independent verifier
+  -> 16504366 HM3D underpowered deferred launcher
+```
+
+新 bundle receipt 为
+`3f5783aca521b0a57c9e27d7278fa386b3390fca2660023716db98e58717d756`。
+`16503217/16503241/16503597` 在任何 formal/lifelong query 前被依赖取消。
+新 smoke `16504303` 已 `COMPLETED 0:0`，并确认 prefix equality、两种 role 的
+proposal equality 与 runtime role invisibility；formal `16504304` 已自动开始。未读取
+任何 partial formal outcome。
+
 ## 6. 结果晋级规则
 
 只有同时具备以下四项才能进论文数字表：

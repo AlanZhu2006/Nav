@@ -65,7 +65,8 @@ PYTHONPATH_VALUE=${REPAIR_ROOT}:${REPAIR_ROOT}/MemNavData:${REPAIR_ROOT}/NavDP/b
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
   "${MEMNAV_PY}" -m unittest -q \
     MemNavData.test_policy_agent_graph \
-    MemNavData.test_monocular_depth_runtime
+    MemNavData.test_monocular_depth_runtime \
+    MemNavData.test_cec_authority_receipt
 # Namespace packages can silently resolve a missing overlay module from an
 # older base bundle.  Prove that the transaction API actually comes from this
 # immutable authority bundle before spending GPU time or writing an outcome.

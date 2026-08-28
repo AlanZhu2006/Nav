@@ -1,0 +1,87 @@
+{
+  "schema_version": "hm3d_lifelong_underpowered_collect_health_receipt_repair_v1_20260829",
+  "frozen_at": "2026-08-29T04:19:42+08:00",
+  "scope": "outcome-blind verifier-schema repair followed by the exact six already-frozen factual-C retries and the unchanged node-affine B2 chain",
+  "source_authority": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d",
+    "population_sha256": "ec11c0dbc43a4abe585330c1ce52a8c14ad1d4b1da6fd8397e1d15592707a6d5",
+    "histories": 22,
+    "scene_clusters": 15,
+    "attempt2_protocol_sha256": "4c6267d49f7019d141261a8004210743fc6e379bcbaeb017870e5fbaeb8632c6",
+    "attempt2_submission_sha256": "85fef2876e71ca80d5327b1be66621357b70942a1ea836ba2fc5e87c14f09d5a",
+    "attempt2_source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_collect_repair2_899141ad23b4ff0c",
+    "attempt2_source_bundle_receipt_sha256": "899141ad23b4ff0ca3012bb68b9bc6aa0e5a8e1ee45bbfe4abcf8fa98ab89f26"
+  },
+  "freeze_boundary": {
+    "successful_factual_C_navigation_outcomes_read": false,
+    "B2_navigation_outcomes_read": false,
+    "smoke_success_spl_distance_or_action_outcomes_read": false,
+    "scheduler_state_startup_logs_and_receipt_schema_read": true,
+    "repair_selection_uses_navigation_outcomes": false
+  },
+  "failed_gate": {
+    "collect_smoke_job": 16514058,
+    "collect_smoke_state": "COMPLETED 0:0",
+    "structural_gate_job": 16514066,
+    "structural_gate_state": "FAILED 1:0",
+    "failure": "hub_health.json did not contain reject_policy/reject_controller",
+    "scientific_retry_jobs_cancelled_before_start": [
+      16514071,
+      16514101,
+      16514136,
+      16514150,
+      16514153,
+      16514157
+    ],
+    "downstream_jobs_cancelled_before_start": [16514162, 16514165],
+    "terminal_barrier_job": 16514159,
+    "terminal_barrier_produced_no_seal": true
+  },
+  "root_cause": {
+    "classification": "verifier receipt-schema mismatch",
+    "frozen_health_schema": "cec_controller_portability_hub_v2 legacy health payload",
+    "legacy_health_fields_used": [
+      "ok",
+      "schema",
+      "controller",
+      "initialized",
+      "reset_required",
+      "force_reject_native"
+    ],
+    "authority_already_proved_by": [
+      "compute_identity.cec_hub.cli_contract=legacy_shared_native_exact",
+      "compute_identity.cec_hub.reject_policy=shared_native_exact",
+      "hash-bound AST audit proving one ComparisonPlan with shared_native_exact and fallback_controller=navdp"
+    ]
+  },
+  "repair_contract": {
+    "reuse_completed_smoke_without_rerun": true,
+    "smoke_result_enters_scientific_denominator": false,
+    "exact_scientific_repair_indices": [0, 1, 7, 9, 11, 13],
+    "preserved_completed_indices": [2, 3, 4, 5, 6, 8, 10, 12, 14, 15, 16, 17, 18, 19, 20, 21],
+    "node_map": {
+      "0": "gh005",
+      "1": "gh001",
+      "7": "ga005",
+      "9": "ga003",
+      "11": "ga028",
+      "13": "ga002"
+    },
+    "maximum_concurrent_scientific_gpu_jobs": 2,
+    "navigation_code_changed": false,
+    "hub_code_changed": false,
+    "weights_population_seed_threshold_or_budget_changed": false,
+    "only_verifier_schema_changed": true,
+    "new_receipt_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_collect_health_receipt_repair_20260829"
+  },
+  "downstream_contract": {
+    "all_22_factual_C_items_required_before_seal": true,
+    "retained_16_sha256_ledger_must_match": true,
+    "each_repair_must_run_on_frozen_factual_B_source_node": true,
+    "B2_uses_sealed_C_compute_node": true,
+    "B2_true_stack_smoke_before_formal": true,
+    "aggregate_and_independent_raw_verifier_required": true,
+    "underpowered": true,
+    "powered_confirmation_claim": false
+  }
+}

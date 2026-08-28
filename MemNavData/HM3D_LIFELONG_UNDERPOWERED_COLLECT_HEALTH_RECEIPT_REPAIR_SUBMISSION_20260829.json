@@ -1,0 +1,53 @@
+{
+  "B2_navigation_outcomes_read_before_submission": false,
+  "factual_C_seal_job": 16521671,
+  "failed_schema_gate_job": 16514066,
+  "integrity_barrier_job": 16521666,
+  "maximum_concurrent_scientific_gpu_jobs": 2,
+  "node_affine_B2_resume_launcher_job": 16521679,
+  "powered_confirmation_claim": false,
+  "receipt_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/underpowered_collect_health_receipt_repair_20260829",
+  "repair_jobs": [
+    {
+      "index": 0,
+      "job": 16521578,
+      "node": "gh005"
+    },
+    {
+      "index": 1,
+      "job": 16521597,
+      "node": "gh001"
+    },
+    {
+      "index": 7,
+      "job": 16521614,
+      "node": "ga005"
+    },
+    {
+      "index": 9,
+      "job": 16521638,
+      "node": "ga003"
+    },
+    {
+      "index": 11,
+      "job": 16521647,
+      "node": "ga028"
+    },
+    {
+      "index": 13,
+      "job": 16521653,
+      "node": "ga002"
+    }
+  ],
+  "repaired_smoke_gate_job": 16521565,
+  "reused_collect_smoke_job": 16514058,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d",
+  "schema_version": "hm3d_lifelong_underpowered_collect_health_receipt_submission_v1_20260829",
+  "smoke_result_enters_scientific_denominator": false,
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_health_receipt_0facfeadd85286e7",
+  "source_bundle_receipt_sha256": "0facfeadd85286e783a52b44af2f553275c8225dbb70166eaddd10d5256ff896",
+  "submitted": true,
+  "submitted_at": "2026-08-28T20:38:41.181310+00:00",
+  "successful_factual_C_navigation_outcomes_read_before_submission": false,
+  "underpowered": true
+}

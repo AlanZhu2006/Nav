@@ -45,8 +45,10 @@ lint_sbatch_template() {
 # safe_sbatch [--lint-fatal] <sbatch args...> <template>
 # Lints the final argument (the template), then submits with SAFE_PARTITIONS
 # on the command line, which overrides any in-file #SBATCH partition line.
-# A caller-supplied --partition in the args still wins over the default,
-# so deliberate overrides remain possible.
+# A caller-supplied --partition in the args must be forwarded without adding
+# the default first.  Slurm keeps the first partition option on this cluster;
+# prepending SAFE_PARTITIONS therefore used to turn an explicit cpu_short
+# submission into an invalid GPU-partition CPU job.
 safe_sbatch() {
   local lint_fatal=0
   if [[ "${1:-}" == "--lint-fatal" ]]; then lint_fatal=1; shift; fi
@@ -57,5 +59,29 @@ safe_sbatch() {
       return 1
     fi
   fi
-  sbatch --partition="$SAFE_PARTITIONS" "$@"
+  local arg caller_partition=0 expect_partition_value=0
+  for arg in "$@"; do
+    if [[ "$expect_partition_value" -eq 1 ]]; then
+      caller_partition=1
+      expect_partition_value=0
+      continue
+    fi
+    case "$arg" in
+      --partition|-p)
+        expect_partition_value=1
+        ;;
+      --partition=*|-p?*)
+        caller_partition=1
+        ;;
+    esac
+  done
+  if [[ "$expect_partition_value" -eq 1 ]]; then
+    echo "safe_sbatch: partition option is missing its value" >&2
+    return 2
+  fi
+  if [[ "$caller_partition" -eq 1 ]]; then
+    sbatch "$@"
+  else
+    sbatch --partition="$SAFE_PARTITIONS" "$@"
+  fi
 }

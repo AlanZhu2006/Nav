@@ -35,6 +35,7 @@ from multigoal_benchmark_contract import (
 )
 from multigoal_policy_contract import three_leg_policy_backends
 from double_revisit_diagnostics import online_path_nearest_anchor
+from navdp_replay_contract import validate_replay_queue_growth
 
 
 args = base.args
@@ -100,8 +101,7 @@ def replay_shared_leg_b(
     if len(plan_steps) != len(set(plan_steps)):
         raise RuntimeError("shared Goal-B trace contains duplicate plan steps")
     plan_step_set = set(plan_steps)
-    navdp = None
-    navdp_queue_lengths = None
+    navdp_responses = []
     for pose in poses:
         floor_position = np.asarray(
             [pose["x"], pose["y"], pose["z"]], dtype=float)
@@ -124,19 +124,10 @@ def replay_shared_leg_b(
                 "yaw": float(pose["yaw"]),
             })
         if int(pose["step"]) in plan_step_set:
-            navdp = base.srv_navdp_memory_replay(frame)
-            navdp_queue_lengths = navdp.get("queue_lengths")
+            navdp_responses.append(base.srv_navdp_memory_replay(frame))
 
     if plan_steps:
-        if navdp is None:
-            raise RuntimeError("Goal-B NavDP replay did not execute")
-        memory_size = int(navdp.get("memory_size", -1))
-        if memory_size <= 0:
-            raise RuntimeError("NavDP replay endpoint omitted memory size")
-        expected_length = min(len(plan_steps), memory_size)
-        if navdp_queue_lengths != [expected_length]:
-            raise RuntimeError(
-                "NavDP replay queue length does not match frozen plan count")
+        validate_replay_queue_growth(navdp_responses)
 
     return {
         "reached": bool(payload["reached"]),

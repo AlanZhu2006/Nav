@@ -1,0 +1,28 @@
+{
+  "benchmark_manifest_sha256": "f82dbcbc6255219aae94b6d77bffdfa454f36835cf803a70df5cf8616193ad01",
+  "construction_verification_sha256": "2a7b8f86f61a6f55762640dcbaef4b975539ec3d93cfb06649bddd6fa4c96dc8",
+  "failure_class": "server_client_monocular_transaction_version_mismatch",
+  "jobs": {
+    "existing_vint_verify": 16526759,
+    "navdp_aggregate": 16527722,
+    "navdp_formal": 16527718,
+    "navdp_smoke": 16527714,
+    "navdp_verify": 16527860,
+    "replacement_controller_portability_seal": 16527863
+  },
+  "original_submission_sha256": "e5693544f3431150a4162ccfb854ea001671bbfeeeaef21c5911d9239bf2b407",
+  "partial_policy_outcomes_read_before_repair": false,
+  "repair_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829/formal_20260828T231109Z/repairs/navdp_transaction_v1",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829/formal_20260828T231109Z",
+  "schema_version": "hm3d_table1_navdp_transport_repair_submission_v1_20260829",
+  "scientific_guards": {
+    "checkpoint_changed": false,
+    "population_changed": false,
+    "threshold_seed_budget_or_controller_changed": false,
+    "vint_branch_resubmitted": false
+  },
+  "server_overlay_receipt_sha256": "05ce401aac8c2e7e31e8a8d820613d30b3a03856a35c8750085b93d5a1539a97",
+  "superseded_navdp_smoke_job": 16526559,
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_navdp_transport_repair_c04fd5aa08b65126",
+  "task_receipt_sha256": "c04fd5aa08b65126f2c2ff67ee2234a0dcd7428d3a642c9ccee08bb37be695aa"
+}

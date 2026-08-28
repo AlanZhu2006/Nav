@@ -54,6 +54,23 @@ formal NavDP directory remains the canonical formal output.  A replacement
 joint seal depends on the repaired NavDP independent verifier and the original
 ViNT independent verifier.
 
+The additive submission completed with the following jobs:
+
+- replacement NavDP smoke: `16527714`;
+- replacement NavDP formal array: `16527718`;
+- NavDP aggregate / independent verify: `16527722` / `16527860`;
+- existing ViNT independent verify: `16526759`;
+- replacement joint seal: `16527863`.
+
+The repair bundle is
+`hm3d_table1_navdp_transport_repair_c04fd5aa08b65126`, with receipt SHA-256
+`c04fd5aa08b65126f2c2ff67ee2234a0dcd7428d3a642c9ccee08bb37be695aa`.
+At submission, no partial policy outcome had been read.  The account permits
+two simultaneous GPUs; after submission, the already-running ViNT array was
+throttled from two concurrent cells to one so that the repair smoke and ViNT
+formal evaluation could progress concurrently.  This is scheduler-only and
+does not alter either evaluation contract.
+
 ## Prevention
 
 The primary submitter and NavDP Slurm wrapper now treat model/base source and

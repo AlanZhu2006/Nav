@@ -139,6 +139,40 @@ def validate_cli() -> tuple[str, str | None]:
     require(args.exec_horizon == 8, "formal NavDP execution horizon is eight")
     require(args.certified_cdec_rescue == "off", "CDEC rescue is out of scope")
     require(args.certified_stagnation_graph == "off", "graph rescue is out of scope")
+    if args.cec_initial_bearing_alignment != "off":
+        require(
+            arm == "cec_portability",
+            "CEC bearing alignment requires the proof-carrying portability hub",
+        )
+        require(
+            args.role_pair_query_role == "all",
+            "CEC bearing alignment cannot receive a runtime role filter",
+        )
+        if args.cec_initial_bearing_alignment == "first_certified":
+            require(
+                args.role_pair_scope == "consumed_integration",
+                "ideal CEC bearing alignment is a consumed mechanism only",
+            )
+            require(
+                bool(args.role_pair_query_manifest),
+                "ideal bearing alignment requires a frozen consumed subset",
+            )
+        else:
+            require(
+                args.role_pair_scope in (
+                    "consumed_integration", "paper_heldout"),
+                "bounded bearing alignment has an unsupported scope",
+            )
+            if args.role_pair_scope == "consumed_integration":
+                require(
+                    bool(args.role_pair_query_manifest),
+                    "consumed bounded smoke requires a frozen query subset",
+                )
+            else:
+                require(
+                    not args.role_pair_query_manifest,
+                    "held-out bounded formal must run its complete population",
+                )
     require(
         args.revisit_controller == "navdp_mixed",
         "legacy evaluator controller label must remain neutral",
@@ -551,6 +585,14 @@ def main() -> None:
                         "end_z_m": float(leg["end_pos"][2]),
                         "end_yaw_rad": float(leg["end_psi"]),
                         "termination_reason": leg.get("termination_reason"),
+                        "cec_initial_bearing_alignment_mode": (
+                            leg["cec_initial_bearing_alignment_mode"]),
+                        "cec_initial_bearing_alignment_count": int(
+                            leg["cec_initial_bearing_alignment_count"]),
+                        "cec_initial_bearing_alignment_turn_deg": (
+                            leg["cec_initial_bearing_alignment_turn_deg"]),
+                        "cec_initial_bearing_alignment_action_count": int(
+                            leg["cec_initial_bearing_alignment_action_count"]),
                         **counts,
                         **depth,
                         **latency,
@@ -575,6 +617,9 @@ def main() -> None:
                                     "legA": leg_a["rollout_trace"],
                                     "query": leg["rollout_trace"],
                                 },
+                                "cec_initial_bearing_alignment_trace": (
+                                    leg[
+                                        "cec_initial_bearing_alignment_trace"]),
                                 # Canonical factual-prefix construction needs
                                 # the exact terminal state returned by the
                                 # controller, not an endpoint inferred from the
@@ -739,6 +784,16 @@ def main() -> None:
             "deterministic_plan_seeds": bool(args.deterministic_plan_seeds),
             "max_steps": int(args.max_steps),
             "exec_horizon": int(args.exec_horizon),
+            "cec_initial_bearing_alignment_mode": (
+                args.cec_initial_bearing_alignment),
+            "cec_initial_bearing_alignment_episodes": sum(
+                row["cec_initial_bearing_alignment_count"] > 0
+                for row in metrics
+            ),
+            "cec_initial_bearing_alignment_actions": sum(
+                row["cec_initial_bearing_alignment_action_count"]
+                for row in metrics
+            ),
             "certified_cdec_rescue": args.certified_cdec_rescue,
             "certified_stagnation_graph": args.certified_stagnation_graph,
             "memnav_server_info": dict(base.MEMNAV_SERVER_INFO),

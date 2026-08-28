@@ -33,6 +33,8 @@ FORCED_HUB_PORT=${FORCED_HUB_PORT:-21845}
 # cross-machine CUDA confound that invalidated older controller tables.
 PORTABILITY_AUTHORITY_PAIR=${PORTABILITY_AUTHORITY_PAIR:-0}
 PORTABILITY_AUTHORITY_ORDER=${PORTABILITY_AUTHORITY_ORDER:-grant,forced_reject_native}
+PORTABILITY_DIRECTION_TRIPLE=${PORTABILITY_DIRECTION_TRIPLE:-0}
+PORTABILITY_DIRECTION_ORDER=${PORTABILITY_DIRECTION_ORDER:-anchor_unaligned,native_bearing_aligned,anchor_bearing_aligned}
 ROLE_PAIR_QUERY_ROLE=${ROLE_PAIR_QUERY_ROLE:-all}
 ROLE_PAIR_QUERY_MANIFEST=${ROLE_PAIR_QUERY_MANIFEST:-}
 CEC_REJECT_POLICY=${CEC_REJECT_POLICY:-shared_native_exact}
@@ -94,6 +96,28 @@ case "${PORTABILITY_AUTHORITY_PAIR}" in
   0|1) ;;
   *) fail "PORTABILITY_AUTHORITY_PAIR must be 0 or 1" ;;
 esac
+case "${PORTABILITY_DIRECTION_TRIPLE}" in
+  0|1) ;;
+  *) fail "PORTABILITY_DIRECTION_TRIPLE must be 0 or 1" ;;
+esac
+if [[ "${PORTABILITY_DIRECTION_TRIPLE}" == 1 ]]; then
+  [[ "${PORTABILITY_AUTHORITY_PAIR}" == 0 ]] || \
+    fail "direction triple and authority pair are mutually exclusive"
+  [[ "${CONTROLLER}" == vint && "${EVAL_KIND}" == role_pair_mixed ]] || \
+    fail "direction triple is restricted to the ViNT role-pair mechanism test"
+  [[ "${CEC_REJECT_POLICY}" == controller_native_exact ]] || \
+    fail "direction triple requires ViNT-native exact fallback"
+  [[ "${ROLE_PAIR_SCOPE}" == consumed_integration ]] || \
+    fail "direction triple is consumed development only"
+  [[ -n "${ROLE_PAIR_QUERY_MANIFEST}" ]] || \
+    fail "direction triple requires a frozen query manifest"
+  case "${PORTABILITY_DIRECTION_ORDER}" in
+    anchor_unaligned,native_bearing_aligned,anchor_bearing_aligned|\
+    native_bearing_aligned,anchor_bearing_aligned,anchor_unaligned|\
+    anchor_bearing_aligned,anchor_unaligned,native_bearing_aligned) ;;
+    *) fail "invalid balanced PORTABILITY_DIRECTION_ORDER" ;;
+  esac
+fi
 case "${CEC_REJECT_POLICY}" in
   shared_native_exact) ;;
   controller_native_exact)
@@ -205,7 +229,8 @@ done
 [[ ! -e "${RUN_ROOT}" ]] || fail "output already exists: ${RUN_ROOT}"
 
 ports=("${MEMNAV_PORT}" "${FALLBACK_PORT}" "${HUB_PORT}")
-if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
+if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 \
+   || "${PORTABILITY_DIRECTION_TRIPLE}" == 1 ]]; then
   ports+=("${FORCED_HUB_PORT}")
 fi
 if [[ "${CONTROLLER}" != navdp ]]; then
@@ -240,6 +265,34 @@ payload={
  "query_manifest_sha256":digest(query_manifest) if query_manifest else None,
  "benchmark_manifest_path":benchmark_manifest,
  "benchmark_manifest_sha256":digest(benchmark_manifest),
+}
+open(path,"x").write(json.dumps(payload,indent=2,sort_keys=True)+"\n")
+PY
+fi
+if [[ "${PORTABILITY_DIRECTION_TRIPLE}" == 1 ]]; then
+  "${MEMNAV_PY}" - "${RUN_ROOT}/direction_triple_contract.json" \
+    "${CONTROLLER}" "${SCENE}" "${EPISODE}" "${MAX_STEPS}" \
+    "${PORTABILITY_DIRECTION_ORDER}" "${ROLE_PAIR_QUERY_MANIFEST}" \
+    "${BENCHMARK_ROOT}/../manifest.json" "${CEC_REJECT_POLICY}" <<'PY'
+import hashlib,json,sys
+(path,controller,scene,episode,max_steps,order,query_manifest,
+ benchmark_manifest,reject_policy)=sys.argv[1:]
+def digest(value):
+ return hashlib.sha256(open(value,"rb").read()).hexdigest()
+payload={
+ "schema_version":"vint_cec_direction_triple_contract_v1_20260828",
+ "scope":"outcome-aware consumed mechanism test; not a paper SR result",
+ "controller":controller,"scene":scene,"episode":episode,
+ "max_steps":int(max_steps),"arm_order":order.split(","),
+ "same_loaded_processes":True,"runtime_role_visibility":"none",
+ "handoff_packets_required":True,"reject_policy":reject_policy,
+ "query_manifest_path":query_manifest,
+ "query_manifest_sha256":digest(query_manifest),
+ "benchmark_manifest_path":benchmark_manifest,
+ "benchmark_manifest_sha256":digest(benchmark_manifest),
+ "alignment_contract":(
+   "first certified robot-local bearing; idealized zero-translation yaw; "
+   "then unchanged controller-local trajectory"),
 }
 open(path,"x").write(json.dumps(payload,indent=2,sort_keys=True)+"\n")
 PY
@@ -475,7 +528,8 @@ if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 0 \
   # Shared-native system baseline: identical pipeline/receipts, no takeover.
   hub_extra+=(--force-reject-native)
 fi
-if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
+if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 \
+   || "${PORTABILITY_DIRECTION_TRIPLE}" == 1 ]]; then
   hub_extra+=(--emit-handoff-packets)
 fi
 (
@@ -495,7 +549,8 @@ hub_pid=$!
 wait_for_port hub "${hub_pid}" "${HUB_PORT}" \
   "${RUN_ROOT}/logs/server_hub.log"
 
-if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
+if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 \
+   || "${PORTABILITY_DIRECTION_TRIPLE}" == 1 ]]; then
   (
     cd "${runtime_root}/forced_hub"
     exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${ROOT}" \
@@ -739,7 +794,29 @@ PY
   echo "DONE controller=${CONTROLLER} result=${arm_root}/result/summary.json"
 }
 
-if [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
+if [[ "${PORTABILITY_DIRECTION_TRIPLE}" == 1 ]]; then
+  IFS=',' read -r -a direction_order <<<"${PORTABILITY_DIRECTION_ORDER}"
+  for treatment in "${direction_order[@]}"; do
+    case "${treatment}" in
+      anchor_unaligned)
+        run_evaluator "${RUN_ROOT}/${treatment}" "${treatment}" \
+          "${HUB_PORT}" "${hub_pid}" \
+          --cec_initial_bearing_alignment off
+        ;;
+      native_bearing_aligned)
+        run_evaluator "${RUN_ROOT}/${treatment}" "${treatment}" \
+          "${FORCED_HUB_PORT}" "${forced_hub_pid}" \
+          --cec_initial_bearing_alignment first_certified
+        ;;
+      anchor_bearing_aligned)
+        run_evaluator "${RUN_ROOT}/${treatment}" "${treatment}" \
+          "${HUB_PORT}" "${hub_pid}" \
+          --cec_initial_bearing_alignment first_certified
+        ;;
+      *) fail "unexpected direction treatment ${treatment}" ;;
+    esac
+  done
+elif [[ "${PORTABILITY_AUTHORITY_PAIR}" == 1 ]]; then
   IFS=',' read -r -a authority_order <<<"${PORTABILITY_AUTHORITY_ORDER}"
   for authority in "${authority_order[@]}"; do
     if [[ "${authority}" == grant ]]; then

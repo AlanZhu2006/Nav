@@ -1,0 +1,38 @@
+{
+  "schema": "hm3d_vint_controller_native_cec_exact_retry_submission_v1",
+  "submitted_before_repaired_outcome_read": true,
+  "scheduler_submit_time": "2026-08-27T21:17:29",
+  "submit_identity": "yz11502",
+  "remote_host": "torch-login-b-1.hpc-infra.svc.cluster.local",
+  "repair_tag": "vint_cec_exact_retry1_20260828",
+  "reason": "infrastructure_sigabrt_before_any_query_outcome",
+  "original_array_job_id": 16482393,
+  "failed_indices": [23, 27],
+  "original_exit_codes": {
+    "23": "6:0",
+    "27": "6:0"
+  },
+  "completed_pair_audits_preserved": 26,
+  "repair_array_job_id": 16492736,
+  "replacement_aggregate_job_id": 16492737,
+  "replacement_verify_job_id": 16492738,
+  "repair_array_spec": "23,27%2",
+  "repair_partitions": ["h100_tandon", "a100_tandon"],
+  "repair_time_limit": "01:00:00",
+  "source_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_vint_cec_3c8da4454ad11c64",
+  "source_receipt_sha256": "735f6e39012bfa5bd02c1ddfcbaa8c0a2e17d0369f892260c1e3709fd16796a9",
+  "benchmark_manifest_sha256": "aada40d25d01e9385df3ffdcaf37847f471b63c7be785a704eade961346a50b0",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_vint_controller_native_cec_20260828/hm3d_vint_cec_table1_20260828",
+  "archive_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_vint_controller_native_cec_20260828/hm3d_vint_cec_table1_20260828/formal/failed_attempts/vint_cec_exact_retry1_20260828",
+  "method_changes": false,
+  "threshold_changes": false,
+  "checkpoint_changes": false,
+  "population_changes": false,
+  "analysis_changes": false,
+  "formal_release_gate": {
+    "required_pair_audits": 28,
+    "required_scene_clusters": 21,
+    "required_raw_query_rows": 56,
+    "independent_verification_required": true
+  }
+}

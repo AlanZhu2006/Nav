@@ -29,7 +29,11 @@ cd "${ROOT}"
 
 fail() { echo "ABORT: $*" >&2; exit 2; }
 remote() {
-  timeout 180 ssh -tt -o BatchMode=yes -o ControlMaster=no \
+  # Some calls run inside process substitution.  With a local controlling TTY,
+  # an SSH slave that can read stdin is backgrounded and receives SIGTTIN.
+  # The complete remote program is already passed as an argv string, so detach
+  # stdin explicitly while retaining the proven shared-master PTY path.
+  timeout 180 ssh -n -tt -o BatchMode=yes -o ControlMaster=no \
     -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" "$@"
 }
 [[ -S "${SSH_CONTROL_PATH}" ]] || fail "authoritative SSH master missing"

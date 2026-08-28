@@ -91,6 +91,13 @@ history.  The current source of truth is
 No new learned model, threshold search, development-set selection, or Novel
 direction module is introduced by this queue.
 
+The low-priority trajectory-length item has now been closed at the
+constructibility level without reading policy outcomes.  On the sealed fresh
+HM3D population, `0--20/20--30/30--50 m` contains `56/0/0` queries (Novel
+`28/0/0`, Revisit `28/0/0`); the construction contract itself is `[2,9]` m.
+Therefore Table 3 cannot be produced by post-hoc binning and requires a new
+result-blind long-range benchmark if schedule permits.
+
 ## 2. HM3D continual repair (completed historical stage)
 
 The factual-B source contains 99 frozen candidate histories.  Four completion

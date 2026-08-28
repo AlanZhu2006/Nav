@@ -1,0 +1,57 @@
+{
+  "contract_query_geodesic_band_m": [
+    2.0,
+    9.0
+  ],
+  "distance_ranges": {
+    "all": {
+      "maximum_m": 8.999506950378418,
+      "median_m": 3.169053077697754,
+      "minimum_m": 2.040367364883423,
+      "n": 56
+    },
+    "novel": {
+      "maximum_m": 8.999506950378418,
+      "median_m": 4.801834583282471,
+      "minimum_m": 2.249999761581421,
+      "n": 28
+    },
+    "revisit": {
+      "maximum_m": 3.7763478755950928,
+      "median_m": 2.677005171775818,
+      "minimum_m": 2.040367364883423,
+      "n": 28
+    }
+  },
+  "histories": 28,
+  "long_bins_populated": false,
+  "manifest": "/home/asus/Research/Nav-graph-blind/.diagnostics/hm3d_fresh_fullmono_mixed_role_20260820/pulled_20260828/benchmarks/natural_direction/manifest.json",
+  "manifest_schema": "shared_online_role_pair_v1_20260814",
+  "manifest_sha256": "aada40d25d01e9385df3ffdcaf37847f471b63c7be785a704eade961346a50b0",
+  "navigation_outcomes_read": false,
+  "outside_requested_bins": 0,
+  "queries": 56,
+  "recommended_action": "post-hoc Table 3 is unsupported; construct and freeze a new 20-50 m benchmark before any length-stratified rollout",
+  "requested_bins": {
+    "0_to_20_m": {
+      "all": 56,
+      "novel": 28,
+      "revisit": 28
+    },
+    "20_to_30_m": {
+      "all": 0,
+      "novel": 0,
+      "revisit": 0
+    },
+    "30_to_50_m": {
+      "all": 0,
+      "novel": 0,
+      "revisit": 0
+    }
+  },
+  "scene_clusters": 21,
+  "schema_version": "role_pair_length_constructibility_audit_v1_20260829",
+  "scope": "sealed role-pair construction only; no navigation outcomes",
+  "table3_constructible_from_this_population": false,
+  "verified": true
+}

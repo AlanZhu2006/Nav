@@ -91,6 +91,22 @@ history.  The current source of truth is
   rollout is part of this submission.  The smoke completed with `0/2`
   constructible reserve histories in scene 0, and the formal construction
   array started normally.  This early count is not used to alter the protocol.
+- At the latest result-blind structural read, `38/54` scene receipts were
+  complete. They contain `25` retained histories from `18` scene clusters,
+  with direction strata `front/side/rear = 3/4/18`. Thus the history and scene
+  thresholds already pass, but the front stratum remains one below its frozen
+  minimum. Finalizer `16525132` and verifier `16525152` remain dependency-held;
+  no policy evaluation has been submitted.
+- The post-gate controller evaluation is now prepared as a single fail-closed
+  submission. NavDP runs `mono_native` versus `mono_cec`; ViNT runs exact
+  native versus CEC with the audited `first_certified_bounded` physical-turn
+  executor. Each controller has an independent raw verifier, followed by one
+  joint provenance seal. A live pre-submission rehearsal passed `114` local
+  tests and then stopped before `sbatch` because the construction verifier did
+  not yet exist. This is the intended behavior and created no remote policy
+  job. The frozen estimands and claim boundary are recorded in
+  `HM3D_TABLE1_CONTROLLER_PORTABILITY_PROTOCOL_20260829.md` and its JSON
+  companion.
 
 ## 1. Current priority order
 

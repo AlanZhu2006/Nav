@@ -42,6 +42,9 @@ def verify(
     require(summary.get("benchmark_manifest_sha256")
             == digest(benchmark_manifest),
             "aggregate is bound to a different benchmark")
+    grant_alignment = summary.get("grant_bearing_alignment", "off")
+    require(grant_alignment in {"off", "first_certified_bounded"},
+            "aggregate bearing alignment is invalid")
     audit_paths = sorted((run_root / "evaluation").glob(
         "*/vint/controller_native_pair_audit.json"))
     require(len(audit_paths) == int(summary["histories"]),
@@ -56,6 +59,21 @@ def verify(
                 and cell.get("reject_policy") == "controller_native_exact"
                 and cell.get("query_count") == 2,
                 f"invalid raw cell: {path}")
+        require(cell.get("grant_bearing_alignment", "off") == grant_alignment,
+                f"raw cell bearing alignment differs: {path}")
+        if grant_alignment == "first_certified_bounded":
+            for query in cell["query_results"]:
+                receipt = query.get("grant_bearing_alignment")
+                require(isinstance(receipt, dict)
+                        and receipt.get("mode") == grant_alignment
+                        and receipt.get("validated") is True,
+                        f"raw bounded-turn receipt is invalid: {path}")
+                if receipt.get("required") is True:
+                    require(int(receipt.get("action_count", 0)) > 0
+                            and int(receipt.get(
+                                "fresh_observation_receipts", 0))
+                            == int(receipt["action_count"]),
+                            f"raw bounded-turn observations are incomplete: {path}")
         identity = str(cell["scene"]), str(cell["episode"])
         require(identity not in identities, f"duplicate raw cell: {path}")
         identities.add(identity)
@@ -126,6 +144,7 @@ def verify(
         "raw_histories": len(audit_paths),
         "raw_queries": len(rows),
         "scene_clusters": len({row["scene"] for row in rows}),
+        "grant_bearing_alignment": grant_alignment,
         "recomputed": recomputed,
         "novel_takeover_queries": novel_takeovers,
         "all_reject_exact_fallback": True,

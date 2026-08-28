@@ -116,6 +116,23 @@ def rotated_arm_order(history_index: int) -> tuple[str, ...]:
     return ARMS[offset:] + ARMS[:offset]
 
 
+def selected_arm_order(
+    history_index: int, selected: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Return a balanced order while preserving the legacy three-arm path."""
+
+    require(len(selected) == len(set(selected)), "selected arms contain duplicates")
+    require(set(selected).issubset(set(ARMS)), "selected arms are unknown")
+    require("mono_native" in selected and "mono_cec" in selected,
+            "paired evaluation requires mono_native and mono_cec")
+    if selected == ARMS:
+        return rotated_arm_order(history_index)
+    require(set(selected) == {"mono_native", "mono_cec"} and len(selected) == 2,
+            "only the frozen native/CEC Table-1 subset may omit raw memory")
+    canonical = ("mono_native", "mono_cec")
+    return canonical if int(history_index) % 2 == 0 else tuple(reversed(canonical))
+
+
 def audit_goal_a_plans(plans: list[dict[str, Any]]) -> dict[str, Any]:
     """Apply the already-frozen first-40 raw-depth audit to Goal-A."""
 
@@ -145,6 +162,7 @@ __all__ = [
     "EVALUATOR_ARM",
     "HYBRID_ROUTE",
     "PRIMARY_CONTRASTS",
+    "selected_arm_order",
     "REVISIT_ADAPTER",
     "audit_goal_a_plans",
     "audit_query_arm",

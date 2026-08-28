@@ -17,6 +17,7 @@ set -euo pipefail
 umask 0022
 export PYTHONDONTWRITEBYTECODE=1
 : "${SLURM_ARRAY_TASK_ID:?}" "${TASK_ROOT:?}" "${BASE_SOURCE_ROOT:?}"
+: "${AMENDMENT_ROOT:?}"
 : "${RUN_ROOT:?}" "${DEPENDENCY_RECEIPT:?}" "${STAGE:?collect|evaluate}"
 case "${STAGE}" in collect|evaluate) ;; *) echo "bad STAGE" >&2; exit 2;; esac
 [[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
@@ -73,7 +74,9 @@ PY
 MEMNAV_CKPT=${dependencies[0]}; NAVDP_CKPT=${dependencies[1]}
 LINGBOT_WEIGHTS=${dependencies[2]}
 label=$(printf '%03d_%s_%s' "${INDEX}" "${SCENE}" "${EPISODE}")
-port_slot=$(( $$ % 7000 )); base_port=$((20000 + port_slot * 5))
+source "${AMENDMENT_ROOT}/MemNavData/slurm_port_pair.sh"
+claim_slurm_tcp_port_block hm3d_lifelong 5 12000 2400
+base_port=${CEC_PORT_BLOCK_BASE}
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python
 HAB_PY=/scratch/lg154/conda-envs/habitat/bin/python

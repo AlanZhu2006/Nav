@@ -5,18 +5,54 @@ completed construction receipt, or scheduler state is not a navigation result.
 Paper numbers remain governed by raw episode receipts, a frozen summary, and an
 independent verifier.
 
+## 0. Superseding execution snapshot
+
+The earlier preparation-only statements below are retained as an incident
+history.  The current source of truth is
+`PAPER_EXPERIMENT_NIGHT_PLAN_20260828.md`.
+
+- Final14 zero depth is complete and independently verified after an exact
+  one-index infrastructure repair: Novel `3/21`, Revisit `1/21`, overall
+  `4/42`; replacement jobs `16502265 -> 16502270`, `verified=true`.
+- The first portsafe authority smoke `16502418` exposed a missing source-bundle
+  dependency before producing an outcome: the new server came from the
+  authority overlay, while the omitted `monocular_depth_runtime.py` silently
+  resolved from the older base namespace package.  Formal `16502420`, verifier
+  `16502421`, and lifelong launcher `16502570` were therefore cancelled by
+  dependency as intended.
+- A provenance-locked replacement authority bundle now contains the complete
+  monocular runtime and test.  Local, remote, port-lock, exact-import-path, and
+  two production-container route checks pass.  The authoritative submitted DAG
+  is `16503212 -> 16503217 -> 16503241`.
+- Natural-V4 factual B and population sealing are complete and independently
+  verified: 22 supported histories in 15 scenes, population SHA
+  `ec11c0dbc43a4abe585330c1ce52a8c14ad1d4b1da6fd8397e1d15592707a6d5`.
+  Because the original 40-history gate was not met, a separate result-blind
+  underpowered amendment was frozen.  Replacement CPU launcher `16503597` is
+  dependency-held behind authority verifier `16503241`; it will submit
+  factual-C and paired-B2 arrays one stage at a time.
+- The ViNT ideal-bearing alignment loss-five result passed its mechanism gates
+  but remains outcome-aware and nonphysical; no formal ViNT SR was submitted.
+
 ## 1. Current priority order
 
-1. Finish the already-running HM3D ViNT/ViNT+CEC formal comparison.
-2. Resume the frozen HM3D continual Natural-V4 chain after factual-B repair.
-3. Run Final14 zero-depth native on the exact mono-factorial query population.
-4. Run the Final14 proposal-matched CEC authority ablation.
-5. Add path/SPL aggregation only after the four result tables above close.
+1. Let the provenance-locked proposal-matched authority ablation pass smoke,
+   complete all 21 paired cells, and independently verify (`16503212 ->
+   16503217 -> 16503241`).
+2. Let the already-submitted HM3D shared-C/B2 continual test start only after
+   that verifier (`16503597`, then dynamically submitted stages).
+3. Do not interpret either formal array while it is partial; only frozen raw
+   receipts plus the independent verifier can promote a number to the paper.
+4. Keep ViNT formal SR blocked until the bounded physical-turn executor has a
+   newly frozen, outcome-blind population.  The old 28-history adapter result
+   and its five inspected losses must not be reused for method selection.
+5. Run the real-robot paired protocol only with an operator present; do not
+   substitute an unattended HPC job for that evidence.
 
 No new learned model, threshold search, development-set selection, or Novel
 direction module is introduced by this queue.
 
-## 2. HM3D continual repair
+## 2. HM3D continual repair (completed historical stage)
 
 The factual-B source contains 99 frozen candidate histories.  Four completion
 receipts were missing (`51, 52, 62, 63`); only shards `31` and `37` required
@@ -30,9 +66,14 @@ overwriting any completed receipt.
 - dependency: factual-B repair plus completion of ViNT array `16482393`;
 - planned prefix array: `0-98%4`, 20 minutes per element.
 
-The last path-count/scheduler check was read-only.  Final scientific promotion
-still requires the deferred launcher to recompute all completion SHA files,
-seal the population, and pass the independent population verifier.
+The repaired factual-B population has since been materialized and independently
+verified: 22 supported histories in 15 scenes, with 18 strong-support
+histories.  It missed the original 40-history power gate.  A separate,
+result-blind underpowered amendment was therefore frozen before any C/B2
+outcome was run.  Launcher `16501659` is queued after `16501320`; it will run
+shared factual C first, seal successful C prefixes, and only then submit the
+paired B2 arms.  This result can never be relabelled as the original powered
+confirmation.
 
 Repair sources:
 
@@ -53,18 +94,16 @@ the exact 21-history/42-query Final14 population.
 - result aggregation joins the original four factorial rows only after checking
   their summary and verifier hashes.
 
-Remote immutable bundle already staged and `sbatch --test-only` passed:
+Remote immutable bundle, smoke, and submission receipts are complete:
 
 ```text
 /scratch/yz11502/Research/Nav-axis-uturn-source-bundles/
-  final14_zero_depth_e2033c8a0771cd84
+  final14_zero_depth_4c061bd6b86da365
 ```
 
-Formal submission remains intentionally off.  Start it with:
-
-```bash
-SUBMIT=1 bash MemNavData/prepare_final14_zero_depth_hpc.sh
-```
+Smoke `16499686` completed successfully.  Formal array `16499701` is running
+with `0-20%2`, and summary/independent verifier `16499709` is dependency-held.
+No partial outcome is a result.
 
 ## 4. Proposal-matched CEC authority ablation
 
@@ -106,12 +145,16 @@ Primary output is strict CEC minus unthresholded witness SR by Novel, Revisit,
 and all queries.  Secondary outputs are Novel authorization, Revisit rejection,
 and first-decision authority discordance.
 
-The formal GPU job has **not** been submitted.  One preparation attempt stopped
-before upload because a manually selected responsive socket belonged to another
-account; the identity gate correctly prevented any remote write or Slurm job.
-The persistent shared `alantorch` connection has since been verified as
-`yz11502`, so the remaining action is to rerun the documented preparation chain
-through that shared master.
+The original and first portsafe DAGs are retained only as incident records.
+The current formal DAG was submitted through the verified `yz11502` shared
+master: smoke `16503212`, formal array `16503217`, and analysis/verifier
+`16503241`.  Its provenance-locked immutable bundle receipt begins
+`18fe24537b840871`.
+
+One earlier preparation attempt stopped before upload because a manually
+selected responsive socket belonged to another account; the identity gate
+correctly prevented any remote write or Slurm job.  This is retained here as
+an incident record, not as the current submission state.
 
 ## 5. SSH incident, resolution, and safety boundary
 
@@ -131,15 +174,9 @@ The default assumption is now explicit: the user's shared `alantorch` master is
 already authenticated and available.  A stalled no-PTY/scripted channel is
 diagnosed through the documented PTY, stdin/job-control, SFTP/SCP, and
 ControlPath procedures; it is not evidence that SSH, Torch HPC, or Slurm is
-down, and it is not a reason to request another user login.  Rerun through the
-verified shared master:
-
-```bash
-SUBMIT=0 bash MemNavData/prepare_final14_authority_ablation_hpc.sh
-```
-
-Only after remote tests, two route-level contract dry-runs, and both
-`sbatch --test-only` checks pass should `SUBMIT=1` be considered.
+down, and it is not a reason to request another user login.  Remote tests, two
+route-level contract dry-runs, both `sbatch --test-only` checks, and immutable
+bundle verification all passed before submission.
 
 ## 6. Interpretation discipline
 
@@ -148,7 +185,9 @@ Only after remote tests, two route-level contract dry-runs, and both
 - Final14 remains consumed and underpowered relative to the original target;
   it is used for a paired mechanism ablation, not new model selection.
 - Continual `99/99` factual-B is construction completeness, not SR.
-- ViNT smoke results do not become controller SR; only the formal frozen array
-  and its verifier may fill the main table.
+- The completed anchor-only ViNT formal result is a controlled negative because
+  that adapter discarded the certified bearing.  The five-loss ideal-yaw repair
+  is mechanism evidence only.  Neither may fill the intended bounded-executor
+  controller-portability row.
 - Zero-depth Novel-A Gate D and zero-depth Final14 mixed-role results must remain
   separate estimands.

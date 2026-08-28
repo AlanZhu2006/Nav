@@ -64,7 +64,27 @@ exec > >(tee "${task_root}/run.log") 2>&1
 PYTHONPATH_VALUE=${REPAIR_ROOT}:${REPAIR_ROOT}/MemNavData:${REPAIR_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
   "${MEMNAV_PY}" -m unittest -q \
-    MemNavData.test_policy_agent_graph
+    MemNavData.test_policy_agent_graph \
+    MemNavData.test_monocular_depth_runtime
+# Namespace packages can silently resolve a missing overlay module from an
+# older base bundle.  Prove that the transaction API actually comes from this
+# immutable authority bundle before spending GPU time or writing an outcome.
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
+  "${MEMNAV_PY}" - "${REPAIR_ROOT}" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+from MemNavData import monocular_depth_runtime as runtime
+
+actual = pathlib.Path(runtime.__file__).resolve()
+expected = (root / "MemNavData" / "monocular_depth_runtime.py").resolve()
+assert actual == expected, (
+    f"monocular depth runtime provenance mismatch: {actual} != {expected}"
+)
+assert callable(runtime.bind_monocular_depth_transaction)
+assert callable(runtime.validate_monocular_depth_transaction)
+PY
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
   "${MEMNAV_PY}" - <<'PY'
 from MemNavData.certified_relocalization_runtime import runtime_contract
@@ -76,12 +96,8 @@ assert set(AUTHORITY_POLICY.values()) == {
     "strict_certificate", "pnp_pose_available"}
 PY
 
-port_key=$(( (${SLURM_JOB_ID:-1000} + HISTORY_INDEX * 43) % 14000 ))
-MEMNAV_PORT=${MEMNAV_PORT:-$((25000 + port_key))}
-NAVDP_PORT=${NAVDP_PORT:-$((MEMNAV_PORT + 1))}
-for port in "${MEMNAV_PORT}" "${NAVDP_PORT}"; do
-  ! ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${port}$"
-done
+source "${REPAIR_ROOT}/MemNavData/slurm_port_pair.sh"
+claim_slurm_tcp_port_pair final14_authority
 runtime_root=${SLURM_TMPDIR:-/tmp}/final14_authority_${SLURM_JOB_ID:-local}_${HISTORY_INDEX}
 mkdir -p "${runtime_root}/memnav" "${runtime_root}/navdp"
 MEMNAV_PID= NAVDP_PID=
@@ -92,6 +108,7 @@ cleanup() {
       wait "${pid}" 2>/dev/null || true
     fi
   done
+  release_slurm_tcp_port_pair
 }
 trap cleanup EXIT INT TERM
 (

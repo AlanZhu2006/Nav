@@ -67,6 +67,7 @@ from deterministic_eval_protocol import (
 )
 from arrival_shadow import ArrivalShadowConfig, ArrivalShadowDetector
 from bearing_diagnostics import evaluation_geodesic_bearing_error_deg
+from cec_bearing_alignment import bounded_turn_delta, certified_alignment_turn
 from navdp_goal_switch import (
     RESET_MODES,
     TRAJECTORY_SELECTOR_SCOPES,
@@ -376,6 +377,16 @@ parser.add_argument(
 )
 parser.add_argument("--max_steps", type=int, default=1200, help="frame budget per policy leg")
 parser.add_argument("--exec_horizon", type=int, default=8, help="frames between replans")
+parser.add_argument(
+    "--cec_initial_bearing_alignment",
+    choices=["off", "first_certified", "first_certified_bounded"],
+    default="off",
+    help=("on the first accepted or shadow-accepted CEC handoff, rotate by "
+          "the sealed robot-local bearing without oracle pose. "
+          "first_certified is the consumed ideal-yaw mechanism; "
+          "first_certified_bounded uses <=30-degree zero-translation actions, "
+          "a fresh observation after every action, and replans before moving"),
+)
 parser.add_argument(
     "--trajectory_selector",
     choices=["server", "oracle_geodesic"],
@@ -2577,6 +2588,12 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
     arrival_shadow_first_strict_gt_dist_m = None
     arrival_shadow_probe_pending = False
     arrival_shadow_probe_completed = False
+    cec_initial_bearing_alignment_count = 0
+    cec_initial_bearing_alignment_turn_deg = None
+    cec_initial_bearing_alignment_trace = []
+    cec_bounded_alignment_remaining_rad = None
+    cec_bounded_alignment_packet_sha256 = None
+    cec_bounded_alignment_force_replan = False
 
     def result(steps, final_response=None, termination_reason=None):
         final_dist = float(np.linalg.norm(
@@ -2718,6 +2735,16 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             arrival_shadow_first_strict_gt_dist_m=(
                 arrival_shadow_first_strict_gt_dist_m),
             arrival_shadow_post_reach_probe=arrival_shadow_probe_completed,
+            cec_initial_bearing_alignment_mode=(
+                args.cec_initial_bearing_alignment),
+            cec_initial_bearing_alignment_count=int(
+                cec_initial_bearing_alignment_count),
+            cec_initial_bearing_alignment_turn_deg=(
+                cec_initial_bearing_alignment_turn_deg),
+            cec_initial_bearing_alignment_action_count=len(
+                cec_initial_bearing_alignment_trace),
+            cec_initial_bearing_alignment_trace=(
+                cec_initial_bearing_alignment_trace),
             certified_graph_rescue_attempted=(
                 certified_graph_rescue_attempted),
             certified_graph_rescue_active=certified_graph_rescue_active,
@@ -2731,6 +2758,46 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             certified_route_start_anchor=certified_route_start_anchor,
             **shadow_summary,
         )
+
+    def execute_bounded_alignment_action(
+            *, step: int, frame_sha256: str,
+            memory_frame_idx=None) -> None:
+        """Execute one bounded yaw action and require a later fresh replan."""
+
+        nonlocal psi
+        nonlocal cec_bounded_alignment_remaining_rad
+        nonlocal cec_bounded_alignment_force_replan
+        remaining = cec_bounded_alignment_remaining_rad
+        if remaining is None:
+            raise RuntimeError("bounded CEC alignment has no pending turn")
+        delta = bounded_turn_delta(remaining, max_step_deg=30.0)
+        if delta == 0.0:
+            cec_bounded_alignment_remaining_rad = None
+            cec_bounded_alignment_force_replan = True
+            return
+        yaw_before = float(psi)
+        psi = float(wrap_angle(psi + delta))
+        remainder = float(remaining - delta)
+        if abs(remainder) <= 1e-9:
+            remainder = 0.0
+            cec_bounded_alignment_remaining_rad = None
+            cec_bounded_alignment_force_replan = True
+        else:
+            cec_bounded_alignment_remaining_rad = remainder
+        cec_initial_bearing_alignment_trace.append({
+            "action_index": len(cec_initial_bearing_alignment_trace),
+            "step": int(step),
+            "packet_sha256": cec_bounded_alignment_packet_sha256,
+            "observation_jpg_sha256": frame_sha256,
+            "memory_frame_idx": (
+                None if memory_frame_idx is None else int(memory_frame_idx)),
+            "yaw_before_rad": yaw_before,
+            "yaw_after_rad": float(psi),
+            "turn_delta_deg": float(np.degrees(delta)),
+            "remaining_after_deg": float(np.degrees(remainder)),
+            "translation_m": 0.0,
+            "fresh_observation_required_before_next_action": True,
+        })
 
     total_budget = (
         args.max_steps
@@ -2900,8 +2967,35 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
         if step >= args.max_steps and not arrival_shadow_probe_pending:
             return result(step, termination_reason="max_steps")
 
+        # A bounded CEC turn is an explicit action sequence.  Each action is
+        # followed by this next loop iteration's freshly rendered observation,
+        # which is written exactly once without sampling or executing a ViNT
+        # trajectory.  The final fresh view forces a new controller plan.
+        if cec_bounded_alignment_remaining_rad is not None:
+            memory_response = srv_memory(frame)
+            memory_frame_idx = memory_response.get("frame_idx")
+            if memory_frame_idx is not None:
+                memory_trace.append(dict(
+                    frame_idx=int(memory_frame_idx),
+                    step=int(step),
+                    x=float(pos[0]),
+                    z=float(pos[2]),
+                    yaw=float(psi),
+                ))
+            execute_bounded_alignment_action(
+                step=step,
+                frame_sha256=bytes_sha256(frame),
+                memory_frame_idx=memory_frame_idx,
+            )
+            way_world = None
+            continue
+
         response = None
-        if step % args.exec_horizon == 0 or arrival_shadow_probe_pending:
+        alignment_started_this_step = False
+        if (cec_bounded_alignment_force_replan
+                or step % args.exec_horizon == 0
+                or arrival_shadow_probe_pending):
+            cec_bounded_alignment_force_replan = False
             request_seed = None
             if args.deterministic_plan_seeds:
                 if episode_seed is None or leg_index is None:
@@ -2958,6 +3052,72 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                     goal_xz,
                     trajectory_selector=leg_trajectory_selector,
                 )
+                alignment_diag = {
+                    "cec_initial_bearing_alignment_mode": (
+                        args.cec_initial_bearing_alignment),
+                    "cec_initial_bearing_alignment_executed": False,
+                    "cec_initial_bearing_alignment_turn_deg": None,
+                    "cec_initial_bearing_alignment_direction": None,
+                    "cec_initial_bearing_alignment_yaw_before_rad": None,
+                    "cec_initial_bearing_alignment_yaw_after_rad": None,
+                    "cec_initial_bearing_alignment_motion_contract": None,
+                }
+                if (args.cec_initial_bearing_alignment != "off"
+                        and cec_initial_bearing_alignment_count == 0
+                        and (response.get("cec_takeover") is True
+                             or response.get("cec_shadow_takeover") is True)):
+                    try:
+                        alignment = certified_alignment_turn(response)
+                    except ValueError as exc:
+                        raise RuntimeError(
+                            "bearing alignment packet is invalid") from exc
+                    if alignment is None:
+                        raise RuntimeError(
+                            "bearing alignment lost its accepted authority")
+                    direction = [alignment.forward, alignment.left]
+                    turn_rad = float(alignment.turn_rad)
+                    yaw_before = float(psi)
+                    if args.cec_initial_bearing_alignment == "first_certified":
+                        psi = float(wrap_angle(psi + turn_rad))
+                        cec_initial_bearing_alignment_count += 1
+                        cec_initial_bearing_alignment_turn_deg = float(
+                            np.degrees(turn_rad))
+                        alignment_diag.update({
+                            "cec_initial_bearing_alignment_executed": True,
+                            "cec_initial_bearing_alignment_turn_deg": (
+                                cec_initial_bearing_alignment_turn_deg),
+                            "cec_initial_bearing_alignment_direction": (
+                                direction),
+                            "cec_initial_bearing_alignment_yaw_before_rad": (
+                                yaw_before),
+                            "cec_initial_bearing_alignment_yaw_after_rad": (
+                                float(psi)),
+                            "cec_initial_bearing_alignment_motion_contract": (
+                                "idealized_zero_translation_yaw_then_unchanged_"
+                                "controller_local_trajectory"),
+                        })
+                    elif abs(turn_rad) > 1e-9:
+                        cec_initial_bearing_alignment_count += 1
+                        cec_initial_bearing_alignment_turn_deg = float(
+                            np.degrees(turn_rad))
+                        cec_bounded_alignment_remaining_rad = turn_rad
+                        cec_bounded_alignment_packet_sha256 = (
+                            alignment.packet_sha256)
+                        alignment_started_this_step = True
+                        alignment_diag.update({
+                            "cec_initial_bearing_alignment_executed": True,
+                            "cec_initial_bearing_alignment_turn_deg": (
+                                cec_initial_bearing_alignment_turn_deg),
+                            "cec_initial_bearing_alignment_direction": (
+                                direction),
+                            "cec_initial_bearing_alignment_yaw_before_rad": (
+                                yaw_before),
+                            "cec_initial_bearing_alignment_yaw_after_rad": (
+                                float(wrap_angle(yaw_before + turn_rad))),
+                            "cec_initial_bearing_alignment_motion_contract": (
+                                "bounded_zero_translation_turns_max_30deg_"
+                                "fresh_observation_each_action_then_replan"),
+                        })
                 way_world = waypoints_to_world(way, [pos[0], pos[2]], psi)
                 evaluation_gt_goal_distance_m = float(np.linalg.norm(
                     np.asarray([pos[0], pos[2]]) - np.asarray(goal_xz)))
@@ -3363,6 +3523,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                       "certified_graph_reason"),
                                   current_goal_cos=response.get("current_goal_cos"),
                                   frame_idx=response.get("frame_idx"),
+                                  **alignment_diag,
                                   **shadow_diag,
                                   **selector_info))
 
@@ -3391,6 +3552,19 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 z=float(pos[2]),
                 yaw=float(psi),
             ))
+        if alignment_started_this_step:
+            # The response above is evidence/authorization only.  Its
+            # pre-turn controller horizon is deliberately discarded.  The
+            # current observation was already consumed by that plan request;
+            # execute one bounded turn now and acquire a fresh observation on
+            # the next loop iteration.
+            execute_bounded_alignment_action(
+                step=step,
+                frame_sha256=bytes_sha256(frame),
+                memory_frame_idx=memory_frame_idx,
+            )
+            way_world = None
+            continue
         if arrival_shadow_probe_pending:
             # Score one current-view decision after first position success, but
             # never execute its trajectory.  This gives an autonomous detector

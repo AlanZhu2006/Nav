@@ -1,0 +1,17 @@
+{
+  "arms": [
+    "mono_cec",
+    "mono_unthresholded_witness"
+  ],
+  "history_count": 21,
+  "queries_per_arm": 42,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_authority_20260828/formal_18fe24537b840871",
+  "runtime_role_visibility": "none",
+  "same_process_pairing": true,
+  "schema_version": "final14_cec_authority_ablation_preparation_v1_20260828",
+  "shared_ssh_socket_used": "/home/asus/.ssh/cm-e3ce4155ccb925413d599e13706baddf79fddff3",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_authority_20260828/smoke_18fe24537b840871",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_cec_authority_18fe24537b840871",
+  "source_bundle_receipt_sha256": "18fe24537b840871017dfc8c5e9cc34a141dfa5eca64c73f4c36395570979d10",
+  "submitted": false
+}

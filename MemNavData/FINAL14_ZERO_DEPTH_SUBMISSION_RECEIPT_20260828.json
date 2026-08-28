@@ -1,14 +1,14 @@
 {
-  "arm": "zero_native",
-  "controller_checkpoint_changed": false,
+  "analysis_and_verifier_job": 16499709,
+  "formal_array": "0-20%2",
+  "formal_array_job": 16499701,
   "history_count": 21,
+  "outcomes_read_before_submission": false,
   "query_count": 42,
   "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_zero_depth_20260828/formal_4c061bd6b86da365",
-  "same_population_as_final14_factorial": true,
-  "schema_version": "final14_zero_depth_preparation_v1_20260828",
+  "schema_version": "final14_zero_depth_submission_v1_20260828",
+  "smoke_job": 16499686,
   "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_zero_depth_20260828/smoke_4c061bd6b86da365",
   "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_zero_depth_4c061bd6b86da365",
-  "source_bundle_receipt_sha256": "4c061bd6b86da365b1ab80ff42b4c13cf0e19b5bd3ee9dd902c540853c088398",
-  "submitted": true,
-  "submission_receipt": "MemNavData/FINAL14_ZERO_DEPTH_SUBMISSION_RECEIPT_20260828.json"
+  "source_bundle_receipt_sha256": "4c061bd6b86da365b1ab80ff42b4c13cf0e19b5bd3ee9dd902c540853c088398"
 }

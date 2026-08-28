@@ -68,12 +68,8 @@ exec > >(tee "${task_root}/run.log") 2>&1
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${REPAIR_ROOT}:${BASE_SOURCE_ROOT}" \
   "${MEMNAV_PY}" -m unittest -q MemNavData.test_final14_zero_depth
 
-port_key=$(( (${SLURM_JOB_ID:-1000} + HISTORY_INDEX * 43) % 14000 ))
-MEMNAV_PORT=${MEMNAV_PORT:-$((25000 + port_key))}
-NAVDP_PORT=${NAVDP_PORT:-$((MEMNAV_PORT + 1))}
-for port in "${MEMNAV_PORT}" "${NAVDP_PORT}"; do
-  ! ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${port}$"
-done
+source "${REPAIR_ROOT}/MemNavData/slurm_port_pair.sh"
+claim_slurm_tcp_port_pair final14_zero_depth
 runtime_root=${SLURM_TMPDIR:-/tmp}/final14_zero_${SLURM_JOB_ID:-local}_${HISTORY_INDEX}
 mkdir -p "${runtime_root}/memnav" "${runtime_root}/navdp"
 MEMNAV_PID= NAVDP_PID=
@@ -84,6 +80,7 @@ cleanup() {
       wait "${pid}" 2>/dev/null || true
     fi
   done
+  release_slurm_tcp_port_pair
 }
 trap cleanup EXIT INT TERM
 PYTHONPATH_VALUE=${REPAIR_ROOT}:${BASE_SOURCE_ROOT}:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy

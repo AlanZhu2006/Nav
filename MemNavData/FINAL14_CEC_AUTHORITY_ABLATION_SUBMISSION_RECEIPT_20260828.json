@@ -1,0 +1,15 @@
+{
+  "analysis_job": "16501320",
+  "formal_array_job": "16501313",
+  "history_count": 21,
+  "queries_per_arm": 42,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_authority_20260828/formal_57f73bd5c842cfd5",
+  "same_process_pairing": true,
+  "schema_version": "final14_cec_authority_ablation_submission_v1_20260828",
+  "smoke_job": "16501311",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_authority_20260828/smoke_57f73bd5c842cfd5",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_cec_authority_57f73bd5c842cfd5",
+  "source_bundle_receipt_sha256": "57f73bd5c842cfd500d0a34244d730f0e25d4f9ac9fde32715362a29bb1f502c",
+  "submitted": true,
+  "upstream_afterok_job": "16499709"
+}

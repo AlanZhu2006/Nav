@@ -72,6 +72,20 @@ history.  The current source of truth is
   was opened.
 - The ViNT ideal-bearing alignment loss-five result passed its mechanism gates
   but remains outcome-aware and nonphysical; no formal ViNT SR was submitted.
+- A read-only audit of the 2026-08-20 HM3D parent population closed the apparent
+  Table-1 "reserve" loophole.  All 130 materialized histories had already been
+  attempted by the original constructor: 28 were retained, 52 lacked its
+  preassigned Natural-Novel query, and 50 lacked both a standard Revisit and
+  that Novel query.  The 102 cannot be relabelled as a ready fresh population.
+  A separate fresh-query, scene-overlap construction protocol now excludes all
+  28 consumed identities, tries the frozen preferred direction first and the
+  other two directions only for structural constructibility, and requires
+  `>=24 histories / >=15 scenes / >=4 per direction stratum` before any policy
+  evaluation.  Its construction-only DAG is smoke `16525112`, array
+  `16525114`, finalizer `16525132`, and verifier `16525152`; no NavDP or ViNT
+  rollout is part of this submission.  The smoke completed with `0/2`
+  constructible reserve histories in scene 0, and the formal construction
+  array started normally.  This early count is not used to alter the protocol.
 
 ## 1. Current priority order
 
@@ -85,6 +99,9 @@ history.  The current source of truth is
 4. Keep ViNT formal SR blocked until the bounded physical-turn executor has a
    newly frozen, outcome-blind population.  The old 28-history adapter result
    and its five inspected losses must not be reused for method selection.
+   The active Table-1 reserve DAG is construction-only; a failing power gate
+   stops the line, while a passing independently verified gate merely
+   authorizes a later four-arm submission.
 5. Run the real-robot paired protocol only with an operator present; do not
    substitute an unattended HPC job for that evidence.
 

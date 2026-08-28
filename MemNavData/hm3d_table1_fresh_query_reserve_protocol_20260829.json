@@ -1,0 +1,76 @@
+{
+  "schema_version": "hm3d_table1_fresh_query_reserve_protocol_v1_20260829",
+  "frozen_at": "2026-08-29T00:00:00+08:00",
+  "scope": "construction-only power gate for a fresh-query HM3D controller-portability population",
+  "scientific_question": "Can unused actual-online histories support a role-balanced, result-blind population for NavDP/ViNT baseline-versus-CEC evaluation?",
+  "source": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+    "parent_manifest_relative_path": "sealed_inputs/parent_manifest.json",
+    "parent_manifest_sha256": "a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5",
+    "consumed_manifest_relative_path": "benchmarks/natural_direction/manifest.json",
+    "consumed_manifest_sha256": "aada40d25d01e9385df3ffdcaf37847f471b63c7be785a704eade961346a50b0",
+    "source_materialized_histories": 130,
+    "consumed_query_histories": 28,
+    "maximum_reserve_histories": 102,
+    "scene_population": 54,
+    "fresh_query_not_fresh_scene": true
+  },
+  "identity_exclusion": {
+    "rule": "exclude every scene/episode identity in the consumed 28-history manifest before query construction",
+    "consumed_navigation_outcomes_read_by_builder": false,
+    "reserve_query_navigation_outcomes_exist_before_freeze": false
+  },
+  "query_contract": {
+    "history": "causal actual-online full-monocular Goal-A RGB history",
+    "query_roles_per_history": [
+      "unsupported_novel",
+      "standard_support_revisit"
+    ],
+    "minimum_query_geodesic_m": 2.0,
+    "maximum_query_geodesic_m": 9.0,
+    "novel_max_online_a_covis_exclusive": 0.1,
+    "revisit_min_online_a_covis_inclusive": 0.55,
+    "revisit_max_online_a_covis_inclusive": 0.9,
+    "runtime_role_visibility": "none",
+    "maximum_histories_per_scene": 3,
+    "construction_seed": 20260829,
+    "sampling_seed_namespace": "hm3d_table1_fresh_query_novel_v1",
+    "direction_rule": "try the identity's preassigned front/side/rear stratum first, then the other two in an identity-hash-bound order; retain the first structurally valid unsupported Novel query",
+    "direction_rule_uses_policy_outcomes": false
+  },
+  "population_selection": {
+    "scene_prefix_schedule": [
+      30,
+      36,
+      42,
+      48,
+      54
+    ],
+    "target_histories": 24,
+    "target_scene_clusters": 15,
+    "minimum_histories_per_direction_stratum": 4,
+    "rule": "use the smallest prefix meeting all three structural targets; otherwise seal all 54 scenes as an underpowered construction result",
+    "selection_reads_navigation_outcomes": false
+  },
+  "authorization": {
+    "policy_evaluation_before_independent_construction_verification": false,
+    "policy_evaluation_if_power_gate_fails": false,
+    "future_arms_if_authorized": [
+      "navdp_native",
+      "navdp_cec",
+      "vint_native",
+      "vint_cec_bounded_bearing"
+    ],
+    "future_vint_reject_policy": "controller_native_exact",
+    "future_vint_bearing_execution": "physical zero-translation turns of at most 30 degrees with one fresh observation and one shadow update per turn"
+  },
+  "claim_boundary": {
+    "allowed": "fresh-query, scene-overlap controller portability after a passing formal evaluation",
+    "forbidden": [
+      "fresh-scene generalization",
+      "reuse of the consumed 28 query identities",
+      "navigation SR inferred from construction counts",
+      "outcome-aware rerun of the five inspected ViNT losses"
+    ]
+  }
+}

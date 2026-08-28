@@ -359,6 +359,8 @@ def sample_natural_novel(
     maximum_paired_distance_m: float | None = None,
     separated_from_positions: list[np.ndarray] | None = None,
     minimum_candidate_separation_m: float = 0.0,
+    direction_stratum: str | None = None,
+    sampling_seed_namespace: str = "final14_natural",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     require(minimum_paired_distance_m >= 0.0,
             "minimum paired distance must be non-negative")
@@ -371,10 +373,24 @@ def sample_natural_novel(
             "minimum candidate separation must be non-negative")
     separated_from_positions = list(separated_from_positions or [])
     endpoint, endpoint_yaw = online_endpoint(history)
-    stratum = assigned_direction_stratum(scene_rank, episode_rank)
+    if direction_stratum is None:
+        stratum = assigned_direction_stratum(scene_rank, episode_rank)
+    else:
+        require(direction_stratum in STRATA,
+                f"unknown direction stratum {direction_stratum!r}")
+        stratum = str(direction_stratum)
     yaw_bin = goal_yaw_bin(scene, episode)
     goal_yaw = goal_yaw_radians(scene, episode)
-    seed = stable_u32("final14_natural", scene, episode, scene_rank, episode_rank)
+    # Preserve the frozen Final14 seed byte-for-byte in the default path.  A
+    # distinct namespace is available only to separately frozen construction
+    # protocols; it prevents a new structural probe from silently reusing the
+    # legacy random stream after changing its direction contract.
+    seed_parts: tuple[object, ...] = (
+        sampling_seed_namespace, scene, episode, scene_rank, episode_rank,
+    )
+    if direction_stratum is not None:
+        seed_parts += (stratum,)
+    seed = stable_u32(*seed_parts)
     pathfinder = simulator.pathfinder
     require(hasattr(pathfinder, "seed"), "PathFinder has no deterministic seed")
     pathfinder.seed(seed)

@@ -21,6 +21,7 @@ DEPENDENCY_RECEIPT=/scratch/yz11502/Research/Nav-axis-uturn-results/shared_onlin
 EXPECTED_DEPENDENCY_RECEIPT_SHA=4eb0ca6479a26f8e04f85a31d906cee4e68b1785f66cfd3ac23bf65424d36e5e
 PORTABILITY_ENV_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-envs/controller_portability_a9ec7146bce7_v1
 PORTABILITY_CHECKPOINT_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-checkpoints/controller_portability_50387aa89be8
+HAB_REQUESTS_VENDOR=/scratch/lg154/conda-envs/habitat/lib/python3.9/site-packages/pip/_vendor
 NAVDP_CONCURRENCY=${NAVDP_CONCURRENCY:-2}
 VINT_CONCURRENCY=${VINT_CONCURRENCY:-2}
 RUN_TAG=${RUN_TAG:-formal_$(date -u +%Y%m%dT%H%M%SZ)}
@@ -259,7 +260,7 @@ vint_analysis=${task_root}/MemNavData/slurm_hm3d_table1_vint_analysis.sbatch
 seal=${task_root}/MemNavData/slurm_hm3d_table1_controller_seal.sbatch
 
 echo '[gate] remote imports and Slurm test-only'
-remote "singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${task_root}:${task_root}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData' /scratch/lg154/conda-envs/habitat/bin/python -c 'import MemNavData.run_hm3d_fullmono_query_history,MemNavData.eval_shared_online_role_pairs'"
+remote "test -r '${HAB_REQUESTS_VENDOR}/requests/__init__.py' && singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${task_root}:${task_root}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData:${HAB_REQUESTS_VENDOR}' /scratch/lg154/conda-envs/habitat/bin/python -c 'from pathlib import Path; [compile(Path(path).read_bytes(),path,\"exec\") for path in (\"${task_root}/MemNavData/eval_shared_online_role_pairs.py\",\"${task_root}/MemNavData/eval_2leg_habitat.py\")]' && singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${task_root}:${task_root}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData:${HAB_REQUESTS_VENDOR}' /scratch/lg154/conda-envs/habitat/bin/python -c 'import MemNavData.run_hm3d_fullmono_query_history'"
 remote "sbatch --test-only --array=0 --export='${nav_common},PHASE=smoke' '${nav_pair}' >/dev/null"
 remote "sbatch --test-only --array=0-53%${NAVDP_CONCURRENCY} --export='${nav_common},PHASE=formal' '${nav_pair}' >/dev/null"
 remote "sbatch --test-only --export='${common},MODE=aggregate' '${nav_analysis}' >/dev/null"

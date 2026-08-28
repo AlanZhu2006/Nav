@@ -101,7 +101,10 @@ def aggregate(
     expected_scenes: int,
     history_indices: tuple[int, ...] | None = None,
     claim_scope: str,
+    expected_grant_alignment: str = "off",
 ) -> dict[str, Any]:
+    require(expected_grant_alignment in {"off", "first_certified_bounded"},
+            "invalid expected ViNT bearing alignment")
     manifest = json.loads(benchmark_manifest.read_text())
     population = _population_index(manifest)
     expected_index_set = (
@@ -125,6 +128,9 @@ def aggregate(
         require(cell.get("controller") == "vint"
                 and cell.get("reject_policy") == "controller_native_exact",
                 f"wrong controller treatment: {path}")
+        require(cell.get("grant_bearing_alignment", "off")
+                == expected_grant_alignment,
+                f"wrong grant bearing alignment: {path}")
         identity = str(cell["scene"]), str(cell["episode"])
         require(identity in population, f"cell not in benchmark manifest: {path}")
         history_index = population[identity]
@@ -222,7 +228,11 @@ def aggregate(
         "benchmark_manifest": str(benchmark_manifest),
         "benchmark_manifest_sha256": digest(benchmark_manifest),
         "controller": "vint",
-        "treatment": "proof_bound_history_anchor_imagegoal",
+        "treatment": (
+            "proof_bound_bearing_turn_then_history_anchor_imagegoal"
+            if expected_grant_alignment == "first_certified_bounded"
+            else "proof_bound_history_anchor_imagegoal"),
+        "grant_bearing_alignment": expected_grant_alignment,
         "reject_policy": "controller_native_exact",
         "histories": expected_histories,
         "scene_clusters": expected_scenes,
@@ -271,6 +281,11 @@ def main() -> None:
     parser.add_argument("--expected-scenes", type=int, required=True)
     parser.add_argument("--history-indices", default="")
     parser.add_argument("--claim-scope", required=True)
+    parser.add_argument(
+        "--expected-grant-alignment",
+        choices=("off", "first_certified_bounded"),
+        default="off",
+    )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     result = aggregate(
@@ -279,6 +294,7 @@ def main() -> None:
         expected_scenes=args.expected_scenes,
         history_indices=parse_indices(args.history_indices),
         claim_scope=args.claim_scope,
+        expected_grant_alignment=args.expected_grant_alignment,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(

@@ -1,0 +1,80 @@
+{
+  "schema_version": "hm3d_table1_controller_portability_protocol_v1_20260829",
+  "frozen_at": "2026-08-29T00:00:00+08:00",
+  "scientific_question": "Does the same role-free Certified Episodic Compass improve a frozen monocular NavDP policy and a distinct frozen ViNT controller on a result-blind HM3D fresh-query population?",
+  "population_gate": {
+    "construction_run": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_fresh_query_reserve_20260829/construction_20260828T212552Z_bb757914",
+    "required_verifier": "hm3d_table1_fresh_query_verification.json",
+    "verified_required": true,
+    "formal_policy_evaluation_authorized_required": true,
+    "minimum_histories": 24,
+    "minimum_scene_clusters": 15,
+    "minimum_histories_per_direction_stratum": 4,
+    "query_identity_overlap_with_consumed_hm3d_formal": 0,
+    "scene_overlap_with_prior_hm3d_is_explicit": true,
+    "policy_outcomes_used_for_population_selection": false
+  },
+  "runtime_contract": {
+    "queries_per_history": [
+      "unsupported_novel",
+      "standard_support_revisit"
+    ],
+    "runtime_role_visibility": "none",
+    "success_distance_m": 1.0,
+    "maximum_steps": 600,
+    "same_process_pairing": true,
+    "smoke_maximum_steps": 80,
+    "smoke_performance_used_as_formal_gate": false,
+    "partial_formal_outcomes_may_change_protocol": false
+  },
+  "navdp": {
+    "shared_history": "actual causal full-monocular NavDP Goal-A RGB replay",
+    "depth": "causal monocular sidecar with immutable first-40 scale receipt",
+    "reference": "mono_native",
+    "treatment": "mono_cec",
+    "arm_order": "alternating by frozen history-index parity",
+    "rejection": "exact unchanged native ImageGoal request",
+    "accepted_payload": "scale-free bearing with fixed 2.5 m residual"
+  },
+  "vint": {
+    "reference": "forced_reject_native with controller_native_exact",
+    "treatment": "grant",
+    "arm_order": "alternating by frozen history-index parity",
+    "rejection": "exact unchanged ViNT ImageGoal request",
+    "accepted_payload": "first certified bearing consumed by physical zero-translation turns of at most 30 degrees, with one fresh observation and one shadow-memory update per turn",
+    "accepted_alignment_mode": "first_certified_bounded"
+  },
+  "analysis": {
+    "primary_estimands": [
+      "NavDP CEC minus NavDP native paired SR",
+      "ViNT CEC minus ViNT native paired SR"
+    ],
+    "role_breakdown": [
+      "Novel",
+      "Revisit",
+      "Overall"
+    ],
+    "primary_test": "two-sided exact McNemar",
+    "uncertainty": "scene-cluster bootstrap 95% interval with 100000 resamples",
+    "secondary_metrics": [
+      "SPL",
+      "mean final distance",
+      "mean path length",
+      "mean steps",
+      "CEC takeover queries",
+      "Novel takeover queries",
+      "exact all-reject fallback"
+    ],
+    "cross_controller_absolute_sr_is_a_paired_estimand": false
+  },
+  "claim_boundary": {
+    "allowed": "fresh-query, scene-overlap within-controller paired portability",
+    "forbidden": [
+      "fresh-scene generalization",
+      "paired NavDP-versus-ViNT superiority",
+      "selection or tuning from smoke outcomes",
+      "selection or tuning from partial formal outcomes",
+      "formal safety guarantee"
+    ]
+  }
+}

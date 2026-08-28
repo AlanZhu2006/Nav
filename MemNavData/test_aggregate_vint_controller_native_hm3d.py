@@ -10,8 +10,8 @@ def write_json(path: Path, payload):
     path.write_text(json.dumps(payload, sort_keys=True) + "\n")
 
 
-def query(scene, episode, role, native, cec, takeover):
-    return {
+def query(scene, episode, role, native, cec, takeover, *, bounded=False):
+    row = {
         "scene": scene, "episode": episode, "pair_id": "pair_00",
         "query_id": f"pair_00_{role}", "analysis_role": role,
         "first_proof_sha256": "a" * 64,
@@ -30,9 +30,18 @@ def query(scene, episode, role, native, cec, takeover):
         "post_divergence_proof_equality_required": False,
         "files": {},
     }
+    if bounded:
+        row["grant_bearing_alignment"] = {
+            "mode": "first_certified_bounded",
+            "required": takeover,
+            "validated": True,
+            "action_count": 3 if takeover else 0,
+            "fresh_observation_receipts": 3 if takeover else 0,
+        }
+    return row
 
 
-def make_run(tmp_path):
+def make_run(tmp_path, *, bounded=False):
     episodes = []
     for index in range(4):
         scene = f"scene{index}"
@@ -40,13 +49,15 @@ def make_run(tmp_path):
         episodes.append({"scene": scene, "episode": episode})
         cell = tmp_path / "run/evaluation" / f"{index:03d}_{scene}" / "vint"
         rows = [
-            query(scene, episode, "novel", 0, 0, False),
-            query(scene, episode, "revisit", 0, 1, True),
+            query(scene, episode, "novel", 0, 0, False, bounded=bounded),
+            query(scene, episode, "revisit", 0, 1, True, bounded=bounded),
         ]
         write_json(cell / "controller_native_pair_audit.json", {
             "schema_version": "vint_controller_native_pair_audit_v1_20260828",
             "verified": True, "controller": "vint",
             "reject_policy": "controller_native_exact",
+            **({"grant_bearing_alignment": "first_certified_bounded"}
+               if bounded else {}),
             "scene": scene, "episode": episode,
             "authority_order": (
                 ["grant", "forced_reject_native"] if index % 2 == 0
@@ -71,3 +82,19 @@ def test_aggregate_and_independent_verifier(tmp_path):
     checked = verify(run, summary_path, manifest)
     assert checked["verified"] is True
     assert checked["raw_queries"] == 8
+
+
+def test_bounded_alignment_aggregate_and_independent_verifier(tmp_path):
+    run, manifest = make_run(tmp_path, bounded=True)
+    summary = aggregate(
+        run, manifest, expected_histories=4, expected_scenes=4,
+        history_indices=(0, 1, 2, 3), claim_scope="paper_heldout",
+        expected_grant_alignment="first_certified_bounded")
+    assert summary["grant_bearing_alignment"] == "first_certified_bounded"
+    assert summary["treatment"] == (
+        "proof_bound_bearing_turn_then_history_anchor_imagegoal")
+    summary_path = run / "summary.json"
+    write_json(summary_path, summary)
+    checked = verify(run, summary_path, manifest)
+    assert checked["verified"] is True
+    assert checked["grant_bearing_alignment"] == "first_certified_bounded"

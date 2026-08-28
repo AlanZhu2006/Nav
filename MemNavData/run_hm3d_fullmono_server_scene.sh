@@ -31,7 +31,7 @@ if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
   [[ "${RUNTIME_ATTEMPT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
     echo "invalid runtime attempt" >&2; exit 2; }
 fi
-if [[ "${MODE}" == lifelong_b ]]; then
+if [[ "${MODE}" == lifelong_b || "${MODE}" == eval ]]; then
   scene_count=$(${MEMNAV_PY} - "${PARENT_MANIFEST}" <<'PY'
 import json,sys
 print(len(json.load(open(sys.argv[1]))["scenes"]))
@@ -273,6 +273,12 @@ else
         --history-index "${history_index}" --hab-python "${HAB_PY}"
         --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}"
         --max-steps "${MAX_STEPS}")
+      if [[ -n "${QUERY_ARMS:-}" ]]; then
+        runner+=(--arms "${QUERY_ARMS}")
+      fi
+      if [[ -n "${ROLE_PAIR_SCOPE:-}" ]]; then
+        runner+=(--role-pair-scope "${ROLE_PAIR_SCOPE}")
+      fi
       if [[ "${MODE}" == smoke ]]; then runner+=(--smoke); fi
       PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
         "${HAB_PY}" -u "${runner[@]}" \

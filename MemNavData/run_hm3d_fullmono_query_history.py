@@ -17,7 +17,7 @@ from MemNavData.hm3d_fullmono_mixed_role import (
     REVISIT_ADAPTER,
     audit_query_arm,
     require,
-    rotated_arm_order,
+    selected_arm_order,
 )
 from MemNavData.run_final14_mono_factorial_episode import (
     audit_fully_rejected_fallback,
@@ -51,6 +51,12 @@ def main() -> None:
     parser.add_argument("--memnav-port", type=int, required=True)
     parser.add_argument("--navdp-port", type=int, required=True)
     parser.add_argument("--max-steps", type=int, default=600)
+    parser.add_argument("--arms", default=",".join(ARMS))
+    parser.add_argument(
+        "--role-pair-scope",
+        choices=("consumed_integration", "paper_heldout"),
+        default="consumed_integration",
+    )
     parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args()
     evaluator_source_root = args.evaluator_source_root or args.source_root
@@ -62,6 +68,8 @@ def main() -> None:
     population = json.loads(
         (args.bench_root.parent / "population_receipt.json").read_text()
     )
+    selected_arms = tuple(part.strip() for part in args.arms.split(",")
+                          if part.strip())
     histories = manifest["episodes"]
     require(0 <= args.history_index < len(histories),
             "history index outside sealed population")
@@ -90,12 +98,12 @@ def main() -> None:
     output = args.run_root / "evaluation" / "natural_direction" / label
     require(not output.exists(), f"history output exists: {output}")
     (output / "logs").mkdir(parents=True)
-    order = rotated_arm_order(args.history_index)
+    order = selected_arm_order(args.history_index, selected_arms)
     contract = {
         "schema_version": SCHEMA,
         "scope": population["scope"],
         "fresh_scene_generalization": bool(
-            population["fresh_scene_generalization"]),
+            population.get("fresh_scene_generalization", False)),
         "history_index": args.history_index,
         "scene": scene,
         "episode": episode,
@@ -105,7 +113,7 @@ def main() -> None:
         ),
         "online_a_depth_source": "monocular_sidecar",
         "benchmark_manifest_sha256": args.expected_manifest_sha256,
-        "arms": list(ARMS),
+        "arms": list(selected_arms),
         "arm_order": list(order),
         "runtime_role_visibility": "none",
         "shared_history_policy": "actual_mono_navdp_goal_a_rgb_replay",
@@ -146,7 +154,7 @@ def main() -> None:
         "--certified_cdec_rescue", "off",
         "--certified_stagnation_graph", "off",
         "--revisit_controller", "navdp_mixed",
-        "--role_pair_scope", "consumed_integration",
+        "--role_pair_scope", args.role_pair_scope,
         "--navdp_depth_source", "monocular_sidecar",
     ]
 
@@ -192,7 +200,7 @@ def main() -> None:
 
     reference_rows = arm_rows["mono_native"]
     reference_payloads = arm_payloads["mono_native"]
-    for arm in ARMS:
+    for arm in selected_arms:
         compare_shared_replay(
             reference_rows, reference_payloads,
             arm_rows[arm], arm_payloads[arm], arm,
@@ -214,12 +222,12 @@ def main() -> None:
         "outcomes": {
             arm: {role: int(arm_rows[arm][role]["reached"])
                   for role in ("novel", "revisit")}
-            for arm in ARMS
+            for arm in selected_arms
         },
         "final_distance_m": {
             arm: {role: float(arm_rows[arm][role]["final_goal_dist_m"])
                   for role in ("novel", "revisit")}
-            for arm in ARMS
+            for arm in selected_arms
         },
         "certificate_accept_plans": {
             role: int(arm_rows["mono_cec"][role]["certificate_accept_plans"])

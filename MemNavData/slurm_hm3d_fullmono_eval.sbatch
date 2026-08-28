@@ -22,6 +22,7 @@ exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   PARENT_MANIFEST="${PARENT_MANIFEST}" PROTOCOL="${PROTOCOL}" \
   BENCH_ROOT="${BENCH_ROOT}" SCENE_INDEX="${SLURM_ARRAY_TASK_ID}" \
   MAX_STEPS="${MAX_STEPS:-600}" \
+  QUERY_ARMS="${QUERY_ARMS:-}" ROLE_PAIR_SCOPE="${ROLE_PAIR_SCOPE:-}" \
   HAB_PY=/scratch/lg154/conda-envs/habitat/bin/python \
   MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python \
   TASK_RECEIPT="${TASK_RECEIPT}" \
@@ -29,4 +30,3 @@ exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   BASE_RECEIPT="${BASE_RECEIPT}" \
   EXPECTED_BASE_RECEIPT_SHA="${EXPECTED_BASE_RECEIPT_SHA}" \
   bash "${TASK_ROOT}/MemNavData/run_hm3d_fullmono_server_scene.sh"
-

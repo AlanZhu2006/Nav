@@ -8,6 +8,7 @@ from MemNavData.hm3d_fullmono_mixed_role import (
     ARMS,
     bind_parent_manifest,
     rotated_arm_order,
+    selected_arm_order,
 )
 from MemNavData.finalize_hm3d_fullmono_mixed_role import choose_scene_prefix
 
@@ -19,6 +20,16 @@ class FullMonoMixedRoleContractTest(unittest.TestCase):
         self.assertEqual(rotated_arm_order(2), ARMS[2:] + ARMS[:2])
         for index in range(12):
             self.assertEqual(set(rotated_arm_order(index)), set(ARMS))
+
+    def test_table1_native_cec_subset_alternates_without_changing_legacy(self):
+        pair = ("mono_native", "mono_cec")
+        self.assertEqual(selected_arm_order(0, ARMS), rotated_arm_order(0))
+        self.assertEqual(selected_arm_order(1, pair), pair[::-1])
+        self.assertEqual(selected_arm_order(2, pair), pair)
+        with self.assertRaisesRegex(RuntimeError, "requires mono_native"):
+            selected_arm_order(0, ("mono_cec",))
+        with self.assertRaisesRegex(RuntimeError, "duplicates"):
+            selected_arm_order(0, ("mono_native", "mono_native", "mono_cec"))
 
     def test_protocol_freezes_all_36_sources(self):
         path = Path(__file__).with_name(

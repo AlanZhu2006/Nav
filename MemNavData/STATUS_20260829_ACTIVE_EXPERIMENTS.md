@@ -329,7 +329,7 @@ verifier 未授权时 fail closed。
 | Table 2 HM3D by leg | 22 条 factual A/B prefix 已封；新 Leg-3 构造只保留 8 histories / 6 scenes、side 0，未过冻结 power gate；controller 未提交；B2 仍等待 | 保留 constructibility null；不放宽阈值，Table 1 完成前不启动 outcome-aware 扩样 |
 | Depth ablation | 已有 Gate C/D、Final14 factorial 与 full-mono 证据 | 先审计能否同 population 重组，禁止拼不同分母 |
 | CEC mechanism ablation | Raw/CEC/known-role 底层证据大部分已有 | 统一导出 retrieval accuracy、FA/FR；不急着重跑 |
-| Real robot | 软件合约与 no-motion transport 已有 | 仍缺冻结 protocol 下的 paired autonomous trials |
+| Real robot | 软件合约与 no-motion transport 已有；无结果的 controlling protocol 已冻结为 4 scenes × 5 native/CEC paired blocks（20 pairs/40 runs，顺序10/10，要求2 Novel/2 Revisit scenes） | 先完成独立 arrival/path 标定与 scene registry，再跑 paired autonomous trials；engineering traces 不计入 |
 | Trajectory-length bins | 当前 2--9 m 为主，长距离桶不可构造 | 低优先级，主表完成前不启动 |
 
 ## 6. 当前最优执行顺序

@@ -22,10 +22,10 @@ outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，
   construction cells、finalizer 和独立 verifier 均完成；最终得到 42 histories、
   25 scenes、84 queries，front/side/rear `14/9/19`，且
   `policy_outcomes_read=false`、`formal_policy_evaluation_authorized=true`。正式
-  NavDP/ViNT 四行因此按冻结协议获准提交。NavDP smoke 已通过，formal 正在以并发 2
-  运行；首个 ViNT smoke 因 shell allowlist 漏列 `paper_replication` 在 policy 前停止，
-  additive repair 已经独立哈希并提交 replacement smoke/formal/verifier。尚未打开任何
-  partial SR。
+  NavDP/ViNT 四行因此按冻结协议获准提交。NavDP 与 replacement ViNT smoke 均已
+  `COMPLETED 0:0`，两个 formal arrays 都正以并发 2 运行；首个 ViNT smoke 因 shell
+  allowlist 漏列 `paper_replication` 在 policy 前停止，additive repair 已独立哈希且
+  通过真实 GPU smoke。尚未打开任何 partial SR。
 - **HM3D lifelong B2 仍在等待 GPU 优先级。** 它是会议 Table 2 的补充机制实验，
   不是 powered confirmation。
 - **会议 Table 2 的新 construction-only 实验给出有效的 constructibility null。** 它不复用
@@ -238,7 +238,8 @@ support-controlled 四份 sealed manifest 全部读成 forbidden identity ledger
 shell wrapper 未允许 `paper_replication` 而 `FAILED 2:0`，没有生成 ViNT evaluation
 cell。修复只扩展 provenance allowlist，不改变任何科学变量；replacement ViNT
 smoke / formal / aggregate / verifier 为
-`16548590 / 16548592 / 16548600 / 16548605`，最终双-controller seal 为 `16548606`。
+`16548590 / 16548592 / 16548600 / 16548605`；smoke 已 `COMPLETED 0:0`，formal 已
+自动启动。最终双-controller seal 为 `16548606`。
 repair receipt：
 `MP3D_TABLE1_CONTROLLER_PORTABILITY_VINT_SCOPE_REPAIR_SUBMISSION_20260829.json`。
 
@@ -324,7 +325,7 @@ verifier 未授权时 fail closed。
 | 会议交付物 | 当前状态 | 下一道门 |
 |---|---|---|
 | Table 1 HM3D 四行 | 已完成：NavDP Revisit `8/28 -> 25/28`；ViNT Revisit `3/28 -> 19/28`；两者 Novel 均 0 takeover/exact fallback | 只保留 controller 内 paired claim，不做 NavDP-vs-ViNT 绝对优劣比较 |
-| Table 1 MP3D 四行 | phase-2 population 已通过独立 gate：42 histories / 25 scenes / front-side-rear `14/9/19`；NavDP smoke 已通过、formal active；ViNT allowlist repair smoke active | 等 `16548444` 与 `16548605` 独立 verifier，再由 `16548606` seal；此前不读 partial SR |
+| Table 1 MP3D 四行 | phase-2 population 已通过独立 gate：42 histories / 25 scenes / front-side-rear `14/9/19`；NavDP 与 repaired ViNT smoke 均通过，两个 formal arrays active | 等 `16548444` 与 `16548605` 独立 verifier，再由 `16548606` seal；此前不读 partial SR |
 | Table 2 HM3D by leg | 22 条 factual A/B prefix 已封；新 Leg-3 构造只保留 8 histories / 6 scenes、side 0，未过冻结 power gate；controller 未提交；B2 仍等待 | 保留 constructibility null；不放宽阈值，Table 1 完成前不启动 outcome-aware 扩样 |
 | Depth ablation | 已有 Gate C/D、Final14 factorial 与 full-mono 证据 | 先审计能否同 population 重组，禁止拼不同分母 |
 | CEC mechanism ablation | Raw/CEC/known-role 底层证据大部分已有 | 统一导出 retrieval accuracy、FA/FR；不急着重跑 |

@@ -7,6 +7,9 @@ RUNNER = ROOT / "MemNavData/run_hm3d_fullmono_server_scene.sh"
 SUBMITTER = (
     ROOT / "MemNavData/submit_hm3d_table1_controller_portability_hpc.sh"
 )
+PORTABILITY_RUNNER = (
+    ROOT / "MemNavData/run_cec_controller_portability_smoke_local.sh"
+)
 
 
 def test_navdp_pair_requires_a_separately_sealed_server_overlay():
@@ -63,3 +66,23 @@ def test_server_processes_have_namespace_specific_sibling_precedence():
     assert 'PYTHONPATH="${MEMNAV_PYTHONPATH_VALUE}"' in text
     assert 'PYTHONPATH="${NAVDP_PYTHONPATH_VALUE}"' in text
     assert 'assert hasattr(policy_agent,\\"NavDP_Agent\\")' in SUBMITTER.read_text()
+
+
+def test_portability_runner_accepts_the_frozen_mp3d_replication_scope():
+    text = PORTABILITY_RUNNER.read_text()
+    assert "consumed_integration|paper_heldout|paper_replication" in text
+    assert (
+        '"${ROLE_PAIR_SCOPE}" == paper_heldout \\\n'
+        '     || "${ROLE_PAIR_SCOPE}" == paper_replication'
+    ) in text
+    assert "bounded CEC alignment requires a frozen complete population" in text
+
+
+def test_submitter_has_a_result_blind_vint_only_scope_repair():
+    text = SUBMITTER.read_text()
+    assert "vint_scope_repair" in text
+    assert "failed_before_policy_outcomes" in text
+    assert "scientific_factors_changed':False" in text
+    assert "EXISTING_NAVDP_VERIFY_JOB" in text
+    assert "FAILED_VINT_SMOKE_JOB" in text
+    assert "vint_scope_repair_submission.json" in text

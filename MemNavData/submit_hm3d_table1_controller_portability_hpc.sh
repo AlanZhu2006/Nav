@@ -61,6 +61,7 @@ HAB_REQUESTS_VENDOR=/scratch/lg154/conda-envs/habitat/lib/python3.9/site-package
 NAVDP_CONCURRENCY=${NAVDP_CONCURRENCY:-2}
 VINT_CONCURRENCY=${VINT_CONCURRENCY:-2}
 RUN_TAG=${RUN_TAG:-formal_$(date -u +%Y%m%dT%H%M%SZ)}
+SUBMIT_MODE=${SUBMIT_MODE:-full}
 SSH_CONTROL_PATH=${SSH_CONTROL_PATH:-$(ssh -G "${SSH_ALIAS}" 2>/dev/null | awk '$1=="controlpath"{value=$2} END{print value}')}
 cd "${ROOT}"
 
@@ -78,6 +79,18 @@ for value in "${NAVDP_CONCURRENCY}" "${VINT_CONCURRENCY}"; do
   [[ "${value}" =~ ^[1-9][0-9]*$ ]] || fail "invalid concurrency ${value}"
 done
 [[ "${RUN_TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || fail "invalid run tag"
+case "${SUBMIT_MODE}" in
+  full) ;;
+  vint_scope_repair)
+    [[ "${DATASET}" == MP3D ]] || fail "ViNT scope repair is MP3D-only"
+    : "${EXISTING_RUN_ROOT:?}" "${EXISTING_NAVDP_VERIFY_JOB:?}" \
+      "${FAILED_VINT_SMOKE_JOB:?}" "${FAILED_TASK_ROOT:?}"
+    for id in "${EXISTING_NAVDP_VERIFY_JOB}" "${FAILED_VINT_SMOKE_JOB}"; do
+      [[ "${id}" =~ ^[0-9]+$ ]] || fail "invalid repair job id ${id}"
+    done
+    ;;
+  *) fail "SUBMIT_MODE must be full or vint_scope_repair" ;;
+esac
 
 required=(
   MemNavData/HM3D_TABLE1_CONTROLLER_PORTABILITY_PROTOCOL_20260829.md
@@ -107,6 +120,7 @@ required=(
 if [[ "${DATASET}" == MP3D ]]; then
   required+=(
     MemNavData/MP3D_TABLE1_NEW_QUERY_PROTOCOL_20260829.md
+    MemNavData/MP3D_TABLE1_VINT_SCOPE_REPAIR_20260829.md
     MemNavData/mp3d_table1_new_query_protocol_20260829.json
   )
 fi
@@ -162,7 +176,11 @@ done
 construction_verification=${CONSTRUCTION_RUN}/${CONSTRUCTION_VERIFICATION_NAME}
 bench_root=${CONSTRUCTION_RUN}/population/natural_direction
 parent_manifest=${PARENT_MANIFEST}
-run_root=${REMOTE_RESULTS}/${RUN_TAG}
+if [[ "${SUBMIT_MODE}" == vint_scope_repair ]]; then
+  run_root=${EXISTING_RUN_ROOT}
+else
+  run_root=${REMOTE_RESULTS}/${RUN_TAG}
+fi
 
 echo '[gate] independently verified construction authorization'
 readarray -t gate < <(remote "python - '${construction_verification}' '${bench_root}/manifest.json' '${parent_manifest}' '${DATASET}' <<'PY'
@@ -311,7 +329,8 @@ fi
 
 task_receipt=${task_root}/SOURCE_BUNDLE.sha256
 protocol=${task_root}/MemNavData/${RUNTIME_PROTOCOL_JSON}
-remote "test ! -e '${run_root}' && mkdir -p '${run_root}/sealed_inputs' '${run_root}/logs' '${run_root}/smoke' '${run_root}/formal' /scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs
+if [[ "${SUBMIT_MODE}" == full ]]; then
+  remote "test ! -e '${run_root}' && mkdir -p '${run_root}/sealed_inputs' '${run_root}/logs' '${run_root}/smoke' '${run_root}/formal' /scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs
 cp '${construction_verification}' '${run_root}/sealed_inputs/'
 cp '${CONSTRUCTION_RUN}/population/population_receipt.json' '${run_root}/sealed_inputs/'
 cp '${task_root}/MemNavData/HM3D_TABLE1_CONTROLLER_PORTABILITY_PROTOCOL_20260829.md' '${run_root}/sealed_inputs/'
@@ -319,6 +338,24 @@ cp '${task_root}/MemNavData/hm3d_table1_controller_portability_protocol_20260829
 cp '${task_root}/MemNavData/${RUNTIME_PROTOCOL_JSON}' '${run_root}/sealed_inputs/'
 sha256sum '${bench_root}/manifest.json' '${construction_verification}' '${CONSTRUCTION_RUN}/population/population_receipt.json' >'${run_root}/sealed_inputs/experiment_inputs.sha256'
 chmod -R a-w '${run_root}/sealed_inputs'"
+else
+  failed_log=/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs/h3T1ViNT_${FAILED_VINT_SMOKE_JOB}_0.err
+  remote "set -euo pipefail
+test -d '${run_root}/sealed_inputs'
+test ! -e '${run_root}/submission.json'
+test ! -e '${run_root}/vint_scope_repair_submission.json'
+test -r '${failed_log}'
+test \"\$(cat '${failed_log}')\" = 'ABORT: ROLE_PAIR_SCOPE must be consumed_integration or paper_heldout'
+test ! -e '${run_root}/formal/vint/evaluation'
+if test -d '${run_root}/smoke/vint/evaluation'; then
+  test -z \"\$(find '${run_root}/smoke/vint/evaluation' -type d -name vint -print -quit)\"
+fi
+test \"\$(sha256sum '${construction_verification}' | awk '{print \$1}')\" = '${construction_verification_sha}'
+test -d '${FAILED_TASK_ROOT}'
+sacct -j '${FAILED_VINT_SMOKE_JOB}' -X -n -o State,ExitCode | awk '\$1==\"FAILED\" && \$2==\"2:0\"{ok=1} END{exit !ok}'
+sacct -j '${EXISTING_NAVDP_VERIFY_JOB}' -X -n -o State | awk '\$1==\"PENDING\" || \$1==\"RUNNING\" || \$1==\"COMPLETED\"{ok=1} END{exit !ok}'
+mkdir -p '${run_root}/repair_receipts'"
+fi
 
 common="ALL,TASK_ROOT=${task_root},TASK_RECEIPT=${task_receipt},EXPECTED_TASK_RECEIPT_SHA=${task_receipt_sha},FORMAL_RUN_ROOT=${run_root},BENCH_ROOT=${bench_root},CONSTRUCTION_VERIFICATION=${construction_verification},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${construction_verification_sha},DATASET=${DATASET},CLAIM_SCOPE=${CLAIM_SCOPE}"
 nav_common="${common},BASE_SOURCE_ROOT=${NAVDP_BASE_SOURCE_ROOT},BASE_RECEIPT=${NAVDP_BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_NAVDP_BASE_RECEIPT_SHA},SERVER_SOURCE_ROOT=${NAVDP_SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${NAVDP_SERVER_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_NAVDP_SERVER_RECEIPT_SHA},SOURCE_RUN_ROOT=${SOURCE_RUN_ROOT},PARENT_MANIFEST=${parent_manifest},PROTOCOL=${protocol},ROLE_PAIR_SCOPE=${ROLE_PAIR_SCOPE}"
@@ -343,6 +380,7 @@ remote "sbatch --test-only --export='${common},MODE=aggregate' '${vint_analysis}
 remote "sbatch --test-only --export='${common}' '${seal}' >/dev/null"
 
 echo '[submit] result-blind smoke -> formal -> independent verification DAGs'
+if [[ "${SUBMIT_MODE}" == full ]]; then
 nav_smoke_raw=$(remote "sbatch --parsable --array=0 --export='${nav_common},PHASE=smoke' '${nav_pair}'" | tr -d '\r')
 nav_smoke=${nav_smoke_raw%%;*}
 vint_smoke_raw=$(remote "sbatch --parsable --array=0 --export='${vint_common},PHASE=smoke' '${vint_pair}'" | tr -d '\r')
@@ -405,3 +443,65 @@ printf 'RUN_ROOT=%s\nTASK_ROOT=%s\nNAVDP_SMOKE=%s\nVINT_SMOKE=%s\nNAVDP_FORMAL=%
   "${run_root}" "${task_root}" "${nav_smoke}" "${vint_smoke}" \
   "${nav_formal}" "${vint_formal}" "${nav_verify}" "${vint_verify}" \
   "${seal_job}"
+else
+  vint_smoke_raw=$(remote "sbatch --parsable --array=0 --export='${vint_common},PHASE=smoke' '${vint_pair}'" | tr -d '\r')
+  vint_smoke=${vint_smoke_raw%%;*}
+  vint_formal_raw=$(remote "sbatch --parsable --array=0-${vint_last}%${VINT_CONCURRENCY} --dependency=afterok:${vint_smoke} --kill-on-invalid-dep=yes --export='${vint_common},PHASE=formal' '${vint_pair}'" | tr -d '\r')
+  vint_formal=${vint_formal_raw%%;*}
+  vint_aggregate_raw=$(remote "sbatch --parsable --dependency=afterok:${vint_formal} --kill-on-invalid-dep=yes --export='${common},MODE=aggregate' '${vint_analysis}'" | tr -d '\r')
+  vint_aggregate=${vint_aggregate_raw%%;*}
+  vint_verify_raw=$(remote "sbatch --parsable --dependency=afterok:${vint_aggregate} --kill-on-invalid-dep=yes --export='${common},MODE=verify' '${vint_analysis}'" | tr -d '\r')
+  vint_verify=${vint_verify_raw%%;*}
+  seal_raw=$(remote "sbatch --parsable --dependency=afterok:${EXISTING_NAVDP_VERIFY_JOB}:${vint_verify} --kill-on-invalid-dep=yes --export='${common}' '${seal}'" | tr -d '\r')
+  seal_job=${seal_raw%%;*}
+  for id in "${vint_smoke}" "${vint_formal}" "${vint_aggregate}" \
+            "${vint_verify}" "${seal_job}"; do
+    [[ "${id}" =~ ^[0-9]+$ ]] || fail "invalid repair job id: ${id}"
+  done
+
+  receipt=MemNavData/MP3D_TABLE1_CONTROLLER_PORTABILITY_VINT_SCOPE_REPAIR_SUBMISSION_20260829.json
+  [[ ! -e "${receipt}" ]] || fail "local repair receipt already exists"
+  "${LOCAL_MEMNAV_PY}" - "${receipt}" "${run_root}" "${task_root}" \
+    "${task_receipt_sha}" "${FAILED_TASK_ROOT}" "${FAILED_VINT_SMOKE_JOB}" \
+    "${EXISTING_NAVDP_VERIFY_JOB}" "${vint_smoke}" "${vint_formal}" \
+    "${vint_aggregate}" "${vint_verify}" "${seal_job}" \
+    "${construction_verification_sha}" "${manifest_sha}" \
+    "${histories}" "${scenes}" <<'PY'
+import json,sys
+(path,run,bundle,bundle_sha,failed_bundle,failed_smoke,navdp_verify,
+ vint_smoke,vint_formal,vint_aggregate,vint_verify,seal,
+ construction_sha,manifest_sha,histories,scenes)=sys.argv[1:]
+payload={
+ 'schema_version':'mp3d_table1_vint_scope_repair_submission_v1_20260829',
+ 'run_root':run,'repair_task_bundle':bundle,
+ 'repair_task_receipt_sha256':bundle_sha,
+ 'failed_task_bundle':failed_bundle,'failed_vint_smoke_job':int(failed_smoke),
+ 'failed_before_policy_outcomes':True,
+ 'repair_reason':'paper_replication omitted from portability shell allowlist',
+ 'scientific_factors_changed':False,
+ 'partial_policy_outcomes_read_at_submission':False,
+ 'construction_verification_sha256':construction_sha,
+ 'benchmark_manifest_sha256':manifest_sha,
+ 'histories':int(histories),'scene_clusters':int(scenes),
+ 'runtime_role_pair_scope':'paper_replication',
+ 'vint_grant_bearing_alignment':'first_certified_bounded',
+ 'jobs':{
+  'existing_navdp_verify':int(navdp_verify),
+  'replacement_vint_smoke':int(vint_smoke),
+  'replacement_vint_formal':int(vint_formal),
+  'replacement_vint_aggregate':int(vint_aggregate),
+  'replacement_vint_verify':int(vint_verify),
+  'controller_portability_seal':int(seal),
+ },
+}
+open(path,'x').write(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+print(json.dumps(payload,indent=2,sort_keys=True))
+PY
+  scp -q -o BatchMode=yes -o ControlMaster=no \
+    -o ControlPath="${SSH_CONTROL_PATH}" "${ROOT}/${receipt}" \
+    "${SSH_ALIAS}:${run_root}/vint_scope_repair_submission.json"
+  remote "sha256sum '${run_root}/vint_scope_repair_submission.json' >'${run_root}/vint_scope_repair_submission.json.sha256' && chmod a-w '${run_root}/vint_scope_repair_submission.json' '${run_root}/vint_scope_repair_submission.json.sha256'"
+  printf 'RUN_ROOT=%s\nTASK_ROOT=%s\nEXISTING_NAVDP_VERIFY=%s\nVINT_SMOKE=%s\nVINT_FORMAL=%s\nVINT_VERIFY=%s\nSEAL=%s\n' \
+    "${run_root}" "${task_root}" "${EXISTING_NAVDP_VERIFY_JOB}" \
+    "${vint_smoke}" "${vint_formal}" "${vint_verify}" "${seal_job}"
+fi

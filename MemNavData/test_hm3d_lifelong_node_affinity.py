@@ -5,6 +5,7 @@ import pytest
 
 from MemNavData.hm3d_lifelong_node_affinity import (
     build_node_affinity_plan,
+    canonical_replay_node,
     partition_for_node,
 )
 
@@ -51,6 +52,41 @@ def test_plan_uses_collection_node_and_two_lanes(tmp_path: Path) -> None:
 def test_unknown_node_fails_closed() -> None:
     with pytest.raises(RuntimeError, match="unsupported replay node"):
         partition_for_node("gpu001")
+
+
+def test_nyu_fqdn_is_normalized_to_slurm_short_name() -> None:
+    assert canonical_replay_node("gh005.hpc.nyu.edu") == "gh005"
+    assert partition_for_node("ga028.hpc.nyu.edu") == "a100_tandon"
+
+
+def test_unrecognized_fqdn_fails_closed() -> None:
+    with pytest.raises(RuntimeError, match="unsupported replay node"):
+        canonical_replay_node("gh005.example.org")
+
+
+def test_plan_normalizes_receipt_fqdn(tmp_path: Path) -> None:
+    source = tmp_path / "source.json"
+    shared = tmp_path / "shared.json"
+    collection = tmp_path / "collection"
+    row = {"scene": "scene0", "episode": "episode_0"}
+    write_json(source, {"accepted": [row]})
+    write_json(shared, {"accepted": [{
+        "population_index": 0,
+        "source_population_index": 0,
+        **row,
+    }]})
+    label = "000_scene0_episode_0"
+    write_json(collection / label / "compute_identity.json", {
+        "schema_version": "cec_compute_identity_v1_20260824",
+        "host": "gh005.hpc.nyu.edu",
+    })
+    plan = build_node_affinity_plan(
+        source_population=source,
+        shared_population=shared,
+        collection_root=collection,
+    )
+    assert plan[0]["node"] == "gh005"
+    assert plan[0]["partition"] == "h100_tandon"
 
 
 def test_identity_drift_fails_closed(tmp_path: Path) -> None:

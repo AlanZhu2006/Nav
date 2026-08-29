@@ -1,0 +1,39 @@
+{
+  "archive_manifest_sha256": "52276bdc08e6158f7642b3ce70735d10c2504633048cb4887da9c8bed25fb5b1",
+  "archive_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829/formal_20260828T231109Z/repairs/navdp_identical_frame_cache_v3/failed_attempts",
+  "empty_original_ranks_retained_without_replay": [
+    48,
+    49,
+    50,
+    51,
+    52,
+    53
+  ],
+  "failure_class": "identical_jpeg_new_valid_transaction_cache_collision",
+  "failed_indices": [
+    36,
+    38,
+    41
+  ],
+  "jobs": {
+    "exact_repair_array": 16541366,
+    "replacement_joint_seal": 16541369,
+    "replacement_navdp_aggregate": 16541367,
+    "replacement_navdp_verify": 16541368,
+    "retained_vint_verify": 16540208
+  },
+  "method_or_population_changed": false,
+  "original_array": 16528369,
+  "partial_policy_outcomes_read_before_repair": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829/formal_20260828T231109Z",
+  "schema_version": "hm3d_table1_navdp_identical_frame_cache_repair_submission_v1_20260829",
+  "server_overlay": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_navdp_cache_repair_2ae34ad0c1503958",
+  "server_overlay_receipt_sha256": "2ae34ad0c150395849d4461913fc086f3b6ea7acf7249c763fe3e8808356ed6d",
+  "superseded_jobs": {
+    "joint_seal": 16540209,
+    "navdp_aggregate": 16528383,
+    "navdp_verify": 16528385
+  },
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_navdp_transport_repair_6edacc0c6c13b389",
+  "task_receipt_sha256": "6edacc0c6c13b389d9eee5b1371d0353b14ad94c4dd6ea4eb520bd4bde63ffaa"
+}

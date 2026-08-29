@@ -18,7 +18,11 @@ import numpy as np
 from MemNavData.hm3d_fullmono_mixed_role import selected_arm_order
 
 
-SCHEMA = "hm3d_table1_navdp_pair_summary_v1_20260829"
+SCHEMAS = {
+    "HM3D": "hm3d_table1_navdp_pair_summary_v1_20260829",
+    "MP3D": "mp3d_table1_navdp_pair_summary_v1_20260829",
+}
+SCHEMA = SCHEMAS["HM3D"]
 ARMS = ("mono_native", "mono_cec")
 ROLES = ("novel", "revisit")
 
@@ -103,6 +107,16 @@ def _manifest_queries(item: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return by_role
 
 
+def _direction_stratum(item: dict[str, Any]) -> str:
+    """Read the frozen stratum from its canonical Novel-query location."""
+
+    novel = _manifest_queries(item)["novel"]
+    value = str(novel.get("assigned_direction_stratum", ""))
+    require(value in {"front", "side", "rear"},
+            "Novel query has an invalid direction stratum")
+    return value
+
+
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     units: dict[tuple[str, str, str], dict[str, dict[str, Any]]] = {}
     for row in rows:
@@ -161,9 +175,11 @@ def aggregate(
     construction_verification: Path,
     *,
     claim_scope: str,
+    dataset: str = "HM3D",
     bootstrap_samples: int = 100_000,
     bootstrap_seed: int = 20260829,
 ) -> dict[str, Any]:
+    require(dataset in SCHEMAS, "unsupported Table-1 dataset")
     require(bootstrap_samples > 0, "bootstrap sample count must be positive")
     verification = json.loads(construction_verification.read_text())
     require(verification.get("verified") is True
@@ -192,7 +208,7 @@ def aggregate(
     for index, item in enumerate(episodes):
         scene, episode = str(item["scene"]), str(item["episode"])
         queries = _manifest_queries(item)
-        stratum_counts[str(item["selected_direction_stratum"])] += 1
+        stratum_counts[_direction_stratum(item)] += 1
         label = f"{index:03d}_{scene}_{episode}"
         root = run_root / "evaluation" / "natural_direction" / label
         completion_path = root / "completion.json"
@@ -242,6 +258,9 @@ def aggregate(
                         == int(row["monocular_receipt_plans"])
                         and int(row["monocular_scale_receipt_hashes"]) == 1,
                         f"monocular receipt audit failed for {label}/{arm}/{role}")
+                require(int(row["runtime_failure_plans"]) == 0,
+                        f"certificate runtime failure at "
+                        f"{label}/{arm}/{role}")
                 rows.append({
                     "history_index": index,
                     "scene": scene,
@@ -288,8 +307,9 @@ def aggregate(
 
     cec_rows = [row for row in rows if row["arm"] == "mono_cec"]
     return {
-        "schema_version": SCHEMA,
+        "schema_version": SCHEMAS[dataset],
         "verified": True,
+        "dataset": dataset,
         "claim_scope": claim_scope,
         "run_root": str(run_root),
         "benchmark_root": str(benchmark_root),
@@ -307,6 +327,7 @@ def aggregate(
         "shared_history_policy": "actual_mono_navdp_goal_a_rgb_replay",
         "fresh_query": True,
         "fresh_scene": False,
+        "fresh_history": False,
         "bootstrap_seed": bootstrap_seed,
         "bootstrap_samples": bootstrap_samples,
         "direction_strata": dict(sorted(stratum_counts.items())),
@@ -324,8 +345,7 @@ def aggregate(
                 and int(row["certificate_accept_plans"]) > 0
                 for row in cec_rows),
             "fully_rejected_exact_native_by_role": fallback_counts,
-            "runtime_failure_plans": sum(
-                int(row["runtime_failure_plans"]) for row in cec_rows),
+            "runtime_failure_plans": 0,
             "metric_depth_sensor_reads": 0,
         },
         "cells": cells,
@@ -338,6 +358,7 @@ def main() -> None:
     parser.add_argument("--benchmark-root", type=Path, required=True)
     parser.add_argument("--construction-verification", type=Path, required=True)
     parser.add_argument("--claim-scope", required=True)
+    parser.add_argument("--dataset", choices=tuple(SCHEMAS), default="HM3D")
     parser.add_argument("--bootstrap-samples", type=int, default=100_000)
     parser.add_argument("--bootstrap-seed", type=int, default=20260829)
     parser.add_argument("--out", type=Path, required=True)
@@ -346,6 +367,7 @@ def main() -> None:
         args.run_root.resolve(), args.benchmark_root.resolve(),
         args.construction_verification.resolve(),
         claim_scope=args.claim_scope,
+        dataset=args.dataset,
         bootstrap_samples=args.bootstrap_samples,
         bootstrap_seed=args.bootstrap_seed,
     )

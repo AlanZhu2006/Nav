@@ -1,0 +1,37 @@
+{
+  "schema_version": "mp3d_table1_new_query_protocol_v1_20260829",
+  "status": "frozen_construction_only",
+  "source": {
+    "dataset": "MP3D",
+    "fresh_manifest": "/scratch/yz11502/Research/Nav-axis-uturn-results/revisit_fresh_confirmation_20260811/fresh160_v3_attempt600_20260811T2000/data_manifest.json",
+    "fresh_manifest_sha256": "8013fa2a768d84638a9f9ecc50df46dda67ebb79250d14ad0a8087ac52fd33e5",
+    "actual_mono_run": "/scratch/yz11502/Research/Nav-axis-uturn-results/mdtec_monocular_cec_composition_20260819/formal_20260819T055600Z_624f9fa9",
+    "scenes": 20,
+    "episodes_per_scene": 2,
+    "selection_rule": "all_first_two_manifest_order_before_goal_a_attrition"
+  },
+  "query_contract": {
+    "runtime_role_visibility": "none",
+    "novel_max_online_a_covis_exclusive": 0.1,
+    "revisit_online_a_covis_interval": [0.55, 0.9],
+    "query_geodesic_interval_m": [2.0, 9.0],
+    "direction_strata": ["front", "side", "rear"],
+    "direction_fallback": "identity_bound_deterministic",
+    "consumed_goal_b_exclusion": ["jpeg_sha256", "pose_and_yaw"],
+    "previous_goal_b_policy_outcomes_read": false,
+    "query_policy_outcomes_read": false
+  },
+  "power_gate": {
+    "target_histories": 20,
+    "target_scene_clusters": 12,
+    "minimum_histories_per_direction_stratum": 4
+  },
+  "claim_boundary": {
+    "fresh_scene": false,
+    "fresh_history": false,
+    "new_query": true,
+    "allowed": "controlled reused-scene/history cross-dataset and cross-controller replication",
+    "forbidden": "fresh-scene MP3D generalization"
+  },
+  "formal_policy_evaluation_submitted_by_this_protocol": false
+}

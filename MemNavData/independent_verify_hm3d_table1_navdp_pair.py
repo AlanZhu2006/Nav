@@ -15,7 +15,14 @@ from typing import Any
 
 
 SCHEMA = "hm3d_table1_navdp_pair_verification_v1_20260829"
-SUMMARY_SCHEMA = "hm3d_table1_navdp_pair_summary_v1_20260829"
+SUMMARY_SCHEMAS = {
+    "HM3D": "hm3d_table1_navdp_pair_summary_v1_20260829",
+    "MP3D": "mp3d_table1_navdp_pair_summary_v1_20260829",
+}
+VERIFICATION_SCHEMAS = {
+    "HM3D": SCHEMA,
+    "MP3D": "mp3d_table1_navdp_pair_verification_v1_20260829",
+}
 ARMS = ("mono_native", "mono_cec")
 ROLES = ("novel", "revisit")
 
@@ -121,12 +128,16 @@ def verify(
     benchmark_root: Path,
     construction_verification: Path,
     summary_path: Path,
+    dataset: str = "HM3D",
 ) -> dict[str, Any]:
+    require(dataset in SUMMARY_SCHEMAS, "unsupported Table-1 dataset")
     construction = json.loads(construction_verification.read_text())
     summary = json.loads(summary_path.read_text())
-    require(summary.get("schema_version") == SUMMARY_SCHEMA
+    require(summary.get("schema_version") == SUMMARY_SCHEMAS[dataset]
             and summary.get("verified") is True,
             "summary is not a verified Table-1 NavDP summary")
+    require(summary.get("dataset") == dataset,
+            "summary dataset identity changed")
     require(construction.get("verified") is True
             and construction.get("formal_policy_evaluation_authorized") is True,
             "construction did not authorize formal evaluation")
@@ -207,6 +218,21 @@ def verify(
                     plan.get("certified_relocalization_accepted") is True
                     or plan.get("cec_takeover") is True for plan in plans
                 )
+                runtime_failures = sum(
+                    plan.get("certified_relocalization_reason")
+                    == "certificate_endpoint_failure"
+                    or plan.get("learned_pi3x_relocalization_ok") is False
+                    or plan.get("cec_reason")
+                    == "certificate_endpoint_failure"
+                    for plan in plans
+                )
+                require(runtime_failures
+                        == int(row["runtime_failure_plans"]),
+                        f"runtime-failure recount changed at "
+                        f"{index}/{arm}/{role}")
+                require(runtime_failures == 0,
+                        f"certificate runtime failure at "
+                        f"{index}/{arm}/{role}")
                 require(accept_plans == int(row["certificate_accept_plans"]),
                         f"takeover recount changed at {index}/{arm}/{role}")
                 payloads[(arm, role)] = payload
@@ -262,9 +288,10 @@ def verify(
         ["fully_rejected_exact_native_by_role"].values()
     ), "summary exact-fallback count does not reproduce")
     return {
-        "schema_version": SCHEMA,
+        "schema_version": VERIFICATION_SCHEMAS[dataset],
         "verified": True,
         "authorized": True,
+        "dataset": dataset,
         "claim_scope": summary["claim_scope"],
         "benchmark_manifest_sha256": manifest_sha,
         "construction_verification_sha256": digest(
@@ -298,11 +325,15 @@ def main() -> None:
     parser.add_argument("--benchmark-root", type=Path, required=True)
     parser.add_argument("--construction-verification", type=Path, required=True)
     parser.add_argument("--summary", type=Path, required=True)
+    parser.add_argument(
+        "--dataset", choices=tuple(SUMMARY_SCHEMAS), default="HM3D",
+    )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     result = verify(
         args.run_root.resolve(), args.benchmark_root.resolve(),
         args.construction_verification.resolve(), args.summary.resolve(),
+        dataset=args.dataset,
     )
     write_exclusive(args.out.resolve(), result)
     print(json.dumps({

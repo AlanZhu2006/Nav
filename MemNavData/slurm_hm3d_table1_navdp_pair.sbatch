@@ -26,12 +26,16 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${SOURCE_RUN_ROOT:?}" "${BENCH_ROOT:?}" "${PARENT_MANIFEST:?}"
 : "${PROTOCOL:?}" "${CONSTRUCTION_VERIFICATION:?}"
 : "${EXPECTED_CONSTRUCTION_VERIFICATION_SHA:?}" "${FORMAL_RUN_ROOT:?}"
+ROLE_PAIR_SCOPE=${ROLE_PAIR_SCOPE:-paper_heldout}
 
 SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 RUNNER=${TASK_ROOT}/MemNavData/run_hm3d_fullmono_server_scene.sh
 fail() { echo "ABORT: $*" >&2; exit 2; }
 
 [[ "${PHASE}" == smoke || "${PHASE}" == formal ]] || fail "invalid phase"
+[[ "${ROLE_PAIR_SCOPE}" == paper_heldout \
+   || "${ROLE_PAIR_SCOPE}" == paper_replication ]] || \
+  fail "invalid formal role-pair scope"
 [[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_TASK_RECEIPT_SHA}" ]] || fail "task receipt changed"
 (cd "${TASK_ROOT}" && sha256sum -c --quiet "${TASK_RECEIPT}") || \
@@ -85,7 +89,7 @@ exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   PARENT_MANIFEST="${PARENT_MANIFEST}" PROTOCOL="${PROTOCOL}" \
   BENCH_ROOT="${BENCH_ROOT}" SCENE_INDEX="${SCENE_INDEX}" \
   MAX_STEPS="${MAX_STEPS}" QUERY_ARMS=mono_native,mono_cec \
-  ROLE_PAIR_SCOPE=paper_heldout \
+  ROLE_PAIR_SCOPE="${ROLE_PAIR_SCOPE}" \
   HAB_PY=/scratch/lg154/conda-envs/habitat/bin/python \
   MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python \
   TASK_RECEIPT="${TASK_RECEIPT}" \

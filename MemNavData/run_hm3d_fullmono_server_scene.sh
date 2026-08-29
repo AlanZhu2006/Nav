@@ -31,7 +31,8 @@ if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
   [[ "${RUNTIME_ATTEMPT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
     echo "invalid runtime attempt" >&2; exit 2; }
 fi
-if [[ "${MODE}" == lifelong_b || "${MODE}" == eval ]]; then
+if [[ "${MODE}" == lifelong_b || "${MODE}" == eval \
+   || "${MODE}" == smoke ]]; then
   scene_count=$(${MEMNAV_PY} - "${PARENT_MANIFEST}" <<'PY'
 import json,sys
 print(len(json.load(open(sys.argv[1]))["scenes"]))

@@ -586,6 +586,7 @@ parser.add_argument(
     choices=[
         "consumed_integration",
         "paper_heldout",
+        "paper_replication",
         "replica_cross_dataset",
     ],
     default="consumed_integration",

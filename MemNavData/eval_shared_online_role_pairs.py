@@ -160,7 +160,8 @@ def validate_cli() -> tuple[str, str | None]:
         else:
             require(
                 args.role_pair_scope in (
-                    "consumed_integration", "paper_heldout"),
+                    "consumed_integration", "paper_heldout",
+                    "paper_replication"),
                 "bounded bearing alignment has an unsupported scope",
             )
             if args.role_pair_scope == "consumed_integration":
@@ -688,6 +689,9 @@ def main() -> None:
                 "consumed-scene integration unless externally promoted"
             ),
             "paper_heldout": "paper held-out role-pair evaluation",
+            "paper_replication": (
+                "paper reused-scene/history new-query replication"
+            ),
             "replica_cross_dataset": (
                 "Replica cross-dataset role-pair evaluation"
             ),

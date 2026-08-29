@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Submit NavDP and ViNT Table-1 pairs only after the construction verifier
-# independently authorizes the frozen fresh-query, scene-overlap population.
+# Submit the paired NavDP/ViNT Table-1 runtime only after an independent
+# construction verifier authorizes the selected frozen population.
 set -euo pipefail
 umask 0022
 
@@ -9,15 +9,48 @@ SSH_ALIAS=${SSH_ALIAS:-alantorch}
 LOCAL_MEMNAV_PY=/home/asus/miniconda3/envs/memnav/bin/python
 LOCAL_HAB_PY=/home/asus/miniconda3/envs/habitat/bin/python
 REMOTE_BUNDLES=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles
-REMOTE_RESULTS=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829
-CONSTRUCTION_RUN=${CONSTRUCTION_RUN:-/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_fresh_query_reserve_20260829/construction_20260828T212552Z_bb757914}
-SOURCE_RUN_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6
+DATASET=${DATASET:-HM3D}
+case "${DATASET}" in
+  HM3D)
+    REMOTE_RESULTS=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829
+    CONSTRUCTION_RUN=${CONSTRUCTION_RUN:-/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_fresh_query_reserve_20260829/construction_20260828T212552Z_bb757914}
+    SOURCE_RUN_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6
+    CONSTRUCTION_VERIFICATION_NAME=hm3d_table1_fresh_query_verification.json
+    PARENT_MANIFEST=${SOURCE_RUN_ROOT}/sealed_inputs/parent_manifest.json
+    EXPECTED_PARENT_MANIFEST_SHA=a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5
+    RUNTIME_PROTOCOL_JSON=hm3d_fullmono_mixed_role_protocol_20260820.json
+    ROLE_PAIR_SCOPE=paper_heldout
+    CLAIM_SCOPE=conference_table_hm3d_fresh_query_scene_overlap
+    TASK_PREFIX=hm3d_table1_controller_portability
+    RECEIPT_BASENAME=HM3D_TABLE1_CONTROLLER_PORTABILITY_SUBMISSION_20260829.json
+    ;;
+  MP3D)
+    REMOTE_RESULTS=/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_controller_portability_20260829
+    [[ -n "${CONSTRUCTION_RUN:-}" ]] || {
+      echo "ABORT: MP3D requires the independently verified CONSTRUCTION_RUN" >&2
+      exit 2
+    }
+    SOURCE_RUN_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-results/mdtec_monocular_cec_composition_20260819/formal_20260819T055600Z_624f9fa9
+    CONSTRUCTION_VERIFICATION_NAME=mp3d_table1_new_query_verification.json
+    PARENT_MANIFEST=${CONSTRUCTION_RUN}/population/parent_manifest.json
+    EXPECTED_PARENT_MANIFEST_SHA=
+    RUNTIME_PROTOCOL_JSON=mp3d_table1_new_query_protocol_20260829.json
+    ROLE_PAIR_SCOPE=paper_replication
+    CLAIM_SCOPE=conference_table_mp3d_reused_scene_history_new_query_replication
+    TASK_PREFIX=mp3d_table1_controller_portability
+    RECEIPT_BASENAME=MP3D_TABLE1_CONTROLLER_PORTABILITY_SUBMISSION_20260829.json
+    ;;
+  *)
+    echo "ABORT: DATASET must be HM3D or MP3D" >&2
+    exit 2
+    ;;
+esac
 NAVDP_BASE_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_5690569a4373f2d2
 NAVDP_BASE_RECEIPT=${NAVDP_BASE_SOURCE_ROOT}/source_inputs.sha256
 EXPECTED_NAVDP_BASE_RECEIPT_SHA=5690569a4373f2d2768671418f0c604c4a03aa4b0ffe01baf70b288af03ba216
-NAVDP_SERVER_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_transaction_repair_67e1132783ce2cb1
+NAVDP_SERVER_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_navdp_authority_transaction_ef4f30de3103d7af
 NAVDP_SERVER_RECEIPT=${NAVDP_SERVER_SOURCE_ROOT}/SOURCE_BUNDLE.sha256
-EXPECTED_NAVDP_SERVER_RECEIPT_SHA=05ce401aac8c2e7e31e8a8d820613d30b3a03856a35c8750085b93d5a1539a97
+EXPECTED_NAVDP_SERVER_RECEIPT_SHA=ef4f30de3103d7af742137d8c63790e0f107afb880ad0650f9f98c649c05472d
 VINT_BASE_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/certified_relocalization_closed_loop_d3bd281fc374cc80
 VINT_BASE_RECEIPT_SHA=74001a9e0150c38c599a206fa0f4dd5e1279b9bed5d167119f4d14cb77995e98
 DEPENDENCY_RECEIPT=/scratch/yz11502/Research/Nav-axis-uturn-results/shared_online_double_revisit_fresh_20260813/double_revisit_fresh40_20260813T200121Z/dependency_receipt.json
@@ -49,6 +82,7 @@ done
 required=(
   MemNavData/HM3D_TABLE1_CONTROLLER_PORTABILITY_PROTOCOL_20260829.md
   MemNavData/HM3D_TABLE1_NAVDP_TRANSACTION_REPAIR_20260829.md
+  MemNavData/HM3D_TABLE1_NAVDP_AUTHORITY_TRANSACTION_REPAIR_20260829.md
   MemNavData/hm3d_table1_controller_portability_protocol_20260829.json
   MemNavData/hm3d_fullmono_mixed_role_protocol_20260820.json
   MemNavData/hm3d_fullmono_mixed_role.py
@@ -70,6 +104,12 @@ required=(
   MemNavData/test_aggregate_vint_controller_native_hm3d.py
   MemNavData/test_audit_vint_controller_native_pair.py
 )
+if [[ "${DATASET}" == MP3D ]]; then
+  required+=(
+    MemNavData/MP3D_TABLE1_NEW_QUERY_PROTOCOL_20260829.md
+    MemNavData/mp3d_table1_new_query_protocol_20260829.json
+  )
+fi
 for path in "${required[@]}"; do
   [[ -f "${path}" && ! -L "${path}" ]] || fail "missing physical ${path}"
 done
@@ -84,6 +124,8 @@ export PYTHONPATH=${ROOT}:${ROOT}/MemNavData${PYTHONPATH:+:${PYTHONPATH}}
 "${LOCAL_MEMNAV_PY}" -m json.tool \
   MemNavData/hm3d_table1_controller_portability_protocol_20260829.json \
   >/dev/null
+"${LOCAL_MEMNAV_PY}" -m json.tool \
+  "MemNavData/${RUNTIME_PROTOCOL_JSON}" >/dev/null
 "${LOCAL_HAB_PY}" -m py_compile \
   MemNavData/run_hm3d_fullmono_query_history.py \
   MemNavData/eval_shared_online_role_pairs.py \
@@ -117,30 +159,47 @@ for script in \
   lint_sbatch_template "${script}" || fail "sbatch lint failed: ${script}"
 done
 
-construction_verification=${CONSTRUCTION_RUN}/hm3d_table1_fresh_query_verification.json
+construction_verification=${CONSTRUCTION_RUN}/${CONSTRUCTION_VERIFICATION_NAME}
 bench_root=${CONSTRUCTION_RUN}/population/natural_direction
-parent_manifest=${SOURCE_RUN_ROOT}/sealed_inputs/parent_manifest.json
+parent_manifest=${PARENT_MANIFEST}
 run_root=${REMOTE_RESULTS}/${RUN_TAG}
 
 echo '[gate] independently verified construction authorization'
-readarray -t gate < <(remote "python - '${construction_verification}' '${bench_root}/manifest.json' <<'PY'
+readarray -t gate < <(remote "python - '${construction_verification}' '${bench_root}/manifest.json' '${parent_manifest}' '${DATASET}' <<'PY'
 import hashlib,json,sys
 verification=json.load(open(sys.argv[1])); manifest=sys.argv[2]
 if verification.get('verified') is not True:
  raise SystemExit('construction verifier did not pass')
 if verification.get('formal_policy_evaluation_authorized') is not True:
  raise SystemExit('construction power gate did not authorize evaluation')
+if sys.argv[4] == 'MP3D':
+ if not (verification.get('fresh_scene') is False and
+         verification.get('fresh_history') is False and
+         verification.get('new_query') is True and
+         verification.get('policy_outcomes_read') is False):
+  raise SystemExit('MP3D claim boundary changed')
 digest=hashlib.sha256(open(manifest,'rb').read()).hexdigest()
 if digest != verification.get('benchmark_manifest_sha256'):
  raise SystemExit('verified benchmark manifest changed')
+parent=json.load(open(sys.argv[3])); parent_scenes=parent.get('scenes')
+if not isinstance(parent_scenes,list) or not parent_scenes:
+ raise SystemExit('runtime parent scene ledger is invalid')
 print(verification['histories']); print(verification['scene_clusters'])
 print(digest); print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())
+print(len(parent_scenes)); print(hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest())
 PY" | tr -d '\r')
-[[ "${#gate[@]}" -eq 4 ]] || fail "construction gate receipt incomplete"
+[[ "${#gate[@]}" -eq 6 ]] || fail "construction gate receipt incomplete"
 histories=${gate[0]}; scenes=${gate[1]}
 manifest_sha=${gate[2]}; construction_verification_sha=${gate[3]}
+nav_scene_count=${gate[4]}; parent_manifest_sha=${gate[5]}
 [[ "${histories}" =~ ^[1-9][0-9]*$ && "${scenes}" =~ ^[1-9][0-9]*$ ]] || \
   fail "invalid frozen denominator"
+[[ "${nav_scene_count}" =~ ^[1-9][0-9]*$ ]] || fail "invalid parent scene count"
+if [[ -n "${EXPECTED_PARENT_MANIFEST_SHA}" ]]; then
+  [[ "${parent_manifest_sha}" == "${EXPECTED_PARENT_MANIFEST_SHA}" ]] || \
+    fail "parent manifest changed"
+fi
+nav_last=$((nav_scene_count - 1))
 vint_last=$((histories - 1))
 
 staging=$(mktemp -d)
@@ -191,19 +250,21 @@ for relative in "${navdp_runtime_support[@]}"; do
 done
 local_head=$(git -C "${ROOT}" rev-parse HEAD)
 "${LOCAL_MEMNAV_PY}" - "${staging}" "${local_head}" "${manifest_sha}" \
-  "${construction_verification_sha}" "${histories}" "${scenes}" <<'PY'
+  "${construction_verification_sha}" "${histories}" "${scenes}" \
+  "${DATASET}" "${CLAIM_SCOPE}" <<'PY'
 import hashlib,json,sys
-root,head,manifest,verification,histories,scenes=sys.argv[1:]
+root,head,manifest,verification,histories,scenes,dataset,claim_scope=sys.argv[1:]
 base=__import__('pathlib').Path(root); files={}
 for path in sorted(base.rglob('*')):
  if path.is_symlink(): raise SystemExit('bundle symlink: '+str(path))
  if path.is_file() and path.name not in {'SOURCE_BUNDLE.sha256','source_bundle_manifest.json'}:
   files[path.relative_to(base).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
 payload={
- 'schema_version':'hm3d_table1_controller_portability_bundle_v1_20260829',
+ 'schema_version':dataset.lower()+'_table1_controller_portability_bundle_v1_20260829',
  'local_git_head_context':head,'benchmark_manifest_sha256':manifest,
  'construction_verification_sha256':verification,
  'histories':int(histories),'scene_clusters':int(scenes),
+ 'dataset':dataset,'claim_scope':claim_scope,
  'controllers':['navdp','vint'],'runtime_role_visibility':'none',
  'navdp_arms':['mono_native','mono_cec'],
  'vint_arms':['forced_reject_native','grant'],
@@ -220,7 +281,7 @@ PY
 )
 task_receipt_sha=$(sha256sum "${staging}/SOURCE_BUNDLE.sha256" | awk '{print $1}')
 bundle_key=${task_receipt_sha:0:16}
-task_root=${REMOTE_BUNDLES}/hm3d_table1_controller_portability_${bundle_key}
+task_root=${REMOTE_BUNDLES}/${TASK_PREFIX}_${bundle_key}
 task_stage=${task_root}.partial.$$
 
 echo '[gate] remote dependency and identity audit'
@@ -235,7 +296,7 @@ test \"\$(sha256sum '${VINT_BASE_SOURCE_ROOT}/SOURCE_BUNDLE.sha256' | awk '{prin
 test \"\$(sha256sum '${DEPENDENCY_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_DEPENDENCY_RECEIPT_SHA}'
 test -r '${PORTABILITY_ENV_ROOT}/environment_receipt.json'
 cd '${PORTABILITY_CHECKPOINT_ROOT}' && sha256sum -c --quiet CHECKPOINTS.sha256
-test \"\$(sha256sum '${parent_manifest}' | awk '{print \$1}')\" = a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5"
+test \"\$(sha256sum '${parent_manifest}' | awk '{print \$1}')\" = '${parent_manifest_sha}'"
 
 echo '[stage] verify or upload immutable source bundle'
 if remote "test -d '${task_root}'"; then
@@ -249,18 +310,19 @@ else
 fi
 
 task_receipt=${task_root}/SOURCE_BUNDLE.sha256
-protocol=${task_root}/MemNavData/hm3d_fullmono_mixed_role_protocol_20260820.json
+protocol=${task_root}/MemNavData/${RUNTIME_PROTOCOL_JSON}
 remote "test ! -e '${run_root}' && mkdir -p '${run_root}/sealed_inputs' '${run_root}/logs' '${run_root}/smoke' '${run_root}/formal' /scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs
 cp '${construction_verification}' '${run_root}/sealed_inputs/'
 cp '${CONSTRUCTION_RUN}/population/population_receipt.json' '${run_root}/sealed_inputs/'
 cp '${task_root}/MemNavData/HM3D_TABLE1_CONTROLLER_PORTABILITY_PROTOCOL_20260829.md' '${run_root}/sealed_inputs/'
 cp '${task_root}/MemNavData/hm3d_table1_controller_portability_protocol_20260829.json' '${run_root}/sealed_inputs/'
+cp '${task_root}/MemNavData/${RUNTIME_PROTOCOL_JSON}' '${run_root}/sealed_inputs/'
 sha256sum '${bench_root}/manifest.json' '${construction_verification}' '${CONSTRUCTION_RUN}/population/population_receipt.json' >'${run_root}/sealed_inputs/experiment_inputs.sha256'
 chmod -R a-w '${run_root}/sealed_inputs'"
 
-common="ALL,TASK_ROOT=${task_root},TASK_RECEIPT=${task_receipt},EXPECTED_TASK_RECEIPT_SHA=${task_receipt_sha},FORMAL_RUN_ROOT=${run_root},BENCH_ROOT=${bench_root},CONSTRUCTION_VERIFICATION=${construction_verification},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${construction_verification_sha}"
-nav_common="${common},BASE_SOURCE_ROOT=${NAVDP_BASE_SOURCE_ROOT},BASE_RECEIPT=${NAVDP_BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_NAVDP_BASE_RECEIPT_SHA},SERVER_SOURCE_ROOT=${NAVDP_SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${NAVDP_SERVER_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_NAVDP_SERVER_RECEIPT_SHA},SOURCE_RUN_ROOT=${SOURCE_RUN_ROOT},PARENT_MANIFEST=${parent_manifest},PROTOCOL=${protocol}"
-vint_common="${common},BASE_SOURCE_ROOT=${VINT_BASE_SOURCE_ROOT},BASE_SOURCE_RECEIPT_SHA=${VINT_BASE_RECEIPT_SHA},DEPENDENCY_RECEIPT=${DEPENDENCY_RECEIPT},EXPECTED_DEPENDENCY_RECEIPT_SHA=${EXPECTED_DEPENDENCY_RECEIPT_SHA},PORTABILITY_ENV_ROOT=${PORTABILITY_ENV_ROOT},PORTABILITY_CHECKPOINT_ROOT=${PORTABILITY_CHECKPOINT_ROOT}"
+common="ALL,TASK_ROOT=${task_root},TASK_RECEIPT=${task_receipt},EXPECTED_TASK_RECEIPT_SHA=${task_receipt_sha},FORMAL_RUN_ROOT=${run_root},BENCH_ROOT=${bench_root},CONSTRUCTION_VERIFICATION=${construction_verification},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${construction_verification_sha},DATASET=${DATASET},CLAIM_SCOPE=${CLAIM_SCOPE}"
+nav_common="${common},BASE_SOURCE_ROOT=${NAVDP_BASE_SOURCE_ROOT},BASE_RECEIPT=${NAVDP_BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_NAVDP_BASE_RECEIPT_SHA},SERVER_SOURCE_ROOT=${NAVDP_SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${NAVDP_SERVER_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_NAVDP_SERVER_RECEIPT_SHA},SOURCE_RUN_ROOT=${SOURCE_RUN_ROOT},PARENT_MANIFEST=${parent_manifest},PROTOCOL=${protocol},ROLE_PAIR_SCOPE=${ROLE_PAIR_SCOPE}"
+vint_common="${common},BASE_SOURCE_ROOT=${VINT_BASE_SOURCE_ROOT},BASE_SOURCE_RECEIPT_SHA=${VINT_BASE_RECEIPT_SHA},DEPENDENCY_RECEIPT=${DEPENDENCY_RECEIPT},EXPECTED_DEPENDENCY_RECEIPT_SHA=${EXPECTED_DEPENDENCY_RECEIPT_SHA},PORTABILITY_ENV_ROOT=${PORTABILITY_ENV_ROOT},PORTABILITY_CHECKPOINT_ROOT=${PORTABILITY_CHECKPOINT_ROOT},ROLE_PAIR_SCOPE=${ROLE_PAIR_SCOPE}"
 nav_pair=${task_root}/MemNavData/slurm_hm3d_table1_navdp_pair.sbatch
 nav_analysis=${task_root}/MemNavData/slurm_hm3d_table1_navdp_analysis.sbatch
 vint_pair=${task_root}/MemNavData/slurm_hm3d_table1_vint_pair.sbatch
@@ -271,7 +333,7 @@ echo '[gate] remote imports and Slurm test-only'
 remote "test -r '${HAB_REQUESTS_VENDOR}/requests/__init__.py' && singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${task_root}:${task_root}/MemNavData:${NAVDP_SERVER_SOURCE_ROOT}:${NAVDP_SERVER_SOURCE_ROOT}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData:${HAB_REQUESTS_VENDOR}' /scratch/lg154/conda-envs/habitat/bin/python -c 'from pathlib import Path; [compile(Path(path).read_bytes(),path,\"exec\") for path in (\"${task_root}/MemNavData/eval_shared_online_role_pairs.py\",\"${task_root}/MemNavData/eval_2leg_habitat.py\",\"${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/memnav/memnav_server.py\",\"${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py\")]' && grep -q 'def append_request_frame' '${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/memnav/memnav_server.py' && grep -q 'require_monocular_depth_transaction' '${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py' && singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${task_root}:${task_root}/MemNavData:${NAVDP_SERVER_SOURCE_ROOT}:${NAVDP_SERVER_SOURCE_ROOT}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData:${HAB_REQUESTS_VENDOR}' /scratch/lg154/conda-envs/habitat/bin/python -c 'import MemNavData.run_hm3d_fullmono_query_history'"
 remote "singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${NAVDP_BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${task_root}:${task_root}/MemNavData:${NAVDP_SERVER_SOURCE_ROOT}:${NAVDP_SERVER_SOURCE_ROOT}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData' /scratch/lg154/conda-envs/memnav/bin/python -c 'import policy_backbone; from depth_anything.depth_anything_v2.dpt import DepthAnythingV2'"
 remote "sbatch --test-only --array=0 --export='${nav_common},PHASE=smoke' '${nav_pair}' >/dev/null"
-remote "sbatch --test-only --array=0-53%${NAVDP_CONCURRENCY} --export='${nav_common},PHASE=formal' '${nav_pair}' >/dev/null"
+remote "sbatch --test-only --array=0-${nav_last}%${NAVDP_CONCURRENCY} --export='${nav_common},PHASE=formal' '${nav_pair}' >/dev/null"
 remote "sbatch --test-only --export='${common},MODE=aggregate' '${nav_analysis}' >/dev/null"
 remote "sbatch --test-only --array=0 --export='${vint_common},PHASE=smoke' '${vint_pair}' >/dev/null"
 remote "sbatch --test-only --array=0-${vint_last}%${VINT_CONCURRENCY} --export='${vint_common},PHASE=formal' '${vint_pair}' >/dev/null"
@@ -283,7 +345,7 @@ nav_smoke_raw=$(remote "sbatch --parsable --array=0 --export='${nav_common},PHAS
 nav_smoke=${nav_smoke_raw%%;*}
 vint_smoke_raw=$(remote "sbatch --parsable --array=0 --export='${vint_common},PHASE=smoke' '${vint_pair}'" | tr -d '\r')
 vint_smoke=${vint_smoke_raw%%;*}
-nav_formal_raw=$(remote "sbatch --parsable --array=0-53%${NAVDP_CONCURRENCY} --dependency=afterok:${nav_smoke} --kill-on-invalid-dep=yes --export='${nav_common},PHASE=formal' '${nav_pair}'" | tr -d '\r')
+nav_formal_raw=$(remote "sbatch --parsable --array=0-${nav_last}%${NAVDP_CONCURRENCY} --dependency=afterok:${nav_smoke} --kill-on-invalid-dep=yes --export='${nav_common},PHASE=formal' '${nav_pair}'" | tr -d '\r')
 nav_formal=${nav_formal_raw%%;*}
 vint_formal_raw=$(remote "sbatch --parsable --array=0-${vint_last}%${VINT_CONCURRENCY} --dependency=afterok:${vint_smoke} --kill-on-invalid-dep=yes --export='${vint_common},PHASE=formal' '${vint_pair}'" | tr -d '\r')
 vint_formal=${vint_formal_raw%%;*}
@@ -303,20 +365,21 @@ for id in "${nav_smoke}" "${vint_smoke}" "${nav_formal}" "${vint_formal}" \
   [[ "${id}" =~ ^[0-9]+$ ]] || fail "invalid submitted job id: ${id}"
 done
 
-receipt=MemNavData/HM3D_TABLE1_CONTROLLER_PORTABILITY_SUBMISSION_20260829.json
+receipt=MemNavData/${RECEIPT_BASENAME}
 [[ ! -e "${receipt}" ]] || fail "local submission receipt already exists"
 "${LOCAL_MEMNAV_PY}" - "${receipt}" "${run_root}" "${task_root}" \
   "${task_receipt_sha}" "${construction_verification_sha}" \
   "${manifest_sha}" "${histories}" "${scenes}" "${nav_smoke}" \
   "${vint_smoke}" "${nav_formal}" "${vint_formal}" "${nav_aggregate}" \
-  "${nav_verify}" "${vint_aggregate}" "${vint_verify}" "${seal_job}" <<'PY'
+  "${nav_verify}" "${vint_aggregate}" "${vint_verify}" "${seal_job}" \
+  "${DATASET}" "${CLAIM_SCOPE}" "${ROLE_PAIR_SCOPE}" <<'PY'
 import json,sys
 (path,run,bundle,bundle_sha,construction_sha,manifest_sha,histories,scenes,
  nav_smoke,vint_smoke,nav_formal,vint_formal,nav_aggregate,nav_verify,
- vint_aggregate,vint_verify,seal)=sys.argv[1:]
+ vint_aggregate,vint_verify,seal,dataset,claim_scope,role_scope)=sys.argv[1:]
 payload={
- 'schema_version':'hm3d_table1_controller_portability_submission_v1_20260829',
- 'scope':'fresh-query scene-overlap within-controller paired evaluation',
+ 'schema_version':dataset.lower()+'_table1_controller_portability_submission_v1_20260829',
+ 'dataset':dataset,'scope':claim_scope,'runtime_role_pair_scope':role_scope,
  'run_root':run,'task_bundle':bundle,'task_receipt_sha256':bundle_sha,
  'construction_verification_sha256':construction_sha,
  'benchmark_manifest_sha256':manifest_sha,'histories':int(histories),

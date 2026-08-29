@@ -26,6 +26,7 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${BASE_SOURCE_ROOT:?}" "${BASE_SOURCE_RECEIPT_SHA:?}"
 : "${DEPENDENCY_RECEIPT:?}" "${EXPECTED_DEPENDENCY_RECEIPT_SHA:?}"
 : "${PORTABILITY_ENV_ROOT:?}" "${PORTABILITY_CHECKPOINT_ROOT:?}"
+ROLE_PAIR_SCOPE=${ROLE_PAIR_SCOPE:-paper_heldout}
 
 MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python
 HAB_PY=/scratch/lg154/conda-envs/habitat/bin/python
@@ -36,6 +37,9 @@ RUNNER=${TASK_ROOT}/MemNavData/run_cec_controller_portability_smoke_local.sh
 fail() { echo "ABORT: $*" >&2; exit 2; }
 
 [[ "${PHASE}" == smoke || "${PHASE}" == formal ]] || fail "invalid phase"
+[[ "${ROLE_PAIR_SCOPE}" == paper_heldout \
+   || "${ROLE_PAIR_SCOPE}" == paper_replication ]] || \
+  fail "invalid formal role-pair scope"
 [[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_TASK_RECEIPT_SHA}" ]] || fail "task receipt changed"
 (cd "${TASK_ROOT}" && sha256sum -c --quiet "${TASK_RECEIPT}") || \
@@ -93,7 +97,7 @@ PY
 SCENE=${identity[0]}; EPISODE=${identity[1]}
 SCENE_FILE=${identity[2]}; EXPECTED_SCENE_SHA=${identity[3]}
 [[ "$(sha256sum "${SCENE_FILE}" | awk '{print $1}')" == \
-   "${EXPECTED_SCENE_SHA}" ]] || fail "HM3D scene asset changed"
+   "${EXPECTED_SCENE_SHA}" ]] || fail "scene asset changed"
 
 readarray -t dependencies < <("${MEMNAV_PY}" - "${DEPENDENCY_RECEIPT}" <<'PY'
 import json,os,sys
@@ -133,7 +137,7 @@ singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   PORTABILITY_AUTHORITY_PAIR=1 \
   PORTABILITY_AUTHORITY_ORDER="${AUTHORITY_ORDER}" \
   PORTABILITY_CEC_ACCEPT_ALIGNMENT=first_certified_bounded \
-  ROLE_PAIR_QUERY_ROLE=all ROLE_PAIR_SCOPE=paper_heldout \
+  ROLE_PAIR_QUERY_ROLE=all ROLE_PAIR_SCOPE="${ROLE_PAIR_SCOPE}" \
   CEC_REJECT_POLICY=controller_native_exact \
   MEMNAV_PORT="${base_port}" FALLBACK_PORT="$((base_port + 1))" \
   UPSTREAM_PORT="$((base_port + 2))" PROXY_PORT="$((base_port + 3))" \

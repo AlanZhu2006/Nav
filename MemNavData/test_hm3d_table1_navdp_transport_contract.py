@@ -25,12 +25,12 @@ def test_smoke_retry_is_additive_and_confined_to_the_formal_run():
     assert "NavDP smoke root escaped the formal run" in text
 
 
-def test_primary_submitter_pins_the_verified_transaction_overlay():
+def test_primary_submitter_pins_the_verified_authority_transaction_overlay():
     text = SUBMITTER.read_text()
-    assert "hm3d_fullmono_transaction_repair_67e1132783ce2cb1" in text
+    assert "hm3d_table1_navdp_authority_transaction_ef4f30de3103d7af" in text
     assert (
         "EXPECTED_NAVDP_SERVER_RECEIPT_SHA="
-        "05ce401aac8c2e7e31e8a8d820613d30b3a03856a35c8750085b93d5a1539a97"
+        "ef4f30de3103d7af742137d8c63790e0f107afb880ad0650f9f98c649c05472d"
     ) in text
     assert "def append_request_frame" in text
     assert "require_monocular_depth_transaction" in text

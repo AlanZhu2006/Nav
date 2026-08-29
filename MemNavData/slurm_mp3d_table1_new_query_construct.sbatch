@@ -30,7 +30,13 @@ fail() { echo "ABORT: $*" >&2; exit 2; }
   fail "task bundle changed"
 [[ "$(sha256sum "${SOURCE_LEDGER}" | awk '{print $1}')" == \
    "${EXPECTED_SOURCE_LEDGER_SHA}" ]] || fail "source ledger changed"
-(( SLURM_ARRAY_TASK_ID >= 0 && SLURM_ARRAY_TASK_ID < 20 )) || \
+scene_count=$("${HAB_PY}" - "${SOURCE_LEDGER}" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); print(p["scene_count"])
+PY
+)
+[[ "${scene_count}" =~ ^[1-9][0-9]*$ ]] || fail "invalid source scene count"
+(( SLURM_ARRAY_TASK_ID >= 0 && SLURM_ARRAY_TASK_ID < scene_count )) || \
   fail "scene index outside frozen population"
 
 scene=$("${HAB_PY}" - "${SOURCE_LEDGER}" "${SLURM_ARRAY_TASK_ID}" <<'PY'

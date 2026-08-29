@@ -17,6 +17,13 @@ except ImportError:
 
 
 SOURCE_LEDGER_SCHEMA = "mp3d_table1_source_ledger_v1_20260829"
+SOURCE_LEDGER_EXPANSION_SCHEMA = (
+    "mp3d_table1_fullmono_source_expansion_ledger_v1_20260829"
+)
+SOURCE_LEDGER_SCHEMAS = (
+    SOURCE_LEDGER_SCHEMA,
+    SOURCE_LEDGER_EXPANSION_SCHEMA,
+)
 SCENE_SCHEMA = "mp3d_table1_new_query_scene_v1_20260829"
 POPULATION_SCHEMA = "mp3d_table1_new_query_population_v1_20260829"
 VERIFICATION_SCHEMA = "mp3d_table1_new_query_verification_v1_20260829"
@@ -72,14 +79,19 @@ def query_reuses_source_goal(query: dict[str, Any],
     return position_error <= 1e-4 and yaw_error <= 1e-4
 
 
-def assert_new_query_identity(row: dict[str, Any],
-                              source_goal: dict[str, Any]) -> None:
+def assert_new_query_identity(
+    row: dict[str, Any],
+    source_goal: dict[str, Any] | list[dict[str, Any]],
+) -> None:
+    forbidden = source_goal if isinstance(source_goal, list) else [source_goal]
+    require(bool(forbidden), "forbidden-query ledger is empty")
     for pair in row["pairs"]:
         for query in pair["queries"]:
-            require(
-                not query_reuses_source_goal(query, source_goal),
-                "new-query population reused the consumed source Goal-B",
-            )
+            for consumed in forbidden:
+                require(
+                    not query_reuses_source_goal(query, consumed),
+                    "new-query population reused a consumed query identity",
+                )
 
 
 def selected_stratum(row: dict[str, Any]) -> str:
@@ -115,7 +127,9 @@ __all__ = [
     "SCENE_COUNT",
     "SCENE_SCHEMA",
     "SEED_NAMESPACE",
+    "SOURCE_LEDGER_EXPANSION_SCHEMA",
     "SOURCE_LEDGER_SCHEMA",
+    "SOURCE_LEDGER_SCHEMAS",
     "TARGET_HISTORIES",
     "TARGET_SCENES",
     "VERIFICATION_SCHEMA",

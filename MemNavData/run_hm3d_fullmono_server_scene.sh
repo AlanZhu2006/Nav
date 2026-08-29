@@ -3,7 +3,7 @@
 set -euo pipefail
 umask 0022
 
-MODE=${MODE:?set collect, smoke, eval, or lifelong_b}
+MODE=${MODE:?set collect, mp3d_collect, smoke, eval, or lifelong_b}
 TASK_ROOT=${TASK_ROOT:?set immutable task root}
 SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT:-${TASK_ROOT}}
 BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT:?set verified Final14 mono source root}
@@ -21,7 +21,8 @@ RUNTIME_ATTEMPT=${RUNTIME_ATTEMPT:-}
 RESUME_INCOMPLETE=${RESUME_INCOMPLETE:-0}
 FORMAL_INDICES_OVERRIDE=${FORMAL_INDICES_OVERRIDE:-}
 
-[[ "${MODE}" == collect || "${MODE}" == smoke || "${MODE}" == eval \
+[[ "${MODE}" == collect || "${MODE}" == mp3d_collect \
+   || "${MODE}" == smoke || "${MODE}" == eval \
    || "${MODE}" == lifelong_b ]] || {
   echo "invalid MODE=${MODE}" >&2; exit 2; }
 [[ "${SCENE_INDEX}" =~ ^[0-9]+$ ]] || { echo "bad scene index" >&2; exit 2; }
@@ -239,6 +240,18 @@ if [[ "${MODE}" == collect ]]; then
       --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}")
   if [[ "${RESUME_INCOMPLETE}" == 1 ]]; then
     collector+=(--resume-incomplete --repair-tag "${RUNTIME_ATTEMPT}")
+  fi
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
+    "${HAB_PY}" -u "${collector[@]}" \
+      >"${task_run}/logs/collector.log" 2>&1
+elif [[ "${MODE}" == mp3d_collect ]]; then
+  collector=("${TASK_ROOT}/MemNavData/collect_mp3d_table1_fullmono_goal_a.py"
+      --source-root "${TASK_ROOT}" --run-root "${RUN_ROOT}"
+      --protocol "${PROTOCOL}" --manifest "${PARENT_MANIFEST}"
+      --scene-index "${SCENE_INDEX}" --hab-python "${HAB_PY}"
+      --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}")
+  if [[ "${MP3D_SOURCE_SMOKE:-0}" == 1 ]]; then
+    collector+=(--smoke --smoke-max-steps "${MAX_STEPS:-80}")
   fi
   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
     "${HAB_PY}" -u "${collector[@]}" \

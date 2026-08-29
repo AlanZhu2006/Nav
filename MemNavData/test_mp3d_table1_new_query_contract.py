@@ -68,6 +68,25 @@ def test_assert_new_query_identity_checks_both_roles():
         assert_new_query_identity(reused, old)
 
 
+def test_assert_new_query_identity_checks_every_consumed_query():
+    row = history("scene", "episode", "front")
+    forbidden = [{
+        "goal_rgb_sha256": "z" * 64,
+        "floor_position": [8.0, 0.0, 9.0],
+        "yaw_rad": 1.2,
+    }, {
+        "goal_rgb_sha256": "y" * 64,
+        "floor_position": [7.0, 0.0, 6.0],
+        "yaw_rad": -0.8,
+    }]
+    assert_new_query_identity(row, forbidden)
+    reused = copy.deepcopy(row)
+    reused["pairs"][0]["queries"][0]["floor_position"] = [7.0, 0.0, 6.0]
+    reused["pairs"][0]["queries"][0]["yaw_rad"] = -0.8
+    with pytest.raises(RuntimeError, match="consumed query"):
+        assert_new_query_identity(reused, forbidden)
+
+
 def test_direction_order_is_deterministic_complete_and_preferred_first():
     first = stratum_order(3, 1, "scene", "episode")
     assert first == stratum_order(3, 1, "scene", "episode")

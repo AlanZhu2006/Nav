@@ -16,9 +16,8 @@ try:
         CONSTRUCTION_SEED,
         MINIMUM_PER_STRATUM,
         POPULATION_SCHEMA,
-        SCENE_COUNT,
         SCENE_SCHEMA,
-        SOURCE_LEDGER_SCHEMA,
+        SOURCE_LEDGER_SCHEMAS,
         TARGET_HISTORIES,
         TARGET_SCENES,
         assert_new_query_identity,
@@ -31,9 +30,8 @@ except ImportError:
         CONSTRUCTION_SEED,
         MINIMUM_PER_STRATUM,
         POPULATION_SCHEMA,
-        SCENE_COUNT,
         SCENE_SCHEMA,
-        SOURCE_LEDGER_SCHEMA,
+        SOURCE_LEDGER_SCHEMAS,
         TARGET_HISTORIES,
         TARGET_SCENES,
         assert_new_query_identity,
@@ -57,21 +55,22 @@ def finalize(*, construction_root: Path, source_ledger_path: Path,
              minimum_per_stratum: int = MINIMUM_PER_STRATUM) -> dict[str, Any]:
     require(not out.exists(), f"output already exists: {out}")
     ledger = json.loads(source_ledger_path.read_text())
-    require(ledger.get("schema_version") == SOURCE_LEDGER_SCHEMA,
+    require(ledger.get("schema_version") in SOURCE_LEDGER_SCHEMAS,
             "source ledger schema changed")
-    require(int(ledger["scene_count"]) == SCENE_COUNT,
+    scene_count = int(ledger["scene_count"])
+    require(scene_count == len(ledger["scenes"]) and scene_count > 0,
             "source scene count changed")
     ledger_sha = sha256_file(source_ledger_path)
     source_goals = {
         (str(scene["scene"]), str(episode["episode"])):
-            episode["consumed_goal_b"]
+            episode.get("consumed_queries", [episode["consumed_goal_b"]])
         for scene in ledger["scenes"]
         for episode in scene["episodes"]
     }
     candidates = []
     fragments = []
     contract = None
-    for scene_index in range(SCENE_COUNT):
+    for scene_index in range(scene_count):
         matches = sorted(construction_root.glob(f"{scene_index:02d}_*/"))
         require(len(matches) == 1,
                 f"scene index {scene_index} has {len(matches)} fragments")

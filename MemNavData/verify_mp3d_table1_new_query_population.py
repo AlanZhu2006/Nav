@@ -12,7 +12,7 @@ try:
     from audit_shared_online_role_pairs import audit, sha256_file
     from mp3d_table1_new_query_contract import (
         POPULATION_SCHEMA,
-        SOURCE_LEDGER_SCHEMA,
+        SOURCE_LEDGER_SCHEMAS,
         VERIFICATION_SCHEMA,
         assert_new_query_identity,
         power,
@@ -22,7 +22,7 @@ except ImportError:
     from MemNavData.audit_shared_online_role_pairs import audit, sha256_file
     from MemNavData.mp3d_table1_new_query_contract import (
         POPULATION_SCHEMA,
-        SOURCE_LEDGER_SCHEMA,
+        SOURCE_LEDGER_SCHEMAS,
         VERIFICATION_SCHEMA,
         assert_new_query_identity,
         power,
@@ -46,11 +46,11 @@ def verify(root: Path, source_ledger_path: Path) -> dict:
                 f"construction artifact changed: {relative}")
 
     ledger = json.loads(source_ledger_path.read_text())
-    require(ledger.get("schema_version") == SOURCE_LEDGER_SCHEMA,
+    require(ledger.get("schema_version") in SOURCE_LEDGER_SCHEMAS,
             "source ledger schema changed")
     source_goals = {
         (str(scene["scene"]), str(episode["episode"])):
-            episode["consumed_goal_b"]
+            episode.get("consumed_queries", [episode["consumed_goal_b"]])
         for scene in ledger["scenes"]
         for episode in scene["episodes"]
     }

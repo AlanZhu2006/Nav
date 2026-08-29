@@ -1,0 +1,118 @@
+{
+  "schema_version": "mp3d_table1_fullmono_source_expansion_protocol_v1_20260829",
+  "status": "frozen_construction_only",
+  "dataset": {
+    "name": "MP3D",
+    "episodes_per_scene": 4,
+    "scenes": [
+      {"rank": 0, "scene_id": "vyrNrziPKCB"},
+      {"rank": 1, "scene_id": "r47D5H71a5s"},
+      {"rank": 2, "scene_id": "jh4fc5c5qoQ"},
+      {"rank": 3, "scene_id": "fzynW3qQPVF"},
+      {"rank": 4, "scene_id": "p5wJjkQkbXX"},
+      {"rank": 5, "scene_id": "pRbA3pwrgk9"},
+      {"rank": 6, "scene_id": "gYvKGZ5eRqb"},
+      {"rank": 7, "scene_id": "kEZ7cmS4wCh"},
+      {"rank": 8, "scene_id": "sKLMLpTHeUy"},
+      {"rank": 9, "scene_id": "jtcxE69GiFV"},
+      {"rank": 10, "scene_id": "sT4fr6TAbpF"},
+      {"rank": 11, "scene_id": "ur6pFq6Qu1A"},
+      {"rank": 12, "scene_id": "q9vSo1VnCiC"},
+      {"rank": 13, "scene_id": "r1Q1Z4BcV1o"},
+      {"rank": 14, "scene_id": "x8F5xyUWy9e"},
+      {"rank": 15, "scene_id": "pa4otMbVnkk"}
+    ]
+  },
+  "trigger": {
+    "construction_verification": "/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_new_query_20260829/construction_20260829T050401Z_6813d501/mp3d_table1_new_query_verification.json",
+    "construction_verification_sha256": "0270d7fd2fd7e7e6c05181cbd34b7c2eef01b843b98e83e4efb0fcb671264fb4",
+    "observed_histories": 14,
+    "observed_scene_clusters": 10,
+    "observed_direction_strata": {
+      "front": 5,
+      "rear": 9,
+      "side": 0
+    },
+    "policy_outcomes_generated": false,
+    "target_met": false
+  },
+  "base_population": {
+    "source_ledger": "/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_new_query_20260829/construction_20260829T050401Z_6813d501/sealed_inputs/source_ledger.json",
+    "source_ledger_sha256": "8b19af79300d63ba81b8efdf76498c22357a4d840f73236863ec0e44b606031e",
+    "scenes": 20,
+    "source_histories": 40,
+    "retained_new_query_histories": 14
+  },
+  "expansion_source": {
+    "manifest": ".diagnostics/paper_power_expansion_freeze_20260814_pre_result/paper_power_expansion_manifest.json",
+    "manifest_sha256": "c148c9695d0a03f877cd860b1c1810ace36e4750da9a7ed5ec385bb29336a598",
+    "scenes": 16,
+    "episodes_per_scene": 4,
+    "episode_ids": [
+      "episode_0002",
+      "episode_0003",
+      "episode_0004",
+      "episode_0005"
+    ],
+    "selection_frozen_before_old_query_outcomes": true,
+    "scene_overlap_with_base_population": 0
+  },
+  "goal_a": {
+    "policy": "frozen_navdp_native_imagegoal",
+    "controller_depth": "causal_lingbot_monocular_sidecar",
+    "base_seed": 20260803,
+    "maximum_steps": 500,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "metric_depth_sensor_read_budget": 0
+  },
+  "consumed_query_exclusion": {
+    "identity_fields": [
+      "jpeg_sha256",
+      "pose_and_yaw"
+    ],
+    "include_source_goal_b": true,
+    "old_query_manifests": [
+      {
+        "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/paper_certified_compass_20260814/paper_role_pair_20260814T051634Z_attempt7/benchmarks/natural_direction/manifest.json",
+        "sha256": "5e04641d23029c216971d5ab955ef8eea974ff7c20f57bbdbcf3df6f4f593d78"
+      },
+      {
+        "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/paper_certified_compass_20260814/paper_role_pair_20260814T051634Z_attempt7/benchmarks/support_controlled/manifest.json",
+        "sha256": "814bf8c88d2d43fcf72b312ebd42b707ab6ecdf5affcd3a0742c2dfa4a1a48e9"
+      },
+      {
+        "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/paper_certified_compass_20260814/paper_power_expansion_20260814_pre_result/benchmarks/natural_direction/manifest.json",
+        "sha256": "e6a88397ac194800d79b52a16086d53da85d84d09471a37b6f61e01e1af311c5"
+      },
+      {
+        "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/paper_certified_compass_20260814/paper_power_expansion_20260814_pre_result/benchmarks/support_controlled/manifest.json",
+        "sha256": "54626f67b918f22ac70aaffd0ce10c68d26b5e462f8feaa3d44087cbcd577d49"
+      }
+    ]
+  },
+  "query_contract": {
+    "novel_max_online_a_covis_exclusive": 0.1,
+    "revisit_online_a_covis_interval": [
+      0.55,
+      0.9
+    ],
+    "query_geodesic_interval_m": [
+      2.0,
+      9.0
+    ],
+    "direction_strata": [
+      "front",
+      "side",
+      "rear"
+    ],
+    "runtime_role_visibility": "none"
+  },
+  "power_gate": {
+    "target_histories": 20,
+    "target_scene_clusters": 12,
+    "minimum_histories_per_direction_stratum": 4,
+    "threshold_changes_authorized": false
+  },
+  "formal_policy_evaluation_submitted_by_this_protocol": false
+}

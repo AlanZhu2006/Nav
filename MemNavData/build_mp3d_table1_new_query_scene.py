@@ -22,7 +22,7 @@ try:
         CONSTRUCTION_SEED,
         SCENE_SCHEMA,
         SEED_NAMESPACE,
-        SOURCE_LEDGER_SCHEMA,
+        SOURCE_LEDGER_SCHEMAS,
         assert_new_query_identity,
         require,
         stratum_order,
@@ -38,7 +38,7 @@ except ImportError:
         CONSTRUCTION_SEED,
         SCENE_SCHEMA,
         SEED_NAMESPACE,
-        SOURCE_LEDGER_SCHEMA,
+        SOURCE_LEDGER_SCHEMAS,
         assert_new_query_identity,
         require,
         stratum_order,
@@ -111,7 +111,7 @@ def build(*, source_ledger_path: Path, scene_index: int,
     require(scene_index >= 0, "scene index must be non-negative")
     require(not out.exists(), f"output already exists: {out}")
     ledger = json.loads(source_ledger_path.read_text())
-    require(ledger.get("schema_version") == SOURCE_LEDGER_SCHEMA,
+    require(ledger.get("schema_version") in SOURCE_LEDGER_SCHEMAS,
             "source ledger schema changed")
     require(ledger.get("previous_goal_b_policy_outcomes_read") is False,
             "source ledger read previous Goal-B outcomes")
@@ -255,9 +255,11 @@ def build(*, source_ledger_path: Path, scene_index: int,
             ) + "\n")
             row["role_pairs_sha256"] = history_tools.sha256_file(metadata_path)
             try:
-                assert_new_query_identity(
-                    row, by_episode[episode]["consumed_goal_b"],
+                source_record = by_episode[episode]
+                forbidden = source_record.get(
+                    "consumed_queries", [source_record["consumed_goal_b"]],
                 )
+                assert_new_query_identity(row, forbidden)
             except RuntimeError:
                 shutil.rmtree(destination)
                 attempt["rejected_consumed_goal_identity"] = True

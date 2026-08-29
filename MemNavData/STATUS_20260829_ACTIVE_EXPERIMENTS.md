@@ -1,6 +1,6 @@
 # 2026-08-29 会议实验活跃总账
 
-更新时间：2026-08-29 17:25（Asia/Shanghai）。本文件是当前调度与证据边界的
+更新时间：2026-08-29 22:30（Asia/Shanghai）。本文件是当前调度与证据边界的
 唯一简表。任何 active rollout 都不读取 partial SR、SPL、final distance 或逐臂
 outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，才允许打开结果。
 
@@ -22,10 +22,12 @@ outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，
   construction cells、finalizer 和独立 verifier 均完成；最终得到 42 histories、
   25 scenes、84 queries，front/side/rear `14/9/19`，且
   `policy_outcomes_read=false`、`formal_policy_evaluation_authorized=true`。正式
-  NavDP/ViNT 四行因此按冻结协议获准提交。NavDP 与 replacement ViNT smoke 均已
-  `COMPLETED 0:0`，两个 formal arrays 都正以并发 2 运行；首个 ViNT smoke 因 shell
-  allowlist 漏列 `paper_replication` 在 policy 前停止，additive repair 已独立哈希且
-  通过真实 GPU smoke。尚未打开任何 partial SR。
+  NavDP/ViNT 四行因此按冻结协议获准提交。两个 formal arrays 分别完成 40/42 与
+  41/42 条 canonical receipts；NavDP rank 27 因 identical-JPEG/new-transaction cache
+  碰撞停止，ViNT index 24 因共享节点 TCP 端口竞争在 server startup 停止。精确修复
+  `16558664/16558665` 已只针对缺失 histories `29,30/24` 启动，replacement
+  aggregate/verifier/seal 为 `16558666--16558670`。方法、population 和已完成输出均
+  未改变。
 - **HM3D lifelong B2 仍在等待 GPU 优先级。** 它是会议 Table 2 的补充机制实验，
   不是 powered confirmation。
 - **会议 Table 2 的新 construction-only 实验给出有效的 constructibility null。** 它不复用
@@ -243,6 +245,40 @@ smoke / formal / aggregate / verifier 为
 repair receipt：
 `MP3D_TABLE1_CONTROLLER_PORTABILITY_VINT_SCOPE_REPAIR_SUBMISSION_20260829.json`。
 
+### 3.2 Formal array 精确基础设施修复
+
+原 NavDP array `16548405` 最终仅 rank 27 失败；按冻结 manifest 复算，canonical
+completion 只缺 history 29/30。失败的确定性 server receipt 为：
+
+```text
+RuntimeError: cached monocular depth belongs to a different transaction
+```
+
+这是旧 authority+transaction overlay 尚未包含 2026-08-22 identical-JPEG 修复所致。
+replacement 复用已在 HM3D 验证的 cache-repair overlay
+`hm3d_table1_navdp_cache_repair_2ae34ad0c1503958`，只提交 scene rank 27，并用 scene
+内合法 override 严格限制为 histories `29,30`。40 条已完成 history 不重放。
+
+replacement ViNT array `16548592` 最终只缺 index 24；该 cell 在 pair audit 前因
+`Address already in use` 停止。replacement wrapper 用 node-local `flock` 领取连续
+六端口 block、逐端口检查 listener，并持锁到 cell 结束，只重跑 index 24。41 条已完成
+history 不重放。
+
+两个 partial canonical directories 已移动到只读 repair archive，未删除；archive
+manifest SHA-256 为
+`e3ec6df936b86e6438d20e4bf11624bf4789aaa4c9e13a50cb276a9c5b2bcf84`。冻结
+wrapper bundle receipt 为
+`6e14f8a5f24b9b7f5f2e7688a8d2df5365e92a9e73f56e2f46454a3f7fe396fd`。
+本地 131 项相关回归、远端 bundle selftest、端口锁测试、failure/missing-set gate 和
+五项 Slurm `--test-only` 全部通过。
+
+审计披露：post-failure 诊断时曾意外打印一条已经完成的 NavDP history outcome；它未
+参与 failure class、missing set、修复内容或 downstream 决策，且没有计算 partial SR
+或 aggregate。新协议不再作“从未看到任何 partial outcome”的过强陈述。权威协议和
+提交收据分别是
+`MP3D_TABLE1_CONTROLLER_EXACT_REPAIR_PROTOCOL_20260829.md` 与
+`MP3D_TABLE1_CONTROLLER_EXACT_REPAIR_SUBMISSION_20260829.json`。
+
 ## 4. HM3D lifelong / Table 2
 
 上游 factual-C integrity barrier 覆盖冻结 22 histories / 15 scenes；最终 17 条
@@ -325,7 +361,7 @@ verifier 未授权时 fail closed。
 | 会议交付物 | 当前状态 | 下一道门 |
 |---|---|---|
 | Table 1 HM3D 四行 | 已完成：NavDP Revisit `8/28 -> 25/28`；ViNT Revisit `3/28 -> 19/28`；两者 Novel 均 0 takeover/exact fallback | 只保留 controller 内 paired claim，不做 NavDP-vs-ViNT 绝对优劣比较 |
-| Table 1 MP3D 四行 | phase-2 population 已通过独立 gate：42 histories / 25 scenes / front-side-rear `14/9/19`；NavDP 与 repaired ViNT smoke 均通过，两个 formal arrays active | 等 `16548444` 与 `16548605` 独立 verifier，再由 `16548606` seal；此前不读 partial SR |
+| Table 1 MP3D 四行 | phase-2 population 已通过独立 gate：42 histories / 25 scenes / front-side-rear `14/9/19`；原 arrays 只缺 NavDP 29/30 与 ViNT 24，exact retries `16558664/16558665` active | 等 replacement verifiers `16558667/16558669`，再由 `16558670` seal；此前不打开 aggregate SR |
 | Table 2 HM3D by leg | 22 条 factual A/B prefix 已封；新 Leg-3 构造只保留 8 histories / 6 scenes、side 0，未过冻结 power gate；controller 未提交；B2 仍等待 | 保留 constructibility null；不放宽阈值，Table 1 完成前不启动 outcome-aware 扩样 |
 | Depth ablation | 已有 Gate C/D、Final14 factorial 与 full-mono 证据 | 先审计能否同 population 重组，禁止拼不同分母 |
 | CEC mechanism ablation | Raw/CEC/known-role 底层证据大部分已有 | 统一导出 retrieval accuracy、FA/FR；不急着重跑 |
@@ -334,8 +370,9 @@ verifier 未授权时 fail closed。
 
 ## 6. 当前最优执行顺序
 
-1. 让 MP3D NavDP/ViNT formal arrays 自然完成；只在两个 independent verifier 与
-   joint seal 全部通过后打开结果，期间不读 partial SR。
+1. 让 MP3D 两个 exact retries 和 replacement downstream DAG 自然完成；只在
+   independent verifiers `16558667/16558669` 与 joint seal `16558670` 全部通过后
+   打开 aggregate 结果。
 2. HM3D Table 1 已完成并写入论文；只保留 controller 内 paired effect 和
    fresh-query/scene-overlap 的准确 claim boundary。
 3. Table 2 新 Leg-3 已在独立 gate 停止；保留 null，不运行其 controller，也不按当前
@@ -374,6 +411,7 @@ episode-level receipts 或 independent verifier。
 - `MP3D_TABLE1_NEW_QUERY_SUBMISSION_20260829.json`；
 - `MP3D_TABLE1_FULLMONO_SOURCE_EXPANSION_SUBMISSION_20260829.json`；
 - `MP3D_TABLE1_CONTROLLER_PORTABILITY_VINT_SCOPE_REPAIR_SUBMISSION_20260829.json`；
+- `MP3D_TABLE1_CONTROLLER_EXACT_REPAIR_SUBMISSION_20260829.json`；
 - `HM3D_TABLE2_LEG3_CONSTRUCTION_SUBMISSION_20260829.json`；
 - `HM3D_TABLE2_LEG3_CONSTRUCTION_CLOSURE_REPAIR_SUBMISSION_20260829.json`；
 - `HM3D_TABLE1_NAVDP_ANALYSIS_PATH_REPAIR_SUBMISSION_20260829.json`。

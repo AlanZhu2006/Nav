@@ -1,6 +1,6 @@
 # 2026-08-29 会议实验活跃总账
 
-更新时间：2026-08-29 22:57（Asia/Shanghai）。本文件是当前调度与证据边界的
+更新时间：2026-08-29 23:34（Asia/Shanghai）。本文件是当前调度与证据边界的
 唯一简表。任何 active rollout 都不读取 partial SR、SPL、final distance 或逐臂
 outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，才允许打开结果。
 
@@ -18,18 +18,14 @@ outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，
   第三轮 process-local import precedence 后完整 54-rank formal、aggregate、独立
   verifier 与 seal 全部完成。Revisit `8/28 -> 25/28`（`+18/-1`, `p=7.63e-5`），
   Novel `6/28 = 6/28` 且 0 takeover；runtime failure 与 metric-depth reads 均为 0。
-- **MP3D phase-2 outcome-blind population 已通过 prospective power gate。** 36 个
-  construction cells、finalizer 和独立 verifier 均完成；最终得到 42 histories、
-  25 scenes、84 queries，front/side/rear `14/9/19`，且
-  `policy_outcomes_read=false`、`formal_policy_evaluation_authorized=true`。正式
-  NavDP/ViNT 四行因此按冻结协议获准提交。两个 formal arrays 分别完成 40/42 与
-  41/42 条 canonical receipts。ViNT 的唯一缺失 history 24 已由 `16558665_24`
-  精确补齐，aggregate/verifier `16558668/16558669` 均为 `COMPLETED 0:0`。NavDP
-  第一次精确补跑 `16558664_27` 修好了 identical-JPEG cache，却因复用 overlay 中的
-  旧 authority endpoint fail closed；没有合法 completion。第二次只补 histories
-  `29,30` 的 source-composition 修复 `16559033_27` 正在运行，downstream 为
-  `16559034/16559035`，最终 seal 为 `16559083`。方法、population、已完成输出与
-  outcome-opening rule 均未改变。
+- **MP3D Table-1 四行已正式封存，并完成跨 controller、跨 dataset 主矩阵。** 在
+  outcome-blind 42-history、25-scene、84-query population 上，NavDP Revisit
+  `9/42 -> 37/42`（`+29/-1`, `p=5.77e-8`），ViNT Revisit
+  `2/42 -> 24/42`（`+22/-0`, `p=4.77e-7`）。两者 Novel SR 均完全持平：NavDP
+  `17/42`，ViNT `9/42`。Certificate 在同一个弱支持 Novel query 上 takeover
+  `1/42`，其余 `41/42` exact fallback；所以准确口径是“Novel SR interference 为
+  0”，不是“Novel 零接管”。两个 controller-specific verifier 与 joint seal
+  `16559083` 均为 `COMPLETED 0:0`。
 - **HM3D lifelong B2 仍在等待 GPU 优先级。** 它是会议 Table 2 的补充机制实验，
   不是 powered confirmation。
 - **会议 Table 2 的新 construction-only 实验给出有效的 constructibility null。** 它不复用
@@ -302,8 +298,10 @@ attempt-2 wrapper receipt 为
 与本地镜像 SHA-256 均为
 `8e92d38935827223fb20926127a6dd1759e482aff49f5c973704d6a4a6e42af2`。调度事件及
 outcome-visibility 边界见
-`MP3D_TABLE1_NAVDP_AUTHORITY_CACHE_SUBMISSION_INCIDENT_20260829.md`。最终 seal 前仍不
-打开任一 controller aggregate。
+`MP3D_TABLE1_NAVDP_AUTHORITY_CACHE_SUBMISSION_INCIDENT_20260829.md`。attempt 2
+最终为 `COMPLETED 0:0`（28 分 02 秒），aggregate/verifier
+`16559034/16559035` 与 joint seal `16559083` 均通过。结果只在 seal 后打开，详见
+`MP3D_TABLE1_CONTROLLER_PORTABILITY_RESULT_20260829.md`。
 
 ## 4. HM3D lifelong / Table 2
 
@@ -387,7 +385,7 @@ verifier 未授权时 fail closed。
 | 会议交付物 | 当前状态 | 下一道门 |
 |---|---|---|
 | Table 1 HM3D 四行 | 已完成：NavDP Revisit `8/28 -> 25/28`；ViNT Revisit `3/28 -> 19/28`；两者 Novel 均 0 takeover/exact fallback | 只保留 controller 内 paired claim，不做 NavDP-vs-ViNT 绝对优劣比较 |
-| Table 1 MP3D 四行 | phase-2 population 已通过独立 gate：42 histories / 25 scenes / front-side-rear `14/9/19`；ViNT 缺失 cell 与 verifier 已完成；NavDP attempt-1 暴露 source-composition 回归，attempt-2 `16559033_27` 只补 histories 29/30 | 等 `16559034/16559035` 与 SHA-pinned joint seal `16559083`；此前不打开 aggregate SR |
+| Table 1 MP3D 四行 | **已完成并 seal**：NavDP Novel `17/42=17/42`、Revisit `9/42->37/42`；ViNT Novel `9/42=9/42`、Revisit `2/42->24/42`；42 histories / 25 scenes | 写入会议主表；披露共同的 `1/42` Novel takeover，禁止写成零误激活 |
 | Table 2 HM3D by leg | 22 条 factual A/B prefix 已封；新 Leg-3 构造只保留 8 histories / 6 scenes、side 0，未过冻结 power gate；controller 未提交；B2 仍等待 | 保留 constructibility null；不放宽阈值，Table 1 完成前不启动 outcome-aware 扩样 |
 | Depth ablation | 已有 Gate C/D、Final14 factorial 与 full-mono 证据 | 先审计能否同 population 重组，禁止拼不同分母 |
 | CEC mechanism ablation | Raw/CEC/known-role 底层证据大部分已有 | 统一导出 retrieval accuracy、FA/FR；不急着重跑 |
@@ -396,17 +394,16 @@ verifier 未授权时 fail closed。
 
 ## 6. 当前最优执行顺序
 
-1. 让 MP3D NavDP attempt-2 与 replacement downstream DAG 自然完成；只在
-   NavDP verifier `16559035` 和 SHA-pinned joint seal `16559083` 全部通过后打开
-   NavDP/ViNT aggregate 结果。ViNT verifier `16558669` 已完成并固定哈希。
-2. HM3D Table 1 已完成并写入论文；只保留 controller 内 paired effect 和
-   fresh-query/scene-overlap 的准确 claim boundary。
+1. 把已经封存的 HM3D + MP3D 两数据集、NavDP + ViNT 两 controller 结果写入会议
+   Table 1；只保留 controller 内 paired effect，不做跨 controller 绝对优劣比较。
+2. MP3D 的 `1/42` Novel takeover 按 weak-support boundary 披露；不追加阈值修补或
+   outcome-aware 重跑，把 support-spectrum 作为解释而不是事后修复。
 3. Table 2 新 Leg-3 已在独立 gate 停止；保留 null，不运行其 controller，也不按当前
    构造结果调阈值。
 4. 利用空闲 GPU 让 lifelong B2 自然启动，但不为抢队列取消 Table 1；它始终标注为
    underpowered mechanism evidence。
-5. HM3D 与 MP3D Table 1 seal 后生成会议主表；Table 2 始终把 factual A/B waterfall
-   与条件 Leg-3 treatment effect 分开报告。
+5. Table 2 始终把 factual A/B waterfall 与条件 Leg-3 treatment effect 分开报告；
+   不用 Table-1 的 role-balanced aggregate 冒充 multi-leg joint SR。
 6. 不再启动新 learned module、GOAT 适配、length-bin 或额外 controller 支线；它们
    现在都不在论文关键路径上。
 

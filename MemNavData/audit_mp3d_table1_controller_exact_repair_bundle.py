@@ -23,7 +23,14 @@ def audit(root: Path) -> dict[str, Any]:
     vint_path = memnav / "slurm_hm3d_table1_vint_pair.sbatch"
     helper_path = memnav / "slurm_port_pair.sh"
     submit_path = memnav / "submit_mp3d_table1_controller_exact_repair_remote.sh"
-    for path in (protocol_path, navdp_path, vint_path, helper_path, submit_path):
+    amendment_path = (
+        memnav / "mp3d_table1_navdp_authority_cache_composition_repair_20260829.json"
+    )
+    repair2_path = (
+        memnav / "submit_mp3d_table1_navdp_authority_cache_repair_remote.sh"
+    )
+    for path in (protocol_path, navdp_path, vint_path, helper_path, submit_path,
+                 amendment_path, repair2_path):
         require(path.is_file() and not path.is_symlink(), f"missing physical {path}")
 
     protocol = json.loads(protocol_path.read_text())
@@ -75,6 +82,22 @@ def audit(root: Path) -> dict[str, Any]:
             "remote submission disclosure missing")
     require("repair_selection_influenced_by_incident':False" in submit,
             "remote submission outcome-isolation receipt missing")
+    amendment = json.loads(amendment_path.read_text())
+    require(amendment.get("attempt") == 2, "composition repair attempt changed")
+    require(amendment.get("frozen_history_indices") == [29, 30],
+            "composition repair set changed")
+    require(amendment.get("method_or_population_changed") is False,
+            "composition repair changed scientific contract")
+    require(amendment["outcome_visibility"].get(
+        "navigation_success_or_distance_read") is False,
+        "composition diagnosis read navigation outcome")
+    repair2 = repair2_path.read_text()
+    require("SERVER_SOURCE_ROOT=${TASK}" in repair2,
+            "repair2 does not use the composed task source")
+    require("FORMAL_INDICES_SPEC=29:30" in repair2,
+            "repair2 exact set changed")
+    require("navigation_success_or_distance_read':False" in repair2,
+            "repair2 disclosure missing")
     return {
         "verified": True,
         "frozen_histories": 42,

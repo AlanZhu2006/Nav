@@ -25,6 +25,8 @@ def test_outcome_visibility_disclosure_is_fail_closed(tmp_path):
         "slurm_hm3d_table1_vint_pair.sbatch",
         "slurm_port_pair.sh",
         "submit_mp3d_table1_controller_exact_repair_remote.sh",
+        "mp3d_table1_navdp_authority_cache_composition_repair_20260829.json",
+        "submit_mp3d_table1_navdp_authority_cache_repair_remote.sh",
     )
     for name in names:
         (target / name).write_bytes((ROOT / "MemNavData" / name).read_bytes())

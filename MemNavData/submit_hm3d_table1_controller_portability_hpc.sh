@@ -48,9 +48,6 @@ esac
 NAVDP_BASE_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_5690569a4373f2d2
 NAVDP_BASE_RECEIPT=${NAVDP_BASE_SOURCE_ROOT}/source_inputs.sha256
 EXPECTED_NAVDP_BASE_RECEIPT_SHA=5690569a4373f2d2768671418f0c604c4a03aa4b0ffe01baf70b288af03ba216
-NAVDP_SERVER_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_navdp_cache_repair_2ae34ad0c1503958
-NAVDP_SERVER_RECEIPT=${NAVDP_SERVER_SOURCE_ROOT}/SOURCE_BUNDLE.sha256
-EXPECTED_NAVDP_SERVER_RECEIPT_SHA=2ae34ad0c150395849d4461913fc086f3b6ea7acf7249c763fe3e8808356ed6d
 VINT_BASE_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/certified_relocalization_closed_loop_d3bd281fc374cc80
 VINT_BASE_RECEIPT_SHA=74001a9e0150c38c599a206fa0f4dd5e1279b9bed5d167119f4d14cb77995e98
 DEPENDENCY_RECEIPT=/scratch/yz11502/Research/Nav-axis-uturn-results/shared_online_double_revisit_fresh_20260813/double_revisit_fresh40_20260813T200121Z/dependency_receipt.json
@@ -314,8 +311,6 @@ remote_identity=$(remote 'id -un' | tr -d '\r')
 remote "set -euo pipefail
 test \"\$(sha256sum '${NAVDP_BASE_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_NAVDP_BASE_RECEIPT_SHA}'
 cd '${NAVDP_BASE_SOURCE_ROOT}' && sha256sum -c --quiet '${NAVDP_BASE_RECEIPT}'
-test \"\$(sha256sum '${NAVDP_SERVER_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_NAVDP_SERVER_RECEIPT_SHA}'
-cd '${NAVDP_SERVER_SOURCE_ROOT}' && sha256sum -c --quiet '${NAVDP_SERVER_RECEIPT}'
 test \"\$(sha256sum '${VINT_BASE_SOURCE_ROOT}/SOURCE_BUNDLE.sha256' | awk '{print \$1}')\" = '${VINT_BASE_RECEIPT_SHA}'
 test \"\$(sha256sum '${DEPENDENCY_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_DEPENDENCY_RECEIPT_SHA}'
 test -r '${PORTABILITY_ENV_ROOT}/environment_receipt.json'
@@ -334,6 +329,12 @@ else
 fi
 
 task_receipt=${task_root}/SOURCE_BUNDLE.sha256
+# Only the newly built task bundle is guaranteed to compose the current strict
+# MemNav authority endpoint and identical-JPEG transaction-cache semantics.
+# Either older narrow overlay by itself can regress the other contract.
+NAVDP_SERVER_SOURCE_ROOT=${task_root}
+NAVDP_SERVER_RECEIPT=${task_receipt}
+EXPECTED_NAVDP_SERVER_RECEIPT_SHA=${task_receipt_sha}
 protocol=${task_root}/MemNavData/${RUNTIME_PROTOCOL_JSON}
 if [[ "${SUBMIT_MODE}" == full ]]; then
   remote "test ! -e '${run_root}' && mkdir -p '${run_root}/sealed_inputs' '${run_root}/logs' '${run_root}/smoke' '${run_root}/formal' /scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs

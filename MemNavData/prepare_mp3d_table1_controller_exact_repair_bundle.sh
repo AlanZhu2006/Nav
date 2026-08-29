@@ -11,6 +11,8 @@ fail() { echo "ABORT: $*" >&2; exit 2; }
 required=(
   MemNavData/MP3D_TABLE1_CONTROLLER_EXACT_REPAIR_PROTOCOL_20260829.md
   MemNavData/mp3d_table1_controller_exact_repair_protocol_20260829.json
+  MemNavData/MP3D_TABLE1_NAVDP_AUTHORITY_CACHE_COMPOSITION_REPAIR_20260829.md
+  MemNavData/mp3d_table1_navdp_authority_cache_composition_repair_20260829.json
   MemNavData/audit_mp3d_table1_controller_exact_repair_bundle.py
   MemNavData/test_audit_mp3d_table1_controller_exact_repair_bundle.py
   MemNavData/slurm_hm3d_table1_navdp_pair.sbatch
@@ -20,6 +22,7 @@ required=(
   MemNavData/slurm_safe_submit.sh
   MemNavData/bundle_selftest.sh
   MemNavData/submit_mp3d_table1_controller_exact_repair_remote.sh
+  MemNavData/submit_mp3d_table1_navdp_authority_cache_repair_remote.sh
 )
 for path in "${required[@]}"; do
   [[ -f "${ROOT}/${path}" && ! -L "${ROOT}/${path}" ]] || \
@@ -30,6 +33,9 @@ done
 cd "${ROOT}"
 "${LOCAL_MEMNAV_PY}" -m json.tool \
   MemNavData/mp3d_table1_controller_exact_repair_protocol_20260829.json \
+  >/dev/null
+"${LOCAL_MEMNAV_PY}" -m json.tool \
+  MemNavData/mp3d_table1_navdp_authority_cache_composition_repair_20260829.json \
   >/dev/null
 "${LOCAL_MEMNAV_PY}" -m py_compile \
   MemNavData/audit_mp3d_table1_controller_exact_repair_bundle.py
@@ -44,6 +50,7 @@ bash -n \
   MemNavData/slurm_safe_submit.sh \
   MemNavData/bundle_selftest.sh \
   MemNavData/submit_mp3d_table1_controller_exact_repair_remote.sh \
+  MemNavData/submit_mp3d_table1_navdp_authority_cache_repair_remote.sh \
   MemNavData/prepare_mp3d_table1_controller_exact_repair_bundle.sh
 bash MemNavData/test_slurm_port_pair.sh
 source MemNavData/slurm_safe_submit.sh

@@ -1,0 +1,27 @@
+{
+  "attempt": 2,
+  "failed_attempt_job": 16558664,
+  "failed_attempt_scene_rank": 27,
+  "failure_class": "cache_fixed_but_obsolete_memnav_authority_endpoint",
+  "frozen_history_indices": [
+    29,
+    30
+  ],
+  "method_or_population_changed": false,
+  "new_runtime_attempt": "mp3d_t1_navdp_exact_retry2_authority_cache_20260829",
+  "outcome_visibility": {
+    "aggregate_or_sr_computed": false,
+    "exception_and_runtime_failure_fields_inspected": true,
+    "navigation_success_or_distance_read": false,
+    "repair_selection_influenced": false
+  },
+  "resolved_server_source_receipt_sha256": "eb7cdf82477f6aa192b5becf42c85e93d490de7bfe7564132bbff285910a32c4",
+  "retained_vint_verify_job": 16558669,
+  "schema_version": "mp3d_table1_navdp_authority_cache_composition_repair_v1_20260829",
+  "server_component_sha256": {
+    "memnav_server.py": "edd670749bc99d457ba68991f3cf6009378a64f379318ff2ba154aa04bcfee61",
+    "navdp_server.py": "222f1be19c1edffb79b9bc67cbbb60acb6076be07e043370b8c010a1a0003529",
+    "policy_agent.py": "5c0c4046692f2cf7c14ccd661389dd8fe5f810c45cd6afea9ebbb322a6df134e",
+    "router_candidates.py": "dd4aca0e9db4fbc5c4d43221d6b6e495eca2186f67cb37fd3a94db10c26233c5"
+  }
+}

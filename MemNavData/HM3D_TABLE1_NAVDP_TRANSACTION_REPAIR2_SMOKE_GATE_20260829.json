@@ -1,0 +1,13 @@
+{
+  "downstream_formal_job": 16528369,
+  "elapsed": "00:05:43",
+  "exit_code": "0:0",
+  "formal_released": true,
+  "infrastructure_error_scan_empty": true,
+  "job_id": 16528367,
+  "node": "ga022",
+  "partial_policy_outcomes_read": false,
+  "schema_version": "hm3d_table1_navdp_transaction_repair2_smoke_gate_v1_20260829",
+  "state": "COMPLETED",
+  "task_receipt_sha256": "6edacc0c6c13b389d9eee5b1371d0353b14ad94c4dd6ea4eb520bd4bde63ffaa"
+}

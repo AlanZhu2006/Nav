@@ -71,11 +71,45 @@ throttled from two concurrent cells to one so that the repair smoke and ViNT
 formal evaluation could progress concurrently.  This is scheduler-only and
 does not alter either evaluation contract.
 
+## First repair smoke: dependency-closure failure
+
+Replacement smoke `16527714` failed during NavDP server import, before Habitat
+or either policy arm started:
+
+```text
+ModuleNotFoundError: No module named 'depth_anything'
+```
+
+The transaction overlay was intentionally narrow and did not carry the
+unchanged vendored Depth-Anything package.  The runner had receipt-bound both
+the overlay and the Final14 base bundle, but exposed only their repository
+roots on `PYTHONPATH`; NavDP imports `depth_anything` from its baseline-local
+directory.  Syntax compilation could not detect this transitive import
+closure.  Formal job `16527718` and its descendants were dependency-cancelled,
+again before producing an outcome.
+
+The second additive repair exposes the `NavDP/baselines/navdp` and
+`NavDP/baselines/memnav` directories from both receipt-bound bundles.  It also
+imports `policy_backbone` and `DepthAnythingV2` in the remote container before
+any `sbatch`.  This changes module resolution only; it neither replaces the
+frozen package nor changes any scientific factor.  The first repair receipt is
+retained at SHA-256
+`a5b19eaab1a76eae0e1c2ac4f71305b12a34cf626cdee5816b8c081dcaaf7f86`.
+
+The second repair submission passed the real import gate and all five Slurm
+test-only gates. Its immutable evaluator bundle is
+`hm3d_table1_navdp_transport_repair_6edacc0c6c13b389`, receipt SHA-256
+`6edacc0c6c13b389d9eee5b1371d0353b14ad94c4dd6ea4eb520bd4bde63ffaa`.
+Submitted jobs are replacement smoke `16528367`, formal array `16528369`,
+aggregate `16528383`, independent verifier `16528385`, and replacement joint
+seal `16528391` (also dependent on the unchanged ViNT verifier `16526759`).
+
 ## Prevention
 
 The primary submitter and NavDP Slurm wrapper now treat model/base source and
 executable server source as separate, receipt-bound dependencies.  Static
 tests reject a wrapper that silently substitutes the older base server.  The
 remote preflight compiles both server entry points, checks the transaction
-symbols, verifies both immutable bundle receipts, and runs every Slurm script
-through `sbatch --test-only` before creating jobs.
+symbols, verifies both immutable bundle receipts, imports the baseline-local
+NavDP dependency closure, and runs every Slurm script through
+`sbatch --test-only` before creating jobs.

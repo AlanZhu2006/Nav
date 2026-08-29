@@ -121,6 +121,14 @@ history.  The current source of truth is
   `16527718`, aggregate `16527722`, verifier `16527860`; replacement joint seal
   is `16527863`. Full diagnosis and guards are in
   `HM3D_TABLE1_NAVDP_TRANSACTION_REPAIR_20260829.md`.
+- Repair smoke `16527714` then exposed one transitive-import omission before
+  server startup: the narrow transaction overlay did not contain the unchanged
+  vendored Depth-Anything directory, and the base baseline-local path was not
+  on `PYTHONPATH`. Its formal descendants were dependency-cancelled and no arm
+  ran. The v2 preflight now performs a real `policy_backbone`/Depth-Anything
+  import from the two receipt-bound bundles. It and all Slurm test-only gates
+  passed; replacement v2 jobs are smoke `16528367`, formal `16528369`,
+  aggregate `16528383`, verifier `16528385`, and joint seal `16528391`.
 
 ## 1. Current priority order
 

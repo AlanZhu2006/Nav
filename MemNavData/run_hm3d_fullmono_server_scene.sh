@@ -126,7 +126,11 @@ fi
 
 HAB_SITE=$(${HAB_PY} -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
 HAB_PYTHONPATH=${HAB_SITE}/pip/_vendor
-PYTHONPATH_VALUE=${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
+# Server entry points import their sibling ``policy_*`` modules directly.  A
+# transport-only server overlay may deliberately omit unchanged heavy runtime
+# assets (for example NavDP's vendored Depth-Anything package), so expose both
+# the receipt-bound overlay and its receipt-bound base implementation roots.
+PYTHONPATH_VALUE=${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
 REQUESTS_INIT=${HAB_PYTHONPATH}/requests/__init__.py
 REQUESTS_VERSION=${HAB_PYTHONPATH}/requests/__version__.py
 [[ -r "${REQUESTS_INIT}" && -r "${REQUESTS_VERSION}" ]] || {

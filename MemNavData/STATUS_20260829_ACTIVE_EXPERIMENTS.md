@@ -1,6 +1,6 @@
 # 2026-08-29 会议实验活跃总账
 
-更新时间：2026-08-29 16:44（Asia/Shanghai）。本文件是当前调度与证据边界的
+更新时间：2026-08-29 17:25（Asia/Shanghai）。本文件是当前调度与证据边界的
 唯一简表。任何 active rollout 都不读取 partial SR、SPL、final distance 或逐臂
 outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，才允许打开结果。
 
@@ -18,13 +18,14 @@ outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，
   第三轮 process-local import precedence 后完整 54-rank formal、aggregate、独立
   verifier 与 seal 全部完成。Revisit `8/28 -> 25/28`（`+18/-1`, `p=7.63e-5`），
   Novel `6/28 = 6/28` 且 0 takeover；runtime failure 与 metric-depth reads 均为 0。
-- **MP3D 第二数据集的 outcome-blind query 构造已完成，但未过 prospective power
-  gate。** 独立 verifier 得到 14 histories / 10 scenes，front/side/rear 为
-  5/0/9，低于冻结的 20 / 12 / 每方向至少 4；因此 controller 四行没有提交，也没有
-  新 MP3D SR。下一步只审计预先冻结的 phase-2 source episodes 能否做新的 full-mono
-  source expansion，不降低任何 query 阈值。该扩源 16-scene full-mono Goal-A
-  collection 已全部完成；104 条 source traces 的 immutable ledger 已冻结，新的
-  36-scene construction/verifier 链已提交，但仍未运行 query controller。
+- **MP3D phase-2 outcome-blind population 已通过 prospective power gate。** 36 个
+  construction cells、finalizer 和独立 verifier 均完成；最终得到 42 histories、
+  25 scenes、84 queries，front/side/rear `14/9/19`，且
+  `policy_outcomes_read=false`、`formal_policy_evaluation_authorized=true`。正式
+  NavDP/ViNT 四行因此按冻结协议获准提交。NavDP smoke 已通过，formal 正在以并发 2
+  运行；首个 ViNT smoke 因 shell allowlist 漏列 `paper_replication` 在 policy 前停止，
+  additive repair 已经独立哈希并提交 replacement smoke/formal/verifier。尚未打开任何
+  partial SR。
 - **HM3D lifelong B2 仍在等待 GPU 优先级。** 它是会议 Table 2 的补充机制实验，
   不是 powered confirmation。
 - **会议 Table 2 的新 construction-only 实验给出有效的 constructibility null。** 它不复用
@@ -221,12 +222,25 @@ support-controlled 四份 sealed manifest 全部读成 forbidden identity ledger
 
 - expanded ledger SHA-256：
   `666d4e86f9ca7f7b52b1324044a73d096c9435bbeeaa0c231deb647076c2de17`；
-- 36-scene construction / finalize / independent verifier：
-  `16545793 / 16545794 / 16545795`；
-- controller rollout 仍未提交。
+- population construction / finalize / independent verifier
+  `16545793 / 16545794 / 16545795` 均为 `COMPLETED 0:0`；
+- 最终 population：42 histories / 25 scenes / 84 queries；
+- front/side/rear：`14/9/19`；
+- construction verifier SHA-256：
+  `618c409f7c7c62ad739687935cdd6f2e564e96aed6ccf6059d887d795c3e953e`；
+- benchmark manifest SHA-256：
+  `a33f210fdd0cfa84e82c4d403ac79056dcc7959cd1ce84bf62bec8c5632deb69`；
+- `formal_policy_evaluation_authorized=true`。
 
-只有 verifier 再次给出 `formal_policy_evaluation_authorized=true`，才允许另行提交
-NavDP/ViNT 四行。
+因此 controller rollout 已合法启动。原提交中的 NavDP smoke `16548397` 已
+`COMPLETED 0:0`，formal / aggregate / verifier 为
+`16548405 / 16548433 / 16548444`。首个 ViNT smoke `16548403` 在 policy 前因共享
+shell wrapper 未允许 `paper_replication` 而 `FAILED 2:0`，没有生成 ViNT evaluation
+cell。修复只扩展 provenance allowlist，不改变任何科学变量；replacement ViNT
+smoke / formal / aggregate / verifier 为
+`16548590 / 16548592 / 16548600 / 16548605`，最终双-controller seal 为 `16548606`。
+repair receipt：
+`MP3D_TABLE1_CONTROLLER_PORTABILITY_VINT_SCOPE_REPAIR_SUBMISSION_20260829.json`。
 
 ## 4. HM3D lifelong / Table 2
 
@@ -310,7 +324,7 @@ verifier 未授权时 fail closed。
 | 会议交付物 | 当前状态 | 下一道门 |
 |---|---|---|
 | Table 1 HM3D 四行 | 已完成：NavDP Revisit `8/28 -> 25/28`；ViNT Revisit `3/28 -> 19/28`；两者 Novel 均 0 takeover/exact fallback | 只保留 controller 内 paired claim，不做 NavDP-vs-ViNT 绝对优劣比较 |
-| Table 1 MP3D 四行 | 首轮 14 histories / 10 scenes / side 0 未过 power gate；full-mono source expansion 已完成并冻结 36 scenes / 104 source traces；新 construction 已提交 | `16545793 -> 16545794 -> 16545795`；仍禁止 controller rollout |
+| Table 1 MP3D 四行 | phase-2 population 已通过独立 gate：42 histories / 25 scenes / front-side-rear `14/9/19`；NavDP smoke 已通过、formal active；ViNT allowlist repair smoke active | 等 `16548444` 与 `16548605` 独立 verifier，再由 `16548606` seal；此前不读 partial SR |
 | Table 2 HM3D by leg | 22 条 factual A/B prefix 已封；新 Leg-3 构造只保留 8 histories / 6 scenes、side 0，未过冻结 power gate；controller 未提交；B2 仍等待 | 保留 constructibility null；不放宽阈值，Table 1 完成前不启动 outcome-aware 扩样 |
 | Depth ablation | 已有 Gate C/D、Final14 factorial 与 full-mono 证据 | 先审计能否同 population 重组，禁止拼不同分母 |
 | CEC mechanism ablation | Raw/CEC/known-role 底层证据大部分已有 | 统一导出 retrieval accuracy、FA/FR；不急着重跑 |
@@ -319,21 +333,22 @@ verifier 未授权时 fail closed。
 
 ## 6. 当前最优执行顺序
 
-1. 让已通过 smoke 的 HM3D NavDP 54-rank formal 完成并封存；期间不读 partial SR。
-2. 让 MP3D 36-scene construction/verifier 自然完成；不降低阈值、不复用已消费
-   query，也不在 verifier 授权前提交四行。
+1. 让 MP3D NavDP/ViNT formal arrays 自然完成；只在两个 independent verifier 与
+   joint seal 全部通过后打开结果，期间不读 partial SR。
+2. HM3D Table 1 已完成并写入论文；只保留 controller 内 paired effect 和
+   fresh-query/scene-overlap 的准确 claim boundary。
 3. Table 2 新 Leg-3 已在独立 gate 停止；保留 null，不运行其 controller，也不按当前
    构造结果调阈值。
 4. 利用空闲 GPU 让 lifelong B2 自然启动，但不为抢队列取消 Table 1；它始终标注为
    underpowered mechanism evidence。
-
-统一方法名、输入模态、hidden-role、分母、统计与结果开放规则见
-`CONFERENCE_EXPERIMENT_CONTRACT_20260829.md`。该契约只索引冻结 protocol，不替代
-episode-level receipts 或 independent verifier。
 5. HM3D 与 MP3D Table 1 seal 后生成会议主表；Table 2 始终把 factual A/B waterfall
    与条件 Leg-3 treatment effect 分开报告。
 6. 不再启动新 learned module、GOAT 适配、length-bin 或额外 controller 支线；它们
    现在都不在论文关键路径上。
+
+统一方法名、输入模态、hidden-role、分母、统计与结果开放规则见
+`CONFERENCE_EXPERIMENT_CONTRACT_20260829.md`。该契约只索引冻结 protocol，不替代
+episode-level receipts 或 independent verifier。
 
 ## 7. 工程与审计状态
 
@@ -346,7 +361,8 @@ episode-level receipts 或 independent verifier。
   `assigned_direction_stratum` 读取；不再访问虚构的 history-level 字段。
 - MP3D/HM3D aggregators、verifiers 与 sbatches 已参数化，但 dataset claim scope
   必须显式给出。
-- 当前扩源实现已通过 129 项相关回归；提交 receipt 与本状态更新完成 commit/push 后，
+- 当前 ViNT scope repair 已通过 123 项相关回归；提交 receipt 与本状态更新完成
+  commit/push 后，
   工作区才可称为本轮 release。
 
 权威提交收据：
@@ -356,6 +372,7 @@ episode-level receipts 或 independent verifier。
 - `HM3D_TABLE1_NAVDP_SERVER_NAMESPACE_REPAIR_SUBMISSION_20260829.json`；
 - `MP3D_TABLE1_NEW_QUERY_SUBMISSION_20260829.json`；
 - `MP3D_TABLE1_FULLMONO_SOURCE_EXPANSION_SUBMISSION_20260829.json`；
+- `MP3D_TABLE1_CONTROLLER_PORTABILITY_VINT_SCOPE_REPAIR_SUBMISSION_20260829.json`；
 - `HM3D_TABLE2_LEG3_CONSTRUCTION_SUBMISSION_20260829.json`；
 - `HM3D_TABLE2_LEG3_CONSTRUCTION_CLOSURE_REPAIR_SUBMISSION_20260829.json`；
 - `HM3D_TABLE1_NAVDP_ANALYSIS_PATH_REPAIR_SUBMISSION_20260829.json`。

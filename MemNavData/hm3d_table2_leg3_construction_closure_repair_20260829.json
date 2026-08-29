@@ -1,0 +1,34 @@
+{
+  "schema_version": "hm3d_table2_leg3_construction_closure_repair_v1_20260829",
+  "frozen_at": "2026-08-29T14:47:00+08:00",
+  "scientific_protocol": "hm3d_table2_leg3_mixed_role_protocol_20260829.json",
+  "scientific_protocol_sha256": "39b1ae703ac2984c3e9d6e20561347f918d9d5af2526f6ea4d3d9ae6699333c7",
+  "failed_attempt": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table2_leg3_mixed_role_20260829/construction_20260829T064043Z_25367fd6",
+    "smoke_job": 16545154,
+    "formal_job": 16545155,
+    "finalize_job": 16545156,
+    "verifier_job": 16545157,
+    "smoke_exit_code": "1:0",
+    "formal_started": false,
+    "policy_rollout_started": false,
+    "query_navigation_outcomes_generated": false,
+    "failure": "immutable task bundle omitted the current build_final14_role_pair_scene dependency; Python resolved an older base implementation without the frozen sampling API"
+  },
+  "repair": {
+    "scientific_variables_changed": false,
+    "query_identity_or_threshold_changed": false,
+    "controller_or_runtime_changed": false,
+    "added_exact_dependency_closure": [
+      "build_final14_role_pair_scene.py",
+      "final14_role_pair_contract.py",
+      "shared_online_role_pair_contract.py",
+      "build_shared_online_double_revisit.py",
+      "build_shared_online_role_pairs.py",
+      "generate_twoleg.py",
+      "materialize_online_a_traces.py",
+      "deterministic_eval_protocol.py"
+    ],
+    "new_preflight": "inspect the resolved sample_natural_novel signature and require its structured rejection type before Habitat construction"
+  }
+}

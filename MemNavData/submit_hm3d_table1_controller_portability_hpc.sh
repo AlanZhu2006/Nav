@@ -112,6 +112,8 @@ required=(
   MemNavData/slurm_hm3d_table1_vint_pair.sbatch
   MemNavData/slurm_hm3d_table1_vint_analysis.sbatch
   MemNavData/slurm_hm3d_table1_controller_seal.sbatch
+  MemNavData/slurm_port_pair.sh
+  MemNavData/test_slurm_port_pair.sh
   MemNavData/test_hm3d_table1_navdp_pair.py
   MemNavData/test_hm3d_table1_navdp_transport_contract.py
   MemNavData/test_aggregate_vint_controller_native_hm3d.py
@@ -162,7 +164,10 @@ bash -n \
   MemNavData/slurm_hm3d_table1_vint_pair.sbatch \
   MemNavData/slurm_hm3d_table1_vint_analysis.sbatch \
   MemNavData/slurm_hm3d_table1_controller_seal.sbatch \
+  MemNavData/slurm_port_pair.sh \
+  MemNavData/test_slurm_port_pair.sh \
   MemNavData/submit_hm3d_table1_controller_portability_hpc.sh
+bash MemNavData/test_slurm_port_pair.sh
 source MemNavData/slurm_safe_submit.sh
 for script in \
   MemNavData/slurm_hm3d_table1_navdp_pair.sbatch \

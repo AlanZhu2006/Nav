@@ -1,0 +1,42 @@
+{
+  "benchmark_manifest_sha256": "a33f210fdd0cfa84e82c4d403ac79056dcc7959cd1ce84bf62bec8c5632deb69",
+  "construction_verification_sha256": "618c409f7c7c62ad739687935cdd6f2e564e96aed6ccf6059d887d795c3e953e",
+  "dataset": "MP3D",
+  "frozen_histories": 42,
+  "frozen_queries": 84,
+  "frozen_scene_clusters": 25,
+  "method_or_population_changed": false,
+  "navdp": {
+    "completed_histories_retained": 40,
+    "failed_array_index": 27,
+    "failure_class": "identical_jpeg_new_valid_transaction_cache_collision",
+    "missing_history_indices": [
+      29,
+      30
+    ],
+    "original_array_job": 16548405,
+    "runtime_attempt": "mp3d_t1_navdp_exact_retry1_20260829",
+    "server_overlay_receipt_sha256": "2ae34ad0c150395849d4461913fc086f3b6ea7acf7249c763fe3e8808356ed6d"
+  },
+  "outcome_visibility_incident": {
+    "failed_cell_outcome_used": false,
+    "incidentally_exposed_scope": "one already-completed NavDP history",
+    "occurred": true,
+    "partial_aggregate_or_sr_computed": false,
+    "repair_selection_influenced": false
+  },
+  "repair_authorized": true,
+  "repair_selection_rule": "missing canonical completion or pair-audit receipt under the frozen manifest",
+  "runtime_role_visibility": "none",
+  "schema_version": "mp3d_table1_controller_exact_repair_protocol_v1_20260829",
+  "vint": {
+    "completed_histories_retained": 41,
+    "failed_array_index": 24,
+    "failure_class": "shared_node_tcp_port_collision_before_pair_audit",
+    "missing_history_indices": [
+      24
+    ],
+    "original_array_job": 16548592,
+    "port_allocation": "six consecutive ports protected by node-local flock for cell lifetime"
+  }
+}

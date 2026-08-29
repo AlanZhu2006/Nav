@@ -10,6 +10,7 @@ SUBMITTER = (
 PORTABILITY_RUNNER = (
     ROOT / "MemNavData/run_cec_controller_portability_smoke_local.sh"
 )
+VINT_SBATCH = ROOT / "MemNavData/slurm_hm3d_table1_vint_pair.sbatch"
 
 
 def test_navdp_pair_requires_a_separately_sealed_server_overlay():
@@ -86,3 +87,28 @@ def test_submitter_has_a_result_blind_vint_only_scope_repair():
     assert "EXISTING_NAVDP_VERIFY_JOB" in text
     assert "FAILED_VINT_SMOKE_JOB" in text
     assert "vint_scope_repair_submission.json" in text
+
+
+def test_navdp_exact_retry_is_explicit_and_scene_confined():
+    text = SBATCH.read_text()
+    assert "EXACT_REPAIR" in text
+    assert "FORMAL_INDICES_SPEC" in text
+    assert "FORMAL_INDICES_OVERRIDE=${FORMAL_INDICES_SPEC//:/ }" in text
+    assert 'RUNTIME_ATTEMPT="${RUNTIME_ATTEMPT}"' in text
+    assert 'FORMAL_INDICES_OVERRIDE="${FORMAL_INDICES_OVERRIDE:-}"' in text
+
+
+def test_vint_uses_a_lifetime_held_collision_safe_six_port_block():
+    text = VINT_SBATCH.read_text()
+    assert "claim_slurm_tcp_port_block mp3d_table1_vint 6 12000 8000" in text
+    assert "base_port=${CEC_PORT_BLOCK_BASE}" in text
+    assert "trap cleanup_port_block EXIT INT TERM" in text
+    assert "port_slot=$(( $$ % 6000 ))" not in text
+
+
+def test_wrappers_can_be_receipt_bound_separately_from_frozen_task_code():
+    for path in (SBATCH, VINT_SBATCH):
+        text = path.read_text()
+        assert "WRAPPER_ROOT=${WRAPPER_ROOT:-${TASK_ROOT}}" in text
+        assert "EXPECTED_WRAPPER_RECEIPT_SHA" in text
+        assert 'fail "wrapper bundle changed"' in text

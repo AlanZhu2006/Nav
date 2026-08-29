@@ -27,6 +27,9 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${DEPENDENCY_RECEIPT:?}" "${EXPECTED_DEPENDENCY_RECEIPT_SHA:?}"
 : "${PORTABILITY_ENV_ROOT:?}" "${PORTABILITY_CHECKPOINT_ROOT:?}"
 ROLE_PAIR_SCOPE=${ROLE_PAIR_SCOPE:-paper_heldout}
+WRAPPER_ROOT=${WRAPPER_ROOT:-${TASK_ROOT}}
+WRAPPER_RECEIPT=${WRAPPER_RECEIPT:-${TASK_RECEIPT}}
+EXPECTED_WRAPPER_RECEIPT_SHA=${EXPECTED_WRAPPER_RECEIPT_SHA:-${EXPECTED_TASK_RECEIPT_SHA}}
 
 MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python
 HAB_PY=/scratch/lg154/conda-envs/habitat/bin/python
@@ -44,6 +47,10 @@ fail() { echo "ABORT: $*" >&2; exit 2; }
    "${EXPECTED_TASK_RECEIPT_SHA}" ]] || fail "task receipt changed"
 (cd "${TASK_ROOT}" && sha256sum -c --quiet "${TASK_RECEIPT}") || \
   fail "task bundle changed"
+[[ "$(sha256sum "${WRAPPER_RECEIPT}" | awk '{print $1}')" == \
+   "${EXPECTED_WRAPPER_RECEIPT_SHA}" ]] || fail "wrapper receipt changed"
+(cd "${WRAPPER_ROOT}" && sha256sum -c --quiet "${WRAPPER_RECEIPT}") || \
+  fail "wrapper bundle changed"
 [[ "$(sha256sum "${CONSTRUCTION_VERIFICATION}" | awk '{print $1}')" == \
    "${EXPECTED_CONSTRUCTION_VERIFICATION_SHA}" ]] || \
   fail "construction verification changed"
@@ -123,8 +130,15 @@ else
   AUTHORITY_ORDER=forced_reject_native,grant
 fi
 
-port_slot=$(( $$ % 6000 ))
-base_port=$((20000 + port_slot * 6))
+PORT_HELPER=${WRAPPER_ROOT}/MemNavData/slurm_port_pair.sh
+[[ -r "${PORT_HELPER}" ]] || fail "collision-safe port helper missing"
+# shellcheck source=MemNavData/slurm_port_pair.sh
+source "${PORT_HELPER}"
+claim_slurm_tcp_port_block mp3d_table1_vint 6 12000 8000 || \
+  fail "could not reserve six controller ports"
+base_port=${CEC_PORT_BLOCK_BASE}
+cleanup_port_block() { release_slurm_tcp_port_block; }
+trap cleanup_port_block EXIT INT TERM
 export PYTHONPYCACHEPREFIX=${SLURM_TMPDIR:-/tmp}/vint_cec_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 mkdir -p "${PYTHONPYCACHEPREFIX}"
 echo "phase=${PHASE} history=${HISTORY_INDEX} scene=${SCENE} episode=${EPISODE} order=${AUTHORITY_ORDER} host=$(hostname)"

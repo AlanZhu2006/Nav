@@ -129,6 +129,8 @@ history.  The current source of truth is
   import from the two receipt-bound bundles. It and all Slurm test-only gates
   passed; replacement v2 jobs are smoke `16528367`, formal `16528369`,
   aggregate `16528383`, verifier `16528385`, and joint seal `16528391`.
+  Smoke `16528367` completed `0:0` in 5:43 and automatically released formal
+  array `16528369`; no smoke SR or final-distance value was opened.
 
 ## 1. Current priority order
 

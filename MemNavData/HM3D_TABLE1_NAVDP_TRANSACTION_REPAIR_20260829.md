@@ -103,6 +103,11 @@ test-only gates. Its immutable evaluator bundle is
 Submitted jobs are replacement smoke `16528367`, formal array `16528369`,
 aggregate `16528383`, independent verifier `16528385`, and replacement joint
 seal `16528391` (also dependent on the unchanged ViNT verifier `16526759`).
+Smoke `16528367` subsequently completed `0:0` in 5:43 and released the formal
+array. This confirms the executable dependency and transaction interface; its
+navigation outcomes were not read or used for any further change.
+The outcome-blind scheduler/error-scan receipt is
+`HM3D_TABLE1_NAVDP_TRANSACTION_REPAIR2_SMOKE_GATE_20260829.json`.
 
 ## Prevention
 

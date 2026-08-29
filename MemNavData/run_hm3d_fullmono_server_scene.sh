@@ -131,7 +131,15 @@ HAB_PYTHONPATH=${HAB_SITE}/pip/_vendor
 # transport-only server overlay may deliberately omit unchanged heavy runtime
 # assets (for example NavDP's vendored Depth-Anything package), so expose both
 # the receipt-bound overlay and its receipt-bound base implementation roots.
-PYTHONPATH_VALUE=${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
+PYTHONPATH_PREFIX=${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData
+PYTHONPATH_SUFFIX=${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
+# Both servers use a script-local module named ``policy_agent``.  A single
+# shared sibling order can therefore make NavDP import MemNav's agent (or the
+# reverse) when a minimal overlay contains only one side.  Keep a common
+# receipt-bound source set, but give each process its own sibling precedence.
+MEMNAV_PYTHONPATH_VALUE=${PYTHONPATH_PREFIX}:${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${PYTHONPATH_SUFFIX}
+NAVDP_PYTHONPATH_VALUE=${PYTHONPATH_PREFIX}:${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:${PYTHONPATH_SUFFIX}
+PYTHONPATH_VALUE=${PYTHONPATH_PREFIX}:${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:${PYTHONPATH_SUFFIX}
 REQUESTS_INIT=${HAB_PYTHONPATH}/requests/__init__.py
 REQUESTS_VERSION=${HAB_PYTHONPATH}/requests/__version__.py
 [[ -r "${REQUESTS_INIT}" && -r "${REQUESTS_VERSION}" ]] || {
@@ -180,7 +188,7 @@ trap cleanup EXIT INT TERM
   cd "${runtime_tmp}/memnav"
   exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-    PYTHONPATH="${PYTHONPATH_VALUE}" TORCH_HOME="${TORCH_HOME}" \
+    PYTHONPATH="${MEMNAV_PYTHONPATH_VALUE}" TORCH_HOME="${TORCH_HOME}" \
     LINGBOT_REPO="${LINGBOT_REPO}" LINGBOT_WEIGHTS="${LINGBOT_WEIGHTS}" \
     MEMNAV_WINDOW=32 MEMNAV_NUM_SCALE=8 MEMNAV_MAX_FRAME_NUM=2048 \
     MEMNAV_GROUND_SCALE_MAX=6.0 MEMNAV_GATE_FUSION=complementary \
@@ -199,7 +207,7 @@ MEMNAV_PID=$!
 (
   cd "${runtime_tmp}/navdp"
   exec env NAVDP_DISABLE_VIDEO=1 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${PYTHONPATH_VALUE}" "${MEMNAV_PY}" -u \
+    PYTHONPATH="${NAVDP_PYTHONPATH_VALUE}" "${MEMNAV_PY}" -u \
     "${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py" \
       --port "${NAVDP_PORT}" --checkpoint "${NAVDP_CKPT}" \
       --depth_source metric_request --allow_depth_source_override \

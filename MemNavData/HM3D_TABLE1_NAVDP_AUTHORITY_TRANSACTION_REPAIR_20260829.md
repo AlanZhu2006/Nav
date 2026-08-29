@@ -80,3 +80,21 @@ and exports `causal_goal_support_indices`.  The new overlay receipt is:
 ```text
 718661db1733d5de16cd86687eec880a8d02fc5ae5ca982e1ab7d5bde5e96f7d
 ```
+
+The next smoke (`16544226`) also stopped before formal evaluation.  Importing
+the MemNav authority closure now succeeded, but the common server
+`PYTHONPATH` placed MemNav's script-local `policy_agent.py` before NavDP's
+unchanged sibling module.  Consequently `navdp_server.py` imported
+`MemNavAgent`'s module and could not find `NavDP_Agent`.
+
+The second closure repair changes only process-local module precedence:
+
+- the MemNav process resolves `memnav/` before `navdp/`;
+- the NavDP process resolves `navdp/` before `memnav/`;
+- both orders remain restricted to the same receipt-bound overlay and base
+  roots;
+- the evaluator keeps the common frozen source set.
+
+The preflight now imports both `policy_agent` modules under their exact
+process-specific order and asserts the expected public class and source path.
+This is an infrastructure namespace repair, not a policy or method change.

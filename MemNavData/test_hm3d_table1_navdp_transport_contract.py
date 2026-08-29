@@ -44,3 +44,22 @@ def test_server_overlay_can_resolve_receipt_bound_base_runtime_assets():
     assert "${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav" in text
     assert "${BASE_SOURCE_ROOT}/NavDP/baselines/navdp" in text
     assert "${BASE_SOURCE_ROOT}/NavDP/baselines/memnav" in text
+
+
+def test_server_processes_have_namespace_specific_sibling_precedence():
+    text = RUNNER.read_text()
+    memnav_order = (
+        "${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:"
+        "${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:"
+        "${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp"
+    )
+    navdp_order = (
+        "${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:"
+        "${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:"
+        "${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav"
+    )
+    assert memnav_order in text
+    assert navdp_order in text
+    assert 'PYTHONPATH="${MEMNAV_PYTHONPATH_VALUE}"' in text
+    assert 'PYTHONPATH="${NAVDP_PYTHONPATH_VALUE}"' in text
+    assert 'assert hasattr(policy_agent,\\"NavDP_Agent\\")' in SUBMITTER.read_text()

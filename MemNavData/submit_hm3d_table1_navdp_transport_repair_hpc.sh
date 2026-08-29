@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Additively repair the result-blind NavDP branch after the frozen Final14
-# server/client transaction-version mismatch.  The frozen population, policy,
+# Additively repair the result-blind NavDP branch after the transaction server
+# overlay exposed an incomplete import closure.  The frozen population, policy,
 # checkpoints, thresholds, seeds, budgets, and ViNT jobs are not resubmitted.
 set -euo pipefail
 umask 0022
@@ -21,10 +21,12 @@ NAVDP_SERVER_RECEIPT=${NAVDP_SERVER_SOURCE_ROOT}/SOURCE_BUNDLE.sha256
 EXPECTED_NAVDP_SERVER_RECEIPT_SHA=05ce401aac8c2e7e31e8a8d820613d30b3a03856a35c8750085b93d5a1539a97
 ORIGINAL_SUBMISSION=${FORMAL_RUN_ROOT}/submission.json
 EXPECTED_ORIGINAL_SUBMISSION_SHA=e5693544f3431150a4162ccfb854ea001671bbfeeeaef21c5911d9239bf2b407
-OLD_NAVDP_SMOKE_JOB=16526559
+PREVIOUS_REPAIR_SUBMISSION=${FORMAL_RUN_ROOT}/repairs/navdp_transaction_v1/submission.json
+EXPECTED_PREVIOUS_REPAIR_SUBMISSION_SHA=a5b19eaab1a76eae0e1c2ac4f71305b12a34cf626cdee5816b8c081dcaaf7f86
+OLD_NAVDP_SMOKE_JOB=16527714
 VINT_VERIFY_JOB=16526759
 NAVDP_CONCURRENCY=${NAVDP_CONCURRENCY:-2}
-REPAIR_KEY=navdp_transaction_v1
+REPAIR_KEY=navdp_transaction_v2
 REPAIR_ROOT=${FORMAL_RUN_ROOT}/repairs/${REPAIR_KEY}
 NAVDP_SMOKE_RUN_ROOT=${FORMAL_RUN_ROOT}/smoke/${REPAIR_KEY}
 HAB_REQUESTS_VENDOR=/scratch/lg154/conda-envs/habitat/lib/python3.9/site-packages/pip/_vendor
@@ -91,7 +93,7 @@ done
 construction_verification=${CONSTRUCTION_RUN}/hm3d_table1_fresh_query_verification.json
 bench_root=${CONSTRUCTION_RUN}/population/natural_direction
 parent_manifest=${SOURCE_RUN_ROOT}/sealed_inputs/parent_manifest.json
-old_eval_log=${FORMAL_RUN_ROOT}/smoke/navdp/evaluation/natural_direction/000_X7gTkoDHViv_episode_0002/logs/eval_mono_native.log
+old_eval_log=${FORMAL_RUN_ROOT}/smoke/navdp_transaction_v1/runtime/smoke_0/logs/server_navdp.log
 final_navdp_root=${FORMAL_RUN_ROOT}/formal/navdp
 final_receipt=${FORMAL_RUN_ROOT}/hm3d_table1_controller_portability_receipt.json
 
@@ -120,11 +122,12 @@ manifest_sha=${gate[2]}; construction_verification_sha=${gate[3]}
 
 remote "set -euo pipefail
 test \"\$(sha256sum '${ORIGINAL_SUBMISSION}' | awk '{print \$1}')\" = '${EXPECTED_ORIGINAL_SUBMISSION_SHA}'
+test \"\$(sha256sum '${PREVIOUS_REPAIR_SUBMISSION}' | awk '{print \$1}')\" = '${EXPECTED_PREVIOUS_REPAIR_SUBMISSION_SHA}'
 test \"\$(sha256sum '${NAVDP_BASE_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_NAVDP_BASE_RECEIPT_SHA}'
 cd '${NAVDP_BASE_SOURCE_ROOT}' && sha256sum -c --quiet '${NAVDP_BASE_RECEIPT}'
 test \"\$(sha256sum '${NAVDP_SERVER_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_NAVDP_SERVER_RECEIPT_SHA}'
 cd '${NAVDP_SERVER_SOURCE_ROOT}' && sha256sum -c --quiet '${NAVDP_SERVER_RECEIPT}'
-grep -q 'MemNav planning append received different JPEG bytes' '${old_eval_log}'
+grep -q \"No module named 'depth_anything'\" '${old_eval_log}'
 test ! -e '${final_navdp_root}'
 test ! -e '${NAVDP_SMOKE_RUN_ROOT}'
 test ! -e '${REPAIR_ROOT}'
@@ -158,21 +161,23 @@ for path in "${required[@]}"; do
 done
 local_head=$(git -C "${ROOT}" rev-parse HEAD)
 "${LOCAL_MEMNAV_PY}" - "${staging}" "${local_head}" "${manifest_sha}" \
-  "${construction_verification_sha}" "${EXPECTED_ORIGINAL_SUBMISSION_SHA}" <<'PY'
+  "${construction_verification_sha}" "${EXPECTED_ORIGINAL_SUBMISSION_SHA}" \
+  "${EXPECTED_PREVIOUS_REPAIR_SUBMISSION_SHA}" <<'PY'
 import hashlib,json,sys
-root,head,manifest,verification,original=sys.argv[1:]
+root,head,manifest,verification,original,previous=sys.argv[1:]
 base=__import__('pathlib').Path(root); files={}
 for path in sorted(base.rglob('*')):
  if path.is_symlink(): raise SystemExit('bundle symlink: '+str(path))
  if path.is_file() and path.name not in {'SOURCE_BUNDLE.sha256','source_bundle_manifest.json'}:
   files[path.relative_to(base).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
 payload={
- 'schema_version':'hm3d_table1_navdp_transport_repair_bundle_v1_20260829',
+ 'schema_version':'hm3d_table1_navdp_transport_repair_bundle_v2_20260829',
  'local_git_head_context':head,
  'benchmark_manifest_sha256':manifest,
  'construction_verification_sha256':verification,
  'original_submission_sha256':original,
- 'repair_scope':'server_client_transaction_version_only',
+ 'previous_repair_submission_sha256':previous,
+ 'repair_scope':'server_overlay_dependency_closure_only',
  'server_overlay_receipt_sha256':'05ce401aac8c2e7e31e8a8d820613d30b3a03856a35c8750085b93d5a1539a97',
  'scientific_factors_changed':False,
  'partial_policy_outcomes_read':False,
@@ -210,6 +215,7 @@ seal=${task_root}/MemNavData/slurm_hm3d_table1_controller_seal.sbatch
 
 echo '[gate] runtime interface and Slurm test-only'
 remote "test -r '${HAB_REQUESTS_VENDOR}/requests/__init__.py' && singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${task_root}:${task_root}/MemNavData:${NAVDP_SERVER_SOURCE_ROOT}:${NAVDP_SERVER_SOURCE_ROOT}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData:${HAB_REQUESTS_VENDOR}' /scratch/lg154/conda-envs/habitat/bin/python -c 'from pathlib import Path; [compile(Path(path).read_bytes(),path,\"exec\") for path in (\"${task_root}/MemNavData/eval_shared_online_role_pairs.py\",\"${task_root}/MemNavData/eval_2leg_habitat.py\",\"${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/memnav/memnav_server.py\",\"${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py\")]' && grep -q 'def append_request_frame' '${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/memnav/memnav_server.py' && grep -q 'require_monocular_depth_transaction' '${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py'"
+remote "singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${NAVDP_SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${NAVDP_BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${task_root}:${task_root}/MemNavData:${NAVDP_SERVER_SOURCE_ROOT}:${NAVDP_SERVER_SOURCE_ROOT}/MemNavData:${NAVDP_BASE_SOURCE_ROOT}:${NAVDP_BASE_SOURCE_ROOT}/MemNavData' /scratch/lg154/conda-envs/memnav/bin/python -c 'import policy_backbone; from depth_anything.depth_anything_v2.dpt import DepthAnythingV2'"
 remote "sbatch --test-only --array=0 --export='${nav_common},PHASE=smoke' '${nav_pair}' >/dev/null"
 remote "sbatch --test-only --array=0-53%${NAVDP_CONCURRENCY} --export='${nav_common},PHASE=formal' '${nav_pair}' >/dev/null"
 remote "sbatch --test-only --export='${common},MODE=aggregate' '${nav_analysis}' >/dev/null"
@@ -233,7 +239,7 @@ for id in "${nav_smoke}" "${nav_formal}" "${nav_aggregate}" \
   [[ "${id}" =~ ^[0-9]+$ ]] || fail "invalid submitted job id: ${id}"
 done
 
-receipt=MemNavData/HM3D_TABLE1_NAVDP_TRANSACTION_REPAIR_SUBMISSION_20260829.json
+receipt=MemNavData/HM3D_TABLE1_NAVDP_TRANSACTION_REPAIR2_SUBMISSION_20260829.json
 [[ ! -e "${receipt}" ]] || fail "local repair receipt already exists"
 "${LOCAL_MEMNAV_PY}" - "${receipt}" "${FORMAL_RUN_ROOT}" "${REPAIR_ROOT}" \
   "${task_root}" "${task_receipt_sha}" "${construction_verification_sha}" \
@@ -243,14 +249,15 @@ import json,sys
 (path,run,repair,bundle,bundle_sha,construction_sha,manifest_sha,
  nav_smoke,nav_formal,nav_aggregate,nav_verify,vint_verify,seal)=sys.argv[1:]
 payload={
- 'schema_version':'hm3d_table1_navdp_transport_repair_submission_v1_20260829',
+ 'schema_version':'hm3d_table1_navdp_transport_repair_submission_v2_20260829',
  'run_root':run,'repair_root':repair,'task_bundle':bundle,
  'task_receipt_sha256':bundle_sha,
  'construction_verification_sha256':construction_sha,
  'benchmark_manifest_sha256':manifest_sha,
  'original_submission_sha256':'e5693544f3431150a4162ccfb854ea001671bbfeeeaef21c5911d9239bf2b407',
- 'superseded_navdp_smoke_job':16526559,
- 'failure_class':'server_client_monocular_transaction_version_mismatch',
+ 'previous_repair_submission_sha256':'a5b19eaab1a76eae0e1c2ac4f71305b12a34cf626cdee5816b8c081dcaaf7f86',
+ 'superseded_navdp_smoke_job':16527714,
+ 'failure_class':'server_overlay_dependency_closure_missing_depth_anything',
  'server_overlay_receipt_sha256':'05ce401aac8c2e7e31e8a8d820613d30b3a03856a35c8750085b93d5a1539a97',
  'partial_policy_outcomes_read_before_repair':False,
  'scientific_guards':{

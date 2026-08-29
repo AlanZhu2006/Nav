@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SBATCH = ROOT / "MemNavData/slurm_hm3d_table1_navdp_pair.sbatch"
+RUNNER = ROOT / "MemNavData/run_hm3d_fullmono_server_scene.sh"
 SUBMITTER = (
     ROOT / "MemNavData/submit_hm3d_table1_controller_portability_hpc.sh"
 )
@@ -33,3 +34,11 @@ def test_primary_submitter_pins_the_verified_transaction_overlay():
     ) in text
     assert "def append_request_frame" in text
     assert "require_monocular_depth_transaction" in text
+
+
+def test_server_overlay_can_resolve_receipt_bound_base_runtime_assets():
+    text = RUNNER.read_text()
+    assert "${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp" in text
+    assert "${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav" in text
+    assert "${BASE_SOURCE_ROOT}/NavDP/baselines/navdp" in text
+    assert "${BASE_SOURCE_ROOT}/NavDP/baselines/memnav" in text

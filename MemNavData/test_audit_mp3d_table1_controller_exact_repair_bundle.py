@@ -36,3 +36,27 @@ def test_outcome_visibility_disclosure_is_fail_closed(tmp_path):
     path.write_text(json.dumps(payload))
     with pytest.raises(RuntimeError, match="visibility incident omitted"):
         audit(tmp_path)
+
+
+def test_completed_vint_verifier_is_hash_pinned_not_reattached(tmp_path):
+    target = tmp_path / "MemNavData"
+    target.mkdir()
+    names = (
+        "mp3d_table1_controller_exact_repair_protocol_20260829.json",
+        "slurm_hm3d_table1_navdp_pair.sbatch",
+        "slurm_hm3d_table1_vint_pair.sbatch",
+        "slurm_port_pair.sh",
+        "submit_mp3d_table1_controller_exact_repair_remote.sh",
+        "mp3d_table1_navdp_authority_cache_composition_repair_20260829.json",
+        "submit_mp3d_table1_navdp_authority_cache_repair_remote.sh",
+    )
+    for name in names:
+        (target / name).write_bytes((ROOT / "MemNavData" / name).read_bytes())
+    path = target / names[-1]
+    text = path.read_text().replace(
+        "--dependency=afterok:${verify} \\",
+        "--dependency=afterok:${verify}:${VINT_VERIFY} \\",
+    )
+    path.write_text(text)
+    with pytest.raises(RuntimeError, match="already-completed job"):
+        audit(tmp_path)

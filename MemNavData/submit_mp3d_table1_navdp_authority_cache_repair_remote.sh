@@ -29,6 +29,7 @@ ANALYSIS=${TASK}/MemNavData/slurm_hm3d_table1_navdp_analysis.sbatch
 SEAL=${TASK}/MemNavData/slurm_hm3d_table1_controller_seal.sbatch
 PY=/scratch/lg154/conda-envs/memnav/bin/python
 VINT_VERIFY=16558669
+VINT_VERIFICATION=${RUN}/formal/vint/vint_table1_independent_verification.json
 DRY_RUN=${DRY_RUN:-0}
 fail() { echo "ABORT: $*" >&2; exit 2; }
 job_id() { awk -F';' 'NR==1{print $1}'; }
@@ -59,9 +60,9 @@ assert_job() {
 
 assert_job 16558664_27 FAILED 1:0
 for id in 16558666 16558667 16558670; do assert_job "${id}" CANCELLED 0:0; done
-sacct -X -j "${VINT_VERIFY}" -n -o State | \
-  awk '$1=="PENDING" || $1=="RUNNING" || $1=="COMPLETED"{ok=1} END{exit !ok}' || \
-  fail "retained ViNT verifier is not viable"
+assert_job "${VINT_VERIFY}" COMPLETED 0:0
+[[ -f "${VINT_VERIFICATION}" ]] || fail "retained ViNT verifier output missing"
+VINT_VERIFICATION_SHA=$(sha256sum "${VINT_VERIFICATION}" | awk '{print $1}')
 grep -q 'certificate runtime failure is not a valid policy outcome' \
   "${FAILED_RUNTIME}/logs/query_29.log" || fail "attempt-1 failure changed"
 grep -q 'authority_policy = request.form.get' \
@@ -104,7 +105,7 @@ lint_sbatch_template "${WRAP}" || fail "NavDP wrapper lint failed"
 wrapper="WRAPPER_ROOT=${WRAPPER_ROOT},WRAPPER_RECEIPT=${WRAPPER_RECEIPT},EXPECTED_WRAPPER_RECEIPT_SHA=${WRAPPER_SHA}"
 common="ALL,TASK_ROOT=${TASK},TASK_RECEIPT=${TASK}/SOURCE_BUNDLE.sha256,EXPECTED_TASK_RECEIPT_SHA=${TASK_SHA},FORMAL_RUN_ROOT=${RUN},BENCH_ROOT=${BENCH},CONSTRUCTION_VERIFICATION=${CONSTRUCTION},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${CONSTRUCTION_SHA},DATASET=MP3D,CLAIM_SCOPE=conference_table_mp3d_reused_scene_history_new_query_replication,BASE_SOURCE_ROOT=${BASE},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${BASE_SHA},SERVER_SOURCE_ROOT=${TASK},SERVER_SOURCE_RECEIPT=${TASK}/SOURCE_BUNDLE.sha256,EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${TASK_SHA},SOURCE_RUN_ROOT=${SOURCE_RUN},PARENT_MANIFEST=${PARENT},PROTOCOL=${PROTOCOL},ROLE_PAIR_SCOPE=paper_replication,${wrapper}"
 analysis_common="ALL,TASK_ROOT=${TASK},TASK_RECEIPT=${TASK}/SOURCE_BUNDLE.sha256,EXPECTED_TASK_RECEIPT_SHA=${TASK_SHA},FORMAL_RUN_ROOT=${RUN},BENCH_ROOT=${BENCH},CONSTRUCTION_VERIFICATION=${CONSTRUCTION},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${CONSTRUCTION_SHA},DATASET=MP3D,CLAIM_SCOPE=conference_table_mp3d_reused_scene_history_new_query_replication"
-seal_common="ALL,FORMAL_RUN_ROOT=${RUN},CONSTRUCTION_VERIFICATION=${CONSTRUCTION},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${CONSTRUCTION_SHA},DATASET=MP3D,CLAIM_SCOPE=conference_table_mp3d_reused_scene_history_new_query_replication"
+seal_common="ALL,FORMAL_RUN_ROOT=${RUN},CONSTRUCTION_VERIFICATION=${CONSTRUCTION},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${CONSTRUCTION_SHA},DATASET=MP3D,CLAIM_SCOPE=conference_table_mp3d_reused_scene_history_new_query_replication,VINT_VERIFICATION_OVERRIDE=${VINT_VERIFICATION},EXPECTED_VINT_VERIFICATION_SHA=${VINT_VERIFICATION_SHA}"
 
 sbatch --test-only --array=27 \
   --export="${common},PHASE=formal,EXACT_REPAIR=1,RUNTIME_ATTEMPT=mp3d_t1_navdp_exact_retry2_authority_cache_20260829,FORMAL_INDICES_SPEC=29:30" \
@@ -149,7 +150,7 @@ aggregate=$(sbatch --parsable --dependency=afterok:${repair} \
 verify=$(sbatch --parsable --dependency=afterok:${aggregate} \
   --kill-on-invalid-dep=yes --export="${analysis_common},MODE=verify" \
   "${ANALYSIS}" | job_id)
-seal=$(sbatch --parsable --dependency=afterok:${verify}:${VINT_VERIFY} \
+seal=$(sbatch --parsable --dependency=afterok:${verify} \
   --kill-on-invalid-dep=yes --export="${seal_common}" "${SEAL}" | job_id)
 for id in "${repair}" "${aggregate}" "${verify}" "${seal}"; do
   [[ "${id}" =~ ^[0-9]+$ ]] || fail "invalid job id: ${id}"
@@ -157,9 +158,9 @@ done
 
 "${PY}" - "${REPAIR_ROOT}/repair_submission.json" "${WRAPPER_ROOT}" \
   "${WRAPPER_SHA}" "${repair}" "${aggregate}" "${verify}" "${seal}" \
-  "${VINT_VERIFY}" "${ARCHIVE}" <<'PY'
+  "${VINT_VERIFY}" "${ARCHIVE}" "${VINT_VERIFICATION_SHA}" <<'PY'
 import hashlib,json,os,sys
-path,bundle,bundle_sha,repair,aggregate,verify,seal,vint_verify,archive=sys.argv[1:]
+path,bundle,bundle_sha,repair,aggregate,verify,seal,vint_verify,archive,vint_sha=sys.argv[1:]
 manifest=os.path.join(archive,'archive_manifest.json')
 payload={
  'schema_version':'mp3d_table1_navdp_authority_cache_repair_submission_v1_20260829',
@@ -173,6 +174,10 @@ payload={
  'wrapper_bundle':bundle,'wrapper_receipt_sha256':bundle_sha,
  'archive_root':archive,
  'archive_manifest_sha256':hashlib.sha256(open(manifest,'rb').read()).hexdigest(),
+ 'retained_vint_verification_sha256':vint_sha,
+ 'seal_dependency_submission_incident':False,
+ 'replacement_seal_depends_on_navdp_verify_only':True,
+ 'retained_vint_verifier_was_completed_and_sha_pinned_before_seal_submission':True,
  'method_or_population_changed':False,
  'exception_and_runtime_failure_fields_inspected':True,
  'navigation_success_or_distance_read':False,'partial_aggregate_or_sr_computed':False,

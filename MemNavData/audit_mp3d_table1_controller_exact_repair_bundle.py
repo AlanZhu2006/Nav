@@ -98,6 +98,16 @@ def audit(root: Path) -> dict[str, Any]:
             "repair2 exact set changed")
     require("navigation_success_or_distance_read':False" in repair2,
             "repair2 disclosure missing")
+    require('assert_job "${VINT_VERIFY}" COMPLETED 0:0' in repair2,
+            "repair2 does not require a completed retained ViNT verifier")
+    require("EXPECTED_VINT_VERIFICATION_SHA=${VINT_VERIFICATION_SHA}" in repair2,
+            "repair2 does not hash-pin the retained ViNT verifier")
+    require("--dependency=afterok:${verify}:${VINT_VERIFY}" not in repair2,
+            "repair2 reattaches an already-completed job to the seal dependency")
+    require("--dependency=afterok:${verify} \\" in repair2,
+            "repair2 seal does not depend on the new NavDP verifier")
+    require("replacement_seal_depends_on_navdp_verify_only':True" in repair2,
+            "repair2 scheduler correction receipt missing")
     return {
         "verified": True,
         "frozen_histories": 42,

@@ -1,6 +1,6 @@
 # 2026-08-29 会议实验活跃总账
 
-更新时间：2026-08-29 16:17（Asia/Shanghai）。本文件是当前调度与证据边界的
+更新时间：2026-08-29 16:44（Asia/Shanghai）。本文件是当前调度与证据边界的
 唯一简表。任何 active rollout 都不读取 partial SR、SPL、final distance 或逐臂
 outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，才允许打开结果。
 
@@ -13,11 +13,11 @@ outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，
 - **上一轮 NavDP 的 `14/56 vs 14/56` 不是方法零结果。** 它有 2,657 个
   runtime-failure plans，全部由 authority endpoint 契约不匹配触发，随后按设计
   exact fallback。它只能作为 fail-closed 基础设施审计，不能进入性能表。
-- **正确的 NavDP 完整双臂修复已经第三次提交。** 前两轮 smoke 分别暴露并阻断了
+- **HM3D Table-1 的 NavDP 两行已经正式封存。** 前两轮 smoke 分别暴露并阻断了
   authority import 闭包缺失和两个同名 `policy_agent.py` 的跨进程 namespace 碰撞；
-  第三轮 process-local import precedence smoke 已通过，54-rank formal array 正在
-  运行。任何 endpoint/runtime failure 仍会直接判为任务失败，不能被统计为正常
-  reject。
+  第三轮 process-local import precedence 后完整 54-rank formal、aggregate、独立
+  verifier 与 seal 全部完成。Revisit `8/28 -> 25/28`（`+18/-1`, `p=7.63e-5`），
+  Novel `6/28 = 6/28` 且 0 takeover；runtime failure 与 metric-depth reads 均为 0。
 - **MP3D 第二数据集的 outcome-blind query 构造已完成，但未过 prospective power
   gate。** 独立 verifier 得到 14 histories / 10 scenes，front/side/rear 为
   5/0/9，低于冻结的 20 / 12 / 每方向至少 4；因此 controller 四行没有提交，也没有
@@ -144,9 +144,20 @@ bundle hash、bash syntax 和 Slurm test-only 全部通过。
 
 smoke `16544384` 于 4 分 25 秒完成并返回 `0:0`。它验证了 authority endpoint、
 transaction 和两个 server 的 process-local Python namespace 能在真实 GPU 进程中
-贯通。随后 54-rank formal array `16544385` 自动启动，并发严格为 2；15:35 时 27 个
-rank 已结构完成、2 个正在运行，`16544386 / 16544387 / 16544388`
-仍按依赖等待。尚未读取任何 partial policy outcome。
+贯通。54-rank formal `16544385`、aggregate `16544386`、independent verifier
+`16544387` 与 seal `16544388` 已全部完成。正式结果为：
+
+| Role | NavDP native | NavDP + CEC | paired gain/loss |
+|---|---:|---:|---:|
+| Novel | 6/28 | 6/28 | +0/-0；0 takeover，exact fallback |
+| Revisit | 8/28 | 25/28 | +18/-1 |
+| Overall | 14/56 | 31/56 | +18/-1 |
+
+Revisit risk difference `+60.71 pp`，exact McNemar `p=7.629e-5`，scene-cluster CI
+`[+35.48,+85.19] pp`；overall risk difference `+30.36 pp`，CI
+`[+17.74,+42.59] pp`。审计得到 runtime failure plans 0、metric-depth reads 0，
+independent verifier 从 raw final distance 复算成功。完整结果见
+`HM3D_TABLE1_CONTROLLER_PORTABILITY_RESULT_20260829.md`。
 
 ## 3. MP3D Table 1：第二数据集构造
 
@@ -298,7 +309,7 @@ verifier 未授权时 fail closed。
 
 | 会议交付物 | 当前状态 | 下一道门 |
 |---|---|---|
-| Table 1 HM3D 四行 | ViNT 两行成立；NavDP 第三轮 smoke 已通过，formal 正在运行 | `16544385 -> 16544386 -> 16544387 -> 16544388` 全链 seal |
+| Table 1 HM3D 四行 | 已完成：NavDP Revisit `8/28 -> 25/28`；ViNT Revisit `3/28 -> 19/28`；两者 Novel 均 0 takeover/exact fallback | 只保留 controller 内 paired claim，不做 NavDP-vs-ViNT 绝对优劣比较 |
 | Table 1 MP3D 四行 | 首轮 14 histories / 10 scenes / side 0 未过 power gate；full-mono source expansion 已完成并冻结 36 scenes / 104 source traces；新 construction 已提交 | `16545793 -> 16545794 -> 16545795`；仍禁止 controller rollout |
 | Table 2 HM3D by leg | 22 条 factual A/B prefix 已封；新 Leg-3 构造只保留 8 histories / 6 scenes、side 0，未过冻结 power gate；controller 未提交；B2 仍等待 | 保留 constructibility null；不放宽阈值，Table 1 完成前不启动 outcome-aware 扩样 |
 | Depth ablation | 已有 Gate C/D、Final14 factorial 与 full-mono 证据 | 先审计能否同 population 重组，禁止拼不同分母 |

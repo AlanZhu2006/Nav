@@ -18,10 +18,14 @@ SCHEMA = "hm3d_table1_navdp_pair_verification_v1_20260829"
 SUMMARY_SCHEMAS = {
     "HM3D": "hm3d_table1_navdp_pair_summary_v1_20260829",
     "MP3D": "mp3d_table1_navdp_pair_summary_v1_20260829",
+    "HM3D_TABLE2": "hm3d_table2_leg3_navdp_pair_summary_v1_20260829",
 }
 VERIFICATION_SCHEMAS = {
     "HM3D": SCHEMA,
     "MP3D": "mp3d_table1_navdp_pair_verification_v1_20260829",
+    "HM3D_TABLE2": (
+        "hm3d_table2_leg3_navdp_pair_verification_v1_20260829"
+    ),
 }
 ARMS = ("mono_native", "mono_cec")
 ROLES = ("novel", "revisit")
@@ -154,6 +158,31 @@ def verify(
     require(len(episodes) == int(summary["histories"])
             == int(construction["histories"]),
             "history denominator changed")
+    table2 = dataset == "HM3D_TABLE2"
+    if table2:
+        require(
+            construction.get("schema_version")
+            == (
+                "hm3d_table2_leg3_mixed_role_construction_"
+                "verification_v1_20260829"
+            ),
+            "Table-2 construction verifier schema changed",
+        )
+        population_path = benchmark_root.parent / "population_receipt.json"
+        require(
+            digest(population_path)
+            == construction.get("population_receipt_sha256"),
+            "Table-2 population receipt changed",
+        )
+        population = json.loads(population_path.read_text())
+        require(
+            summary.get("conditional_on_factual_AB_success") is True
+            and summary.get("unconditional_three_leg_joint_sr_reported")
+            is False,
+            "Table-2 estimand boundary changed",
+        )
+    else:
+        population = None
 
     rows: list[dict[str, Any]] = []
     plan_receipts = 0
@@ -176,6 +205,35 @@ def verify(
         require(completion.get("arms") == list(ARMS)
                 and completion.get("prefix_equality") is True,
                 f"completion contract changed at history {index}")
+        if table2:
+            require(
+                completion.get("schema_version")
+                == "hm3d_table2_leg3_history_v1_20260829"
+                and completion.get("history_contract") == "actual_ab"
+                and completion.get("shared_history_policy")
+                == "actual_mono_navdp_novel_A_then_novel_B_rgb_replay",
+                f"Table-2 A/B replay contract changed at history {index}",
+            )
+            prefix_root = Path(item["online_a_episode"])
+            receipt = json.loads((prefix_root / "receipt.json").read_text())
+            trace = json.loads(
+                (prefix_root / "online_a_trace.json").read_text()
+            )
+            prefix_a = int(receipt.get("prefix_A_steps", -1))
+            prefix_b = int(receipt.get("prefix_B_steps", -1))
+            require(
+                receipt.get("prefix_receipt_schema")
+                == "hm3d_table2_actual_mono_ab_prefix_v1_20260829"
+                and receipt.get("prefix_semantics")
+                == "actual_mono_Novel_A_then_Novel_B"
+                and trace.get("prefix_semantics")
+                == "exact_actual_mono_A_then_B_observation_concat"
+                and prefix_a > 0 and prefix_b > 0
+                and prefix_a + prefix_b == len(trace["poses"])
+                and prefix_a == int(completion.get("prefix_A_steps", -2))
+                and prefix_b == int(completion.get("prefix_B_steps", -2)),
+                f"Table-2 raw A/B prefix failed audit at history {index}",
+            )
         payloads: dict[tuple[str, str], dict[str, Any]] = {}
         for arm in ARMS:
             with (root / arm / "metric.csv").open(newline="") as handle:
@@ -287,7 +345,7 @@ def verify(
         int(value) for value in summary["safety"]
         ["fully_rejected_exact_native_by_role"].values()
     ), "summary exact-fallback count does not reproduce")
-    return {
+    result = {
         "schema_version": VERIFICATION_SCHEMAS[dataset],
         "verified": True,
         "authorized": True,
@@ -309,6 +367,49 @@ def verify(
         "success_distance_m": 1.0,
         "recomputed": recomputed,
     }
+    if table2:
+        assert population is not None
+        observed_waterfall = {
+            "source_A_successful_histories_entering_B": int(
+                population["source_A_attempts"]
+            ),
+            "factual_AB_successful_prefixes": int(
+                population["factual_AB_successful_prefixes"]
+            ),
+            "factual_AB_scene_clusters": int(
+                population["factual_AB_scene_clusters"]
+            ),
+            "leg3_constructible_histories": int(
+                population["leg3_constructible_histories"]
+            ),
+            "leg3_scene_clusters": int(
+                population["leg3_scene_clusters"]
+            ),
+        }
+        require(
+            observed_waterfall == summary.get("factual_prefix_waterfall"),
+            "Table-2 factual prefix waterfall does not reproduce",
+        )
+        segment_counts = {"A": 0, "B": 0}
+        for item in episodes:
+            segment = str(item.get("table2_selected_revisit_segment", ""))
+            require(segment in segment_counts,
+                    "Table-2 Revisit source segment changed")
+            segment_counts[segment] += 1
+        require(
+            {key: value for key, value in segment_counts.items() if value}
+            == summary.get("revisit_source_segment_counts"),
+            "Table-2 Revisit segment counts do not reproduce",
+        )
+        result.update({
+            "estimand": "Leg3_C_given_factual_successful_A_and_B",
+            "factual_prefix_waterfall": observed_waterfall,
+            "revisit_source_segment_counts": {
+                key: value for key, value in segment_counts.items() if value
+            },
+            "unconditional_three_leg_joint_sr_reported": False,
+        })
+    return result
 
 
 def write_exclusive(path: Path, payload: dict[str, Any]) -> None:

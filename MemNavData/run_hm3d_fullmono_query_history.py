@@ -28,7 +28,11 @@ from MemNavData.run_final14_mono_factorial_episode import (
 )
 
 
-SCHEMA = "hm3d_fullmono_mixed_role_history_v1_20260820"
+SCHEMAS = {
+    "goal_a": "hm3d_fullmono_mixed_role_history_v1_20260820",
+    "actual_ab": "hm3d_table2_leg3_history_v1_20260829",
+}
+SCHEMA = SCHEMAS["goal_a"]
 
 
 def sha256(path: Path) -> str:
@@ -37,6 +41,49 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(8 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def audit_history_contract(
+    receipt: dict, trace: dict, history_contract: str,
+) -> tuple[int, int, str]:
+    """Validate and name the immutable history that precedes each query."""
+
+    require(history_contract in SCHEMAS, "unsupported history contract")
+    if history_contract == "actual_ab":
+        require(
+            receipt.get("prefix_receipt_schema")
+            == "hm3d_table2_actual_mono_ab_prefix_v1_20260829",
+            "Table-2 history lacks the frozen A/B prefix receipt",
+        )
+        require(
+            receipt.get("prefix_semantics")
+            == "actual_mono_Novel_A_then_Novel_B",
+            "Table-2 history prefix semantics changed",
+        )
+        prefix_a_steps = int(receipt.get("prefix_A_steps", -1))
+        prefix_b_steps = int(receipt.get("prefix_B_steps", -1))
+        require(
+            prefix_a_steps > 0 and prefix_b_steps > 0
+            and prefix_a_steps + prefix_b_steps == len(trace["poses"]),
+            "Table-2 A/B segment lengths do not reproduce",
+        )
+        require(
+            trace.get("prefix_semantics")
+            == "exact_actual_mono_A_then_B_observation_concat",
+            "Table-2 trace is not an exact actual A/B concatenation",
+        )
+        return (
+            prefix_a_steps,
+            prefix_b_steps,
+            "actual_mono_navdp_novel_A_then_novel_B_rgb_replay",
+        )
+    require(
+        receipt.get("prefix_receipt_schema") is None,
+        "ordinary Goal-A evaluation received a Table-2 A/B prefix",
+    )
+    return (
+        len(trace["poses"]), 0, "actual_mono_navdp_goal_a_rgb_replay",
+    )
 
 
 def main() -> None:
@@ -52,6 +99,15 @@ def main() -> None:
     parser.add_argument("--navdp-port", type=int, required=True)
     parser.add_argument("--max-steps", type=int, default=600)
     parser.add_argument("--arms", default=",".join(ARMS))
+    parser.add_argument(
+        "--history-contract",
+        choices=tuple(SCHEMAS),
+        default="goal_a",
+        help=(
+            "goal_a replays one actual Novel-A history; actual_ab replays "
+            "one hash-bound actual Novel-A then Novel-B causal prefix"
+        ),
+    )
     parser.add_argument(
         "--role-pair-scope",
         choices=("consumed_integration", "paper_heldout", "paper_replication"),
@@ -94,6 +150,9 @@ def main() -> None:
     require(all(plan.get("metric_depth_sensor_consumed") is False
                 for plan in trace["plans"]),
             "history Goal-A consumed simulator metric depth")
+    prefix_a_steps, prefix_b_steps, shared_history_policy = (
+        audit_history_contract(receipt, trace, args.history_contract)
+    )
     scene_file = Path(receipt["source_asset"])
     require(scene_file.is_file() and
             sha256(scene_file) == receipt["source_asset_sha256"],
@@ -105,7 +164,7 @@ def main() -> None:
     (output / "logs").mkdir(parents=True)
     order = selected_arm_order(args.history_index, selected_arms)
     contract = {
-        "schema_version": SCHEMA,
+        "schema_version": SCHEMAS[args.history_contract],
         "scope": population["scope"],
         "fresh_scene_generalization": bool(
             population.get("fresh_scene_generalization", False)),
@@ -113,6 +172,9 @@ def main() -> None:
         "scene": scene,
         "episode": episode,
         "online_a_steps": int(item["online_a_steps"]),
+        "history_contract": args.history_contract,
+        "prefix_A_steps": prefix_a_steps,
+        "prefix_B_steps": prefix_b_steps,
         "online_a_trace_sha256": sha256(
             source_episode / "online_a_trace.json"
         ),
@@ -121,7 +183,7 @@ def main() -> None:
         "arms": list(selected_arms),
         "arm_order": list(order),
         "runtime_role_visibility": "none",
-        "shared_history_policy": "actual_mono_navdp_goal_a_rgb_replay",
+        "shared_history_policy": shared_history_policy,
         "max_steps": args.max_steps,
         "success_distance_m": 1.0,
         "exec_horizon": 8,

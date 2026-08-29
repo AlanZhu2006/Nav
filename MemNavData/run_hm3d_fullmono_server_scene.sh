@@ -20,6 +20,7 @@ EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA:?set base receipt sha}
 RUNTIME_ATTEMPT=${RUNTIME_ATTEMPT:-}
 RESUME_INCOMPLETE=${RESUME_INCOMPLETE:-0}
 FORMAL_INDICES_OVERRIDE=${FORMAL_INDICES_OVERRIDE:-}
+HISTORY_CONTRACT=${HISTORY_CONTRACT:-goal_a}
 
 [[ "${MODE}" == collect || "${MODE}" == mp3d_collect \
    || "${MODE}" == smoke || "${MODE}" == eval \
@@ -28,6 +29,8 @@ FORMAL_INDICES_OVERRIDE=${FORMAL_INDICES_OVERRIDE:-}
 [[ "${SCENE_INDEX}" =~ ^[0-9]+$ ]] || { echo "bad scene index" >&2; exit 2; }
 [[ "${RESUME_INCOMPLETE}" =~ ^[01]$ ]] || {
   echo "RESUME_INCOMPLETE must be 0 or 1" >&2; exit 2; }
+[[ "${HISTORY_CONTRACT}" == goal_a || "${HISTORY_CONTRACT}" == actual_ab ]] || {
+  echo "HISTORY_CONTRACT must be goal_a or actual_ab" >&2; exit 2; }
 if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
   [[ "${RUNTIME_ATTEMPT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
     echo "invalid runtime attempt" >&2; exit 2; }
@@ -298,7 +301,7 @@ else
         --expected-manifest-sha256 "${expected_manifest_sha}"
         --history-index "${history_index}" --hab-python "${HAB_PY}"
         --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}"
-        --max-steps "${MAX_STEPS}")
+        --max-steps "${MAX_STEPS}" --history-contract "${HISTORY_CONTRACT}")
       if [[ -n "${QUERY_ARMS:-}" ]]; then
         runner+=(--arms "${QUERY_ARMS}")
       fi

@@ -1,6 +1,6 @@
 # 2026-08-29 会议实验活跃总账
 
-更新时间：2026-08-29 14:53（Asia/Shanghai）。本文件是当前调度与证据边界的
+更新时间：2026-08-29 15:05（Asia/Shanghai）。本文件是当前调度与证据边界的
 唯一简表。任何 active rollout 都不读取 partial SR、SPL、final distance 或逐臂
 outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，才允许打开结果。
 
@@ -143,8 +143,8 @@ bundle hash、bash syntax 和 Slurm test-only 全部通过。
 
 smoke `16544384` 于 4 分 25 秒完成并返回 `0:0`。它验证了 authority endpoint、
 transaction 和两个 server 的 process-local Python namespace 能在真实 GPU 进程中
-贯通。随后 54-rank formal array `16544385` 自动启动，并发严格为 2；14:53 时 ranks
-`0--17` 已结构完成，18 与 19 正在运行，`16544386 / 16544387 / 16544388`
+贯通。随后 54-rank formal array `16544385` 自动启动，并发严格为 2；15:05 时 ranks
+`0--19,21` 已结构完成，20 与 22 正在运行，`16544386 / 16544387 / 16544388`
 仍按依赖等待。尚未读取任何 partial policy outcome。
 
 ## 3. MP3D Table 1：第二数据集构造
@@ -203,7 +203,7 @@ support-controlled 四份 sealed manifest 全部读成 forbidden identity ledger
 - run root：
   `/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_fullmono_source_expansion_20260829/source_expansion_20260829T060541Z_f3e7c3e5`。
 
-14:53 时 collection 已启动：cells `0--6` 结构完成，7 与 8 正在运行，其余按并发与优先级
+15:05 时 collection 已启动：cells `0--9` 结构完成，10 正在运行，其余按并发与优先级
 等待。collection 完成后，deferred launcher 会先
 生成 20+16 scenes / 40+64 source traces 的 immutable ledger，再提交 36-scene
 construction、finalize 和 independent verifier。它不会自动提交 controller rollout；
@@ -261,8 +261,17 @@ Habitat cold import、resolved source-path/signature、bundle SHA、JSON、Pytho
 
 replacement smoke `16545221` 已于 1 分 29 秒完成并返回 `0:0`；它在真实 H100/Habitat
 进程中通过了 dependency source-path/signature、输入哈希和单个 prefix 构造。随后
-22-cell formal construction `16545222` 自动启动，并发严格为 2。14:53 时 cells 0 与 1
-正在运行，finalizer/verifier 按依赖等待；尚未读取任何构造 population 统计。
+22-cell formal construction `16545222` 自动启动，并发严格为 2。15:05 时 cells 0--4
+已结构完成、5 正在运行，finalizer/verifier 按依赖等待；尚未读取任何构造 population
+统计。
+
+闭环阶段也已 result-blind 准备完成，但尚未提交：现有 query runner 新增显式
+`actual_ab` history contract，运行前要求 A/B 两段长度、prefix receipt 与逐帧 trace
+语义一致；Table-2 专用 pair/analysis DAG 只运行 `mono_native / mono_cec`，并在独立
+统计中复算原始 final distance、exact fallback、Novel/Revisit takeover、A/B factual
+waterfall 与 Revisit anchor 来自 A 还是 B。输出被硬标为 `C | A,B`，并显式禁止报告
+成无条件三段 joint SR。本地 16 项相关回归全部通过；提交脚本会在 construction
+verifier 未授权时 fail closed。
 
 该设计把会议表里的分母纪律写死：Leg 1/2 报来源 factual waterfall；Leg 3 报
 `C | A,B` 的 paired Novel/Revisit effect，绝不把条件于 A/B 成功的分母包装成无条件
@@ -275,7 +284,7 @@ replacement smoke `16545221` 已于 1 分 29 秒完成并返回 `0:0`；它在�
 |---|---|---|
 | Table 1 HM3D 四行 | ViNT 两行成立；NavDP 第三轮 smoke 已通过，formal 正在运行 | `16544385 -> 16544386 -> 16544387 -> 16544388` 全链 seal |
 | Table 1 MP3D 四行 | 首轮 14 histories / 10 scenes / side 0 未过 power gate；full-mono source expansion smoke 已通过，formal source collection 正在运行 | `16544773 -> 16544776 -> construction verifier`；仍禁止 controller rollout |
-| Table 2 HM3D by leg | 22 条 factual A/B prefix 已封；首轮 construction smoke 拦截依赖闭包遗漏，replacement smoke 已通过、formal construction 正在运行；B2 仍等待 | `16545222 -> 16545223 -> 16545224`；过 power gate 后才提交 paired NavDP arms |
+| Table 2 HM3D by leg | 22 条 factual A/B prefix 已封；replacement smoke 已通过、formal construction 正在运行；专用 actual-AB paired runtime 与独立分析已预备但未提交；B2 仍等待 | `16545222 -> 16545223 -> 16545224`；过 power gate 后才运行 `submit_hm3d_table2_leg3_navdp_hpc.sh` |
 | Depth ablation | 已有 Gate C/D、Final14 factorial 与 full-mono 证据 | 先审计能否同 population 重组，禁止拼不同分母 |
 | CEC mechanism ablation | Raw/CEC/known-role 底层证据大部分已有 | 统一导出 retrieval accuracy、FA/FR；不急着重跑 |
 | Real robot | 软件合约与 no-motion transport 已有 | 仍缺冻结 protocol 下的 paired autonomous trials |

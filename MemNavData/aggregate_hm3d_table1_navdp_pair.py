@@ -21,6 +21,7 @@ from MemNavData.hm3d_fullmono_mixed_role import selected_arm_order
 SCHEMAS = {
     "HM3D": "hm3d_table1_navdp_pair_summary_v1_20260829",
     "MP3D": "mp3d_table1_navdp_pair_summary_v1_20260829",
+    "HM3D_TABLE2": "hm3d_table2_leg3_navdp_pair_summary_v1_20260829",
 }
 SCHEMA = SCHEMAS["HM3D"]
 ARMS = ("mono_native", "mono_cec")
@@ -199,6 +200,25 @@ def aggregate(
     require(len({str(row["scene"]) for row in episodes})
             == int(verification["scene_clusters"]),
             "scene denominator differs from construction verification")
+    table2 = dataset == "HM3D_TABLE2"
+    if table2:
+        require(
+            verification.get("schema_version")
+            == (
+                "hm3d_table2_leg3_mixed_role_construction_"
+                "verification_v1_20260829"
+            ),
+            "Table-2 construction verifier schema changed",
+        )
+        population_path = benchmark_root.parent / "population_receipt.json"
+        require(
+            digest(population_path)
+            == verification.get("population_receipt_sha256"),
+            "Table-2 population receipt changed",
+        )
+        table2_population = json.loads(population_path.read_text())
+    else:
+        table2_population = None
 
     rows: list[dict[str, Any]] = []
     cells = []
@@ -231,6 +251,21 @@ def aggregate(
                 f"paired replay or role hiding failed for {label}")
         require(completion.get("online_a_depth_source") == "monocular_sidecar",
                 f"Goal-A history is not full-mono for {label}")
+        if table2:
+            require(
+                completion.get("history_contract") == "actual_ab"
+                and completion.get("shared_history_policy")
+                == "actual_mono_navdp_novel_A_then_novel_B_rgb_replay",
+                f"Table-2 A/B replay contract changed for {label}",
+            )
+            require(
+                int(completion.get("prefix_A_steps", 0)) > 0
+                and int(completion.get("prefix_B_steps", 0)) > 0
+                and int(completion["prefix_A_steps"])
+                + int(completion["prefix_B_steps"])
+                == int(completion["online_a_steps"]),
+                f"Table-2 A/B prefix lengths changed for {label}",
+            )
         order_counts[tuple(expected_order)] += 1
         for role in ROLES:
             if completion["fully_rejected_exact_native"][role] is True:
@@ -306,7 +341,7 @@ def aggregate(
         results[role] = result
 
     cec_rows = [row for row in rows if row["arm"] == "mono_cec"]
-    return {
+    result = {
         "schema_version": SCHEMAS[dataset],
         "verified": True,
         "dataset": dataset,
@@ -324,7 +359,10 @@ def aggregate(
         "scene_clusters": len({str(row["scene"]) for row in episodes}),
         "queries": 2 * len(episodes),
         "runtime_role_visibility": "none",
-        "shared_history_policy": "actual_mono_navdp_goal_a_rgb_replay",
+        "shared_history_policy": (
+            "actual_mono_navdp_novel_A_then_novel_B_rgb_replay"
+            if table2 else "actual_mono_navdp_goal_a_rgb_replay"
+        ),
         "fresh_query": True,
         "fresh_scene": False,
         "fresh_history": False,
@@ -350,6 +388,40 @@ def aggregate(
         },
         "cells": cells,
     }
+    if table2:
+        assert table2_population is not None
+        segment_counts: dict[str, int] = defaultdict(int)
+        for row in episodes:
+            segment = str(row.get("table2_selected_revisit_segment", ""))
+            require(segment in {"A", "B"},
+                    "Table-2 Revisit source segment changed")
+            segment_counts[segment] += 1
+        result.update({
+            "estimand": "Leg3_C_given_factual_successful_A_and_B",
+            "conditional_on_factual_AB_success": True,
+            "factual_prefix_waterfall": {
+                "source_A_successful_histories_entering_B": int(
+                    table2_population["source_A_attempts"]
+                ),
+                "factual_AB_successful_prefixes": int(
+                    table2_population["factual_AB_successful_prefixes"]
+                ),
+                "factual_AB_scene_clusters": int(
+                    table2_population["factual_AB_scene_clusters"]
+                ),
+                "leg3_constructible_histories": int(
+                    table2_population["leg3_constructible_histories"]
+                ),
+                "leg3_scene_clusters": int(
+                    table2_population["leg3_scene_clusters"]
+                ),
+            },
+            "revisit_source_segment_counts": dict(
+                sorted(segment_counts.items())
+            ),
+            "unconditional_three_leg_joint_sr_reported": False,
+        })
+    return result
 
 
 def main() -> None:

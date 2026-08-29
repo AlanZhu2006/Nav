@@ -13,8 +13,9 @@ outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，
 - **上一轮 NavDP 的 `14/56 vs 14/56` 不是方法零结果。** 它有 2,657 个
   runtime-failure plans，全部由 authority endpoint 契约不匹配触发，随后按设计
   exact fallback。它只能作为 fail-closed 基础设施审计，不能进入性能表。
-- **正确的 NavDP 完整双臂修复已经提交。** 新 smoke 会把任何 endpoint/runtime
-  failure 直接判为任务失败；不再允许基础设施错误被统计为正常 reject。
+- **正确的 NavDP 完整双臂修复已经重新提交。** 第一轮 smoke 暴露并阻断了
+  authority import 闭包缺失；补齐同一 receipt-bound 父包后，新 smoke 会把任何
+  endpoint/runtime failure 直接判为任务失败，不允许其被统计为正常 reject。
 - **MP3D 第二数据集仍处在 outcome-blind query 构造阶段。** smoke 已完成，正式
   controller 四行尚未提交，也没有新 MP3D SR。
 - **HM3D lifelong B2 仍在等待 GPU 优先级。** 它是会议 Table 2 的补充机制实验，
@@ -67,7 +68,7 @@ RuntimeError: certificate endpoint used wrong authority policy
 异常都安全地退回 native。ViNT 在同一 population 上能接受 27/28 Revisit，进一步
 排除了“历史没有几何 witness”这一解释。
 
-### 2.4 NavDP 正确修复：已正式排队
+### 2.4 NavDP 正确修复与 smoke 闭包门
 
 新 server overlay 只组合两个已经 receipt-bound 的父组件：
 
@@ -82,22 +83,32 @@ seed、arm order、600-step budget 与 1 m success radius 均未改变。完整 
 `runtime_failure_plans == 0`。正常 certificate reject 仍合法并 exact fallback；
 endpoint/proof runtime failure 会终止 cell 并阻断全部统计。
 
-- task bundle：
-  `hm3d_table1_navdp_authority_transaction_repair_3d11c13df616cfa0`；
-- task receipt：
-  `3d11c13df616cfa0a61f56ccd238b1cc5e8c983b14cc31db12778bc30593989a`；
-- server overlay receipt：
-  `ef4f30de3103d7af742137d8c63790e0f107afb880ad0650f9f98c649c05472d`；
-- 远端隔离预检：8/8 authority/transaction contract tests 通过；所有 bundle SHA、
-  endpoint symbol、bash syntax 与 Slurm test-only 通过；
-- smoke：`16543736`；
-- 54-rank formal array（并发 2）：`16543737`；
-- aggregate / independent verifier / replacement joint seal：
-  `16543738 / 16543739 / 16543740`；
-- run root：
-  `/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829/navdp_authority_transaction_repair_20260829T052519Z_3d11c13d`。
+第一轮 smoke `16543736` 在正式 rollout 前以 `2:0` 失败，并自动取消全部下游。
+错误不是 outcome，而是组合 overlay 漏复制 authority 父包中的
+`router_candidates.py`；`policy_agent.py` 因而从旧 base 解析出不兼容实现，缺少
+`causal_goal_support_indices`。这证明 smoke 门有必要，也证明此前仅做 symbol grep
+不足以验证 Python import resolution。
 
-最后一次只读调度检查：smoke 因 `Priority` 等待；下游均按 dependency 等待。尚未
+closure-2 修复只加入同一个 Final14 authority 父 bundle 的 byte-identical
+`router_candidates.py`，并新增 overlay-first `PYTHONPATH` 下的真实
+`import policy_agent, router_candidates` 断言。没有改变方法、阈值或 population。
+
+- replacement task bundle：
+  `hm3d_table1_navdp_authority_transaction_repair_82e71f19ee7f4e52`；
+- task receipt：
+  `82e71f19ee7f4e5233fae499633ce5a233c9c036bb41b9e2bf7d4f0f18effd7d`；
+- closure-complete server overlay receipt：
+  `718661db1733d5de16cd86687eec880a8d02fc5ae5ca982e1ab7d5bde5e96f7d`；
+- 远端隔离预检：8/8 contract tests、完整 bundle SHA、authority dependency import、
+  endpoint/transaction symbols、bash syntax 与 Slurm test-only 均通过；
+- replacement smoke：`16544226`；
+- 54-rank formal array（并发 2）：`16544227`；
+- aggregate / independent verifier / replacement joint seal：
+  `16544228 / 16544229 / 16544230`；
+- run root：
+  `/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829/navdp_authority_transaction_closure_repair_20260829T053627Z_82e71f19`。
+
+最后一次只读调度检查：replacement smoke 因 `Priority` 等待；下游均按 dependency 等待。尚未
 读取或产生这轮 NavDP outcome。
 
 ## 3. MP3D Table 1：第二数据集构造
@@ -122,7 +133,7 @@ NavDP/ViNT 四行 controller rollout。
 - run root：
   `/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_new_query_20260829/construction_20260829T050401Z_6813d501`。
 
-最后一次调度检查时，cells 0--8 与 10 已完成，9 与 11 正在运行，12--19 等待 array
+最后一次调度检查时，cells 0--13 与 15 已完成，14 与 16 正在运行，17--19 等待 array
 并发槽。这里的“完成”仅表示构造进程正常退出，不代表 query 合格；正式分母必须等
 finalize + verifier。未提交 controller rollout，未读取任何新 SR。
 
@@ -145,7 +156,7 @@ accepted histories 可进入 B2。两者属于不同阶段的分母，不能混�
 
 | 会议交付物 | 当前状态 | 下一道门 |
 |---|---|---|
-| Table 1 HM3D 四行 | ViNT 两行成立；NavDP 旧链判为 infrastructure incident | `16543736--16543740` 全链 seal |
+| Table 1 HM3D 四行 | ViNT 两行成立；NavDP 旧链与首个 repair smoke 均被判为 infrastructure incident | `16544226--16544230` 全链 seal |
 | Table 1 MP3D 四行 | outcome-blind construction 正在运行 | `16542592` verifier/power gate 后才提交四行 |
 | Table 2 HM3D by leg | factual population 已封，B2 等待 | B2 verifier；随后只补 Leg-3 Novel 缺口 |
 | Depth ablation | 已有 Gate C/D、Final14 factorial 与 full-mono 证据 | 先审计能否同 population 重组，禁止拼不同分母 |
@@ -181,5 +192,6 @@ accepted histories 可进入 B2。两者属于不同阶段的分母，不能混�
 权威提交收据：
 
 - `HM3D_TABLE1_NAVDP_AUTHORITY_TRANSACTION_REPAIR_SUBMISSION_20260829.json`；
+- `HM3D_TABLE1_NAVDP_AUTHORITY_TRANSACTION_CLOSURE_REPAIR_SUBMISSION_20260829.json`；
 - `MP3D_TABLE1_NEW_QUERY_SUBMISSION_20260829.json`；
 - `HM3D_TABLE1_NAVDP_ANALYSIS_PATH_REPAIR_SUBMISSION_20260829.json`。

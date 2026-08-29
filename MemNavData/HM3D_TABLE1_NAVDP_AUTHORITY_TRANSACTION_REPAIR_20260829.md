@@ -60,3 +60,23 @@ The retained ViNT branch is not rerun.  Its verifier SHA-256 is pinned in the
 new seal.  The old NavDP 0/0 comparison remains an infrastructure incident and
 must not be reported as a CEC performance result.
 
+## First smoke-gate incident and dependency-closure repair
+
+The first full-pair repair submission stopped at its one-cell smoke
+(`16543736`, exit `2:0`) before any formal rollout.  The composed authority
+overlay contained the authority parent's `memnav_server.py` and
+`policy_agent.py`, but omitted that same parent's `router_candidates.py`.
+Script-local import resolution therefore fell through to the older base copy,
+which does not export `causal_goal_support_indices`.  No controller outcome
+was produced, and all downstream jobs were cancelled by dependency.
+
+The replacement overlay adds the byte-identical `router_candidates.py` from
+the same receipt-bound Final14 authority parent.  It changes no model,
+threshold, query, or execution rule.  In addition to bundle checks, the
+preflight now imports `policy_agent` under the exact overlay-first runtime
+`PYTHONPATH` and asserts that `router_candidates` resolves inside the overlay
+and exports `causal_goal_support_indices`.  The new overlay receipt is:
+
+```text
+718661db1733d5de16cd86687eec880a8d02fc5ae5ca982e1ab7d5bde5e96f7d
+```

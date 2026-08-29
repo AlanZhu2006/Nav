@@ -1,6 +1,6 @@
 # 2026-08-29 会议实验活跃总账
 
-更新时间：2026-08-29 13:50（Asia/Shanghai）。本文件是当前调度与证据边界的
+更新时间：2026-08-29 14:15（Asia/Shanghai）。本文件是当前调度与证据边界的
 唯一简表。任何 active rollout 都不读取 partial SR、SPL、final distance 或逐臂
 outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，才允许打开结果。
 
@@ -15,13 +15,15 @@ outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，
   exact fallback。它只能作为 fail-closed 基础设施审计，不能进入性能表。
 - **正确的 NavDP 完整双臂修复已经第三次提交。** 前两轮 smoke 分别暴露并阻断了
   authority import 闭包缺失和两个同名 `policy_agent.py` 的跨进程 namespace 碰撞；
-  第三轮使用 process-local import precedence，任何 endpoint/runtime failure 仍会
-  直接判为任务失败，不能被统计为正常 reject。
+  第三轮 process-local import precedence smoke 已通过，54-rank formal array 正在
+  运行。任何 endpoint/runtime failure 仍会直接判为任务失败，不能被统计为正常
+  reject。
 - **MP3D 第二数据集的 outcome-blind query 构造已完成，但未过 prospective power
   gate。** 独立 verifier 得到 14 histories / 10 scenes，front/side/rear 为
   5/0/9，低于冻结的 20 / 12 / 每方向至少 4；因此 controller 四行没有提交，也没有
   新 MP3D SR。下一步只审计预先冻结的 phase-2 source episodes 能否做新的 full-mono
-  source expansion，不降低任何 query 阈值。
+  source expansion，不降低任何 query 阈值。该扩源 smoke 已通过，16-scene full-mono
+  Goal-A collection 已提交并在等待 GPU priority。
 - **HM3D lifelong B2 仍在等待 GPU 优先级。** 它是会议 Table 2 的补充机制实验，
   不是 powered confirmation。
 
@@ -131,8 +133,11 @@ bundle hash、bash syntax 和 Slurm test-only 全部通过。
 - run root：
   `/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829/navdp_server_namespace_repair_20260829T054615Z_51ee9a4c`。
 
-13:50 的只读调度检查：smoke 正在 `gh012` 运行，formal 和所有分析任务仍被
-dependency gate 挡住。尚未读取任何 partial policy outcome。
+smoke `16544384` 于 4 分 25 秒完成并返回 `0:0`。它验证了 authority endpoint、
+transaction 和两个 server 的 process-local Python namespace 能在真实 GPU 进程中
+贯通。随后 54-rank formal array `16544385` 自动启动，并发严格为 2；14:15 时已推进到
+后续 scene ranks，`16544386 / 16544387 / 16544388` 仍按依赖等待。尚未读取任何
+partial policy outcome。
 
 ## 3. MP3D Table 1：第二数据集构造
 
@@ -168,6 +173,34 @@ null，而不是方法 SR 零结果。没有提交任何 controller rollout，�
 episodes source identities，重新收集 actual full-mono Goal-A histories并构造全新 query；
 必须排除所有已消费 query identity，并再次独立通过同一个 prospective power gate。
 
+### 3.1 Full-mono source expansion：已冻结并提交
+
+旧 phase-2 的 64 条 metric-depth Goal-A trace 不复用；只复用其在旧 query outcome
+之前已冻结的 16 scenes × `episode_0002..0005` identities。新链使用 frozen NavDP +
+causal LingBot monocular depth 重新收集 Goal A，500-step / horizon 8 / 1 m success
+contract 与第一批 MP3D actual-mono source 对齐。
+
+为了不把旧 query 重新包装成“新 query”，构造器把 Attempt-7 与 phase-2 的 natural、
+support-controlled 四份 sealed manifest 全部读成 forbidden identity ledger：共核验
+112 条原始 query identity，去重后覆盖 15 scenes / 92 identities；新 Novel/Revisit
+任一 JPEG SHA 或 pose+yaw 命中都会拒绝。旧 policy summary/outcome 不被读取。
+
+- task bundle：
+  `mp3d_table1_fullmono_source_expansion_f3e7c3e5ab65ba4f`；
+- receipt SHA-256：
+  `f3e7c3e5ab65ba4f49a6c47b1d6b29eb04fa6d6d39307c6deddcbdcf414c3f3d`；
+- source smoke：`16544770`，`COMPLETED 0:0`，2 分 42 秒；
+- 16-scene / 64-episode source collection：`16544773`，并发 2；
+- ledger freeze + construction deferred launcher：`16544776`；
+- run root：
+  `/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_fullmono_source_expansion_20260829/source_expansion_20260829T060541Z_f3e7c3e5`。
+
+14:15 时 collection 因 `Priority` 等待。collection 完成后，deferred launcher 会先
+生成 20+16 scenes / 40+64 source traces 的 immutable ledger，再提交 36-scene
+construction、finalize 和 independent verifier。它不会自动提交 controller rollout；
+只有 verifier 再次给出 `formal_policy_evaluation_authorized=true`，才允许另行提交
+NavDP/ViNT 四行。
+
 ## 4. HM3D lifelong / Table 2
 
 上游 factual-C integrity barrier 覆盖冻结 22 histories / 15 scenes；最终 17 条
@@ -187,8 +220,8 @@ accepted histories 可进入 B2。两者属于不同阶段的分母，不能混�
 
 | 会议交付物 | 当前状态 | 下一道门 |
 |---|---|---|
-| Table 1 HM3D 四行 | ViNT 两行成立；NavDP 旧链与首个 repair smoke 均被判为 infrastructure incident | `16544226--16544230` 全链 seal |
-| Table 1 MP3D 四行 | construction verifier 通过，但 14 histories / 10 scenes / side 0 未过 power gate；零 formal rollout | 先冻结 phase-2 full-mono source expansion，再做 construction-only verifier |
+| Table 1 HM3D 四行 | ViNT 两行成立；NavDP 第三轮 smoke 已通过，formal 正在运行 | `16544385 -> 16544386 -> 16544387 -> 16544388` 全链 seal |
+| Table 1 MP3D 四行 | 首轮 14 histories / 10 scenes / side 0 未过 power gate；full-mono source expansion smoke 已通过，formal source collection 等待 | `16544773 -> 16544776 -> construction verifier`；仍禁止 controller rollout |
 | Table 2 HM3D by leg | factual population 已封，B2 等待 | B2 verifier；随后只补 Leg-3 Novel 缺口 |
 | Depth ablation | 已有 Gate C/D、Final14 factorial 与 full-mono 证据 | 先审计能否同 population 重组，禁止拼不同分母 |
 | CEC mechanism ablation | Raw/CEC/known-role 底层证据大部分已有 | 统一导出 retrieval accuracy、FA/FR；不急着重跑 |
@@ -197,10 +230,9 @@ accepted histories 可进入 B2。两者属于不同阶段的分母，不能混�
 
 ## 6. 当前最优执行顺序
 
-1. 等 HM3D NavDP smoke 先验证 authority + transaction 真正在线贯通；只有它通过，
-   54-rank formal 才会启动。
-2. 审计并冻结 MP3D phase-2 full-mono source expansion；先只生成新 query population，
-   不降低阈值、不复用已消费 query，也不在 verifier 前提交四行。
+1. 让已通过 smoke 的 HM3D NavDP 54-rank formal 完成并封存；期间不读 partial SR。
+2. 让 MP3D phase-2 full-mono source expansion 自然启动；先只生成新 query
+   population，不降低阈值、不复用已消费 query，也不在 verifier 前提交四行。
 3. 利用空闲 GPU 让 lifelong B2 自然启动，但不为抢队列取消 Table 1。
 4. HM3D 与 MP3D Table 1 seal 后，再生成会议主表并决定是否需要 Table 2 Leg-3
    Novel 新 rollout。
@@ -218,7 +250,8 @@ accepted histories 可进入 B2。两者属于不同阶段的分母，不能混�
   `assigned_direction_stratum` 读取；不再访问虚构的 history-level 字段。
 - MP3D/HM3D aggregators、verifiers 与 sbatches 已参数化，但 dataset claim scope
   必须显式给出。
-- 当前仓库修改尚待完整回归、commit 与 push；在此之前不能把工作区状态称为 release。
+- 当前扩源实现已通过 129 项相关回归；提交 receipt 与本状态更新完成 commit/push 后，
+  工作区才可称为本轮 release。
 
 权威提交收据：
 
@@ -226,4 +259,5 @@ accepted histories 可进入 B2。两者属于不同阶段的分母，不能混�
 - `HM3D_TABLE1_NAVDP_AUTHORITY_TRANSACTION_CLOSURE_REPAIR_SUBMISSION_20260829.json`；
 - `HM3D_TABLE1_NAVDP_SERVER_NAMESPACE_REPAIR_SUBMISSION_20260829.json`；
 - `MP3D_TABLE1_NEW_QUERY_SUBMISSION_20260829.json`；
+- `MP3D_TABLE1_FULLMONO_SOURCE_EXPANSION_SUBMISSION_20260829.json`；
 - `HM3D_TABLE1_NAVDP_ANALYSIS_PATH_REPAIR_SUBMISSION_20260829.json`。

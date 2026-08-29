@@ -1,0 +1,18 @@
+{
+  "formal_controller_rollout_submitted": false,
+  "jobs": {
+    "ledger_and_construction_deferred": 16544776,
+    "source_collection_array": 16544773,
+    "source_smoke": 16544770
+  },
+  "new_query_policy_outcomes_read_at_submission": false,
+  "old_query_policy_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_fullmono_source_expansion_20260829/source_expansion_20260829T060541Z_f3e7c3e5",
+  "schema_version": "mp3d_table1_fullmono_source_expansion_submission_v1_20260829",
+  "scope": "fullmono_source_collection_then_outcome_blind_query_construction",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_fullmono_source_expansion_20260829/source_expansion_20260829T060541Z_f3e7c3e5_smoke",
+  "source_episodes": 64,
+  "source_scenes": 16,
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mp3d_table1_fullmono_source_expansion_f3e7c3e5ab65ba4f",
+  "task_receipt_sha256": "f3e7c3e5ab65ba4f49a6c47b1d6b29eb04fa6d6d39307c6deddcbdcf414c3f3d"
+}

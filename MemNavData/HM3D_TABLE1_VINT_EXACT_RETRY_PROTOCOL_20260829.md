@@ -1,6 +1,6 @@
 # HM3D Table-1 ViNT exact retry protocol
 
-Date frozen: 2026-08-29  
+Date frozen: 2026-08-29
 Status: infrastructure-only exact retry; no partial navigation outcome read
 
 ## Incident

@@ -1,6 +1,6 @@
 # HM3D lifelong node-affinity FQDN repair
 
-Date frozen: 2026-08-29  
+Date frozen: 2026-08-29
 Status: infrastructure-only launcher repair; no B2 navigation job was submitted
 
 ## Incident

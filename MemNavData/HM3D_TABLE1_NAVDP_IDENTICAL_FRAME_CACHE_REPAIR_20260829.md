@@ -1,6 +1,6 @@
 # HM3D Table-1 NavDP identical-frame cache repair
 
-Date frozen: 2026-08-29  
+Date frozen: 2026-08-29
 Status: result-blind transport repair; no failed-cell navigation outcome read
 
 ## Incident

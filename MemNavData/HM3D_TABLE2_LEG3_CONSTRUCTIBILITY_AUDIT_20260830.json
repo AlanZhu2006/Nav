@@ -1,0 +1,492 @@
+{
+  "audit_conclusion": {
+    "basis": "Every Novel attrition exhausted all three 5,000-attempt strata. Thousands of candidates passed every preceding geometry, direction, distance, and pairing gate; all were rejected only because they retained >=0.10 covisibility with the complete factual A+B history.",
+    "binary_role_pair_constructibility_failure": true,
+    "scientific_scope": "This explains why the prospective population gate failed; it is not a navigation-policy outcome and does not estimate SR.",
+    "side_direction_sampler_failure": false,
+    "simple_attempt_budget_failure": false
+  },
+  "novel_attrition_audit": {
+    "attempts": 195000,
+    "by_direction_stratum": {
+      "front": {
+        "attempts": 65000,
+        "candidates_reaching_final_support_check": 881,
+        "failed_history_searches": 13,
+        "rejected_as_historically_supported": 881,
+        "stage_funnel": [
+          {
+            "fraction_of_all_attempts": 0.0012615384615384615,
+            "fraction_of_stage_input": 0.0012615384615384615,
+            "incoming": 65000,
+            "rejected": 82,
+            "stage": "duplicate_position",
+            "surviving": 64918
+          },
+          {
+            "fraction_of_all_attempts": 0.0033076923076923075,
+            "fraction_of_stage_input": 0.0033118703595304846,
+            "incoming": 64918,
+            "rejected": 215,
+            "stage": "non_navigable",
+            "surviving": 64703
+          },
+          {
+            "fraction_of_all_attempts": 0.5083384615384615,
+            "fraction_of_stage_input": 0.5106718390182835,
+            "incoming": 64703,
+            "rejected": 33042,
+            "stage": "floor_mismatch",
+            "surviving": 31661
+          },
+          {
+            "fraction_of_all_attempts": 0.2564,
+            "fraction_of_stage_input": 0.526388932756388,
+            "incoming": 31661,
+            "rejected": 16666,
+            "stage": "insufficient_clearance",
+            "surviving": 14995
+          },
+          {
+            "fraction_of_all_attempts": 0.007076923076923077,
+            "fraction_of_stage_input": 0.03067689229743248,
+            "incoming": 14995,
+            "rejected": 460,
+            "stage": "consumed_identity_separation",
+            "surviving": 14535
+          },
+          {
+            "fraction_of_all_attempts": 0.024723076923076924,
+            "fraction_of_stage_input": 0.11056071551427589,
+            "incoming": 14535,
+            "rejected": 1607,
+            "stage": "unreachable",
+            "surviving": 12928
+          },
+          {
+            "fraction_of_all_attempts": 0.07726153846153846,
+            "fraction_of_stage_input": 0.3884591584158416,
+            "incoming": 12928,
+            "rejected": 5022,
+            "stage": "outside_2_9m_band",
+            "surviving": 7906
+          },
+          {
+            "fraction_of_all_attempts": 0.1046923076923077,
+            "fraction_of_stage_input": 0.8607386794839362,
+            "incoming": 7906,
+            "rejected": 6805,
+            "stage": "wrong_direction_stratum",
+            "surviving": 1101
+          },
+          {
+            "fraction_of_all_attempts": 0.0,
+            "fraction_of_stage_input": 0.0,
+            "incoming": 1101,
+            "rejected": 0,
+            "stage": "paired_unreachable",
+            "surviving": 1101
+          },
+          {
+            "fraction_of_all_attempts": 0.0,
+            "fraction_of_stage_input": 0.0,
+            "incoming": 1101,
+            "rejected": 0,
+            "stage": "paired_too_close",
+            "surviving": 1101
+          },
+          {
+            "fraction_of_all_attempts": 0.003384615384615385,
+            "fraction_of_stage_input": 0.19981834695731154,
+            "incoming": 1101,
+            "rejected": 220,
+            "stage": "paired_too_far",
+            "surviving": 881
+          },
+          {
+            "fraction_of_all_attempts": 0.013553846153846154,
+            "fraction_of_stage_input": 1.0,
+            "incoming": 881,
+            "rejected": 881,
+            "stage": "historically_supported",
+            "surviving": 0
+          }
+        ],
+        "unsupported_candidates_found": 0
+      },
+      "rear": {
+        "attempts": 65000,
+        "candidates_reaching_final_support_check": 2932,
+        "failed_history_searches": 13,
+        "rejected_as_historically_supported": 2932,
+        "stage_funnel": [
+          {
+            "fraction_of_all_attempts": 0.0014461538461538461,
+            "fraction_of_stage_input": 0.0014461538461538461,
+            "incoming": 65000,
+            "rejected": 94,
+            "stage": "duplicate_position",
+            "surviving": 64906
+          },
+          {
+            "fraction_of_all_attempts": 0.001969230769230769,
+            "fraction_of_stage_input": 0.001972082704218408,
+            "incoming": 64906,
+            "rejected": 128,
+            "stage": "non_navigable",
+            "surviving": 64778
+          },
+          {
+            "fraction_of_all_attempts": 0.5062461538461539,
+            "fraction_of_stage_input": 0.5079811046960387,
+            "incoming": 64778,
+            "rejected": 32906,
+            "stage": "floor_mismatch",
+            "surviving": 31872
+          },
+          {
+            "fraction_of_all_attempts": 0.25553846153846155,
+            "fraction_of_stage_input": 0.5211470883534136,
+            "incoming": 31872,
+            "rejected": 16610,
+            "stage": "insufficient_clearance",
+            "surviving": 15262
+          },
+          {
+            "fraction_of_all_attempts": 0.008046153846153847,
+            "fraction_of_stage_input": 0.03426811689162626,
+            "incoming": 15262,
+            "rejected": 523,
+            "stage": "consumed_identity_separation",
+            "surviving": 14739
+          },
+          {
+            "fraction_of_all_attempts": 0.023861538461538462,
+            "fraction_of_stage_input": 0.10523101974353756,
+            "incoming": 14739,
+            "rejected": 1551,
+            "stage": "unreachable",
+            "surviving": 13188
+          },
+          {
+            "fraction_of_all_attempts": 0.08033846153846154,
+            "fraction_of_stage_input": 0.39596602972399153,
+            "incoming": 13188,
+            "rejected": 5222,
+            "stage": "outside_2_9m_band",
+            "surviving": 7966
+          },
+          {
+            "fraction_of_all_attempts": 0.0682923076923077,
+            "fraction_of_stage_input": 0.5572432839568164,
+            "incoming": 7966,
+            "rejected": 4439,
+            "stage": "wrong_direction_stratum",
+            "surviving": 3527
+          },
+          {
+            "fraction_of_all_attempts": 0.0,
+            "fraction_of_stage_input": 0.0,
+            "incoming": 3527,
+            "rejected": 0,
+            "stage": "paired_unreachable",
+            "surviving": 3527
+          },
+          {
+            "fraction_of_all_attempts": 0.009153846153846153,
+            "fraction_of_stage_input": 0.1686986107173235,
+            "incoming": 3527,
+            "rejected": 595,
+            "stage": "paired_too_close",
+            "surviving": 2932
+          },
+          {
+            "fraction_of_all_attempts": 0.0,
+            "fraction_of_stage_input": 0.0,
+            "incoming": 2932,
+            "rejected": 0,
+            "stage": "paired_too_far",
+            "surviving": 2932
+          },
+          {
+            "fraction_of_all_attempts": 0.04510769230769231,
+            "fraction_of_stage_input": 1.0,
+            "incoming": 2932,
+            "rejected": 2932,
+            "stage": "historically_supported",
+            "surviving": 0
+          }
+        ],
+        "unsupported_candidates_found": 0
+      },
+      "side": {
+        "attempts": 65000,
+        "candidates_reaching_final_support_check": 2847,
+        "failed_history_searches": 13,
+        "rejected_as_historically_supported": 2847,
+        "stage_funnel": [
+          {
+            "fraction_of_all_attempts": 0.0008923076923076924,
+            "fraction_of_stage_input": 0.0008923076923076924,
+            "incoming": 65000,
+            "rejected": 58,
+            "stage": "duplicate_position",
+            "surviving": 64942
+          },
+          {
+            "fraction_of_all_attempts": 0.0028,
+            "fraction_of_stage_input": 0.0028025006929259955,
+            "incoming": 64942,
+            "rejected": 182,
+            "stage": "non_navigable",
+            "surviving": 64760
+          },
+          {
+            "fraction_of_all_attempts": 0.5104923076923077,
+            "fraction_of_stage_input": 0.5123841877702285,
+            "incoming": 64760,
+            "rejected": 33182,
+            "stage": "floor_mismatch",
+            "surviving": 31578
+          },
+          {
+            "fraction_of_all_attempts": 0.25372307692307694,
+            "fraction_of_stage_input": 0.5222623345367028,
+            "incoming": 31578,
+            "rejected": 16492,
+            "stage": "insufficient_clearance",
+            "surviving": 15086
+          },
+          {
+            "fraction_of_all_attempts": 0.007507692307692308,
+            "fraction_of_stage_input": 0.032347872199390164,
+            "incoming": 15086,
+            "rejected": 488,
+            "stage": "consumed_identity_separation",
+            "surviving": 14598
+          },
+          {
+            "fraction_of_all_attempts": 0.025107692307692307,
+            "fraction_of_stage_input": 0.11179613645704892,
+            "incoming": 14598,
+            "rejected": 1632,
+            "stage": "unreachable",
+            "surviving": 12966
+          },
+          {
+            "fraction_of_all_attempts": 0.07892307692307693,
+            "fraction_of_stage_input": 0.3956501619620546,
+            "incoming": 12966,
+            "rejected": 5130,
+            "stage": "outside_2_9m_band",
+            "surviving": 7836
+          },
+          {
+            "fraction_of_all_attempts": 0.06881538461538461,
+            "fraction_of_stage_input": 0.5708269525267994,
+            "incoming": 7836,
+            "rejected": 4473,
+            "stage": "wrong_direction_stratum",
+            "surviving": 3363
+          },
+          {
+            "fraction_of_all_attempts": 0.0,
+            "fraction_of_stage_input": 0.0,
+            "incoming": 3363,
+            "rejected": 0,
+            "stage": "paired_unreachable",
+            "surviving": 3363
+          },
+          {
+            "fraction_of_all_attempts": 0.004876923076923077,
+            "fraction_of_stage_input": 0.09426107641986321,
+            "incoming": 3363,
+            "rejected": 317,
+            "stage": "paired_too_close",
+            "surviving": 3046
+          },
+          {
+            "fraction_of_all_attempts": 0.0030615384615384615,
+            "fraction_of_stage_input": 0.06533158240315168,
+            "incoming": 3046,
+            "rejected": 199,
+            "stage": "paired_too_far",
+            "surviving": 2847
+          },
+          {
+            "fraction_of_all_attempts": 0.0438,
+            "fraction_of_stage_input": 1.0,
+            "incoming": 2847,
+            "rejected": 2847,
+            "stage": "historically_supported",
+            "surviving": 0
+          }
+        ],
+        "unsupported_candidates_found": 0
+      }
+    },
+    "candidates_reaching_final_support_check": 6660,
+    "deterministic_local_attempts": 2366,
+    "deterministic_seeded_uniform_attempts": 192634,
+    "histories": 13,
+    "rejected_as_historically_supported": 6660,
+    "stage_funnel": [
+      {
+        "fraction_of_all_attempts": 0.0012,
+        "fraction_of_stage_input": 0.0012,
+        "incoming": 195000,
+        "rejected": 234,
+        "stage": "duplicate_position",
+        "surviving": 194766
+      },
+      {
+        "fraction_of_all_attempts": 0.002692307692307692,
+        "fraction_of_stage_input": 0.0026955423431194356,
+        "incoming": 194766,
+        "rejected": 525,
+        "stage": "non_navigable",
+        "surviving": 194241
+      },
+      {
+        "fraction_of_all_attempts": 0.5083589743589744,
+        "fraction_of_stage_input": 0.5103453956682678,
+        "incoming": 194241,
+        "rejected": 99130,
+        "stage": "floor_mismatch",
+        "surviving": 95111
+      },
+      {
+        "fraction_of_all_attempts": 0.25522051282051283,
+        "fraction_of_stage_input": 0.5232622935307167,
+        "incoming": 95111,
+        "rejected": 49768,
+        "stage": "insufficient_clearance",
+        "surviving": 45343
+      },
+      {
+        "fraction_of_all_attempts": 0.0075435897435897434,
+        "fraction_of_stage_input": 0.03244161171514898,
+        "incoming": 45343,
+        "rejected": 1471,
+        "stage": "consumed_identity_separation",
+        "surviving": 43872
+      },
+      {
+        "fraction_of_all_attempts": 0.024564102564102564,
+        "fraction_of_stage_input": 0.10918125455871626,
+        "incoming": 43872,
+        "rejected": 4790,
+        "stage": "unreachable",
+        "surviving": 39082
+      },
+      {
+        "fraction_of_all_attempts": 0.07884102564102564,
+        "fraction_of_stage_input": 0.39337802568957575,
+        "incoming": 39082,
+        "rejected": 15374,
+        "stage": "outside_2_9m_band",
+        "surviving": 23708
+      },
+      {
+        "fraction_of_all_attempts": 0.0806,
+        "fraction_of_stage_input": 0.6629407794837185,
+        "incoming": 23708,
+        "rejected": 15717,
+        "stage": "wrong_direction_stratum",
+        "surviving": 7991
+      },
+      {
+        "fraction_of_all_attempts": 0.0,
+        "fraction_of_stage_input": 0.0,
+        "incoming": 7991,
+        "rejected": 0,
+        "stage": "paired_unreachable",
+        "surviving": 7991
+      },
+      {
+        "fraction_of_all_attempts": 0.004676923076923077,
+        "fraction_of_stage_input": 0.11412839444374921,
+        "incoming": 7991,
+        "rejected": 912,
+        "stage": "paired_too_close",
+        "surviving": 7079
+      },
+      {
+        "fraction_of_all_attempts": 0.002148717948717949,
+        "fraction_of_stage_input": 0.05918915101002967,
+        "incoming": 7079,
+        "rejected": 419,
+        "stage": "paired_too_far",
+        "surviving": 6660
+      },
+      {
+        "fraction_of_all_attempts": 0.03415384615384615,
+        "fraction_of_stage_input": 1.0,
+        "incoming": 6660,
+        "rejected": 6660,
+        "stage": "historically_supported",
+        "surviving": 0
+      }
+    ],
+    "stratum_searches": 39,
+    "unsupported_candidates_found": 0
+  },
+  "query_policy_outcomes_read": false,
+  "revisit_attrition_audit": {
+    "fully_scored": 1256,
+    "grid_attempts": 3456,
+    "histories": 1,
+    "interpretation_boundary": "The receipt does not separate candidates below 0.55 from candidates above 0.90, so no finer Revisit cause is inferred.",
+    "support_band_rejects": 1256
+  },
+  "schema_version": "hm3d_table2_leg3_constructibility_audit_v1_20260830",
+  "sealed_population": {
+    "accepted_novel_proposal_modes": {
+      "deterministic_local_polar_grid": 6,
+      "deterministic_seeded_uniform_fallback": 2
+    },
+    "attrition": {
+      "accepted": 8,
+      "no_new_standard_revisit_after_combined_AB": 1,
+      "no_new_unsupported_novel_after_combined_AB": 13
+    },
+    "combined_prefix_steps": {
+      "accepted": {
+        "maximum": 601,
+        "median": 349.5,
+        "minimum": 179,
+        "n": 8
+      },
+      "novel_attrition": {
+        "maximum": 823,
+        "median": 472,
+        "minimum": 194,
+        "n": 13
+      }
+    },
+    "constructible_histories": 8,
+    "constructible_scene_clusters": 6,
+    "direction_strata": {
+      "front": 4,
+      "rear": 4,
+      "side": 0
+    },
+    "factual_AB_prefixes": 22,
+    "factual_AB_scene_clusters": 15,
+    "formal_policy_evaluation_authorized": false,
+    "selected_revisit_source_segments": {
+      "A": 3,
+      "B": 5
+    }
+  },
+  "source_completion_count": 22,
+  "source_completion_digest_sha256": "800c0987da592d2bb947b773f528eef90056de3496911657eaf316cbc83a74b2",
+  "source_files": {
+    "construction_verification_sha256": "75da29bdd6fccaf73843694f0d9820f75b528fd2d5d23c5a7c8f19ca79f433e8",
+    "population_receipt_sha256": "6ec8e202754ac716f055e11967564a049d36c4b0bd4f9d5fd2e70d80eb1ba948"
+  },
+  "source_protocol_sha256": "39b1ae703ac2984c3e9d6e20561347f918d9d5af2526f6ea4d3d9ae6699333c7",
+  "source_uri": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table2_leg3_mixed_role_20260829/construction_repair_20260829T064841Z_8e909a5b",
+  "status": "complete_construction_only_audit",
+  "threshold_or_method_changed": false
+}

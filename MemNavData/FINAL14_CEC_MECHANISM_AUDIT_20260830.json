@@ -1,0 +1,132 @@
+{
+  "conclusions": {
+    "closed_loop_strength_boundary": "Strict CEC is 28/42 versus 25/42 for proposal-matched finite PnP (p=0.375) and 23/42 for raw DINO (p=0.0625); these are mechanism trends, not confirmed superiority claims.",
+    "finite_pose_is_not_authority": "A finite PnP pose authorizes 18/21 constructed unsupported Novel queries, while strict CEC authorizes 2/21.",
+    "revisit_addressability": "DINO top-8 contains a >=0.5-covis historical address in 21/21 supported Revisit queries; top-1 does so in 19/21.",
+    "revisit_utility_preserved": "Finite-PnP and strict CEC both authorize 21/21 and succeed on 20/21 Revisit queries."
+  },
+  "diagnostic_contract": {
+    "novel_construction_max_covis_exclusive": 0.1,
+    "revisit_construction_max_covis_minimum": 0.55,
+    "support_metric_role": "address-coverage diagnostic only; not localization accuracy",
+    "supported_anchor_threshold_covis": 0.5,
+    "threshold_is_runtime_gate": false,
+    "threshold_selected_after_navigation_outcomes": false
+  },
+  "operational_ladder": {
+    "proposal_matched_finite_pnp": {
+      "authority_policy": "finite PnP pose available",
+      "by_role": {
+        "novel": {
+          "authorized": 18,
+          "n": 21,
+          "successes": 5
+        },
+        "revisit": {
+          "authorized": 21,
+          "n": 21,
+          "successes": 20
+        }
+      },
+      "proposal_matched_to_strict_cec": true
+    },
+    "raw_dino_always_on": {
+      "by_role": {
+        "novel": {
+          "authorized": 21,
+          "n": 21,
+          "successes": 3
+        },
+        "revisit": {
+          "authorized": 21,
+          "n": 21,
+          "successes": 20
+        }
+      },
+      "interpretation": "same population and monocular controller depth, but a different direct-top1 candidate contract",
+      "proposal_matched_to_strict_cec": false
+    },
+    "strict_cec": {
+      "authority_policy": "frozen operational certificate",
+      "by_role": {
+        "novel": {
+          "authorized": 2,
+          "n": 21,
+          "successes": 8
+        },
+        "revisit": {
+          "authorized": 21,
+          "n": 21,
+          "successes": 20
+        }
+      },
+      "proposal_matched_to_finite_pnp": true
+    }
+  },
+  "paired_closed_loop_contrasts": {
+    "strict_cec_minus_proposal_matched_finite_pnp": {
+      "exact_mcnemar_two_sided_p": 0.375,
+      "gains": 4,
+      "losses": 1,
+      "risk_difference_pp": 7.142857142857142
+    },
+    "strict_cec_minus_raw_dino_always_on": {
+      "exact_mcnemar_two_sided_p": 0.0625,
+      "gains": 5,
+      "losses": 0,
+      "risk_difference_pp": 11.904761904761903
+    }
+  },
+  "population": {
+    "benchmark_manifest_sha256": "7468703a9efbb10e801ffdd226911f696a30fa9432ef9ab486d3134f6e40fe6a",
+    "goal_a_history_boundary": "original metric-NavDP Goal-A RGB replay; this is not a full-mono Goal-A confirmation",
+    "histories": 21,
+    "novel_queries": 21,
+    "queries": 42,
+    "query_controller_depth": "monocular_sidecar",
+    "revisit_queries": 21,
+    "runtime_role_visibility": "none",
+    "scene_clusters": 10
+  },
+  "proposal_diagnostics": {
+    "novel": {
+      "dino_top1_supported": 0,
+      "dino_top8_contains_supported_anchor": 0,
+      "geometry_selected_supported": 0,
+      "maximum_constructed_history_covis": 0.09343065693430656,
+      "n": 21
+    },
+    "revisit": {
+      "dino_top1_supported": 19,
+      "dino_top8_contains_supported_anchor": 21,
+      "geometry_selected_supported": 19,
+      "maximum_constructed_history_covis": 0.7213167146053052,
+      "n": 21
+    }
+  },
+  "revisit_selected_dino_rank_histogram": {
+    "1": 5,
+    "2": 4,
+    "3": 0,
+    "4": 3,
+    "5": 3,
+    "6": 1,
+    "7": 2,
+    "8": 3
+  },
+  "schema_version": "final14_cec_mechanism_audit_v1_20260830",
+  "scope": "consumed_final14_attribution_not_fresh_confirmation",
+  "source_sha256": {
+    "authority_summary": "5669fcb50ee2c26c764a2179c7b3f88ed513520fe6f3e2a118ae1908f0821fe2",
+    "authority_verification": "99668cd8d51006b001cfe55db3dcd71130ff8a15b45bd51569f965aa6ec8eb8c",
+    "ledger": "4e2abfd2f6781e636260206ae0675813f1b7227e09ab4709742bd8bcc2715277",
+    "mono_summary": "ae24138b3cd7fecb737dffe8454eb91aaae8f5aa19d4e679e67e039d793e17b7",
+    "mono_verification": "7bf7e496c1a9cc53f3dc9ef0ff0194cce61f03d554a84678210320f699fbb35f"
+  },
+  "source_uris": {
+    "authority_summary": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_authority_20260828/formal_3f5783aca521b0a5/POSTHOC/final14_cec_authority_ablation_summary.json",
+    "ledger": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_cec_authority_20260828/formal_3f5783aca521b0a5/POSTHOC/final14_cec_mechanism_ledger_20260830.json",
+    "mono_summary": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_mono_factorial_20260819/formal_20260819T124820Z_5690569a/POSTHOC/final14_mono_factorial_summary.json"
+  },
+  "status": "complete_posthoc_mechanism_audit"
+}

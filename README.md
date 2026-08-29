@@ -24,7 +24,8 @@ path to NavDP.
 
 ## Start here
 
-- [Current workspace and release source of truth](MemNavData/STATUS_20260828_WORKSPACE_MAIN_RELEASE.md)
+- [Current conference-completion audit](MemNavData/STATUS_20260830_CONFERENCE_COMPLETION_AUDIT.md)
+- [Workspace and release source of truth](MemNavData/STATUS_20260828_WORKSPACE_MAIN_RELEASE.md)
 - [Previous full project ledger](MemNavData/STATUS_20260825_GIT_RELEASE.md)
 - [Architecture and claim boundaries](MemNavData/ARCHITECTURE_20260819_PAPER_SOURCE_OF_TRUTH.md)
 - [Final14 formal result](MemNavData/FINAL14_CEC_PI3X_FORMAL_RESULT_20260818.md)

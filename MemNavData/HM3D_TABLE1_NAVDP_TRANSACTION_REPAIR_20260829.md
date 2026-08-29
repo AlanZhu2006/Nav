@@ -96,6 +96,14 @@ frozen package nor changes any scientific factor.  The first repair receipt is
 retained at SHA-256
 `a5b19eaab1a76eae0e1c2ac4f71305b12a34cf626cdee5816b8c081dcaaf7f86`.
 
+The second repair submission passed the real import gate and all five Slurm
+test-only gates. Its immutable evaluator bundle is
+`hm3d_table1_navdp_transport_repair_6edacc0c6c13b389`, receipt SHA-256
+`6edacc0c6c13b389d9eee5b1371d0353b14ad94c4dd6ea4eb520bd4bde63ffaa`.
+Submitted jobs are replacement smoke `16528367`, formal array `16528369`,
+aggregate `16528383`, independent verifier `16528385`, and replacement joint
+seal `16528391` (also dependent on the unchanged ViNT verifier `16526759`).
+
 ## Prevention
 
 The primary submitter and NavDP Slurm wrapper now treat model/base source and

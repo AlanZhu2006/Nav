@@ -1,0 +1,21 @@
+{
+  "schema_version": "hm3d_table2_leg3_finalizer_import_repair_v1_20260829",
+  "failure_job": 16545223,
+  "failure_stage": "construction_population_finalize_before_output",
+  "failure_class": "cpu_analysis_imported_habitat_builder_dependency_chain",
+  "construction_array": 16545222,
+  "construction_cells_completed": 22,
+  "construction_cells_changed": false,
+  "query_policy_outcomes_read": false,
+  "old_task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table2_leg3_repair_8e909a5ba81c146d",
+  "old_task_receipt_sha256": "8e909a5ba81c146dd2fe7c9e179fee553672608ee78c08ab4cbfc5b8be23baf1",
+  "protocol_sha256": "39b1ae703ac2984c3e9d6e20561347f918d9d5af2526f6ea4d3d9ae6699333c7",
+  "repair_scope": [
+    "move_role_contract_to_pure_python_module",
+    "reuse_immutable_construction_fragments",
+    "rerun_finalizer_and_independent_verifier_only"
+  ],
+  "scientific_factors_changed": false,
+  "future_policy_evaluation_submitted": false
+}
+

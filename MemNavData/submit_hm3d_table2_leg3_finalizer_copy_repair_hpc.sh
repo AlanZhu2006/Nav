@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export REPAIR_DOC=MemNavData/HM3D_TABLE2_LEG3_FINALIZER_COPY_REPAIR_20260829.md
+export REPAIR_JSON=MemNavData/hm3d_table2_leg3_finalizer_copy_repair_20260829.json
+export BUNDLE_LABEL=hm3d_table2_leg3_finalize_copy_repair
+export SUBMISSION_RECEIPT=MemNavData/HM3D_TABLE2_LEG3_FINALIZER_COPY_REPAIR_SUBMISSION_20260829.json
+export SUBMISSION_SCHEMA=hm3d_table2_leg3_finalizer_copy_repair_submission_v1_20260829
+export SUBMISSION_SCOPE="reuse immutable fragments; repair private copy modes; rerun finalizer and verifier only"
+export SUBMISSION_DRIVER=MemNavData/submit_hm3d_table2_leg3_finalizer_copy_repair_hpc.sh
+
+exec bash MemNavData/submit_hm3d_table2_leg3_finalizer_repair_hpc.sh

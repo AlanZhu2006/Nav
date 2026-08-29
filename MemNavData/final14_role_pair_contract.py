@@ -11,6 +11,8 @@ POPULATION_SCHEMA = "final14_role_pair_population_v1_20260817"
 PROTOCOLS = ("natural_direction", "hard_support")
 STRATA = ("front", "side", "rear")
 FROZEN_SOURCE_EPISODES_PER_SCENE = 8
+NOVEL_ATTEMPTS = 5000
+DEPTH_TOLERANCE_M = 0.30
 
 
 def stable_u32(*parts: object) -> int:
@@ -69,8 +71,44 @@ def support_band(max_covis: float, argmax_gap: int) -> str | None:
     return None
 
 
+def role_contract(*, support: str) -> dict[str, object]:
+    """Return the pure-data role-pair contract without simulator imports."""
+
+    if support not in {"standard", "hard"}:
+        raise ValueError("invalid Revisit support band")
+    revisit_minimum = 0.55 if support == "standard" else 0.25
+    revisit_maximum = 0.90 if support == "standard" else 0.55
+    return {
+        "online_history": "frozen_native_navdp_goal_a_rgb_depth_pose_trace",
+        "query_execution": "independent_reset_and_exact_online_a_replay",
+        "runtime_role_visibility": "none",
+        "analysis_role_location": "sidecar_only_never_forwarded_to_policy",
+        "pairs_per_online_history": 1,
+        "minimum_query_geodesic_m": 2.0,
+        "maximum_query_geodesic_m": 9.0,
+        # Natural Novel and Revisit are independently constructed.  These
+        # permissive bounds only describe their recorded diagnostic gap.
+        "maximum_role_distance_error_m": 7.0,
+        "maximum_role_initial_path_bearing_error_deg": 180.0,
+        "novel_max_online_a_covis_exclusive": 0.10,
+        "revisit_min_online_a_covis_inclusive": revisit_minimum,
+        "revisit_max_online_a_covis_inclusive": revisit_maximum,
+        "revisit_max_online_a_covis_is_exclusive": support == "hard",
+        "minimum_clearance_m": 0.30,
+        "same_floor_tolerance_m": 0.20,
+        "minimum_novel_pair_separation_m": 1.0,
+        "novel_candidate_attempts": NOVEL_ATTEMPTS,
+        "novel_covis_stride": 1,
+        "covis_depth_tolerance_m": DEPTH_TOLERANCE_M,
+        "final14_revisit_support_band": support,
+        "final14_natural_direction_strata": list(STRATA),
+    }
+
+
 __all__ = [
+    "DEPTH_TOLERANCE_M",
     "FROZEN_SOURCE_EPISODES_PER_SCENE",
+    "NOVEL_ATTEMPTS",
     "POPULATION_SCHEMA",
     "PROTOCOLS",
     "SCENE_BUILD_SCHEMA",
@@ -80,6 +118,7 @@ __all__ = [
     "goal_yaw_bin",
     "goal_yaw_radians",
     "relative_direction_degrees",
+    "role_contract",
     "stable_u32",
     "support_band",
     "wrap_radians",

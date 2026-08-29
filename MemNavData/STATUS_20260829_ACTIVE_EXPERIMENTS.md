@@ -1,6 +1,6 @@
 # 2026-08-29 会议实验活跃总账
 
-更新时间：2026-08-29 15:35（Asia/Shanghai）。本文件是当前调度与证据边界的
+更新时间：2026-08-29 16:17（Asia/Shanghai）。本文件是当前调度与证据边界的
 唯一简表。任何 active rollout 都不读取 partial SR、SPL、final distance 或逐臂
 outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，才允许打开结果。
 
@@ -27,14 +27,14 @@ outcome；只有 independent raw-file verifier 通过并写入最终 seal 后，
   36-scene construction/verifier 链已提交，但仍未运行 query controller。
 - **HM3D lifelong B2 仍在等待 GPU 优先级。** 它是会议 Table 2 的补充机制实验，
   不是 powered confirmation。
-- **会议 Table 2 的主缺口已经冻结为一项新的 construction-only 实验。** 它不复用
+- **会议 Table 2 的新 construction-only 实验给出有效的 constructibility null。** 它不复用
   已经跑过的旧 Goal-C，而是在 22 条 sealed actual-mono `Novel A -> Novel B` 成功
   前缀上重新构造一条 Novel-C 与一条 Revisit-C；两者都对完整 A+B history 定义，
   runtime role 隐藏。首轮 smoke 在 policy 前拦截了 task-bundle dependency closure
   缺失；修复只补齐精确依赖和 resolved-signature preflight。replacement
-  smoke / 22-cell construction / finalizer / independent verifier 为
-  `16545221 / 16545222 / 16545223 / 16545224`；replacement smoke 已通过，formal
-  construction 已启动；verifier 过门前禁止闭环。
+  22/22 构造 cells 均完成；经两个 result-blind finalizer 基础设施修复后，独立 verifier
+  得到 8 histories / 6 scenes、front/side/rear `4/0/4`，未过冻结的 16/10/每方向3
+  power gate。因此 controller rollout 没有提交，阈值也不会事后放宽。
 
 ## 2. HM3D Table 1：跨 controller 正式结果与修复
 
@@ -268,9 +268,18 @@ Habitat cold import、resolved source-path/signature、bundle SHA、JSON、Pytho
 
 replacement smoke `16545221` 已于 1 分 29 秒完成并返回 `0:0`；它在真实 H100/Habitat
 进程中通过了 dependency source-path/signature、输入哈希和单个 prefix 构造。随后
-22-cell formal construction `16545222` 自动启动，并发严格为 2。15:35 时 12 个 cells
-已结构完成、2 个正在运行，finalizer/verifier 按依赖等待；尚未读取任何构造 population
-统计。
+22-cell formal construction `16545222` 全部 `COMPLETED 0:0`。原 finalizer
+`16545223` 误导入完整 Habitat builder，在 CPU 环境缺 `quaternion` 时 fail closed；
+pure-contract replacement `16546413` 又确定性暴露 copytree 保留只读 fragment mode。
+两轮均未生成 canonical population 或 policy outcome。最终 copy-mode repair 只修改私有
+staging sidecar 的 owner-write 与异常清理，不触碰 source fragments；replacement
+finalizer/verifier `16546714 / 16546717` 均完成。
+
+独立结构复算为：8 histories、6 scene clusters、16 queries，front/side/rear
+`4/0/4`，旧 B/C identity overlap 为 0，且 `policy_outcomes_read=false`。14 条 attrition
+中 13 条为 `no_new_unsupported_novel_after_combined_AB`，1 条为
+`no_new_standard_revisit_after_combined_AB`。因此
+`formal_policy_evaluation_authorized=false`，Table-2 controller rollout 禁止提交。
 
 闭环阶段也已 result-blind 准备完成，但尚未提交：现有 query runner 新增显式
 `actual_ab` history contract，运行前要求 A/B 两段长度、prefix receipt 与逐帧 trace
@@ -291,7 +300,7 @@ verifier 未授权时 fail closed。
 |---|---|---|
 | Table 1 HM3D 四行 | ViNT 两行成立；NavDP 第三轮 smoke 已通过，formal 正在运行 | `16544385 -> 16544386 -> 16544387 -> 16544388` 全链 seal |
 | Table 1 MP3D 四行 | 首轮 14 histories / 10 scenes / side 0 未过 power gate；full-mono source expansion 已完成并冻结 36 scenes / 104 source traces；新 construction 已提交 | `16545793 -> 16545794 -> 16545795`；仍禁止 controller rollout |
-| Table 2 HM3D by leg | 22 条 factual A/B prefix 已封；replacement smoke 已通过、formal construction 正在运行；专用 actual-AB paired runtime 与独立分析已预备但未提交；B2 仍等待 | `16545222 -> 16545223 -> 16545224`；过 power gate 后才运行 `submit_hm3d_table2_leg3_navdp_hpc.sh` |
+| Table 2 HM3D by leg | 22 条 factual A/B prefix 已封；新 Leg-3 构造只保留 8 histories / 6 scenes、side 0，未过冻结 power gate；controller 未提交；B2 仍等待 | 保留 constructibility null；不放宽阈值，Table 1 完成前不启动 outcome-aware 扩样 |
 | Depth ablation | 已有 Gate C/D、Final14 factorial 与 full-mono 证据 | 先审计能否同 population 重组，禁止拼不同分母 |
 | CEC mechanism ablation | Raw/CEC/known-role 底层证据大部分已有 | 统一导出 retrieval accuracy、FA/FR；不急着重跑 |
 | Real robot | 软件合约与 no-motion transport 已有 | 仍缺冻结 protocol 下的 paired autonomous trials |
@@ -302,9 +311,10 @@ verifier 未授权时 fail closed。
 1. 让已通过 smoke 的 HM3D NavDP 54-rank formal 完成并封存；期间不读 partial SR。
 2. 让 MP3D 36-scene construction/verifier 自然完成；不降低阈值、不复用已消费
    query，也不在 verifier 授权前提交四行。
-3. 让 Table 2 新 Leg-3 construction-only DAG 先过独立 power gate；只有授权后才提交
-   `mono_native / mono_cec`，不复用旧 Goal-C outcome。
-4. 利用空闲 GPU 让 lifelong B2 自然启动，但不为抢队列取消 Table 1。
+3. Table 2 新 Leg-3 已在独立 gate 停止；保留 null，不运行其 controller，也不按当前
+   构造结果调阈值。
+4. 利用空闲 GPU 让 lifelong B2 自然启动，但不为抢队列取消 Table 1；它始终标注为
+   underpowered mechanism evidence。
 
 统一方法名、输入模态、hidden-role、分母、统计与结果开放规则见
 `CONFERENCE_EXPERIMENT_CONTRACT_20260829.md`。该契约只索引冻结 protocol，不替代

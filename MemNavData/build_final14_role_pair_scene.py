@@ -28,6 +28,8 @@ import numpy as np
 import build_shared_online_double_revisit as history_tools
 import build_shared_online_role_pairs as pair_tools
 from final14_role_pair_contract import (
+    DEPTH_TOLERANCE_M,
+    NOVEL_ATTEMPTS,
     PROTOCOLS,
     SCENE_BUILD_SCHEMA,
     STRATA,
@@ -36,6 +38,7 @@ from final14_role_pair_contract import (
     goal_yaw_bin,
     goal_yaw_radians,
     relative_direction_degrees,
+    role_contract,
     stable_u32,
     support_band,
 )
@@ -48,8 +51,6 @@ END_MARGIN_FRAMES = 16
 SOURCE_FRAME_STRIDE = 8
 MAX_SOURCE_FRAMES = 6
 MAX_HISTORIES_PER_SCENE = 3
-NOVEL_ATTEMPTS = 5000
-DEPTH_TOLERANCE_M = 0.30
 
 
 class NaturalNovelConstructionError(RuntimeError):
@@ -538,38 +539,6 @@ def sample_natural_novel(
         }
         return record, diagnostics
     raise NaturalNovelConstructionError(diagnostics)
-
-
-def role_contract(*, support: str) -> dict[str, Any]:
-    require(support in {"standard", "hard"}, "invalid Revisit support band")
-    revisit_minimum = 0.55 if support == "standard" else 0.25
-    revisit_maximum = 0.90 if support == "standard" else 0.55
-    return {
-        "online_history": "frozen_native_navdp_goal_a_rgb_depth_pose_trace",
-        "query_execution": "independent_reset_and_exact_online_a_replay",
-        "runtime_role_visibility": "none",
-        "analysis_role_location": "sidecar_only_never_forwarded_to_policy",
-        "pairs_per_online_history": 1,
-        "minimum_query_geodesic_m": 2.0,
-        "maximum_query_geodesic_m": 9.0,
-        # Natural Novel and Revisit are independently constructed.  These
-        # permissive bounds exist only because the legacy role-pair container
-        # records their diagnostic difference; they are not matching gates.
-        "maximum_role_distance_error_m": 7.0,
-        "maximum_role_initial_path_bearing_error_deg": 180.0,
-        "novel_max_online_a_covis_exclusive": 0.10,
-        "revisit_min_online_a_covis_inclusive": revisit_minimum,
-        "revisit_max_online_a_covis_inclusive": revisit_maximum,
-        "revisit_max_online_a_covis_is_exclusive": support == "hard",
-        "minimum_clearance_m": 0.30,
-        "same_floor_tolerance_m": 0.20,
-        "minimum_novel_pair_separation_m": 1.0,
-        "novel_candidate_attempts": NOVEL_ATTEMPTS,
-        "novel_covis_stride": 1,
-        "covis_depth_tolerance_m": DEPTH_TOLERANCE_M,
-        "final14_revisit_support_band": support,
-        "final14_natural_direction_strata": list(STRATA),
-    }
 
 
 def _write_goal(

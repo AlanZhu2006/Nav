@@ -1,8 +1,13 @@
 from copy import deepcopy
+import stat
 from pathlib import Path
 
 import pytest
 
+from MemNavData.final14_role_pair_contract import role_contract
+from MemNavData.finalize_hm3d_table2_leg3_mixed_role import (
+    remove_temporary_tree,
+)
 from MemNavData.hm3d_table2_leg3_mixed_role import (
     compose_actual_ab_trace,
     load_protocol,
@@ -71,6 +76,32 @@ def test_protocol_is_frozen_and_self_consistent() -> None:
     payload = load_protocol(PROTOCOL)
     assert payload["population_gate"]["minimum_histories"] == 16
     assert payload["leg3_queries"]["both_query_identities_are_new"] is True
+
+
+def test_role_contract_is_pure_and_matches_the_frozen_standard_band() -> None:
+    contract = role_contract(support="standard")
+    assert contract["runtime_role_visibility"] == "none"
+    assert contract["novel_max_online_a_covis_exclusive"] == 0.10
+    assert contract["revisit_min_online_a_covis_inclusive"] == 0.55
+    assert contract["revisit_max_online_a_covis_inclusive"] == 0.90
+    assert contract["novel_candidate_attempts"] == 5000
+    assert contract["covis_depth_tolerance_m"] == 0.30
+    with pytest.raises(ValueError, match="invalid Revisit support band"):
+        role_contract(support="unknown")
+
+
+def test_read_only_temporary_tree_is_removable(tmp_path: Path) -> None:
+    tree = tmp_path / "population.tmp.test"
+    child = tree / "scene" / "role_pairs.json"
+    child.parent.mkdir(parents=True)
+    child.write_text("{}")
+    child.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+    child.parent.chmod(
+        stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP
+        | stat.S_IROTH | stat.S_IXOTH
+    )
+    remove_temporary_tree(tree)
+    assert not tree.exists()
 
 
 def test_stratum_order_balances_the_preferred_direction() -> None:

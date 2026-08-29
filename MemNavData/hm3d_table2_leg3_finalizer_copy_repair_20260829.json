@@ -1,0 +1,21 @@
+{
+  "schema_version": "hm3d_table2_leg3_finalizer_copy_repair_v1_20260829",
+  "failure_job": 16546413,
+  "cancelled_verifier_job": 16546417,
+  "failure_stage": "private_population_staging_before_canonical_output",
+  "failure_class": "copytree_preserved_read_only_fragment_mode",
+  "construction_cells_changed": false,
+  "canonical_population_created": false,
+  "query_policy_outcomes_read": false,
+  "prior_repair_task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table2_leg3_finalize_repair_cdc2611add079b51",
+  "prior_repair_task_receipt_sha256": "cdc2611add079b5104e3d1877d7067c4852cd009b38f560d78506ea1ae9227b4",
+  "protocol_sha256": "39b1ae703ac2984c3e9d6e20561347f918d9d5af2526f6ea4d3d9ae6699333c7",
+  "repair_scope": [
+    "owner_write_only_on_private_sidecar_copy",
+    "deterministic_read_only_staging_cleanup",
+    "rerun_finalizer_and_independent_verifier_only"
+  ],
+  "scientific_factors_changed": false,
+  "future_policy_evaluation_submitted": false
+}
+

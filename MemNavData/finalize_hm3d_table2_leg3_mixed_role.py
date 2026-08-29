@@ -6,11 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
 
-import build_final14_role_pair_scene as role_builder
+from final14_role_pair_contract import role_contract
 from hm3d_table2_leg3_mixed_role import (
     FRAGMENT_SCHEMA,
     POPULATION_SCHEMA,
@@ -20,6 +21,20 @@ from hm3d_table2_leg3_mixed_role import (
     sha256_file,
 )
 from shared_online_role_pair_contract import validate_manifest
+
+
+def remove_temporary_tree(path: Path) -> None:
+    """Remove a private staging tree even when copied inputs are read-only."""
+
+    if not path.exists():
+        return
+    for child in sorted(path.rglob("*"), reverse=True):
+        try:
+            child.chmod(child.stat().st_mode | stat.S_IWUSR)
+        except FileNotFoundError:
+            pass
+    path.chmod(path.stat().st_mode | stat.S_IWUSR)
+    shutil.rmtree(path)
 
 
 def finalize(*, protocol_path: Path, source_root: Path, fragments: Path,
@@ -109,6 +124,7 @@ def finalize(*, protocol_path: Path, source_root: Path, fragments: Path,
             row["online_a_trace_sha256"] = sha256_file(
                 destination_prefix / "online_a_trace.json"
             )
+            sidecar.chmod(sidecar.stat().st_mode | stat.S_IWUSR)
             sidecar.write_text(json.dumps(
                 row, indent=2, sort_keys=True, allow_nan=False,
             ) + "\n")
@@ -116,7 +132,7 @@ def finalize(*, protocol_path: Path, source_root: Path, fragments: Path,
             accepted.append(row)
 
         accepted.sort(key=lambda row: int(row["table2_source_population_index"]))
-        contract = role_builder.role_contract(support="standard")
+        contract = role_contract(support="standard")
         contract.update({
             "online_history_semantics": (
                 "hash_verified_actual_mono_Novel_A_then_Novel_B_prefix"
@@ -218,7 +234,7 @@ def finalize(*, protocol_path: Path, source_root: Path, fragments: Path,
         )
         temporary.replace(out)
     except BaseException:
-        shutil.rmtree(temporary, ignore_errors=True)
+        remove_temporary_tree(temporary)
         raise
     return population
 

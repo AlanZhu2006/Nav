@@ -58,13 +58,36 @@ successful A+B prefixes，或改用更大场景数据集；然后原封不动地
 
 ## 5. 当前 HPC
 
-截至 2026-08-30 北京时间早晨：
+截至 2026-08-30 10:48（北京时间）的再次核验：
 
 - `16540468_[0]`：HM3D B2 true-stack smoke，`h100_tandon`，1 小时，因
-  `QOSMaxGRESPerUser` 等待；scheduler estimate 为 2026-08-31 19:55（北京）；
+  `Priority` 等待；先前的 scheduler estimate 已撤回，当前 `StartTime=Unknown`；
 - `16540469`：CPU deferred launcher，正确等待 smoke dependency；
 - 没有新的 B2 SR，不能读取 partial result。
 
-该 smoke 必须在 factual-B/C 的原 node 上 exact replay；因此不能为了更快排队随意转到
-L40S 或 5090。若取消/重提，必须保持 node affinity、immutable bundle 和未读 outcome
-边界。
+该 smoke 被显式绑定到 `ReqNodeList=gh005`。复核时该节点四张 GPU 已全部分配给两个
+长任务，Slurm 因此暂时无法给出 backfill 起点；这不是代码、依赖、QOS 或 controller
+故障。B2 复用的 factual-B/C RGB 在该节点生成，跨节点 replay 已知会改变渲染哈希，
+所以不能为了缩短排队把任务迁移到另一台 H100/L40S/5090，也不应取消后无修改重提。
+它保持为非阻塞、underpowered mechanism evidence，论文和真机关键路径继续独立推进。
+
+## 6. 投稿关键路径补充审计
+
+当前不再缺新的 controller、matcher 或 learned head。下一份时间应按以下顺序使用：
+
+1. **正式真机 outcome：**先完成独立的 scale-free arrival calibration 与 held-out
+   confirmation，再执行已经冻结的 20 个 native/CEC pairs；现有 transport、no-motion、
+   手动干预或 powered debugging trace 均不能填入结果表。
+2. **实现与叙事对齐：**长程 memory 是 causal RGB/descriptor address 与 LingBot
+   geometry witness 的组合，不是 LingBot KV cache 单独完成内容寻址。可以保留
+   “one causal RGB stream, two time scales, one frozen policy”，但不能把 state-only
+   retrieval 写成已实现能力；candidate-free GCT 的负结果恰好说明显式 address 仍必要。
+3. **论文系统证据：**补一张基于冻结 episode 的 qualitative trajectory/evidence 图，
+   并在最终 RTX+Jetson 共驻配置上报告 end-to-end first-use/cached latency。已有 eager
+   microbenchmark 只证明实现等价与速度/显存交换，不替代目标设备测量。
+4. **唯一值得考虑的新仿真：**若真机完成后仍有算力，再冻结一个新的 powered
+   mixed-role population，比较 always-on raw、finite-PnP 与 strict CEC；这是目前比
+   length bins、更多 controller 或重复 Leg-3 sampling 更直接的统计缺口。
+
+以下支线不再进入投稿关键路径：GOAT/Replica 适配、X-NavDP、Pi3X/CDEC 继续训练、更多
+controller smoke、20--50 m length buckets，以及在现有 22 条 A/B prefix 上重复采样。

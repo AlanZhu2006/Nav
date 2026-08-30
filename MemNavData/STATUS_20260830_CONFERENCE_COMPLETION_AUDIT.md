@@ -89,11 +89,11 @@
 | 会议项目 | 状态 | 最准确结论 |
 |---|---|---|
 | Table I：跨 controller / dataset | **完成** | HM3D 与 MP3D 上 NavDP、ViNT 的 native/CEC 四行均已 sealed、独立复算；只作 controller 内 paired claim |
-| Table II：HM3D continual by leg | **部分完成** | factual A/B 与 multi-goal evidence 已有；强制 Leg-3 Novel/Revisit pair 在 8 histories / 6 scenes 停于 constructibility gate，无 policy SR |
+| Table II：HM3D continual by leg | **正式运行中，powered gate 已通过** | exact union 已冻结 41 histories / 20 scenes；hidden-role Leg-3 construction、双臂 policy 与 verifier 尚未完成 |
 | Real robot | **未完成** | transport、hash、fail-stop 与启动框架可用；尚无冻结的 paired autonomous outcome |
 | Depth ablation | **完成** | 同 Final14 query population 的 metric/mono/zero 与 CEC 对照完成；Goal-A history 仍是 metric replay，须保留边界 |
 | CEC mechanism | **完成** | proposal、finite-PnP witness、strict authority 与闭环已统一复算；authority 行为成立，阈值特定 SR superiority 未显著 |
-| Length buckets | **未完成，低优先级** | 当前 query 全在 0--20 m；要填表必须另建 20--50 m benchmark |
+| Length buckets | **正式运行中** | 125 个 actual-mono reserves 已冻结并执行；完成 receipt 修复后将严格封存三个桶各 16 histories，再跑 96 个 paired queries |
 
 ## 2. 8 月 30 日新增的两项硬结论
 

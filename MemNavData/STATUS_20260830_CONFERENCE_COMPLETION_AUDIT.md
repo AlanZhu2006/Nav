@@ -299,6 +299,7 @@ paired history。它同时满足：
 
 已生成 300-dpi PNG、vector PDF 和 8 秒 H.264 MP4；图中不暴露 scene identity，数值标注
 读取 formal receipt，重新绘制的 CUDA matcher 仅用于 inlier 线条并单独记录其轻微数值
-差异，不新增任何 scientific row。论文已接入该图并成功编译；当前草稿因此从 8 页变为
-9 页，最终会议版必须在不删除该证据的前提下压回 8 页，这属于版面重构任务，不能通过
-把该会议交付物移除来“完成”。
+差异，不新增任何 scientific row。论文将该图前置为 Fig. 1，并在完全不修改
+Abstract/Introduction 的前提下压缩重复的实验协议、limitations 与 caption；Tectonic
+重新编译为严格 8 页，正文占 1--6 页、References 从第 7 页开始。会议交付物没有被删掉
+或移入不存在的 supplementary。

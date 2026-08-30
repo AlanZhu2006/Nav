@@ -170,16 +170,16 @@ def draw_match_inset(ax, reference: Path, query: Path, match,
                    color="#3F8F63", edgecolors="white", linewidths=0.2)
     ax.axvline(ref.shape[1] - 0.5, color="white", linewidth=1.0)
     ax.text(0.012, 0.965, "historical candidate", transform=ax.transAxes,
-            ha="left", va="top", fontsize=6.5, color="#24272C",
+            ha="left", va="top", fontsize=8.5, color="#24272C",
             bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.82,
                   "pad": 1.4})
     ax.text(0.988, 0.965, "goal image", transform=ax.transAxes,
-            ha="right", va="top", fontsize=6.5, color="#24272C",
+            ha="right", va="top", fontsize=8.5, color="#24272C",
             bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.82,
                   "pad": 1.4})
-    ax.set_title(title, loc="left", fontsize=8.6, weight="semibold", pad=3)
+    ax.set_title(title, loc="left", fontsize=12.5, weight="semibold", pad=3)
     ax.text(0.0, -0.035, subtitle, transform=ax.transAxes, va="top",
-            fontsize=7.2, color="#4D535B")
+            fontsize=9.5, color="#4D535B")
     ax.axis("off")
 
 
@@ -188,7 +188,7 @@ def trajectory(plan: dict) -> np.ndarray:
     return np.asarray([[float(row["x"]), float(row["z"])] for row in rows])
 
 
-def draw_trajectory_panel(ax, role: str, plans: dict, metrics: dict,
+def draw_trajectory_panel(ax, role: str, plans: dict,
                           goal: list[float]) -> None:
     traces = {arm: trajectory(plans[(arm, role)]) for arm in ARMS}
     for arm in ARMS:
@@ -199,25 +199,15 @@ def draw_trajectory_panel(ax, role: str, plans: dict, metrics: dict,
     ax.scatter(*start, marker="o", s=30, color="#24272C", zorder=5)
     ax.scatter(float(goal[0]), float(goal[2]), marker="*", s=92,
                color="#3F8F63", edgecolor="white", linewidth=0.7, zorder=6)
-    ax.text(start[0], start[1], "  start", fontsize=7.0, va="center")
-    ax.text(float(goal[0]), float(goal[2]), "  goal", fontsize=7.0,
+    ax.text(start[0], start[1], "  start", fontsize=9.0, va="center")
+    ax.text(float(goal[0]), float(goal[2]), "  goal", fontsize=9.0,
             color="#2E7350", va="center")
 
-    success = {
-        arm: int(metrics[arm][role]["reached"]) for arm in ARMS
-    }
-    title = ("Unsupported Novel: abstention preserves native control"
+    title = ("Unsupported Novel: raw memory interferes; CEC abstains"
              if role == "novel" else
-             "Supported Revisit: verified memory restores control")
-    status = " · ".join(
-        f"{LABELS[arm]} {'success' if success[arm] else 'failure'}"
-        for arm in ARMS)
-    if role == "novel":
-        status += " · CEC trace = Native exactly"
-    ax.set_title(title, loc="left", fontsize=9.0, weight="semibold",
-                 y=1.065, pad=0)
-    ax.text(0.0, 1.015, status, transform=ax.transAxes, fontsize=7.1,
-            color="#4D535B", va="bottom")
+             "Supported Revisit: verified memory restores navigation")
+    ax.set_title(title, loc="left", fontsize=13.0, weight="semibold",
+                 y=1.035, pad=0)
     ax.set_aspect("equal", adjustable="datalim")
     ax.set_xticks([])
     ax.set_yticks([])
@@ -232,12 +222,12 @@ def draw_trajectory_panel(ax, role: str, plans: dict, metrics: dict,
     y0 = ymin + 0.07 * (ymax - ymin)
     ax.plot([x0, x0 + bar], [y0, y0], color="#24272C", linewidth=1.5)
     ax.text(x0 + bar / 2, y0 + 0.02 * (ymax - ymin), "1 m",
-            ha="center", va="bottom", fontsize=6.8)
+            ha="center", va="bottom", fontsize=9.0)
 
 
 def image_panel(ax, path: Path, title: str) -> None:
     ax.imshow(Image.open(path).convert("RGB"))
-    ax.set_title(title, loc="left", fontsize=8.3, weight="semibold", pad=3)
+    ax.set_title(title, loc="left", fontsize=11.5, weight="semibold", pad=3)
     ax.axis("off")
 
 
@@ -287,11 +277,11 @@ def main() -> None:
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
     })
-    fig = plt.figure(figsize=(13.6, 6.2), facecolor="white")
+    fig = plt.figure(figsize=(13.6, 4.25), facecolor="white")
     grid = fig.add_gridspec(
-        2, 6, height_ratios=(0.88, 1.35),
+        2, 6, height_ratios=(0.72, 1.18),
         width_ratios=(0.75, 1.1, 1.1, 0.75, 1.1, 1.1),
-        hspace=0.43, wspace=0.22)
+        hspace=0.30, wspace=0.22)
 
     image_panel(fig.add_subplot(grid[0, 0]), root / "current.jpg",
                 "Shared current RGB")
@@ -315,28 +305,19 @@ def main() -> None:
         seed=23)
 
     draw_trajectory_panel(
-        fig.add_subplot(grid[1, :3]), "novel", plans, metrics,
+        fig.add_subplot(grid[1, :3]), "novel", plans,
         queries["novel"]["floor_position"])
     draw_trajectory_panel(
-        fig.add_subplot(grid[1, 3:]), "revisit", plans, metrics,
+        fig.add_subplot(grid[1, 3:]), "revisit", plans,
         queries["revisit"]["floor_position"])
 
-    fig.suptitle(
-        "Proof before control separates Revisit utility from Novel interference",
-        x=0.018, y=0.985, ha="left", fontsize=12.0, weight="semibold",
-        color="#24272C")
-    fig.text(
-        0.018, 0.946,
-        "One frozen Final14 history; the Novel/Revisit role is hidden at runtime. "
-        "Green correspondences are Fundamental-MAGSAC inliers.",
-        ha="left", fontsize=8.0, color="#555C65")
     legend = [
         Line2D([0], [0], color=COLORS[arm], lw=2.0, label=LABELS[arm])
         for arm in ARMS
     ]
     fig.legend(handles=legend, loc="lower center", ncol=3, frameon=False,
-               bbox_to_anchor=(0.5, 0.005), fontsize=8.0)
-    fig.subplots_adjust(left=0.018, right=0.988, top=0.89, bottom=0.075)
+               bbox_to_anchor=(0.5, 0.005), fontsize=11.0)
+    fig.subplots_adjust(left=0.018, right=0.988, top=0.955, bottom=0.105)
 
     png = output / "final14_qualitative_failure_case.png"
     pdf = output / "final14_qualitative_failure_case.pdf"

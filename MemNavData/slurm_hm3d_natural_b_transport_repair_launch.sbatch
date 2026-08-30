@@ -15,11 +15,15 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${WRAPPER_ROOT:?}" "${WRAPPER_RECEIPT:?}" "${EXPECTED_WRAPPER_RECEIPT_SHA:?}"
 : "${TASK_ROOT:?}" "${RUN_ROOT:?}" "${PARENT_ROOT:?}" "${PROTOCOL:?}"
 : "${SHARD_MANIFEST:?}" "${EXPECTED_SHARD_MANIFEST_SHA:?}"
+: "${GPU_PARTITION:?}" "${REPAIR_TAG:?}" "${REPAIR_RUNTIME_PREFIX:?}"
+[[ "${GPU_PARTITION}" =~ ^(h100_tandon|a100_tandon|h100_tandon,a100_tandon)$ ]]
+[[ "${REPAIR_TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
+[[ "${REPAIR_RUNTIME_PREFIX}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
 [[ "$(sha256sum "${WRAPPER_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_WRAPPER_RECEIPT_SHA}" ]]
 (cd "${WRAPPER_ROOT}" && sha256sum -c --quiet "${WRAPPER_RECEIPT}")
-repair_root=${RUN_ROOT}/transport_repair_20260830
-archive=${RUN_ROOT}/failed_attempts/transport_repair_20260830
+repair_root=${RUN_ROOT}/${REPAIR_TAG}
+archive=${RUN_ROOT}/failed_attempts/${REPAIR_TAG}
 plan=${repair_root}/repair_plan.json
 verify=${repair_root}/independent_verification.json
 benchmark=${RUN_ROOT}/ab_population/role_pairs/manifest.json
@@ -46,15 +50,15 @@ print(p['repair_group_count']); print(len(p['missing_history_indices']))
 PY
 )
 (( counts[0] > 0 && counts[1] > 0 ))
-common="ALL,WRAPPER_ROOT=${WRAPPER_ROOT},WRAPPER_RECEIPT=${WRAPPER_RECEIPT},EXPECTED_WRAPPER_RECEIPT_SHA=${EXPECTED_WRAPPER_RECEIPT_SHA},REPAIR_PLAN=${plan},TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},TABLE2_SERVER_SOURCE_ROOT=${TABLE2_SERVER_SOURCE_ROOT},TABLE2_SERVER_SOURCE_RECEIPT=${TABLE2_SERVER_SOURCE_RECEIPT},EXPECTED_TABLE2_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_TABLE2_SERVER_SOURCE_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},RUN_ROOT=${RUN_ROOT},PARENT_ROOT=${PARENT_ROOT},PROTOCOL=${PROTOCOL},EXPECTED_PROTOCOL_SHA=${EXPECTED_PROTOCOL_SHA}"
+common="ALL,WRAPPER_ROOT=${WRAPPER_ROOT},WRAPPER_RECEIPT=${WRAPPER_RECEIPT},EXPECTED_WRAPPER_RECEIPT_SHA=${EXPECTED_WRAPPER_RECEIPT_SHA},REPAIR_PLAN=${plan},TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},TABLE2_SERVER_SOURCE_ROOT=${TABLE2_SERVER_SOURCE_ROOT},TABLE2_SERVER_SOURCE_RECEIPT=${TABLE2_SERVER_SOURCE_RECEIPT},EXPECTED_TABLE2_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_TABLE2_SERVER_SOURCE_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},RUN_ROOT=${RUN_ROOT},PARENT_ROOT=${PARENT_ROOT},PROTOCOL=${PROTOCOL},EXPECTED_PROTOCOL_SHA=${EXPECTED_PROTOCOL_SHA},REPAIR_RUNTIME_PREFIX=${REPAIR_RUNTIME_PREFIX}"
 safe=${TASK_ROOT}/MemNavData/slurm_safe_submit.sh
 repair=${WRAPPER_ROOT}/MemNavData/slurm_hm3d_natural_b_transport_repair_shard.sbatch
 finish=${TASK_ROOT}/MemNavData/slurm_hm3d_fullmono_lifelong_natural_b_expansion_finish.sbatch
 source "${safe}"
 last=$((counts[0]-1))
-safe_sbatch --lint-fatal --test-only --qos=gpu48 --time=01:00:00 \
+safe_sbatch --lint-fatal --test-only --partition="${GPU_PARTITION}" --qos=gpu48 --time=01:00:00 \
   --array="0-${last}%4" --export="${common}" "${repair}" >/dev/null
-r_raw=$(safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=01:00:00 \
+r_raw=$(safe_sbatch --lint-fatal --parsable --partition="${GPU_PARTITION}" --qos=gpu48 --time=01:00:00 \
   --array="0-${last}%4" --export="${common}" "${repair}")
 r_job=$(printf '%s\n' "${r_raw}" | tr -d '\r' | awk -F';' '/^[0-9]+(;|$)/ {print $1; exit}')
 [[ "${r_job}" =~ ^[0-9]+$ ]]

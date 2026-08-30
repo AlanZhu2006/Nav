@@ -1,0 +1,11 @@
+{
+  "fallback_completion_allowed": false,
+  "navigation_outcomes_read_at_submission": false,
+  "original_factual_A_array_job": 16596273,
+  "query_policy_outcomes_read_at_submission": false,
+  "repair_launcher_job": 16597086,
+  "schema_version": "hm3d_table3_actual_mono_a_transport_repair_launcher_submission_v1_20260830",
+  "scientific_thresholds_changed": false,
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_actual_mono_a_transport_repair_0ef36254d8b323ff",
+  "wrapper_bundle_sha256": "0ef36254d8b323ff2ebf8bc815321fa4920e17c2be724a1b8c18ec8653f4cab4"
+}

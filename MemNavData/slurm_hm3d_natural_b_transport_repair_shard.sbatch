@@ -17,6 +17,8 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${EXPECTED_WRAPPER_RECEIPT_SHA:?}" "${REPAIR_PLAN:?}"
 : "${TASK_ROOT:?}" "${RUN_ROOT:?}" "${PARENT_ROOT:?}" "${PROTOCOL:?}"
 : "${SERVER_SOURCE_ROOT:?}" "${BASE_SOURCE_ROOT:?}"
+: "${REPAIR_RUNTIME_PREFIX:?}"
+[[ "${REPAIR_RUNTIME_PREFIX}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
 [[ "$(sha256sum "${WRAPPER_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_WRAPPER_RECEIPT_SHA}" ]]
 (cd "${WRAPPER_ROOT}" && sha256sum -c --quiet "${WRAPPER_RECEIPT}")
@@ -40,7 +42,7 @@ exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   RUN_ROOT="${RUN_ROOT}" PARENT_MANIFEST="${PARENT_ROOT}/sealed_inputs/parent_manifest.json" \
   PROTOCOL="${PROTOCOL}" SCENE_INDEX="${row[0]}" \
   FORMAL_INDICES_OVERRIDE="${row[1]}" \
-  RUNTIME_ATTEMPT="transportRepair$(printf '%03d' "${SLURM_ARRAY_TASK_ID}")" \
+  RUNTIME_ATTEMPT="${REPAIR_RUNTIME_PREFIX}$(printf '%03d' "${SLURM_ARRAY_TASK_ID}")" \
   BENCH_ROOT="${RUN_ROOT}/ab_population/role_pairs" MAX_STEPS=600 \
   HAB_PY=/scratch/lg154/conda-envs/habitat/bin/python \
   MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python \

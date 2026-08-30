@@ -83,7 +83,10 @@ def test_repair_runtime_preserves_the_frozen_scientific_contract():
     assert 'MAX_STEPS=600' in shard
     assert 'MODE=lifelong_b' in shard
     assert 'FORMAL_INDICES_OVERRIDE="${row[1]}"' in shard
+    assert 'RUNTIME_ATTEMPT="${REPAIR_RUNTIME_PREFIX}' in shard
     assert 'bash "${WRAPPER_ROOT}/MemNavData/run_hm3d_fullmono_server_scene.sh"' in shard
     assert '--dependency="afterok:${r_job}"' in launcher
+    assert '--partition="${GPU_PARTITION}"' in launcher
+    assert 'repair_root=${RUN_ROOT}/${REPAIR_TAG}' in launcher
     assert 'fallback_completion_allowed\':False' in launcher
     assert 'navigation_outcomes_read\':False' in launcher

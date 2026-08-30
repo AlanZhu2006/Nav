@@ -9,7 +9,8 @@ def test_downstream_dag_is_full_power_and_fail_closed():
     text = SCRIPT.read_text()
     assert "--array=0-124%4" in text
     assert "--array=0-47%4" in text
-    assert "--dependency='afterok:${factual_gate}:${factual_array}'" in text
+    assert "factual_dependency=${factual_gate}:${factual_array}" in text
+    assert "--dependency='afterok:${factual_dependency}'" in text
     assert "--dependency='afterok:${population_verify_job}'" in text
     assert "'powered_histories':48,'formal_queries':96" in text
     assert "'partial_results_allowed':False" in text
@@ -17,6 +18,7 @@ def test_downstream_dag_is_full_power_and_fail_closed():
     assert "'threshold_relaxation':False,'smoke_substitution':False" in text
     assert text.count("--partition=cpu_short") >= 8
     assert "CONSTRUCTION_JOB_OVERRIDE" in text
+    assert "FACTUAL_DEPENDENCY_OVERRIDE" in text
 
 
 def test_all_runtime_overlays_are_receipt_bound():

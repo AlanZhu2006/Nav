@@ -10,6 +10,7 @@ LOCAL_HAB_PY=${LOCAL_HAB_PY:-/home/asus/miniconda3/envs/habitat/bin/python}
 A_RECEIPT=${A_RECEIPT:-${ROOT}/MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_COMPLETE_SUBMISSION_20260830.json}
 OUT_RECEIPT=${OUT_RECEIPT:-MemNavData/HM3D_TABLE3_ACTUAL_MONO_DOWNSTREAM_SUBMISSION_20260830.json}
 CONSTRUCTION_JOB_OVERRIDE=${CONSTRUCTION_JOB_OVERRIDE:-}
+FACTUAL_DEPENDENCY_OVERRIDE=${FACTUAL_DEPENDENCY_OVERRIDE:-}
 TABLE3_PLAN=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_20260830/plan_20260830T061943Z_3b848b5c/candidate_plan.json
 EXPECTED_TABLE3_PLAN_SHA=1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d
 TASK_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_expansion_execution_1f4979a7fd37d467
@@ -47,6 +48,13 @@ PY
 [[ "${#factual[@]}" -eq 3 && "${factual[0]}" =~ ^[0-9]+$ \
    && "${factual[1]}" =~ ^[0-9]+$ ]] || fail "invalid factual-A receipt"
 factual_gate=${factual[0]}; factual_array=${factual[1]}; run_root=${factual[2]}
+factual_dependency=${factual_gate}:${factual_array}
+if [[ -n "${FACTUAL_DEPENDENCY_OVERRIDE}" ]]; then
+  [[ "${FACTUAL_DEPENDENCY_OVERRIDE}" =~ ^[0-9]+$ ]] || \
+    fail "bad factual dependency override"
+  remote "scontrol show job '${FACTUAL_DEPENDENCY_OVERRIDE}' >/dev/null"
+  factual_dependency=${FACTUAL_DEPENDENCY_OVERRIDE}
+fi
 
 files=(
   MemNavData/analyze_hm3d_table3_actual_mono.py
@@ -173,7 +181,7 @@ if [[ -n "${CONSTRUCTION_JOB_OVERRIDE}" ]]; then
   remote "scontrol show job '${CONSTRUCTION_JOB_OVERRIDE}' >/dev/null"
   construct_job=${CONSTRUCTION_JOB_OVERRIDE}
 else
-  raw=$(remote "source '${safe}'; safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=01:00:00 --array=0-124%4 --dependency='afterok:${factual_gate}:${factual_array}' --kill-on-invalid-dep=yes --export='${common}' '${construct}'")
+  raw=$(remote "source '${safe}'; safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=01:00:00 --array=0-124%4 --dependency='afterok:${factual_dependency}' --kill-on-invalid-dep=yes --export='${common}' '${construct}'")
   construct_job=$(printf '%s\n' "${raw}" | job_id)
 fi
 [[ "${construct_job}" =~ ^[0-9]+$ ]] || fail "bad construction job id"
@@ -199,13 +207,15 @@ receipt=${OUT_RECEIPT}
   "${construct_job}" "${finalize_job}" "${population_verify_job}" \
   "${pair_job}" "${analysis_job}" "${result_verify_job}" \
   "${run_root}" "${wrapper_root}" "${receipt_sha}" \
-  "${CONSTRUCTION_JOB_OVERRIDE:+1}" <<'PY'
+  "${CONSTRUCTION_JOB_OVERRIDE:+1}" "${FACTUAL_DEPENDENCY_OVERRIDE}" <<'PY'
 import json,sys
 (path,gate,factual,construct,finalize,popverify,pair,analysis,resultverify,
- run,bundle,bundle_sha,reused)=sys.argv[1:]
+ run,bundle,bundle_sha,reused,factual_override)=sys.argv[1:]
 p={
  'schema_version':'hm3d_table3_actual_mono_downstream_submission_v1_20260830',
  'factual_A_gate_job':int(gate),'factual_A_array_job':int(factual),
+ 'factual_completion_dependency_job':(
+     int(factual_override) if factual_override else None),
  'construction_array_job':int(construct),'construction_job_reused':reused=='1',
  'population_finalize_job':int(finalize),
  'population_independent_verification_job':int(popverify),

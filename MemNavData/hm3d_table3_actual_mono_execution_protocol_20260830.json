@@ -1,6 +1,6 @@
 {
-  "schema_version": "hm3d_table3_actual_mono_execution_v1_20260830",
-  "frozen_at": "2026-08-30T15:02:00+08:00",
+  "schema_version": "hm3d_table3_actual_mono_execution_v2_20260830",
+  "frozen_at": "2026-08-30T15:15:00+08:00",
   "candidate_plan": {
     "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_20260830/plan_20260830T061943Z_3b848b5c/candidate_plan.json",
     "sha256": "1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d",
@@ -29,6 +29,13 @@
     "deterministic_plan_seeds": true,
     "base_seed": 310000,
     "metric_depth_for_control": false
+  },
+  "runtime_geometry": {
+    "mode": "content_addressed_pinned_navmesh",
+    "navmesh_path_source": "candidate_plan.asset.navmesh_path",
+    "navmesh_sha256_source": "candidate_plan.asset.navmesh_sha256",
+    "runtime_recomputation": false,
+    "reason": "the capacity bins and every rollout must use the identical frozen Habitat path graph"
   },
   "collection": {
     "candidate_indices": "0-124",

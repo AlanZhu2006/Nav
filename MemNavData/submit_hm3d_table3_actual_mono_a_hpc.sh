@@ -29,7 +29,29 @@ job_id() { tr -d '\r' | awk -F';' '/^[0-9]+(;|$)/ {print $1; exit}'; }
 [[ -x "${LOCAL_MEMNAV_PY}" && -x "${LOCAL_HAB_PY}" && -S "${SSH_CONTROL_PATH}" ]] || fail "local prerequisite missing"
 timeout 15 ssh -O check -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" >/dev/null 2>&1 || fail "shared SSH unavailable"
 files=(
+  MemNavData/arrival_shadow.py
+  MemNavData/audit_shared_online_double_revisit.py
+  MemNavData/audit_shared_online_role_pairs.py
+  MemNavData/bearing_diagnostics.py
+  MemNavData/cec_authority_receipt.py
+  MemNavData/cec_bearing_alignment.py
+  MemNavData/cec_handoff_contract.py
   MemNavData/collect_hm3d_table3_actual_mono_a.py
+  MemNavData/controller_portability_contract.py
+  MemNavData/deterministic_eval_protocol.py
+  MemNavData/eval_2leg_habitat.py
+  MemNavData/final14_mono_factorial.py
+  MemNavData/generate_twoleg.py
+  MemNavData/hm3d_fullmono_mixed_role.py
+  MemNavData/materialize_online_a_traces.py
+  MemNavData/mdtec_raw_depth_gate_d.py
+  MemNavData/navdp_goal_switch.py
+  MemNavData/revisit_action_shadow.py
+  MemNavData/revisit_bearing_adapter.py
+  MemNavData/shared_online_double_revisit_runtime.py
+  MemNavData/terminal_uturn.py
+  MemNavData/visual_yaw_refinement.py
+  MemNavData/xnavdp_revisit_contract.py
   MemNavData/hm3d_table3_actual_mono_execution_protocol_20260830.json
   MemNavData/run_hm3d_fullmono_server_scene.sh
   MemNavData/slurm_hm3d_table3_actual_mono_a.sbatch
@@ -63,6 +85,12 @@ else
   rsync -a --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r -e "ssh -o BatchMode=yes -o ControlMaster=no -S ${SSH_CONTROL_PATH}" "${scratch}/root/" "${SSH_ALIAS}:${stage}/"
   remote "cd '${stage}'; sha256sum -c --quiet SOURCE_BUNDLE.sha256; chmod -R a-w '${stage}'; mv '${stage}' '${wrapper_root}'"
 fi
+remote "singularity exec -B /scratch/lg154 -B /scratch/yz11502 \
+  /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env \
+  PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONPATH='${wrapper_root}:${wrapper_root}/MemNavData:${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:/scratch/yz11502/Research/Nav-axis-uturn/InternNav/src/diffusion-policy:/scratch/lg154/conda-envs/habitat/lib/python3.9/site-packages/pip/_vendor' \
+  /scratch/lg154/conda-envs/habitat/bin/python \
+  '${wrapper_root}/MemNavData/eval_2leg_habitat.py' --help >/dev/null"
 protocol=${wrapper_root}/MemNavData/hm3d_table3_actual_mono_execution_protocol_20260830.json
 remote "mkdir -p '${run_root}/sealed_inputs' '${run_root}/factual_a' '${run_root}/carriers' /scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs; cp '${protocol}' '${run_root}/sealed_inputs/'; sha256sum '${TABLE3_PLAN}' '${protocol}' '${wrapper_root}/SOURCE_BUNDLE.sha256' >'${run_root}/sealed_inputs/source_inputs.sha256'; chmod -R a-w '${run_root}/sealed_inputs'"
 common="ALL,WRAPPER_ROOT=${wrapper_root},WRAPPER_RECEIPT=${wrapper_root}/SOURCE_BUNDLE.sha256,EXPECTED_WRAPPER_RECEIPT_SHA=${receipt_sha},TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},RUN_ROOT=${run_root},TABLE3_PLAN=${TABLE3_PLAN},TABLE3_EXECUTION_PROTOCOL=${protocol}"
@@ -76,17 +104,19 @@ gate_job=$(printf '%s\n' "${gate_raw}" | job_id)
 raw=$(remote "source '${safe}'; safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=02:00:00 --array=1-124%4 --dependency='afterok:${gate_job}' --kill-on-invalid-dep=yes --export='${common}' '${sbatch}'")
 job=$(printf '%s\n' "${raw}" | job_id)
 [[ "${job}" =~ ^[0-9]+$ ]] || fail "bad remaining factual Goal-A job id"
-receipt=MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_SUBMISSION_20260830.json
+receipt=MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_COMPLETE_SUBMISSION_20260830.json
 [[ ! -e "${receipt}" ]] || fail "submission receipt exists"
 "${LOCAL_MEMNAV_PY}" - "${receipt}" "${gate_job}" "${job}" "${run_root}" "${wrapper_root}" "${receipt_sha}" <<'PY'
 import json,sys
 path,gate,job,run,bundle,bundle_sha=sys.argv[1:]
-p={'schema_version':'hm3d_table3_actual_mono_a_submission_v1_20260830',
+p={'schema_version':'hm3d_table3_actual_mono_a_submission_v3_20260830',
  'first_formal_candidate_job':int(gate),'factual_A_remainder_array_job':int(job),
  'arrays':['0','1-124%4'],'time_limit':'02:00:00',
  'run_root':run,'wrapper_bundle':bundle,'wrapper_bundle_sha256':bundle_sha,
  'candidate_plan_sha256':'1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d',
  'candidate_count':125,'all_frozen_reserves_submitted':True,
+ 'supersedes_aborted_jobs':[16594607,16594617,16595187,16595189],
+ 'supersession_reason':'first chain mixed capacity and recomputed navmeshes; second chain proved pinned geometry but exposed an incomplete immutable Python import closure before evaluator startup; v3 preserves the same candidates and scientific contract while sealing and import-testing the complete local dependency closure',
  'factual_A_outcomes_read_at_submission':False,
  'query_policy_outcomes_read_at_submission':False,
  'threshold_relaxation':False,'fallback_completion_allowed':False}

@@ -24,7 +24,7 @@ from materialize_online_a_traces import native_control_audit
 
 SCHEMA = "hm3d_table3_actual_mono_factual_a_v1_20260830"
 CARRIER_SCHEMA = "hm3d_table3_goal_a_source_carrier_v1_20260830"
-EXECUTION_SCHEMA = "hm3d_table3_actual_mono_execution_v1_20260830"
+EXECUTION_SCHEMA = "hm3d_table3_actual_mono_execution_v2_20260830"
 
 
 def require(condition: bool, message: str) -> None:
@@ -64,7 +64,10 @@ def materialize_carrier(row: dict, destination: Path) -> dict:
     geometry = row["capacity_geometry"]
     start = np.asarray(geometry["first_goal"], dtype=float)
     goal = np.asarray(geometry["query_start"], dtype=float)
-    simulator = make_sim(str(asset), str(navmesh), agent_radius=0.30)
+    simulator = make_sim(
+        str(asset), str(navmesh), agent_radius=0.30,
+        recompute_navmesh=False,
+    )
     try:
         ok, distance, points = geodesic(simulator.pathfinder, start, goal)
         require(ok and math.isfinite(distance), "factual Goal-A path is invalid")
@@ -152,6 +155,14 @@ def main() -> None:
     execution = json.loads(args.execution_protocol.read_text())
     require(execution.get("schema_version") == EXECUTION_SCHEMA,
             "Table-III execution protocol changed")
+    require(execution.get("runtime_geometry") == {
+        "mode": "content_addressed_pinned_navmesh",
+        "navmesh_path_source": "candidate_plan.asset.navmesh_path",
+        "navmesh_sha256_source": "candidate_plan.asset.navmesh_sha256",
+        "runtime_recomputation": False,
+        "reason": ("the capacity bins and every rollout must use the "
+                   "identical frozen Habitat path graph"),
+    }, "Table-III runtime geometry contract changed")
     require(sha256(args.candidate_plan) == execution["candidate_plan"]["sha256"],
             "candidate plan changed")
     plan = json.loads(args.candidate_plan.read_text())
@@ -184,6 +195,8 @@ def main() -> None:
         args.hab_python, "-u", str(args.source_root / "MemNavData/eval_2leg_habitat.py"),
         "--episode_root", str(carrier.parent), "--episode_ids", runtime_episode,
         "--scene", row["asset"]["glb_path"], "--scene_identity", row["scene"],
+        "--pinned_navmesh", row["asset"]["navmesh_path"],
+        "--expected_pinned_navmesh_sha256", row["asset"]["navmesh_sha256"],
         "--host", "127.0.0.1", "--port", str(args.memnav_port),
         "--novel_port", str(args.navdp_port), "--server_backend", "hybrid_pose",
         "--success_dist", str(cfg["success_radius_m"]),
@@ -233,6 +246,8 @@ def main() -> None:
         "carrier": carrier_receipt,
         "controller": "frozen_navdp_native_sidecar",
         "depth_source": "monocular_sidecar",
+        "runtime_geometry": "content_addressed_pinned_navmesh",
+        "runtime_navmesh_sha256": row["asset"]["navmesh_sha256"],
         "metric_depth_sensor_reads": 0,
         "max_steps": max_steps, "seed": seed,
         "reached_A": reached, "history_eligible": bool(

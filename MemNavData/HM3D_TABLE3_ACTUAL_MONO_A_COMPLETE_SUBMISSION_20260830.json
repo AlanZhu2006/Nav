@@ -1,0 +1,27 @@
+{
+  "all_frozen_reserves_submitted": true,
+  "arrays": [
+    "0",
+    "1-124%4"
+  ],
+  "candidate_count": 125,
+  "candidate_plan_sha256": "1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d",
+  "factual_A_outcomes_read_at_submission": false,
+  "factual_A_remainder_array_job": 16595636,
+  "fallback_completion_allowed": false,
+  "first_formal_candidate_job": 16595631,
+  "query_policy_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_execution_20260830/formal_20260830T072821Z_8c8f8c25",
+  "schema_version": "hm3d_table3_actual_mono_a_submission_v3_20260830",
+  "supersedes_aborted_jobs": [
+    16594607,
+    16594617,
+    16595187,
+    16595189
+  ],
+  "supersession_reason": "first chain mixed capacity and recomputed navmeshes; second chain proved pinned geometry but exposed an incomplete immutable Python import closure before evaluator startup; v3 preserves the same candidates and scientific contract while sealing and import-testing the complete local dependency closure",
+  "threshold_relaxation": false,
+  "time_limit": "02:00:00",
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_actual_mono_a_8c8f8c25b9dc2f97",
+  "wrapper_bundle_sha256": "8c8f8c25b9dc2f97ca8ec98b9dc88dbbd68b42a31b0cf411c3098abecfeb9a10"
+}

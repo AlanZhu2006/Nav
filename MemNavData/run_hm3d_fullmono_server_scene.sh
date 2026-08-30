@@ -6,6 +6,7 @@ umask 0022
 MODE=${MODE:?set collect, mp3d_collect, smoke, eval, lifelong_b, or table3_a}
 TASK_ROOT=${TASK_ROOT:?set immutable task root}
 WRAPPER_ROOT=${WRAPPER_ROOT:-${TASK_ROOT}}
+QUERY_SOURCE_ROOT=${QUERY_SOURCE_ROOT:-${TASK_ROOT}}
 SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT:-${TASK_ROOT}}
 BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT:?set verified Final14 mono source root}
 RUN_ROOT=${RUN_ROOT:?set isolated run root}
@@ -22,6 +23,7 @@ RUNTIME_ATTEMPT=${RUNTIME_ATTEMPT:-}
 RESUME_INCOMPLETE=${RESUME_INCOMPLETE:-0}
 FORMAL_INDICES_OVERRIDE=${FORMAL_INDICES_OVERRIDE:-}
 HISTORY_CONTRACT=${HISTORY_CONTRACT:-goal_a}
+SCENE_RANK_FIELD=${SCENE_RANK_FIELD:-final14_scene_rank}
 
 [[ "${MODE}" == collect || "${MODE}" == mp3d_collect \
    || "${MODE}" == smoke || "${MODE}" == eval \
@@ -36,6 +38,9 @@ if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
   [[ "${RUNTIME_ATTEMPT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
     echo "invalid runtime attempt" >&2; exit 2; }
 fi
+[[ "${SCENE_RANK_FIELD}" == final14_scene_rank \
+   || "${SCENE_RANK_FIELD}" == scene_index ]] || {
+  echo "unsupported scene-rank field" >&2; exit 2; }
 if [[ "${MODE}" == table3_a ]]; then
   : "${TABLE3_PLAN:?set frozen Table-3 candidate plan}"
   scene_count=$(${MEMNAV_PY} - "${TABLE3_PLAN}" <<'PY'
@@ -47,7 +52,13 @@ elif [[ "${MODE}" == lifelong_b || "${MODE}" == eval \
    || "${MODE}" == smoke ]]; then
   scene_count=$(${MEMNAV_PY} - "${PARENT_MANIFEST}" <<'PY'
 import json,sys
-print(len(json.load(open(sys.argv[1]))["scenes"]))
+p=json.load(open(sys.argv[1]))
+if "scenes" in p:
+    print(len(p["scenes"]))
+elif p.get("episodes") and all("scene_index" in row for row in p["episodes"]):
+    print(1 + max(int(row["scene_index"]) for row in p["episodes"]))
+else:
+    raise SystemExit("parent manifest has neither scenes nor indexed episodes")
 PY
   )
 else
@@ -109,11 +120,12 @@ FORMAL_INDICES=
 if [[ "${MODE}" == eval || "${MODE}" == lifelong_b ]]; then
   BENCH_ROOT=${BENCH_ROOT:?set sealed natural-direction benchmark}
   manifest=${BENCH_ROOT}/manifest.json
-  FORMAL_INDICES=$(${MEMNAV_PY} - "${manifest}" "${SCENE_INDEX}" <<'PY'
+  FORMAL_INDICES=$(${MEMNAV_PY} - "${manifest}" "${SCENE_INDEX}" \
+    "${SCENE_RANK_FIELD}" <<'PY'
 import json,sys
-m=json.load(open(sys.argv[1])); rank=int(sys.argv[2])
+m=json.load(open(sys.argv[1])); rank=int(sys.argv[2]); field=sys.argv[3]
 print(" ".join(str(i) for i,row in enumerate(m["episodes"])
-               if int(row["final14_scene_rank"]) == rank))
+               if int(row[field]) == rank))
 PY
 )
   if [[ -n "${FORMAL_INDICES_OVERRIDE}" ]]; then
@@ -143,7 +155,7 @@ HAB_PYTHONPATH=${HAB_SITE}/pip/_vendor
 # transport-only server overlay may deliberately omit unchanged heavy runtime
 # assets (for example NavDP's vendored Depth-Anything package), so expose both
 # the receipt-bound overlay and its receipt-bound base implementation roots.
-PYTHONPATH_PREFIX=${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData
+PYTHONPATH_PREFIX=${WRAPPER_ROOT}:${WRAPPER_ROOT}/MemNavData:${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData
 PYTHONPATH_SUFFIX=${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
 # Both servers use a script-local module named ``policy_agent``.  A single
 # shared sibling order can therefore make NavDP import MemNav's agent (or the
@@ -303,7 +315,7 @@ elif [[ "${MODE}" == table3_a ]]; then
   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
     "${HAB_PY}" -u \
     "${WRAPPER_ROOT}/MemNavData/collect_hm3d_table3_actual_mono_a.py" \
-      --source-root "${TASK_ROOT}" --run-root "${RUN_ROOT}" \
+      --source-root "${WRAPPER_ROOT}" --run-root "${RUN_ROOT}" \
       --candidate-plan "${TABLE3_PLAN}" \
       --execution-protocol "${TABLE3_EXECUTION_PROTOCOL}" \
       --history-index "${SCENE_INDEX}" --hab-python "${HAB_PY}" \
@@ -326,9 +338,9 @@ else
       "${SCENE_INDEX}" >"${task_run}/empty_scene_receipt.json"
   else
     for history_index in ${indices}; do
-      runner=("${TASK_ROOT}/MemNavData/run_hm3d_fullmono_query_history.py"
+      runner=("${QUERY_SOURCE_ROOT}/MemNavData/run_hm3d_fullmono_query_history.py"
         --source-root "${BASE_SOURCE_ROOT}" --run-root "${RUN_ROOT}"
-        --evaluator-source-root "${TASK_ROOT}"
+        --evaluator-source-root "${QUERY_SOURCE_ROOT}"
         --bench-root "${BENCH_ROOT}"
         --expected-manifest-sha256 "${expected_manifest_sha}"
         --history-index "${history_index}" --hab-python "${HAB_PY}"

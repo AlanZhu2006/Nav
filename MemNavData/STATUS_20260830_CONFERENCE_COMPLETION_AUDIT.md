@@ -35,6 +35,38 @@
 > `factual_b/`、`prefix_fragments/` 与 Leg-3 outcomes 在修复前均不存在。这是零 outcome 的
 > infrastructure repair，不改变候选、threshold、controller 或统计口径。
 
+> **15:40 CST full-completion addendum.** 作者进一步明确：原会议 Table II、Table III
+> 与真机目标必须按原定义完成，不能再以 constructibility null、旧结果、低样本 smoke、
+> 删项或降门槛代替。当前执行因此分成三条互不替代的链：
+>
+> 1. **Table II expansion。** 46-shard、84-candidate factual-B array `16592875` 正在
+>    完成最后分片；正式运行中出现的 `exit=2` 是 gh012 上服务已监听但旧 `ss` 探针
+>    假阴性，`exit=1` 是 Habitat/EGL transport crash。两类都不作为 navigation outcome。
+>    只按 completion 文件存在性与 byte hash 选择缺失 identity 的修复 launcher
+>    `16594267` 已冻结，等待原数组 `afterany` 后精确补齐；不读取 SR、不改候选或门。
+> 2. **Table III actual-mono length benchmark。** 已在不读取导航结果的 100-scene HM3D
+>    capacity graph 上冻结 125 个 reserves；三个 bin 的预评估容量分别达到
+>    `16 histories / 16 scenes`、`16/16`、`16/12`。首次 factual-A gate 在策略执行前
+>    暴露 capacity navmesh 与 evaluator runtime rebake 不一致；第二次证明 pinned
+>    navmesh 可用后，又在 evaluator import 前暴露 immutable overlay 漏装本地依赖。
+>    两次均没有 policy outcome。v3 bundle 递归封存 36 个本地 import dependencies，
+>    并在提交前于远端容器执行真实 `eval_2leg_habitat.py --help` import preflight。
+>    正式 factual-A jobs 为 `16595631 -> 16595636`；完整下游 DAG 为
+>    `16595695`（125 constructions）-> `16595706`（48-history population seal）->
+>    `16595711`（独立 population verifier）-> `16595720`（48 paired histories / 96
+>    queries）-> `16595722`（SR/SPL/McNemar aggregate）-> `16595726`（raw verifier）。
+>    强化 raw-row verifier `16595792` 再从全部 192 arm-role metric rows 独立复算 SR、
+>    SPL、gain/loss、exact McNemar 与 authorization counts。全部依赖均为 `afterok`；
+>    `partial_results_allowed=false`、`fallback_completion_allowed=false`。
+> 3. **Real robot。** 软件已冻结 4 scenes x 5 matched blocks（20 pairs / 40 autonomous
+>    rollouts），但 outcome 仍为 0/40。该项唯一剩余依赖是现场：独立 arrival/path
+>    calibration、四场景 registry 和有人值守的 paired motion。静态、no-motion 或手动
+>    接管 trace 均不会补位。
+>
+> 截至本 addendum，Table I、Depth、CEC mechanism 已完成；Table II 与 Table III 在正式
+> HPC 链中；真机仍等待物理执行。论文只会接收最终 independent verifier 通过的数字，
+> Abstract/Introduction 保持作者当前版本不动。
+
 本文件只回答两个问题：会议清单现在完成到哪里，以及下一份 GPU/真机时间应该花在哪。
 
 ## 1. 当前完成度

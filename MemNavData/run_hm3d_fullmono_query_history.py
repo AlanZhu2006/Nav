@@ -110,7 +110,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--role-pair-scope",
-        choices=("consumed_integration", "paper_heldout", "paper_replication"),
+        choices=("consumed_integration", "paper_heldout", "paper_replication",
+                 "table3_length"),
         default="consumed_integration",
     )
     parser.add_argument("--smoke", action="store_true")
@@ -135,6 +136,16 @@ def main() -> None:
     scene = str(item["scene"])
     episode = str(item["episode"])
     source_episode = Path(item["online_a_episode"])
+    require(
+        sha256(source_episode / "receipt.json")
+        == item["online_a_receipt_sha256"],
+        "sealed online-A receipt changed",
+    )
+    require(
+        sha256(source_episode / "online_a_trace.json")
+        == item["online_a_trace_sha256"],
+        "sealed online-A trace changed",
+    )
     receipt = json.loads((source_episode / "receipt.json").read_text())
     trace = json.loads((source_episode / "online_a_trace.json").read_text())
     control_audit = receipt.get("online_a_control_audit")
@@ -157,6 +168,23 @@ def main() -> None:
     require(scene_file.is_file() and
             sha256(scene_file) == receipt["source_asset_sha256"],
             "explicit HM3D source asset changed")
+    pinned_args: list[str] = []
+    runtime_geometry = "runtime_recomputed_navmesh"
+    runtime_navmesh_sha256 = None
+    if args.role_pair_scope == "table3_length":
+        pinned_navmesh = Path(item.get("runtime_navmesh", ""))
+        require(
+            item.get("runtime_geometry") == "content_addressed_pinned_navmesh"
+            and pinned_navmesh.is_file()
+            and sha256(pinned_navmesh) == item.get("runtime_navmesh_sha256"),
+            "Table-III runtime navmesh receipt changed",
+        )
+        runtime_geometry = "content_addressed_pinned_navmesh"
+        runtime_navmesh_sha256 = item["runtime_navmesh_sha256"]
+        pinned_args = [
+            "--pinned_navmesh", str(pinned_navmesh),
+            "--expected_pinned_navmesh_sha256", runtime_navmesh_sha256,
+        ]
 
     label = f"{args.history_index:03d}_{scene}_{episode}"
     output = args.run_root / "evaluation" / "natural_direction" / label
@@ -184,6 +212,8 @@ def main() -> None:
         "arm_order": list(order),
         "runtime_role_visibility": "none",
         "shared_history_policy": shared_history_policy,
+        "runtime_geometry": runtime_geometry,
+        "runtime_navmesh_sha256": runtime_navmesh_sha256,
         "max_steps": args.max_steps,
         "success_distance_m": 1.0,
         "exec_horizon": 8,
@@ -223,7 +253,7 @@ def main() -> None:
         "--revisit_controller", "navdp_mixed",
         "--role_pair_scope", args.role_pair_scope,
         "--navdp_depth_source", "monocular_sidecar",
-    ]
+    ] + pinned_args
 
     elapsed = {}
     arm_rows = {}
@@ -297,6 +327,21 @@ def main() -> None:
         },
         "final_distance_m": {
             arm: {role: float(arm_rows[arm][role]["final_goal_dist_m"])
+                  for role in ("novel", "revisit")}
+            for arm in selected_arms
+        },
+        "geodesic_m": {
+            arm: {role: float(arm_rows[arm][role]["geodesic_m"])
+                  for role in ("novel", "revisit")}
+            for arm in selected_arms
+        },
+        "path_len_m": {
+            arm: {role: float(arm_rows[arm][role]["path_len_m"])
+                  for role in ("novel", "revisit")}
+            for arm in selected_arms
+        },
+        "query_steps": {
+            arm: {role: int(arm_rows[arm][role]["steps"])
                   for role in ("novel", "revisit")}
             for arm in selected_arms
         },

@@ -14,9 +14,11 @@ import numpy as np
 import pandas as pd
 
 import eval_2leg_habitat as base
-from audit_shared_online_role_pairs import audit as audit_benchmark
+from audit_shared_online_role_pairs import audit as audit_shared_benchmark
+from audit_hm3d_table3_length_role_pairs import audit as audit_table3_benchmark
 from shared_online_double_revisit_runtime import replay_online_a, sha256_file
-from shared_online_role_pair_contract import runtime_query
+from shared_online_role_pair_contract import runtime_query as shared_runtime_query
+from hm3d_table3_length_contract import runtime_query as table3_runtime_query
 
 
 args = base.args
@@ -30,6 +32,18 @@ CEC_LATENCY_FIELDS = (
     "cec_context_shadow_ms",
     "cec_total_decision_ms",
 )
+
+
+def audit_benchmark(root: Path) -> dict:
+    if args.role_pair_scope == "table3_length":
+        return audit_table3_benchmark(root)
+    return audit_shared_benchmark(root)
+
+
+def runtime_query(query: dict) -> dict:
+    if args.role_pair_scope == "table3_length":
+        return table3_runtime_query(query)
+    return shared_runtime_query(query)
 
 
 def require(condition: bool, message: str) -> None:
@@ -694,6 +708,9 @@ def main() -> None:
             ),
             "replica_cross_dataset": (
                 "Replica cross-dataset role-pair evaluation"
+            ),
+            "table3_length": (
+                "HM3D actual-mono Novel/Revisit evaluation by geodesic length"
             ),
         }
         summary = {

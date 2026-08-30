@@ -517,3 +517,7 @@ launcher `16597086` 等待原数组 `afterany` 后按 completion receipt 与 byt
   `formal_20260830T080030Z_8ff97ca6`，wrapper SHA 为
   `2d8d08ff5a65da0ad00e7372fd756174b88958ed4cf74076e6605c951b38c3fe`。
 - 同期 Table II 为 `50 COMPLETED / 3 RUNNING / 1 PENDING / 0 FAILED`；仍未读取 partial SR。
+- 旧的 retained-history node-affine `16540468`（N=1 smoke）与依赖 launcher
+  `16540469` 自 8 月 28 日起始终未运行。它们服务于 17-history underpowered mechanism
+  线，文档已明确禁止用来填 powered Table II；为避免抢占同一用户 GPU 配额，21:25 CST
+  精确取消这两个 pending jobs。没有删除既有数据或正式结果，也没有改变任何会议 population。

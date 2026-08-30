@@ -292,10 +292,18 @@ def main() -> None:
             "candidate plan/construction protocol binding changed")
     require(0 <= args.history_index < len(plan["episodes"]), "history index invalid")
     row = plan["episodes"][args.history_index]
-    factual_matches = list((args.run_root / "factual_a").glob(
-        f"{args.history_index:03d}_{row['scene']}_*/completion.json"))
-    require(len(factual_matches) == 1, "factual Goal-A completion is ambiguous")
-    factual_path = factual_matches[0]
+    factual_label = (
+        f"{args.history_index:03d}_{row['scene']}_episode_{row['episode']}"
+    )
+    factual_path = args.run_root / "factual_a" / factual_label / "completion.json"
+    require(factual_path.is_file(), "factual Goal-A completion is missing")
+    factual_sidecar = factual_path.with_name("completion.json.sha256")
+    require(
+        factual_sidecar.is_file()
+        and factual_sidecar.read_text().split()
+        == [sha256(factual_path), "completion.json"],
+        "factual Goal-A completion receipt changed",
+    )
     factual = json.loads(factual_path.read_text())
     require(factual["candidate_identity_sha256"] == row["candidate_identity_sha256"],
             "factual Goal-A candidate identity changed")

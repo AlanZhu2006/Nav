@@ -1,0 +1,40 @@
+{
+  "all_dependencies_afterok": true,
+  "analysis_job": 16609203,
+  "arms": [
+    "mono_native",
+    "mono_cec"
+  ],
+  "construction_array_job": 16609158,
+  "construction_job_reused": false,
+  "directed_repair_completion_receipt": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_execution_20260830/formal_20260830T080030Z_8ff97ca6/table3_a_directed_geodesic_repair_20260830/completion.json",
+  "directed_repair_completion_receipt_sha256": "96d38a0f104d22fd340f99b526fdce7a270c4855e74767b84b8a4e4a3160abcd",
+  "directed_repair_submission_receipt": "/home/asus/Research/Nav-graph-blind/MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_DIRECTED_GEODESIC_REPAIR_SUBMISSION_20260830.json",
+  "directed_repair_submission_receipt_sha256": "01b84794fa6934a7371c50a337ca50c3fcc1e1e4e42b17ac0ab8bf3f3731a066",
+  "factual_A_array_job": 16596273,
+  "factual_A_gate_job": 16596239,
+  "factual_A_submission_receipt": "/home/asus/Research/Nav-graph-blind/MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_SIGABRT_REPAIR_SUBMISSION_20260830.json",
+  "factual_A_submission_receipt_sha256": "df4138f361ba6becc1dd95a4ee8fbbceb9990470f31b186f6d7bfed1ac52123a",
+  "factual_completion_dependency_job": 16603036,
+  "fallback_completion_allowed": false,
+  "formal_queries": 96,
+  "frozen_candidates": 125,
+  "length_bins": [
+    "0_to_20_m",
+    "20_to_30_m",
+    "30_to_50_m"
+  ],
+  "paired_query_array_job": 16609194,
+  "partial_results_allowed": false,
+  "population_finalize_job": 16609170,
+  "population_independent_verification_job": 16609184,
+  "powered_histories": 48,
+  "query_policy_outcomes_read_at_submission": false,
+  "result_independent_verification_job": 16609207,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_execution_20260830/formal_20260830T080030Z_8ff97ca6",
+  "schema_version": "hm3d_table3_actual_mono_downstream_submission_v2_20260830",
+  "smoke_substitution": false,
+  "threshold_relaxation": false,
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_actual_mono_downstream_2d8d08ff5a65da0a",
+  "wrapper_bundle_sha256": "2d8d08ff5a65da0ad00e7372fd756174b88958ed4cf74076e6605c951b38c3fe"
+}

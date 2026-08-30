@@ -488,3 +488,32 @@ launcher `16597086` 等待原数组 `afterany` 后按 completion receipt 与 byt
   arm-role rows`，三个长度桶各 16 histories；`partial_results_allowed=false`、
   `fallback_completion_allowed=false`、`threshold_relaxation=false`、
   `smoke_substitution=false`。旧的已取消下游回执保留作审计记录，未覆盖。
+
+## 14. 21:17 CST Table-III final-run-root binding repair
+
+第 13 节记录的第一条 downstream DAG 在首批 construction 暴露了一个提交器默认值错误，
+随后被完整取消；它不是科学结果，也没有任何 query arm 运行。
+
+- `16603035` 的 19/19 exact repairs 全部 `COMPLETED`，finish verifier `16603036` 以
+  `exit=0` 验证最终 factual-A run root 的 125/125 completion receipts。
+- 第一条 downstream receipt 错把 `A_RECEIPT` 默认指向早先、已 supersede 的
+  `formal_...8c8f8c25`，而实际完成数组 `16596273` 属于
+  `formal_...8ff97ca6`。首批 construction 因旧 root 中 completion 缺失/歧义在导航查询前
+  退出；整链 `16608231/16608333/16608340/16608351/16608364/16608376` 已取消，未产生
+  policy query outcome。该 receipt 保留用于失败审计。
+- 修正版提交器默认并哈希绑定
+  `HM3D_TABLE3_ACTUAL_MONO_A_SIGABRT_REPAIR_SUBMISSION_20260830.json` 与
+  `HM3D_TABLE3_ACTUAL_MONO_A_DIRECTED_GEODESIC_REPAIR_SUBMISSION_20260830.json`，要求二者
+  同时指向原数组 `16596273`；它还独立校验 repair completion 的 125 个 byte receipts。
+  已完成的 Slurm job ID 不再被误当作活跃 dependency，而以不可变 completion receipt
+  作为更强的启动门。
+- constructor 不再用 scene-prefix glob 搜索 factual completion；它现在按冻结的
+  `history_index + scene + episode` 解析唯一绝对 identity，并验证 completion sidecar。
+  Candidate、role、distance bin、threshold、controller、seed、budget 和 success definition
+  全部未改。27 项测试通过。
+- 正确正式链为 construction `16609158_[0-124%4]` -> population finalize `16609170` ->
+  independent population verifier `16609184` -> paired query `16609194_[0-47%4]` -> analysis
+  `16609203` -> independent result verifier `16609207`。其 run root 是
+  `formal_20260830T080030Z_8ff97ca6`，wrapper SHA 为
+  `2d8d08ff5a65da0ad00e7372fd756174b88958ed4cf74076e6605c951b38c3fe`。
+- 同期 Table II 为 `50 COMPLETED / 3 RUNNING / 1 PENDING / 0 FAILED`；仍未读取 partial SR。

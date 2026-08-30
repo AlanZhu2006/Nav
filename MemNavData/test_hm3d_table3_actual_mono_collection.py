@@ -14,6 +14,7 @@ PAIR_SBATCH = ROOT / "MemNavData/slurm_hm3d_table3_actual_mono_pair.sbatch"
 DOWNSTREAM_SUBMITTER = (
     ROOT / "MemNavData/submit_hm3d_table3_actual_mono_downstream_hpc.sh"
 )
+CONSTRUCTOR = ROOT / "MemNavData/construct_hm3d_table3_actual_mono_role_pair.py"
 
 
 def test_final_goal_yaw_uses_the_last_nontrivial_path_segment():
@@ -77,6 +78,14 @@ def test_capacity_receipt_is_checked_in_its_original_query_direction():
     assert 'float(geometry["first_goal_geodesic_m"])' in text
     assert '"capacity query-direction geodesic changed"' in text
     assert '"capacity/factual Goal-A geodesic changed"' not in text
+
+
+def test_constructor_resolves_the_exact_frozen_factual_identity():
+    text = CONSTRUCTOR.read_text()
+    assert 'f"{args.history_index:03d}_{row[\'scene\']}_episode_{row[\'episode\']}"' in text
+    assert 'factual_path = args.run_root / "factual_a" / factual_label' in text
+    assert 'factual_sidecar.read_text().split()' in text
+    assert '.glob(' not in text[text.index("def main() -> None:"):]
 
 
 def test_factual_a_bundle_import_tests_the_local_runtime_closure():

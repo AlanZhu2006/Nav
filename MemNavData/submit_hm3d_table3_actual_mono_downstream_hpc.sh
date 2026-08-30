@@ -7,7 +7,8 @@ ROOT=${ROOT:-/home/asus/Research/Nav-graph-blind}
 SSH_ALIAS=${SSH_ALIAS:-alantorch}
 LOCAL_MEMNAV_PY=${LOCAL_MEMNAV_PY:-/home/asus/miniconda3/envs/memnav/bin/python}
 LOCAL_HAB_PY=${LOCAL_HAB_PY:-/home/asus/miniconda3/envs/habitat/bin/python}
-A_RECEIPT=${A_RECEIPT:-${ROOT}/MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_COMPLETE_SUBMISSION_20260830.json}
+A_RECEIPT=${A_RECEIPT:-${ROOT}/MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_SIGABRT_REPAIR_SUBMISSION_20260830.json}
+REPAIR_RECEIPT=${REPAIR_RECEIPT:-${ROOT}/MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_DIRECTED_GEODESIC_REPAIR_SUBMISSION_20260830.json}
 OUT_RECEIPT=${OUT_RECEIPT:-MemNavData/HM3D_TABLE3_ACTUAL_MONO_DOWNSTREAM_SUBMISSION_20260830.json}
 CONSTRUCTION_JOB_OVERRIDE=${CONSTRUCTION_JOB_OVERRIDE:-}
 FACTUAL_DEPENDENCY_OVERRIDE=${FACTUAL_DEPENDENCY_OVERRIDE:-}
@@ -32,8 +33,9 @@ job_id() { tr -d '\r' | awk -F';' '/^[0-9]+(;|$)/ {print $1; exit}'; }
 [[ -x "${LOCAL_MEMNAV_PY}" && -x "${LOCAL_HAB_PY}" && -S "${SSH_CONTROL_PATH}" ]] || fail "local prerequisite missing"
 timeout 15 ssh -O check -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" >/dev/null 2>&1 || fail "shared SSH unavailable"
 [[ -f "${A_RECEIPT}" ]] || fail "missing factual-A submission receipt"
+[[ -f "${REPAIR_RECEIPT}" ]] || fail "missing directed-geodesic repair receipt"
 readarray -t factual < <("${LOCAL_MEMNAV_PY}" - "${A_RECEIPT}" <<'PY'
-import json,sys
+import hashlib,json,sys
 p=json.load(open(sys.argv[1]))
 assert p['schema_version']=='hm3d_table3_actual_mono_a_submission_v3_20260830'
 assert p['candidate_count']==125 and p['all_frozen_reserves_submitted'] is True
@@ -43,18 +45,68 @@ assert p['threshold_relaxation'] is False and p['fallback_completion_allowed'] i
 print(p['first_formal_candidate_job'])
 print(p['factual_A_remainder_array_job'])
 print(p['run_root'])
+print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())
 PY
 )
-[[ "${#factual[@]}" -eq 3 && "${factual[0]}" =~ ^[0-9]+$ \
+[[ "${#factual[@]}" -eq 4 && "${factual[0]}" =~ ^[0-9]+$ \
    && "${factual[1]}" =~ ^[0-9]+$ ]] || fail "invalid factual-A receipt"
 factual_gate=${factual[0]}; factual_array=${factual[1]}; run_root=${factual[2]}
-factual_dependency=${factual_gate}:${factual_array}
+factual_receipt_sha=${factual[3]}
+readarray -t repair < <("${LOCAL_MEMNAV_PY}" - "${REPAIR_RECEIPT}" <<'PY'
+import hashlib,json,sys
+p=json.load(open(sys.argv[1]))
+assert p['schema_version']=='hm3d_table3_actual_mono_a_directed_geodesic_repair_launcher_submission_v1_20260830'
+assert p['navigation_outcomes_read_at_submission'] is False
+assert p['query_policy_outcomes_read_at_submission'] is False
+assert p['scientific_thresholds_changed'] is False
+assert p['fallback_completion_allowed'] is False
+print(p['original_factual_A_array_job'])
+print(p['repair_finish_job'])
+print(p['repair_array_job'])
+print(p['repair_namespace'])
+print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())
+PY
+)
+[[ "${#repair[@]}" -eq 5 && "${repair[0]}" =~ ^[0-9]+$ \
+   && "${repair[1]}" =~ ^[0-9]+$ && "${repair[2]}" =~ ^[0-9]+$ \
+   && "${repair[3]}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || \
+  fail "invalid directed repair receipt"
+[[ "${factual_array}" == "${repair[0]}" ]] || \
+  fail "factual-A receipt and directed repair bind different arrays"
+repair_finish=${repair[1]}; repair_array=${repair[2]}
+repair_namespace=${repair[3]}; repair_receipt_sha=${repair[4]}
+factual_dependency=${repair_finish}
 if [[ -n "${FACTUAL_DEPENDENCY_OVERRIDE}" ]]; then
   [[ "${FACTUAL_DEPENDENCY_OVERRIDE}" =~ ^[0-9]+$ ]] || \
     fail "bad factual dependency override"
-  remote "scontrol show job '${FACTUAL_DEPENDENCY_OVERRIDE}' >/dev/null"
+  [[ "${FACTUAL_DEPENDENCY_OVERRIDE}" == "${repair_finish}" ]] || \
+    fail "factual dependency override is not the receipt-bound repair verifier"
   factual_dependency=${FACTUAL_DEPENDENCY_OVERRIDE}
 fi
+repair_completion=${run_root}/${repair_namespace}/completion.json
+repair_completion_sha=$(remote "set -euo pipefail
+test -f '${repair_completion}' -a -f '${repair_completion}.sha256'
+digest=\$(sha256sum '${repair_completion}' | awk '{print \$1}')
+test \"\$(cat '${repair_completion}.sha256')\" = \"\${digest}  completion.json\"
+/scratch/lg154/conda-envs/memnav/bin/python - '${repair_completion}' \
+  '${EXPECTED_TABLE3_PLAN_SHA}' '${repair_array}' <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+assert p['schema_version']=='hm3d_table3_actual_mono_a_transport_repair_completion_v1_20260830'
+assert p['status']=='complete'
+assert p['candidate_plan_sha256']==sys.argv[2]
+assert p['repair_array_job']==int(sys.argv[3])
+assert p['candidate_count']==125 and p['completion_receipts_verified']==125
+assert len(p['completion_receipt_digests'])==125
+assert p['completion_payloads_deserialized'] is False
+assert p['navigation_outcomes_read'] is False
+assert p['query_policy_outcomes_read'] is False
+assert p['scientific_thresholds_changed'] is False
+assert p['fallback_completion_allowed'] is False
+PY
+printf '%s\\n' \"\${digest}\"")
+[[ "${repair_completion_sha}" =~ ^[0-9a-f]{64}$ ]] || \
+  fail "directed repair completion receipt did not verify"
 
 files=(
   MemNavData/analyze_hm3d_table3_actual_mono.py
@@ -181,7 +233,7 @@ if [[ -n "${CONSTRUCTION_JOB_OVERRIDE}" ]]; then
   remote "scontrol show job '${CONSTRUCTION_JOB_OVERRIDE}' >/dev/null"
   construct_job=${CONSTRUCTION_JOB_OVERRIDE}
 else
-  raw=$(remote "source '${safe}'; safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=01:00:00 --array=0-124%4 --dependency='afterok:${factual_dependency}' --kill-on-invalid-dep=yes --export='${common}' '${construct}'")
+  raw=$(remote "source '${safe}'; safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=01:00:00 --array=0-124%4 --export='${common}' '${construct}'")
   construct_job=$(printf '%s\n' "${raw}" | job_id)
 fi
 [[ "${construct_job}" =~ ^[0-9]+$ ]] || fail "bad construction job id"
@@ -207,15 +259,25 @@ receipt=${OUT_RECEIPT}
   "${construct_job}" "${finalize_job}" "${population_verify_job}" \
   "${pair_job}" "${analysis_job}" "${result_verify_job}" \
   "${run_root}" "${wrapper_root}" "${receipt_sha}" \
-  "${CONSTRUCTION_JOB_OVERRIDE:+1}" "${FACTUAL_DEPENDENCY_OVERRIDE}" <<'PY'
+  "${CONSTRUCTION_JOB_OVERRIDE:+1}" "${factual_dependency}" \
+  "${A_RECEIPT}" "${factual_receipt_sha}" \
+  "${REPAIR_RECEIPT}" "${repair_receipt_sha}" \
+  "${repair_completion}" "${repair_completion_sha}" <<'PY'
 import json,sys
 (path,gate,factual,construct,finalize,popverify,pair,analysis,resultverify,
- run,bundle,bundle_sha,reused,factual_override)=sys.argv[1:]
+ run,bundle,bundle_sha,reused,factual_completion,
+ factual_receipt,factual_receipt_sha,repair_receipt,repair_receipt_sha,
+ repair_completion,repair_completion_sha)=sys.argv[1:]
 p={
- 'schema_version':'hm3d_table3_actual_mono_downstream_submission_v1_20260830',
+ 'schema_version':'hm3d_table3_actual_mono_downstream_submission_v2_20260830',
  'factual_A_gate_job':int(gate),'factual_A_array_job':int(factual),
- 'factual_completion_dependency_job':(
-     int(factual_override) if factual_override else None),
+ 'factual_completion_dependency_job':int(factual_completion),
+ 'factual_A_submission_receipt':factual_receipt,
+ 'factual_A_submission_receipt_sha256':factual_receipt_sha,
+ 'directed_repair_submission_receipt':repair_receipt,
+ 'directed_repair_submission_receipt_sha256':repair_receipt_sha,
+ 'directed_repair_completion_receipt':repair_completion,
+ 'directed_repair_completion_receipt_sha256':repair_completion_sha,
  'construction_array_job':int(construct),'construction_job_reused':reused=='1',
  'population_finalize_job':int(finalize),
  'population_independent_verification_job':int(popverify),

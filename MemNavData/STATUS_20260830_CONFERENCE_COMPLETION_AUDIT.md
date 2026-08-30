@@ -248,3 +248,57 @@ pairs。若 formal 全部使用 external frozen goal，自动 candidate 的 Spor
   trace 都不会替代。
 - 在 Table II/Table III 最终 verifier 出现前不读取 partial SR。论文 Abstract 与
   Introduction 保持作者版本不动；最终仅把 verifier-sealed 数字写入会议矩阵与表格。
+
+## 9. 17:45 CST 运行进展与定性素材闭环
+
+### Table II 已越过 factual-B 基础设施故障
+
+- A100 exact-repair array `16597248` 的 11 个 scene-group cells 已全部
+  `COMPLETED`，耗时 5:16--13:11，均写出正常 completion；此前 H100 的
+  `SIGABRT` 没有在 A100 repair 上复现。
+- finish `16597249` 已 `COMPLETED`，随后启动 84 个 factual-prefix construction
+  `16598398`、population verifier `16598399` 与 union/Table-II launcher `16598400`。
+  17:45 CST 时 construction 已推进至 index 76，剩余 `77--83` 等待 GPU quota。
+- 这仍不是最终 Table II 结果：只有 population verifier、C-query paired array、summary
+  与 raw-row independent verifier 全部通过后才能读取 SR/SPL。当前没有查看任何 partial
+  outcome，也没有缩小 population。
+
+### Table III 原数组继续，失败项保持为待精确补缺 identity
+
+- `16596273` 仍按 `%2` 执行冻结的 125 factual-A candidates。旧 immutable wrapper 中
+  仍可能出现 pre-receipt server-start 失败；截至本次审计已看到 indices
+  `2/23/40/42/43` 在 completion 前退出，其日志没有形成可用 policy outcome。
+- 不对这些 identity 做删除、换样或事后解释；`16597086` 会在整个原数组结束后按
+  receipt/SHA 完整性一次性冻结全部 missing indices，再由带动态端口锁的新 wrapper
+  精确补跑。其后仍须得到 `125/125` factual receipts 才能进入 48-history/96-query
+  正式表。
+
+### Motivation failure case 不再是空缺
+
+从已经冻结并消费的 Final14 中选择了一个**仅用于定性展示**、不用于模型或门限选择的
+paired history。它同时满足：
+
+- unsupported Novel：mono Native/Raw/CEC 为 `success/failure/success`；CEC 从第一步
+  拒绝 memory，完整 query trace 与 Native 逐点相同；
+- supported Revisit：mono Native/Raw/CEC 为 `failure/success/success`；CEC 选择历史
+  anchor 后获得 529 个 PnP inliers、query/reference coverage `34.0/36.1%`、RMSE
+  `1.09 px` 并授权 unit bearing；
+- Novel 的局部匹配虽有 56 个 PnP inliers，但 reference coverage 仅 `3.8% < 5%`，因此
+  operational certificate 正确 abstain。这个案例直接展示“同一历史既可能有用，也可能
+  干扰；proposal 不等于 control authority”。
+
+可复算生成器：
+
+- `MemNavData/build_final14_qualitative_case.py`；
+- `MemNavData/build_final14_qualitative_video.py`。
+
+内部 hash-sealed 原始素材与 receipt：
+
+- `.diagnostics/conference_qualitative_20260830/history_002/`；
+- `.diagnostics/conference_qualitative_20260830/rendered/`。
+
+已生成 300-dpi PNG、vector PDF 和 8 秒 H.264 MP4；图中不暴露 scene identity，数值标注
+读取 formal receipt，重新绘制的 CUDA matcher 仅用于 inlier 线条并单独记录其轻微数值
+差异，不新增任何 scientific row。论文已接入该图并成功编译；当前草稿因此从 8 页变为
+9 页，最终会议版必须在不删除该证据的前提下压回 8 页，这属于版面重构任务，不能通过
+把该会议交付物移除来“完成”。

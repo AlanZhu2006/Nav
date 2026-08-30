@@ -521,3 +521,39 @@ launcher `16597086` 等待原数组 `afterany` 后按 completion receipt 与 byt
   `16540469` 自 8 月 28 日起始终未运行。它们服务于 17-history underpowered mechanism
   线，文档已明确禁止用来填 powered Table II；为避免抢占同一用户 GPU 配额，21:25 CST
   精确取消这两个 pending jobs。没有删除既有数据或正式结果，也没有改变任何会议 population。
+
+## 15. 21:45 CST Table II powered result sealed
+
+- policy array `16602105` 54/54 完成，aggregate `16602106`、raw verifier `16602107` 与
+  meeting verifier `16602108` 全部 `COMPLETED 0:0`；结果只在三个节点通过后首次读取。
+- factual waterfall 为 Novel-A `131/196`，Novel-B `54/183`。B 的 183 个 candidates 覆盖
+  67 个唯一 A prefixes，故禁止把两个阶段率相乘成 unconditional joint。
+- 在 20 histories / 13 scenes 的 `C | successful, supported factual A+B` population 上：
+  Novel native/CEC 均为 `4/20`（`+0/-0, p=1`）；Revisit 为 `8/20 -> 17/20`
+  （`+10/-1, p=.01171875`）；balanced all 为 `12/40 -> 21/40`
+  （`+10/-1, p=.01171875`, risk difference `+22.5 pp`）。
+- balanced SPL `.1572 -> .4236`，Revisit SPL `.1422 -> .6750`。Runtime role hidden；
+  Novel takeover 1/20，Revisit takeover 18/20，21 queries 为全部拒绝后的 byte-exact fallback。
+- meeting verification SHA：
+  `a3b4adf9f5c29cab775da30fc19fd60704201070b87c35aa755ffe1e34457f50`；
+  `verified=true`，无 fallback completion、threshold relaxation 或 partial outcome。
+- 完整结果与 claim boundary 见
+  `HM3D_TABLE2_POWERED_MEETING_RESULT_20260830.md`。
+
+## 16. 22:07 CST Table II 逐段 SPL 补充审计完成
+
+- 原会议清单要求逐 leg 同时报 SR、SPL 与有效分母；primary meeting verifier 已封存 A/B
+  factual SR，但没有汇总其 SPL。该缺口不能用空值冒充完成。
+- 新增只读 post-seal verifier `independent_verify_hm3d_table2_stage_spl.py`，哈希绑定
+  primary meeting verifier，并逐条复核 `196` 个 actual-mono Goal-A raw metrics/traces 与
+  `183` 个 result-blind factual-B raw metrics/traces。它没有重跑 policy、没有选择 prefix、
+  没有读取下游 query 来改变 population。
+- HPC CPU job `16609841` 在 `00:00:32` 内 `COMPLETED 0:0`。独立复算得到：Leg-1
+  `SR=131/196=.66837, SPL=.60106`；Leg-2 `SR=54/183=.29508, SPL=.19211`。
+- 封存 verifier SHA 为
+  `321f40534e1d467f4bf47b58414ac09f714b54c4b032460ee67235debd9f97ee`；A/B raw
+  artifact-set SHA 分别为
+  `1a4ccff0f4bfb67d18cd010f7ef0a921d2cdd4e8c526c3e84e07c08462800876` 与
+  `16a9daba00f0cd59f50be319d9c781ece0f9474cf1a72ce73ee1a6c39c117691`。
+- 至此 Table II 的会议字段（逐段分母、SR、SPL、Leg-3 hidden-role Novel/Revisit paired
+  contrast）均已有封存证据；仍不得把分层 waterfall 相乘为 unconditional 3-leg joint。

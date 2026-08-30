@@ -23,7 +23,7 @@ export PYTHONDONTWRITEBYTECODE=1
 (cd "${TASK_ROOT}" && sha256sum -c --quiet "${TASK_RECEIPT}")
 [[ "$(sha256sum "${PROTOCOL}" | awk '{print $1}')" == \
    "${EXPECTED_PROTOCOL_SHA}" ]]
-parent=${PARENT_ROOT}/sealed_inputs/parent_manifest.json
+parent=${PARENT_MANIFEST_PATH:-${PARENT_ROOT}/sealed_inputs/parent_manifest.json}
 [[ "$(sha256sum "${parent}" | awk '{print $1}')" == \
    "${EXPECTED_PARENT_MANIFEST_SHA}" ]]
 py=/scratch/lg154/conda-envs/memnav/bin/python

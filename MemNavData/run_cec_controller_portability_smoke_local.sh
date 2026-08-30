@@ -98,8 +98,8 @@ case "${ROLE_PAIR_QUERY_ROLE}" in
   *) fail "ROLE_PAIR_QUERY_ROLE must be all, novel, or revisit" ;;
 esac
 case "${ROLE_PAIR_SCOPE}" in
-  consumed_integration|paper_heldout) ;;
-  *) fail "ROLE_PAIR_SCOPE must be consumed_integration or paper_heldout" ;;
+  consumed_integration|paper_heldout|paper_replication) ;;
+  *) fail "ROLE_PAIR_SCOPE must be consumed_integration, paper_heldout, or paper_replication" ;;
 esac
 case "${PORTABILITY_AUTHORITY_PAIR}" in
   0|1) ;;
@@ -156,8 +156,9 @@ if [[ "${PORTABILITY_CEC_ACCEPT_ALIGNMENT}" == first_certified_bounded ]]; then
     fail "bounded CEC alignment requires a paired ViNT role-pair run"
   [[ "${CEC_REJECT_POLICY}" == controller_native_exact ]] || \
     fail "bounded CEC alignment requires exact native ViNT rejection"
-  [[ "${ROLE_PAIR_SCOPE}" == paper_heldout ]] || \
-    fail "bounded CEC alignment is restricted to a frozen held-out population"
+  [[ "${ROLE_PAIR_SCOPE}" == paper_heldout \
+     || "${ROLE_PAIR_SCOPE}" == paper_replication ]] || \
+    fail "bounded CEC alignment requires a frozen complete population"
   [[ -z "${ROLE_PAIR_QUERY_MANIFEST}" ]] || \
     fail "bounded held-out formal must run the complete population"
 fi

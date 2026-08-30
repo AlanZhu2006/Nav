@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from MemNavData.aggregate_hm3d_table1_navdp_pair import aggregate, digest
+from MemNavData.aggregate_hm3d_table1_navdp_pair import (
+    _direction_stratum,
+    aggregate,
+    digest,
+)
 from MemNavData.independent_verify_hm3d_table1_navdp_pair import verify
 
 
@@ -38,6 +42,9 @@ def plan(*, accepted: bool, trace: list[list[float]], reached: int) -> dict:
                 "scale_receipt_sha256": "a" * 64,
             },
             "certified_relocalization_accepted": accepted,
+            "certified_relocalization_reason": (
+                "accepted" if accepted else "insufficient_support"
+            ),
             "cec_takeover": accepted,
         }],
         "rollout_traces": {"query": trace},
@@ -54,11 +61,16 @@ def make_fixture(tmp_path: Path, *, authorized: bool = True):
         episodes.append({
             "scene": scene,
             "episode": episode,
-            "selected_direction_stratum": "front" if index == 0 else "side",
             "pairs": [{
                 "pair_id": "pair_00",
                 "queries": [
-                    {"analysis_role": "novel", "query_id": "pair_00_novel"},
+                    {
+                        "analysis_role": "novel",
+                        "query_id": "pair_00_novel",
+                        "assigned_direction_stratum": (
+                            "front" if index == 0 else "side"
+                        ),
+                    },
                     {"analysis_role": "revisit", "query_id": "pair_00_revisit"},
                 ],
             }],
@@ -146,6 +158,13 @@ def test_aggregate_and_independent_verifier(tmp_path):
     assert checked["fully_rejected_exact_native_queries"] == 2
 
 
+def test_direction_stratum_uses_canonical_novel_query(tmp_path):
+    _run, benchmark, _construction = make_fixture(tmp_path)
+    manifest = json.loads((benchmark / "manifest.json").read_text())
+    assert _direction_stratum(manifest["episodes"][0]) == "front"
+    assert _direction_stratum(manifest["episodes"][1]) == "side"
+
+
 def test_power_gate_blocks_aggregation(tmp_path):
     run, benchmark, construction = make_fixture(tmp_path, authorized=False)
     with pytest.raises(RuntimeError, match="did not authorize"):
@@ -153,3 +172,40 @@ def test_power_gate_blocks_aggregation(tmp_path):
             run, benchmark, construction,
             claim_scope="must_not_run", bootstrap_samples=10,
         )
+
+
+def test_runtime_failure_is_infrastructure_not_a_policy_outcome(tmp_path):
+    run, benchmark, construction = make_fixture(tmp_path)
+    root = (run / "evaluation/natural_direction"
+            / "000_scene0_episode_0000" / "mono_cec")
+    metric_path = root / "metric.csv"
+    with metric_path.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    rows[0]["runtime_failure_plans"] = 1
+    write_metric(metric_path, rows)
+    with pytest.raises(RuntimeError, match="runtime failure"):
+        aggregate(
+            run, benchmark, construction,
+            claim_scope="must_not_seal", bootstrap_samples=10,
+        )
+
+    # The independent verifier must reject the same defect even if a stale
+    # clean aggregate were presented to it.
+    rows[0]["runtime_failure_plans"] = 0
+    write_metric(metric_path, rows)
+    summary = aggregate(
+        run, benchmark, construction,
+        claim_scope="must_not_seal", bootstrap_samples=10,
+    )
+    summary_path = run / "summary.json"
+    write_json(summary_path, summary)
+    rows[0]["runtime_failure_plans"] = 1
+    write_metric(metric_path, rows)
+    payload_path = root / "episode_0000_pair_00_novel_plans.json"
+    payload = json.loads(payload_path.read_text())
+    payload["query_leg"][0][
+        "certified_relocalization_reason"
+    ] = "certificate_endpoint_failure"
+    write_json(payload_path, payload)
+    with pytest.raises(RuntimeError, match="runtime failure"):
+        verify(run, benchmark, construction, summary_path)

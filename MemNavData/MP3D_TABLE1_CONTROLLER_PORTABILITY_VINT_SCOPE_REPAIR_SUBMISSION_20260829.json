@@ -1,0 +1,26 @@
+{
+  "benchmark_manifest_sha256": "a33f210fdd0cfa84e82c4d403ac79056dcc7959cd1ce84bf62bec8c5632deb69",
+  "construction_verification_sha256": "618c409f7c7c62ad739687935cdd6f2e564e96aed6ccf6059d887d795c3e953e",
+  "failed_before_policy_outcomes": true,
+  "failed_task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mp3d_table1_controller_portability_eb7cdf82477f6aa1",
+  "failed_vint_smoke_job": 16548403,
+  "histories": 42,
+  "jobs": {
+    "controller_portability_seal": 16548606,
+    "existing_navdp_verify": 16548444,
+    "replacement_vint_aggregate": 16548600,
+    "replacement_vint_formal": 16548592,
+    "replacement_vint_smoke": 16548590,
+    "replacement_vint_verify": 16548605
+  },
+  "partial_policy_outcomes_read_at_submission": false,
+  "repair_reason": "paper_replication omitted from portability shell allowlist",
+  "repair_task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mp3d_table1_controller_portability_7f1713660eee6f5c",
+  "repair_task_receipt_sha256": "7f1713660eee6f5c4893c46b8705767a5e64c117c0ac0aa55fa2f80ef504169e",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_controller_portability_20260829/formal_20260829T085025Z",
+  "runtime_role_pair_scope": "paper_replication",
+  "scene_clusters": 25,
+  "schema_version": "mp3d_table1_vint_scope_repair_submission_v1_20260829",
+  "scientific_factors_changed": false,
+  "vint_grant_bearing_alignment": "first_certified_bounded"
+}

@@ -1,0 +1,73 @@
+{
+  "schema_version": "hm3d_table3_causal_survey_protocol_v1_20260830",
+  "frozen_at": "2026-08-30T23:05:00+08:00",
+  "scope": "HM3D NavDP-only causal-monocular Novel/Revisit evaluation stratified by frozen query geodesic length",
+  "source_candidate_plan": {
+    "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_20260830/plan_20260830T061943Z_3b848b5c/candidate_plan.json",
+    "sha256": "1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d",
+    "candidate_count": 125,
+    "selection": "copy the complete pre-outcome 125-candidate prefix without reading or filtering by factual-A or query-policy outcomes"
+  },
+  "history": {
+    "manifest_contract": "controlled_causal_rgb_geodesic_survey",
+    "source": "deterministic physically ordered RGB survey along the frozen first_goal-to-query_start geodesic",
+    "camera_height_m": 0.5,
+    "translation_step_m": 0.0376,
+    "maximum_yaw_step_deg": 4.5,
+    "navdp_fifo_replay_stride": 8,
+    "minimum_frames": 72,
+    "runtime_memory_input": "RGB only",
+    "construction_only_simulator_depth": true,
+    "metric_depth_for_query_control_or_CEC": false,
+    "source_policy_success_conditioned": false,
+    "task_specific_training": false
+  },
+  "query_construction": {
+    "runtime_role_visibility": "none",
+    "revisit": "controlled 0.20-0.80 m and 12-45 deg perturbation of an eligible causal-survey frame",
+    "revisit_min_history_covis_inclusive": 0.55,
+    "novel": "frozen capacity second_goal rendered at the final geodesic tangent",
+    "novel_max_history_covis_exclusive": 0.10,
+    "maximum_role_distance_mismatch_m": 2.0,
+    "minimum_initial_bearing_separation_deg": 60.0,
+    "eligible_frame_floor": 39,
+    "eligible_end_margin_frames": 32,
+    "construction_before_query_policy": true
+  },
+  "length_definition": {
+    "metric": "Habitat shortest-path geodesic from the causal-survey endpoint to each query goal",
+    "method_execution_path_used": false,
+    "bins_m": [
+      {"name": "0_to_20_m", "lower_inclusive": 2.0, "upper": 20.0, "upper_inclusive": false},
+      {"name": "20_to_30_m", "lower_inclusive": 20.0, "upper": 30.0, "upper_inclusive": false},
+      {"name": "30_to_50_m", "lower_inclusive": 30.0, "upper": 50.0, "upper_inclusive": true}
+    ]
+  },
+  "runtime": {
+    "arms": ["mono_native", "mono_cec"],
+    "same_history_start_goal_and_seed_per_arm": true,
+    "success_radius_m": 1.0,
+    "execution_horizon": 8,
+    "v_max_m_per_frame": 0.0376,
+    "step_budget_formula": "max(600, ceil(2.5 * max(role_geodesic_m) / 0.0376))",
+    "maximum_steps_cap": 3400,
+    "terminal_uturn": "off",
+    "terminal_visual_refine": "off",
+    "deterministic_plan_seeds": true
+  },
+  "population_gate": {
+    "minimum_histories_per_bin": 16,
+    "minimum_scene_clusters_per_bin": 10,
+    "maximum_selected_histories_per_scene_per_bin": 2,
+    "all_bins_required": true
+  },
+  "guards": {
+    "query_policy_outcomes_read_before_population_seal": false,
+    "independent_construction_verifier_required": true,
+    "independent_policy_verifier_required": true,
+    "threshold_relaxation_after_outcomes": false,
+    "partial_results_prohibited": true,
+    "failed_actual_mono_population_is_not_a_result_or_population_source": true,
+    "survey_prefix_is_disclosed_as_controlled_history_not_navdp_goal_success": true
+  }
+}

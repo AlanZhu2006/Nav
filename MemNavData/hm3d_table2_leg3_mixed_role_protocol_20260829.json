@@ -1,0 +1,93 @@
+{
+  "schema_version": "hm3d_table2_leg3_mixed_role_protocol_v1_20260829",
+  "frozen_at": "2026-08-29T14:32:00+08:00",
+  "scope": "controlled shared-prefix HM3D continual Table-2 Leg-3 Novel/Revisit comparison",
+  "scientific_question": "after two factual Novel legs have accumulated causal RGB history, can role-free CEC improve a new Revisit query while exactly preserving native behavior on a new unsupported Novel query?",
+  "source_population": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d",
+    "population": "population/population.json",
+    "population_sha256": "ec11c0dbc43a4abe585330c1ce52a8c14ad1d4b1da6fd8397e1d15592707a6d5",
+    "seal": "population/SEALED",
+    "seal_sha256": "9c0410578381602eeed64ebebc56acc0a1a36add11f37795553460d9376daf79",
+    "source_histories": 99,
+    "actual_AB_successful_histories": 22,
+    "actual_AB_scene_clusters": 15,
+    "selection_rule": "all A/B prefixes sealed before any C/B2/C2 outcome",
+    "selection_reads_C_B2_C2_navigation_outcomes": false
+  },
+  "scene_ledger": {
+    "parent_manifest": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6/sealed_inputs/parent_manifest.json",
+    "parent_manifest_sha256": "a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5",
+    "scene_rank_semantics": "index in the immutable 54-scene HM3D parent manifest"
+  },
+  "shared_prefix": {
+    "sequence": ["A_novel", "B_novel"],
+    "A_controller": "frozen_navdp_native_monocular_sidecar",
+    "B_controller": "frozen_navdp_native_monocular_sidecar",
+    "A_and_B_are_actual_rollouts": true,
+    "composition": "concatenate every hash-verified physical RGB observation and replay only the original NavDP decision frames",
+    "same_prefix_for_every_leg3_role_and_arm": true,
+    "metric_depth_sensor_reads_allowed": 0
+  },
+  "leg3_queries": {
+    "roles": ["novel", "revisit"],
+    "runtime_role_visibility": "none",
+    "both_query_identities_are_new": true,
+    "old_goal_B_and_goal_C_RGB_and_pose_identities_forbidden": true,
+    "old_goal_C_navigation_outcomes_read_for_construction": false,
+    "query_geodesic_band_m": [2.0, 9.0],
+    "novel_max_combined_AB_covis_exclusive": 0.1,
+    "revisit_min_combined_AB_covis_inclusive": 0.55,
+    "revisit_max_combined_AB_covis_inclusive": 0.9,
+    "revisit_source": "controlled pose perturbation around one actual A/B observation",
+    "novel_source": "deterministic navigable rendering unsupported by the complete A/B prefix",
+    "direction_strata": ["front", "side", "rear"],
+    "direction_search": "balanced preferred stratum, then deterministic fallback",
+    "candidate_policy_outcomes_read": false
+  },
+  "population_gate": {
+    "minimum_histories": 16,
+    "minimum_scene_clusters": 10,
+    "minimum_histories_per_direction_stratum": 3,
+    "halt_before_policy_rollout_if_not_met": true,
+    "no_threshold_relaxation_after_construction": true
+  },
+  "runtime": {
+    "controller": "frozen NavDP",
+    "arms": ["mono_native", "mono_cec"],
+    "depth_source": "causal LingBot monocular sidecar",
+    "same_AB_prefix_replayed_before_every_arm": true,
+    "maximum_steps": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "terminal_uturn": false,
+    "terminal_visual_refine": false,
+    "deterministic_diffusion_seeds": true,
+    "cec_residual_m": 2.5,
+    "cec_runtime_role_input": false
+  },
+  "analysis": {
+    "primary_endpoints": [
+      "Leg3_Revisit_SR_mono_cec_vs_mono_native",
+      "Leg3_Novel_loss_and_false_takeover_count"
+    ],
+    "paired_unit": ["scene", "actual_AB_prefix", "query_role"],
+    "primary_cluster_unit": "scene",
+    "exact_mcnemar": "two-sided exact binomial over discordant pairs",
+    "bootstrap_seed": 20260829,
+    "bootstrap_resamples": 100000,
+    "prefix_reporting": "Leg1 A and Leg2 B are a shared factual construction waterfall; Leg3 is the randomized paired treatment comparison",
+    "joint_denominator_rule": "report C given successful A,B and separately report the source A/B waterfall; do not present selected-prefix C as unconditional end-to-end SR"
+  },
+  "leg3_query_outcomes_read_before_freeze": false,
+  "guards": {
+    "no_training": true,
+    "no_metric_depth_for_control_or_CEC": true,
+    "no_runtime_role_label": true,
+    "no_old_leg3_query_reuse": true,
+    "no_query_outcome_filtering": true,
+    "construction_before_policy_rollout": true,
+    "independent_construction_verifier_required": true,
+    "immutable_source_bundle_and_receipt_required": true
+  }
+}

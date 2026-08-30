@@ -15,17 +15,29 @@ umask 0022
 export PYTHONDONTWRITEBYTECODE=1
 : "${FORMAL_RUN_ROOT:?}" "${CONSTRUCTION_VERIFICATION:?}"
 : "${EXPECTED_CONSTRUCTION_VERIFICATION_SHA:?}"
+DATASET=${DATASET:-HM3D}
+CLAIM_SCOPE=${CLAIM_SCOPE:-}
+if [[ -z "${CLAIM_SCOPE}" ]]; then
+  CLAIM_SCOPE="fresh-query scene-overlap within-controller paired evaluation"
+fi
 PY=/scratch/lg154/conda-envs/memnav/bin/python
 NAV=${FORMAL_RUN_ROOT}/formal/navdp/navdp_table1_independent_verification.json
-VINT=${FORMAL_RUN_ROOT}/formal/vint/vint_table1_independent_verification.json
-OUT=${FORMAL_RUN_ROOT}/hm3d_table1_controller_portability_receipt.json
+VINT=${VINT_VERIFICATION_OVERRIDE:-${FORMAL_RUN_ROOT}/formal/vint/vint_table1_independent_verification.json}
+EXPECTED_VINT_VERIFICATION_SHA=${EXPECTED_VINT_VERIFICATION_SHA:-}
+dataset_lower=$(printf '%s' "${DATASET}" | tr '[:upper:]' '[:lower:]')
+OUT=${FORMAL_RUN_ROOT}/${dataset_lower}_table1_controller_portability_receipt.json
+[[ "${DATASET}" == HM3D || "${DATASET}" == MP3D ]]
 [[ ! -e "${OUT}" ]]
 [[ "$(sha256sum "${CONSTRUCTION_VERIFICATION}" | awk '{print $1}')" == \
    "${EXPECTED_CONSTRUCTION_VERIFICATION_SHA}" ]]
+if [[ -n "${EXPECTED_VINT_VERIFICATION_SHA}" ]]; then
+  [[ "$(sha256sum "${VINT}" | awk '{print $1}')" == \
+     "${EXPECTED_VINT_VERIFICATION_SHA}" ]]
+fi
 "${PY}" - "${CONSTRUCTION_VERIFICATION}" "${NAV}" "${VINT}" \
-  "${OUT}" <<'PY'
+  "${OUT}" "${DATASET}" "${CLAIM_SCOPE}" <<'PY'
 import hashlib,json,os,sys
-construction_path,nav_path,vint_path,out_path=sys.argv[1:]
+construction_path,nav_path,vint_path,out_path,dataset,claim_scope=sys.argv[1:]
 def load(path):
  with open(path) as handle: return json.load(handle)
 def digest(path):
@@ -37,20 +49,25 @@ if nav.get("verified") is not True or nav.get("authorized") is not True:
  raise SystemExit("NavDP verifier invalid")
 if vint.get("verified") is not True:
  raise SystemExit("ViNT verifier invalid")
+if nav.get("dataset","HM3D") != dataset or vint.get("dataset","HM3D") != dataset:
+ raise SystemExit("controller verifier dataset changed")
 expected=(int(construction["histories"]),int(construction["scene_clusters"]))
 if (int(nav["histories"]),int(nav["scene_clusters"])) != expected:
  raise SystemExit("NavDP population changed")
 if (int(vint["raw_histories"]),int(vint["scene_clusters"])) != expected:
  raise SystemExit("ViNT population changed")
 payload={
- "schema_version":"hm3d_table1_controller_portability_receipt_v1_20260829",
+ "schema_version":dataset.lower()+"_table1_controller_portability_receipt_v1_20260829",
  "verified":True,
- "claim_scope":"fresh-query scene-overlap within-controller paired evaluation",
+ "dataset":dataset,
+ "claim_scope":claim_scope,
  "cross_controller_absolute_sr_is_not_a_paired_estimand":True,
  "histories":expected[0],"scene_clusters":expected[1],
  "construction_verification_sha256":digest(construction_path),
  "navdp_independent_verification_sha256":digest(nav_path),
+ "navdp_independent_verification_path":nav_path,
  "vint_independent_verification_sha256":digest(vint_path),
+ "vint_independent_verification_path":vint_path,
  "runtime_role_visibility":"none",
  "navdp_depth":"causal_monocular_sidecar",
  "vint_cec_bearing_execution":"first_certified_bounded",

@@ -1,0 +1,18 @@
+{
+  "base_candidates_deleted_or_replaced": false,
+  "base_construction_array_job": 16610812,
+  "construction_protocol": "expansion_plan/construction_protocol.json",
+  "expansion_plan_freeze_job": 16614442,
+  "expansion_plan_independent_verification_job": 16614445,
+  "fallback_completion_allowed": false,
+  "independent_verification": "expansion_plan/independent_verification.json",
+  "navigation_policy_outcomes_read": false,
+  "plan": "expansion_plan/candidate_plan.json",
+  "query_policy_jobs_submitted": false,
+  "query_policy_outcomes_read": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e",
+  "schema_version": "hm3d_table3_causal_survey_expansion_plan_submission_v1_20260831",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_causal_survey_expansion_plan_a8dd232ef5e64347",
+  "source_bundle_sha256": "a8dd232ef5e64347a7e0ca529d24eedb6cbbe3864a883f02f7260023b85f5eca",
+  "threshold_relaxation": false
+}

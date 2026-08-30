@@ -1,0 +1,25 @@
+{
+  "all_frozen_reserves_submitted": true,
+  "arrays": [
+    "0",
+    "1-124%4"
+  ],
+  "candidate_count": 125,
+  "candidate_plan_sha256": "1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d",
+  "factual_A_outcomes_read_at_submission": false,
+  "factual_A_remainder_array_job": 16595189,
+  "fallback_completion_allowed": false,
+  "first_formal_candidate_job": 16595187,
+  "query_policy_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_execution_20260830/formal_20260830T070323Z_1cc8a4bd",
+  "schema_version": "hm3d_table3_actual_mono_a_submission_v2_20260830",
+  "supersedes_aborted_jobs": [
+    16594607,
+    16594617
+  ],
+  "supersession_reason": "capacity/runtime navmesh mismatch before any policy outcome; v2 loads the content-addressed capacity navmesh verbatim",
+  "threshold_relaxation": false,
+  "time_limit": "02:00:00",
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_actual_mono_a_1cc8a4bdd7a77cd5",
+  "wrapper_bundle_sha256": "1cc8a4bdd7a77cd5277495f13d90aaea1e6ef9297a9d8c11538aa3a0dfa8153d"
+}

@@ -10,7 +10,11 @@ import math
 from pathlib import Path
 
 
-SCHEMA = "vint_controller_native_hm3d_verification_v1_20260828"
+SCHEMAS = {
+    "HM3D": "vint_controller_native_hm3d_verification_v1_20260828",
+    "MP3D": "vint_controller_native_mp3d_verification_v1_20260829",
+}
+SCHEMA = SCHEMAS["HM3D"]
 
 
 def require(condition: bool, message: str) -> None:
@@ -35,10 +39,14 @@ def verify(
     run_root: Path,
     summary_path: Path,
     benchmark_manifest: Path,
+    dataset: str = "HM3D",
 ) -> dict:
+    require(dataset in SCHEMAS, "unsupported Table-1 dataset")
     summary = json.loads(summary_path.read_text())
     require(summary.get("verified") is True,
             "aggregate summary is not verified")
+    require(summary.get("dataset") == dataset,
+            "aggregate dataset identity changed")
     require(summary.get("benchmark_manifest_sha256")
             == digest(benchmark_manifest),
             "aggregate is bound to a different benchmark")
@@ -137,8 +145,9 @@ def verify(
     require(reported_hashes == observed_hashes,
             "a raw pair audit changed after aggregation")
     return {
-        "schema_version": SCHEMA,
+        "schema_version": SCHEMAS[dataset],
         "verified": True,
+        "dataset": dataset,
         "summary_sha256": digest(summary_path),
         "benchmark_manifest_sha256": digest(benchmark_manifest),
         "raw_histories": len(audit_paths),
@@ -157,10 +166,11 @@ def main() -> None:
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--benchmark-manifest", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--dataset", choices=tuple(SCHEMAS), default="HM3D")
     args = parser.parse_args()
     result = verify(
         args.run_root.resolve(), args.summary.resolve(),
-        args.benchmark_manifest.resolve())
+        args.benchmark_manifest.resolve(), dataset=args.dataset)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(
         result, indent=2, sort_keys=True, allow_nan=False) + "\n")

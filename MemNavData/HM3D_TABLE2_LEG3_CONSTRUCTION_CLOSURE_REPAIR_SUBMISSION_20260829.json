@@ -1,0 +1,23 @@
+{
+  "failed_attempt_jobs": {
+    "construction_array": 16545155,
+    "construction_smoke": 16545154,
+    "independent_verification": 16545157,
+    "population_finalize": 16545156
+  },
+  "future_policy_evaluation_submitted": false,
+  "jobs": {
+    "construction_array": 16545222,
+    "construction_smoke": 16545221,
+    "independent_verification": 16545224,
+    "population_finalize": 16545223
+  },
+  "query_policy_outcomes_read_at_submission": false,
+  "repair_scope": "exact dependency closure and resolved-signature preflight only",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table2_leg3_mixed_role_20260829/construction_repair_20260829T064841Z_8e909a5b",
+  "schema_version": "hm3d_table2_leg3_construction_closure_repair_submission_v1_20260829",
+  "scientific_protocol_changed": false,
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table2_leg3_mixed_role_20260829/construction_repair_20260829T064841Z_8e909a5b_smoke",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table2_leg3_repair_8e909a5ba81c146d",
+  "task_receipt_sha256": "8e909a5ba81c146dd2fe7c9e179fee553672608ee78c08ab4cbfc5b8be23baf1"
+}

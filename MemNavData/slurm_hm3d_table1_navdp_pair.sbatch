@@ -26,16 +26,31 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${SOURCE_RUN_ROOT:?}" "${BENCH_ROOT:?}" "${PARENT_MANIFEST:?}"
 : "${PROTOCOL:?}" "${CONSTRUCTION_VERIFICATION:?}"
 : "${EXPECTED_CONSTRUCTION_VERIFICATION_SHA:?}" "${FORMAL_RUN_ROOT:?}"
+ROLE_PAIR_SCOPE=${ROLE_PAIR_SCOPE:-paper_heldout}
+WRAPPER_ROOT=${WRAPPER_ROOT:-${TASK_ROOT}}
+WRAPPER_RECEIPT=${WRAPPER_RECEIPT:-${TASK_RECEIPT}}
+EXPECTED_WRAPPER_RECEIPT_SHA=${EXPECTED_WRAPPER_RECEIPT_SHA:-${EXPECTED_TASK_RECEIPT_SHA}}
+EXACT_REPAIR=${EXACT_REPAIR:-0}
+RUNTIME_ATTEMPT=${RUNTIME_ATTEMPT:-}
+FORMAL_INDICES_SPEC=${FORMAL_INDICES_SPEC:-}
 
 SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 RUNNER=${TASK_ROOT}/MemNavData/run_hm3d_fullmono_server_scene.sh
 fail() { echo "ABORT: $*" >&2; exit 2; }
 
 [[ "${PHASE}" == smoke || "${PHASE}" == formal ]] || fail "invalid phase"
+[[ "${EXACT_REPAIR}" =~ ^[01]$ ]] || fail "EXACT_REPAIR must be 0 or 1"
+[[ "${ROLE_PAIR_SCOPE}" == paper_heldout \
+   || "${ROLE_PAIR_SCOPE}" == paper_replication ]] || \
+  fail "invalid formal role-pair scope"
 [[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_TASK_RECEIPT_SHA}" ]] || fail "task receipt changed"
 (cd "${TASK_ROOT}" && sha256sum -c --quiet "${TASK_RECEIPT}") || \
   fail "task bundle changed"
+[[ "$(sha256sum "${WRAPPER_RECEIPT}" | awk '{print $1}')" == \
+   "${EXPECTED_WRAPPER_RECEIPT_SHA}" ]] || fail "wrapper receipt changed"
+(cd "${WRAPPER_ROOT}" && sha256sum -c --quiet "${WRAPPER_RECEIPT}") || \
+  fail "wrapper bundle changed"
 [[ "$(sha256sum "${BASE_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_BASE_RECEIPT_SHA}" ]] || fail "base receipt changed"
 (cd "${BASE_SOURCE_ROOT}" && sha256sum -c --quiet "${BASE_RECEIPT}") || \
@@ -61,6 +76,9 @@ PY
   fail "construction power gate or manifest binding failed"
 
 if [[ "${PHASE}" == smoke ]]; then
+  [[ "${EXACT_REPAIR}" == 0 && -z "${RUNTIME_ATTEMPT}" \
+     && -z "${FORMAL_INDICES_SPEC}" ]] || \
+    fail "exact-repair controls are formal-only"
   RUN_ROOT=${NAVDP_SMOKE_RUN_ROOT:-${FORMAL_RUN_ROOT}/smoke/navdp}
   case "${RUN_ROOT}" in
     "${FORMAL_RUN_ROOT}"/smoke/navdp*) ;;
@@ -74,6 +92,17 @@ else
   MODE=eval
   SCENE_INDEX=${SLURM_ARRAY_TASK_ID}
   MAX_STEPS=600
+  if [[ "${EXACT_REPAIR}" == 1 ]]; then
+    [[ "${RUNTIME_ATTEMPT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || \
+      fail "exact repair requires a valid RUNTIME_ATTEMPT"
+    [[ "${FORMAL_INDICES_SPEC}" =~ ^[0-9]+(:[0-9]+)*$ ]] || \
+      fail "exact repair requires colon-delimited FORMAL_INDICES_SPEC"
+    FORMAL_INDICES_OVERRIDE=${FORMAL_INDICES_SPEC//:/ }
+  else
+    [[ -z "${RUNTIME_ATTEMPT}" && -z "${FORMAL_INDICES_SPEC}" ]] || \
+      fail "repair controls require EXACT_REPAIR=1"
+    FORMAL_INDICES_OVERRIDE=
+  fi
 fi
 
 exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
@@ -85,7 +114,9 @@ exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   PARENT_MANIFEST="${PARENT_MANIFEST}" PROTOCOL="${PROTOCOL}" \
   BENCH_ROOT="${BENCH_ROOT}" SCENE_INDEX="${SCENE_INDEX}" \
   MAX_STEPS="${MAX_STEPS}" QUERY_ARMS=mono_native,mono_cec \
-  ROLE_PAIR_SCOPE=paper_heldout \
+  ROLE_PAIR_SCOPE="${ROLE_PAIR_SCOPE}" \
+  RUNTIME_ATTEMPT="${RUNTIME_ATTEMPT}" \
+  FORMAL_INDICES_OVERRIDE="${FORMAL_INDICES_OVERRIDE:-}" \
   HAB_PY=/scratch/lg154/conda-envs/habitat/bin/python \
   MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python \
   TASK_RECEIPT="${TASK_RECEIPT}" \

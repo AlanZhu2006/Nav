@@ -7,6 +7,10 @@ RUNNER = ROOT / "MemNavData/run_hm3d_fullmono_server_scene.sh"
 SUBMITTER = (
     ROOT / "MemNavData/submit_hm3d_table1_controller_portability_hpc.sh"
 )
+PORTABILITY_RUNNER = (
+    ROOT / "MemNavData/run_cec_controller_portability_smoke_local.sh"
+)
+VINT_SBATCH = ROOT / "MemNavData/slurm_hm3d_table1_vint_pair.sbatch"
 
 
 def test_navdp_pair_requires_a_separately_sealed_server_overlay():
@@ -25,15 +29,16 @@ def test_smoke_retry_is_additive_and_confined_to_the_formal_run():
     assert "NavDP smoke root escaped the formal run" in text
 
 
-def test_primary_submitter_pins_the_verified_transaction_overlay():
+def test_primary_submitter_uses_its_composed_task_bundle_for_both_servers():
     text = SUBMITTER.read_text()
-    assert "hm3d_fullmono_transaction_repair_67e1132783ce2cb1" in text
-    assert (
-        "EXPECTED_NAVDP_SERVER_RECEIPT_SHA="
-        "05ce401aac8c2e7e31e8a8d820613d30b3a03856a35c8750085b93d5a1539a97"
-    ) in text
+    assert "NAVDP_SERVER_SOURCE_ROOT=${task_root}" in text
+    assert "NAVDP_SERVER_RECEIPT=${task_receipt}" in text
+    assert "EXPECTED_NAVDP_SERVER_RECEIPT_SHA=${task_receipt_sha}" in text
+    assert "HM3D_TABLE1_NAVDP_IDENTICAL_FRAME_CACHE_REPAIR_20260829.md" in text
     assert "def append_request_frame" in text
     assert "require_monocular_depth_transaction" in text
+    assert "def causal_goal_support_indices" in text
+    assert "import policy_agent,router_candidates" in text
 
 
 def test_server_overlay_can_resolve_receipt_bound_base_runtime_assets():
@@ -42,3 +47,84 @@ def test_server_overlay_can_resolve_receipt_bound_base_runtime_assets():
     assert "${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav" in text
     assert "${BASE_SOURCE_ROOT}/NavDP/baselines/navdp" in text
     assert "${BASE_SOURCE_ROOT}/NavDP/baselines/memnav" in text
+
+
+def test_server_processes_have_namespace_specific_sibling_precedence():
+    text = RUNNER.read_text()
+    memnav_order = (
+        "${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:"
+        "${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:"
+        "${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp"
+    )
+    navdp_order = (
+        "${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:"
+        "${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:"
+        "${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav"
+    )
+    assert memnav_order in text
+    assert navdp_order in text
+    assert 'PYTHONPATH="${MEMNAV_PYTHONPATH_VALUE}"' in text
+    assert 'PYTHONPATH="${NAVDP_PYTHONPATH_VALUE}"' in text
+    assert 'assert hasattr(policy_agent,\\"NavDP_Agent\\")' in SUBMITTER.read_text()
+
+
+def test_server_readiness_uses_a_real_loopback_connection():
+    text = RUNNER.read_text()
+    assert 'tcp_ready() {' in text
+    assert 'socket.create_connection(("127.0.0.1", int(sys.argv[1]))' in text
+    readiness = text.split('for spec in "memnav:', 1)[1]
+    assert 'if tcp_ready "${port}"; then' in readiness
+    assert "if ss -ltn | awk '{print $4}'" not in readiness
+
+
+def test_navdp_server_pair_uses_the_shared_lifetime_port_allocator():
+    text = RUNNER.read_text()
+    assert "claim_slurm_tcp_port_pair h3fullmono 12000 6000" in text
+    assert "release_slurm_tcp_port_pair" in text
+    assert "slurm_port_pair.sh" in text
+    assert "unset MEMNAV_PORT NAVDP_PORT" in text
+
+
+def test_portability_runner_accepts_the_frozen_mp3d_replication_scope():
+    text = PORTABILITY_RUNNER.read_text()
+    assert "consumed_integration|paper_heldout|paper_replication" in text
+    assert (
+        '"${ROLE_PAIR_SCOPE}" == paper_heldout \\\n'
+        '     || "${ROLE_PAIR_SCOPE}" == paper_replication'
+    ) in text
+    assert "bounded CEC alignment requires a frozen complete population" in text
+
+
+def test_submitter_has_a_result_blind_vint_only_scope_repair():
+    text = SUBMITTER.read_text()
+    assert "vint_scope_repair" in text
+    assert "failed_before_policy_outcomes" in text
+    assert "scientific_factors_changed':False" in text
+    assert "EXISTING_NAVDP_VERIFY_JOB" in text
+    assert "FAILED_VINT_SMOKE_JOB" in text
+    assert "vint_scope_repair_submission.json" in text
+
+
+def test_navdp_exact_retry_is_explicit_and_scene_confined():
+    text = SBATCH.read_text()
+    assert "EXACT_REPAIR" in text
+    assert "FORMAL_INDICES_SPEC" in text
+    assert "FORMAL_INDICES_OVERRIDE=${FORMAL_INDICES_SPEC//:/ }" in text
+    assert 'RUNTIME_ATTEMPT="${RUNTIME_ATTEMPT}"' in text
+    assert 'FORMAL_INDICES_OVERRIDE="${FORMAL_INDICES_OVERRIDE:-}"' in text
+
+
+def test_vint_uses_a_lifetime_held_collision_safe_six_port_block():
+    text = VINT_SBATCH.read_text()
+    assert "claim_slurm_tcp_port_block mp3d_table1_vint 6 12000 8000" in text
+    assert "base_port=${CEC_PORT_BLOCK_BASE}" in text
+    assert "trap cleanup_port_block EXIT INT TERM" in text
+    assert "port_slot=$(( $$ % 6000 ))" not in text
+
+
+def test_wrappers_can_be_receipt_bound_separately_from_frozen_task_code():
+    for path in (SBATCH, VINT_SBATCH):
+        text = path.read_text()
+        assert "WRAPPER_ROOT=${WRAPPER_ROOT:-${TASK_ROOT}}" in text
+        assert "EXPECTED_WRAPPER_RECEIPT_SHA" in text
+        assert 'fail "wrapper bundle changed"' in text

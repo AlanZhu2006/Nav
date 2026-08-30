@@ -15,7 +15,11 @@ from typing import Any
 import numpy as np
 
 
-SCHEMA = "vint_controller_native_hm3d_summary_v1_20260828"
+SCHEMAS = {
+    "HM3D": "vint_controller_native_hm3d_summary_v1_20260828",
+    "MP3D": "vint_controller_native_mp3d_summary_v1_20260829",
+}
+SCHEMA = SCHEMAS["HM3D"]
 AUDIT_SCHEMA = "vint_controller_native_pair_audit_v1_20260828"
 ROLES = ("novel", "revisit")
 
@@ -102,7 +106,9 @@ def aggregate(
     history_indices: tuple[int, ...] | None = None,
     claim_scope: str,
     expected_grant_alignment: str = "off",
+    dataset: str = "HM3D",
 ) -> dict[str, Any]:
+    require(dataset in SCHEMAS, "unsupported Table-1 dataset")
     require(expected_grant_alignment in {"off", "first_certified_bounded"},
             "invalid expected ViNT bearing alignment")
     manifest = json.loads(benchmark_manifest.read_text())
@@ -221,8 +227,9 @@ def aggregate(
             "an all-reject query violated exact fallback")
 
     return {
-        "schema_version": SCHEMA,
+        "schema_version": SCHEMAS[dataset],
         "verified": True,
+        "dataset": dataset,
         "claim_scope": claim_scope,
         "run_root": str(run_root),
         "benchmark_manifest": str(benchmark_manifest),
@@ -286,6 +293,7 @@ def main() -> None:
         choices=("off", "first_certified_bounded"),
         default="off",
     )
+    parser.add_argument("--dataset", choices=tuple(SCHEMAS), default="HM3D")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     result = aggregate(
@@ -295,6 +303,7 @@ def main() -> None:
         history_indices=parse_indices(args.history_indices),
         claim_scope=args.claim_scope,
         expected_grant_alignment=args.expected_grant_alignment,
+        dataset=args.dataset,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(

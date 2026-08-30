@@ -1,0 +1,84 @@
+{
+  "schema_version": "hm3d_table3_actual_mono_protocol_v1_20260830",
+  "frozen_at": "2026-08-30T14:42:00+08:00",
+  "scope": "HM3D NavDP-only causal-monocular Novel/Revisit evaluation stratified by frozen query geodesic length",
+  "capacity_source": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_navmesh_capacity_dense100_20260830/capacity_dense100_20260830T060412Z_5a3c38e0/formal",
+    "summary": "capacity_summary.json",
+    "summary_sha256": "061eceb45e829140be3a3d0ec878cdf6792484b6221406be43eb4a80c45327e4",
+    "independent_verification": "independent_capacity_verification.json",
+    "independent_verification_sha256": "e9a3e5047a7d0c2200378482378aef614c1b99bb69f4223a9d07c353b9ff6191",
+    "geometry_gate_required": true,
+    "navigation_outcomes_read": false
+  },
+  "parent": {
+    "manifest": "MemNavData/hm3d_table3_combined_assets_20260830.json",
+    "manifest_sha256": "e555c6a6e1cea896c2af010b4342fb168ce3e423b545108aa019b77486822d34",
+    "expected_scenes": 100
+  },
+  "source_candidate_prefix": {
+    "selection_order": "candidate_rank_round_robin_across_lexicographic_scenes",
+    "counts": {
+      "0_to_20_m": 40,
+      "20_to_30_m": 40,
+      "30_to_50_m": 45
+    },
+    "selection_reads_navigation_outcomes": false,
+    "reserve_rule": "all selected candidates are frozen before factual Goal-A; no query outcome may alter the prefix"
+  },
+  "history": {
+    "controller": "frozen_navdp_native_monocular_sidecar",
+    "causal_start": "capacity first_goal",
+    "factual_goal_A": "capacity query_start rendered at final geodesic tangent",
+    "minimum_frames": 40,
+    "runtime_memory": "exact RGB observations from successful factual Goal-A only",
+    "metric_depth_for_control_or_CEC": false,
+    "task_specific_training": false
+  },
+  "query_construction": {
+    "runtime_role_visibility": "none",
+    "revisit": "controlled 0.20-0.80 m and 12-45 deg perturbation of an eligible factual-history frame near capacity first_goal",
+    "revisit_min_history_covis_inclusive": 0.55,
+    "novel": "capacity second_goal rendered at a deterministic final-geodesic tangent",
+    "novel_max_history_covis_exclusive": 0.10,
+    "maximum_role_distance_mismatch_m": 2.0,
+    "minimum_initial_bearing_separation_deg": 60.0,
+    "recompute_geometry_from_actual_factual_A_endpoint": true,
+    "construction_before_query_policy": true
+  },
+  "length_definition": {
+    "metric": "Habitat shortest-path geodesic from the actual factual-A endpoint to each query goal",
+    "method_execution_path_used": false,
+    "bins_m": [
+      {"name": "0_to_20_m", "lower_inclusive": 2.0, "upper": 20.0, "upper_inclusive": false},
+      {"name": "20_to_30_m", "lower_inclusive": 20.0, "upper": 30.0, "upper_inclusive": false},
+      {"name": "30_to_50_m", "lower_inclusive": 30.0, "upper": 50.0, "upper_inclusive": true}
+    ]
+  },
+  "runtime": {
+    "arms": ["mono_native", "mono_cec"],
+    "same_history_start_goal_and_seed_per_arm": true,
+    "success_radius_m": 1.0,
+    "execution_horizon": 8,
+    "v_max_m_per_frame": 0.0376,
+    "step_budget_formula": "max(600, ceil(2.5 * max(role_geodesic_m) / 0.0376))",
+    "maximum_steps_cap": 3400,
+    "terminal_uturn": "off",
+    "terminal_visual_refine": "off",
+    "deterministic_plan_seeds": true
+  },
+  "population_gate": {
+    "minimum_histories_per_bin": 16,
+    "minimum_scene_clusters_per_bin": 10,
+    "maximum_selected_histories_per_scene_per_bin": 2,
+    "all_bins_required": true
+  },
+  "guards": {
+    "factual_A_outcomes_may_define_history_eligibility": true,
+    "query_policy_outcomes_read_before_population_seal": false,
+    "independent_construction_verifier_required": true,
+    "independent_policy_verifier_required": true,
+    "threshold_relaxation_after_outcomes": false,
+    "partial_results_prohibited": true
+  }
+}

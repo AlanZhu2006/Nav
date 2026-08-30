@@ -1,0 +1,11 @@
+{
+  "formal_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_b_expansion_execution_20260830/formal_20260830T045416Z_1f4979a7/table2_leg3_power/policy_authority_closure_repair_v3",
+  "job_id": 16609841,
+  "partition": "cpu_short",
+  "policy_rollouts_submitted": false,
+  "population_or_threshold_changed": false,
+  "schema_version": "hm3d_table2_stage_spl_submission_v1_20260830",
+  "source_bundle_receipt_sha256": "a2b0babceceff67405fabd2cb08558271c319763e84c16be6466e98c71c24d79",
+  "task_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table2_stage_spl_a2b0babceceff674",
+  "time_limit": "00:20:00"
+}

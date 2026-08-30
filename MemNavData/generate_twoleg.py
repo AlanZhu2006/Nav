@@ -87,7 +87,10 @@ def first_path_yaw(points, origin, min_baseline=0.30):
     return float(yaw_facing(delta))
 
 
-def make_sim(glb, navmesh, agent_radius=0.30, agent_height=1.5):
+def make_sim(
+    glb, navmesh, agent_radius=0.30, agent_height=1.5,
+    *, recompute_navmesh=True,
+):
     import habitat_sim, magnum as mn
     bk = habitat_sim.SimulatorConfiguration(); bk.scene_id = glb; bk.enable_physics = False
     def cam(uuid, typ):
@@ -97,16 +100,31 @@ def make_sim(glb, navmesh, agent_radius=0.30, agent_height=1.5):
     ac.sensor_specifications = [cam("color", habitat_sim.SensorType.COLOR),
                                cam("depth", habitat_sim.SensorType.DEPTH)]
     sim = habitat_sim.Simulator(habitat_sim.Configuration(bk, [ac]))
+    loaded_navmesh = False
     if navmesh and os.path.isfile(navmesh):
-        sim.pathfinder.load_nav_mesh(navmesh)
+        loaded_navmesh = bool(sim.pathfinder.load_nav_mesh(navmesh))
+        if not loaded_navmesh:
+            sim.close()
+            raise RuntimeError(f"failed to load pinned navmesh: {navmesh}")
     # Re-bake the navmesh at the robot radius so the free space (and every geodesic) keeps
     # real clearance from walls and centres through doorways (PythonRobotics/iPlanner: inflate
     # by robot radius before planning). agent_radius ~0.3 matches iPlanner's robot_size.
-    ns = habitat_sim.NavMeshSettings(); ns.set_defaults()
-    ns.agent_radius = agent_radius; ns.agent_height = agent_height
-    ok = sim.recompute_navmesh(sim.pathfinder, ns)
-    print(f"[make_sim] recompute_navmesh(agent_radius={agent_radius}) ok={ok} "
-          f"navigable_area={sim.pathfinder.navigable_area:.1f} m^2")
+    if recompute_navmesh:
+        ns = habitat_sim.NavMeshSettings(); ns.set_defaults()
+        ns.agent_radius = agent_radius; ns.agent_height = agent_height
+        ok = sim.recompute_navmesh(sim.pathfinder, ns)
+        if not ok:
+            sim.close()
+            raise RuntimeError("Habitat navmesh recomputation failed")
+        print(f"[make_sim] recompute_navmesh(agent_radius={agent_radius}) ok={ok} "
+              f"navigable_area={sim.pathfinder.navigable_area:.1f} m^2")
+    else:
+        if not loaded_navmesh:
+            sim.close()
+            raise RuntimeError(
+                "recompute_navmesh=False requires a readable pinned navmesh")
+        print(f"[make_sim] pinned_navmesh={navmesh} "
+              f"navigable_area={sim.pathfinder.navigable_area:.1f} m^2")
     return sim
 
 

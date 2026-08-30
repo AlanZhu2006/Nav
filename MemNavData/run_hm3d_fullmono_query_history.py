@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 import sys
 
+import numpy as np
+
 from MemNavData.hm3d_fullmono_mixed_role import (
     ARMS,
     DEPTH_SOURCE,
@@ -28,7 +30,12 @@ from MemNavData.run_final14_mono_factorial_episode import (
 )
 
 
-SCHEMA = "hm3d_fullmono_mixed_role_history_v1_20260820"
+SCHEMAS = {
+    "goal_a": "hm3d_fullmono_mixed_role_history_v1_20260820",
+    "actual_ab": "hm3d_table2_leg3_history_v1_20260829",
+    "causal_survey": "hm3d_table3_causal_survey_history_v1_20260830",
+}
+SCHEMA = SCHEMAS["goal_a"]
 
 
 def sha256(path: Path) -> str:
@@ -37,6 +44,83 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(8 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def audit_history_contract(
+    receipt: dict, trace: dict, history_contract: str,
+) -> tuple[int, int, str]:
+    """Validate and name the immutable history that precedes each query."""
+
+    require(history_contract in SCHEMAS, "unsupported history contract")
+    if history_contract == "causal_survey":
+        require(
+            receipt.get("schema_version")
+            == "hm3d_table3_causal_survey_materialized_v1_20260830",
+            "Table-III survey receipt schema changed",
+        )
+        require(
+            receipt.get("history_source")
+            == "controlled_causal_rgb_geodesic_survey"
+            and trace.get("schema_version")
+            == "hm3d_table3_causal_survey_trace_v1_20260830"
+            and trace.get("source_hybrid_route") == "causal_survey",
+            "Table-III history is not the frozen causal survey",
+        )
+        survey = receipt.get("survey_contract")
+        intrinsic = np.asarray(receipt.get("camera_intrinsic"), dtype=float)
+        require(
+            isinstance(survey, dict)
+            and survey.get("runtime_memory_input") == "RGB only"
+            and survey.get("construction_only_simulator_depth") is True
+            and survey.get("metric_depth_for_query_control_or_CEC") is False
+            and int(trace.get("metric_depth_sensor_reads", -1)) == 0,
+            "Table-III survey leaked simulator depth at runtime",
+        )
+        require(
+            intrinsic.shape == (3, 3) and np.isfinite(intrinsic).all()
+            and int(receipt.get("episode_seed", -1))
+            == int(trace.get("episode_seed", -2)) >= 0,
+            "Table-III survey camera/seed receipt changed",
+        )
+        return (
+            len(trace["poses"]), 0,
+            "controlled_causal_rgb_geodesic_survey_replay",
+        )
+    if history_contract == "actual_ab":
+        require(
+            receipt.get("prefix_receipt_schema")
+            == "hm3d_table2_actual_mono_ab_prefix_v1_20260829",
+            "Table-2 history lacks the frozen A/B prefix receipt",
+        )
+        require(
+            receipt.get("prefix_semantics")
+            == "actual_mono_Novel_A_then_Novel_B",
+            "Table-2 history prefix semantics changed",
+        )
+        prefix_a_steps = int(receipt.get("prefix_A_steps", -1))
+        prefix_b_steps = int(receipt.get("prefix_B_steps", -1))
+        require(
+            prefix_a_steps > 0 and prefix_b_steps > 0
+            and prefix_a_steps + prefix_b_steps == len(trace["poses"]),
+            "Table-2 A/B segment lengths do not reproduce",
+        )
+        require(
+            trace.get("prefix_semantics")
+            == "exact_actual_mono_A_then_B_observation_concat",
+            "Table-2 trace is not an exact actual A/B concatenation",
+        )
+        return (
+            prefix_a_steps,
+            prefix_b_steps,
+            "actual_mono_navdp_novel_A_then_novel_B_rgb_replay",
+        )
+    require(
+        receipt.get("prefix_receipt_schema") is None,
+        "ordinary Goal-A evaluation received a Table-2 A/B prefix",
+    )
+    return (
+        len(trace["poses"]), 0, "actual_mono_navdp_goal_a_rgb_replay",
+    )
 
 
 def main() -> None:
@@ -53,8 +137,18 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=600)
     parser.add_argument("--arms", default=",".join(ARMS))
     parser.add_argument(
+        "--history-contract",
+        choices=tuple(SCHEMAS),
+        default="goal_a",
+        help=(
+            "goal_a replays one actual Novel-A history; actual_ab replays "
+            "one hash-bound actual Novel-A then Novel-B causal prefix"
+        ),
+    )
+    parser.add_argument(
         "--role-pair-scope",
-        choices=("consumed_integration", "paper_heldout"),
+        choices=("consumed_integration", "paper_heldout", "paper_replication",
+                 "table3_length"),
         default="consumed_integration",
     )
     parser.add_argument("--smoke", action="store_true")
@@ -79,20 +173,62 @@ def main() -> None:
     scene = str(item["scene"])
     episode = str(item["episode"])
     source_episode = Path(item["online_a_episode"])
+    require(
+        sha256(source_episode / "receipt.json")
+        == item["online_a_receipt_sha256"],
+        "sealed online-A receipt changed",
+    )
+    require(
+        sha256(source_episode / "online_a_trace.json")
+        == item["online_a_trace_sha256"],
+        "sealed online-A trace changed",
+    )
     receipt = json.loads((source_episode / "receipt.json").read_text())
     trace = json.loads((source_episode / "online_a_trace.json").read_text())
-    require(trace.get("source_hybrid_route") == "native_sidecar",
-            "history was not generated by mono native Goal-A")
+    if args.history_contract == "causal_survey":
+        require(
+            receipt.get("history_source")
+            == "controlled_causal_rgb_geodesic_survey",
+            "history is outside the sealed causal-survey source",
+        )
+    else:
+        control_audit = receipt.get("online_a_control_audit")
+        require(
+            isinstance(control_audit, dict) and control_audit.get("ok") is True,
+            "history was not generated under audited native Goal-A control",
+        )
+        require(trace.get("source_hybrid_route") in {"native_sidecar", "phase"},
+                "history route is outside audited mono native Goal-A sources")
     require(all(plan.get("navdp_depth_source") == "monocular_sidecar"
                 for plan in trace["plans"]),
             "history Goal-A contains a non-mono plan")
     require(all(plan.get("metric_depth_sensor_consumed") is False
                 for plan in trace["plans"]),
             "history Goal-A consumed simulator metric depth")
+    prefix_a_steps, prefix_b_steps, shared_history_policy = (
+        audit_history_contract(receipt, trace, args.history_contract)
+    )
     scene_file = Path(receipt["source_asset"])
     require(scene_file.is_file() and
             sha256(scene_file) == receipt["source_asset_sha256"],
             "explicit HM3D source asset changed")
+    pinned_args: list[str] = []
+    runtime_geometry = "runtime_recomputed_navmesh"
+    runtime_navmesh_sha256 = None
+    if args.role_pair_scope == "table3_length":
+        pinned_navmesh = Path(item.get("runtime_navmesh", ""))
+        require(
+            item.get("runtime_geometry") == "content_addressed_pinned_navmesh"
+            and pinned_navmesh.is_file()
+            and sha256(pinned_navmesh) == item.get("runtime_navmesh_sha256"),
+            "Table-III runtime navmesh receipt changed",
+        )
+        runtime_geometry = "content_addressed_pinned_navmesh"
+        runtime_navmesh_sha256 = item["runtime_navmesh_sha256"]
+        pinned_args = [
+            "--pinned_navmesh", str(pinned_navmesh),
+            "--expected_pinned_navmesh_sha256", runtime_navmesh_sha256,
+        ]
 
     label = f"{args.history_index:03d}_{scene}_{episode}"
     output = args.run_root / "evaluation" / "natural_direction" / label
@@ -100,7 +236,7 @@ def main() -> None:
     (output / "logs").mkdir(parents=True)
     order = selected_arm_order(args.history_index, selected_arms)
     contract = {
-        "schema_version": SCHEMA,
+        "schema_version": SCHEMAS[args.history_contract],
         "scope": population["scope"],
         "fresh_scene_generalization": bool(
             population.get("fresh_scene_generalization", False)),
@@ -108,6 +244,9 @@ def main() -> None:
         "scene": scene,
         "episode": episode,
         "online_a_steps": int(item["online_a_steps"]),
+        "history_contract": args.history_contract,
+        "prefix_A_steps": prefix_a_steps,
+        "prefix_B_steps": prefix_b_steps,
         "online_a_trace_sha256": sha256(
             source_episode / "online_a_trace.json"
         ),
@@ -116,7 +255,9 @@ def main() -> None:
         "arms": list(selected_arms),
         "arm_order": list(order),
         "runtime_role_visibility": "none",
-        "shared_history_policy": "actual_mono_navdp_goal_a_rgb_replay",
+        "shared_history_policy": shared_history_policy,
+        "runtime_geometry": runtime_geometry,
+        "runtime_navmesh_sha256": runtime_navmesh_sha256,
         "max_steps": args.max_steps,
         "success_distance_m": 1.0,
         "exec_horizon": 8,
@@ -156,7 +297,7 @@ def main() -> None:
         "--revisit_controller", "navdp_mixed",
         "--role_pair_scope", args.role_pair_scope,
         "--navdp_depth_source", "monocular_sidecar",
-    ]
+    ] + pinned_args
 
     elapsed = {}
     arm_rows = {}
@@ -187,6 +328,10 @@ def main() -> None:
                 {row["analysis_role"] for row in rows} == {"novel", "revisit"},
                 f"{arm}: paired role population changed")
         by_role = {row["analysis_role"]: row for row in rows}
+        for role, row in by_role.items():
+            require(int(row.get("runtime_failure_plans", -1)) == 0,
+                    f"{arm}/{role}: certificate runtime failure is not a "
+                    "valid policy outcome")
         payloads = load_payloads(arm_root, episode, rows)
         audits = {}
         for role in ("novel", "revisit"):
@@ -226,6 +371,21 @@ def main() -> None:
         },
         "final_distance_m": {
             arm: {role: float(arm_rows[arm][role]["final_goal_dist_m"])
+                  for role in ("novel", "revisit")}
+            for arm in selected_arms
+        },
+        "geodesic_m": {
+            arm: {role: float(arm_rows[arm][role]["geodesic_m"])
+                  for role in ("novel", "revisit")}
+            for arm in selected_arms
+        },
+        "path_len_m": {
+            arm: {role: float(arm_rows[arm][role]["path_len_m"])
+                  for role in ("novel", "revisit")}
+            for arm in selected_arms
+        },
+        "query_steps": {
+            arm: {role: int(arm_rows[arm][role]["steps"])
                   for role in ("novel", "revisit")}
             for arm in selected_arms
         },

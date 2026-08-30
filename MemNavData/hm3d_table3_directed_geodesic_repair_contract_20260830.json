@@ -1,0 +1,57 @@
+{
+  "schema_version": "hm3d_table3_directed_geodesic_repair_contract_v1_20260830",
+  "frozen_at": "2026-08-30T20:25:00+08:00",
+  "original_factual_A_array_job": 16596273,
+  "candidate_plan": {
+    "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_20260830/plan_20260830T061943Z_3b848b5c/candidate_plan.json",
+    "sha256": "1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d",
+    "candidate_count": 125
+  },
+  "diagnosis": {
+    "navigation_outcomes_read": false,
+    "query_policy_outcomes_read": false,
+    "signal": "failed-task infrastructure logs and frozen navmesh geodesics only",
+    "capacity_direction": "query_start_to_first_goal",
+    "factual_goal_A_direction": "first_goal_to_query_start",
+    "failed_directional_contract_indices": [
+      23,
+      40,
+      42,
+      43,
+      47,
+      56,
+      59,
+      66,
+      73,
+      75,
+      78,
+      81,
+      90,
+      93,
+      95,
+      101,
+      102,
+      116
+    ],
+    "observed_absolute_directional_difference_m": {
+      "minimum": 0.064208984,
+      "maximum": 1.64056015
+    },
+    "root_cause": "the collector compared the reverse factual rollout distance with the forward capacity receipt even though directed Detour endpoint projection is not strictly symmetric"
+  },
+  "repair": {
+    "capacity_receipt_check": "recompute query_start_to_first_goal on the identical pinned navmesh and retain the frozen 0.05 m equality tolerance",
+    "factual_route": "compute and execute first_goal_to_query_start on the identical pinned navmesh",
+    "missing_membership": "completion receipt existence and SHA-256 only",
+    "archive_partial_attempts": true,
+    "candidate_identities_changed": false,
+    "goals_changed": false,
+    "distance_bins_changed": false,
+    "model_or_controller_changed": false,
+    "seed_changed": false,
+    "step_budget_changed": false,
+    "success_definition_changed": false,
+    "scientific_thresholds_changed": false,
+    "fallback_completion_allowed": false
+  }
+}

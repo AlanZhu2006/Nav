@@ -11,6 +11,7 @@ from typing import Any
 
 
 NODE_PATTERN = re.compile(r"^(?P<family>gh|ga)[0-9]{3}$")
+NYU_COMPUTE_SUFFIX = ".hpc.nyu.edu"
 
 
 def require(condition: bool, message: str) -> None:
@@ -24,9 +25,21 @@ def load_object(path: Path) -> dict[str, Any]:
     return payload
 
 
+def canonical_replay_node(node: str) -> str:
+    """Return the Slurm short name for a receipt-bound NYU compute host."""
+
+    require(isinstance(node, str) and node, "replay node is missing")
+    short = node[:-len(NYU_COMPUTE_SUFFIX)] \
+        if node.endswith(NYU_COMPUTE_SUFFIX) else node
+    require(NODE_PATTERN.fullmatch(short) is not None,
+            f"unsupported replay node: {node}")
+    return short
+
+
 def partition_for_node(node: str) -> str:
-    match = NODE_PATTERN.fullmatch(node)
-    require(match is not None, f"unsupported replay node: {node}")
+    short = canonical_replay_node(node)
+    match = NODE_PATTERN.fullmatch(short)
+    assert match is not None
     return "h100_tandon" if match.group("family") == "gh" else "a100_tandon"
 
 
@@ -83,14 +96,15 @@ def build_node_affinity_plan(
                 f"{label}: compute identity schema changed")
         host = compute.get("host")
         require(isinstance(host, str), f"{label}: compute host is missing")
-        partition = partition_for_node(host)
+        node = canonical_replay_node(host)
+        partition = partition_for_node(node)
         plan.append({
             "evaluation_index": evaluation_index,
             "source_population_index": source_index,
             "scene": row["scene"],
             "episode": row["episode"],
             "collection_label": label,
-            "node": host,
+            "node": node,
             "partition": partition,
             "lane": evaluation_index % lanes,
         })

@@ -19,11 +19,15 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${FORMAL_RUN_ROOT:?}" "${BENCH_ROOT:?}"
 : "${CONSTRUCTION_VERIFICATION:?}"
 : "${EXPECTED_CONSTRUCTION_VERIFICATION_SHA:?}"
+DATASET=${DATASET:-HM3D}
+CLAIM_SCOPE=${CLAIM_SCOPE:-conference_table_hm3d_fresh_query_scene_overlap}
 PY=/scratch/lg154/conda-envs/memnav/bin/python
 RUN_ROOT=${FORMAL_RUN_ROOT}/formal/navdp
 SUMMARY=${RUN_ROOT}/navdp_table1_summary.json
 VERIFICATION=${RUN_ROOT}/navdp_table1_independent_verification.json
 fail() { echo "ABORT: $*" >&2; exit 2; }
+[[ "${DATASET}" == HM3D || "${DATASET}" == MP3D ]] || \
+  fail "unsupported Table-1 dataset"
 
 [[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_TASK_RECEIPT_SHA}" ]] || fail "task receipt changed"
@@ -40,7 +44,7 @@ case "${MODE}" in
     "${PY}" -u "${TASK_ROOT}/MemNavData/aggregate_hm3d_table1_navdp_pair.py" \
       --run-root "${RUN_ROOT}" --benchmark-root "${BENCH_ROOT}" \
       --construction-verification "${CONSTRUCTION_VERIFICATION}" \
-      --claim-scope conference_table_hm3d_fresh_query_scene_overlap \
+      --claim-scope "${CLAIM_SCOPE}" --dataset "${DATASET}" \
       --out "${SUMMARY}"
     sha256sum "${SUMMARY}" >"${SUMMARY}.sha256"
     ;;
@@ -51,7 +55,8 @@ case "${MODE}" in
       "${TASK_ROOT}/MemNavData/independent_verify_hm3d_table1_navdp_pair.py" \
       --run-root "${RUN_ROOT}" --benchmark-root "${BENCH_ROOT}" \
       --construction-verification "${CONSTRUCTION_VERIFICATION}" \
-      --summary "${SUMMARY}" --out "${VERIFICATION}"
+      --summary "${SUMMARY}" --dataset "${DATASET}" \
+      --out "${VERIFICATION}"
     sha256sum "${VERIFICATION}" >"${VERIFICATION}.sha256"
     "${PY}" - "${VERIFICATION}" <<'PY'
 import json,sys

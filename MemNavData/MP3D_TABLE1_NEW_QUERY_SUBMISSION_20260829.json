@@ -1,0 +1,18 @@
+{
+  "formal_policy_evaluation_submitted": false,
+  "jobs": {
+    "construction_array": 16542590,
+    "construction_smoke": 16542589,
+    "independent_verification": 16542592,
+    "population_finalize": 16542591
+  },
+  "previous_goal_b_policy_outcomes_read_at_submission": false,
+  "query_policy_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_new_query_20260829/construction_20260829T050401Z_6813d501",
+  "schema_version": "mp3d_table1_new_query_submission_v1_20260829",
+  "scope": "construction_only_reused_scene_history_new_query",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_new_query_20260829/construction_20260829T050401Z_6813d501_smoke",
+  "source_ledger_sha256": "8b19af79300d63ba81b8efdf76498c22357a4d840f73236863ec0e44b606031e",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mp3d_table1_new_query_6813d50153b355e5",
+  "task_receipt_sha256": "6813d50153b355e5e0c1650a730d368940fe4675d194381a92ed54e9f582002b"
+}

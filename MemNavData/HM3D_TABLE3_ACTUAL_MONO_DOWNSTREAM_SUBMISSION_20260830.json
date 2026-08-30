@@ -1,0 +1,33 @@
+{
+  "all_dependencies_afterok": true,
+  "analysis_job": 16595722,
+  "arms": [
+    "mono_native",
+    "mono_cec"
+  ],
+  "construction_array_job": 16595695,
+  "construction_job_reused": false,
+  "factual_A_array_job": 16595636,
+  "factual_A_gate_job": 16595631,
+  "fallback_completion_allowed": false,
+  "formal_queries": 96,
+  "frozen_candidates": 125,
+  "length_bins": [
+    "0_to_20_m",
+    "20_to_30_m",
+    "30_to_50_m"
+  ],
+  "paired_query_array_job": 16595720,
+  "partial_results_allowed": false,
+  "population_finalize_job": 16595706,
+  "population_independent_verification_job": 16595711,
+  "powered_histories": 48,
+  "query_policy_outcomes_read_at_submission": false,
+  "result_independent_verification_job": 16595726,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_execution_20260830/formal_20260830T072821Z_8c8f8c25",
+  "schema_version": "hm3d_table3_actual_mono_downstream_submission_v1_20260830",
+  "smoke_substitution": false,
+  "threshold_relaxation": false,
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_actual_mono_downstream_48d51702578f8e52",
+  "wrapper_bundle_sha256": "48d51702578f8e52a3f0dcc916ca58bfe58dfd598a00245c0891a85ada4a4e8e"
+}

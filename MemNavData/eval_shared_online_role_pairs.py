@@ -14,9 +14,11 @@ import numpy as np
 import pandas as pd
 
 import eval_2leg_habitat as base
-from audit_shared_online_role_pairs import audit as audit_benchmark
+from audit_shared_online_role_pairs import audit as audit_shared_benchmark
+from audit_hm3d_table3_length_role_pairs import audit as audit_table3_benchmark
 from shared_online_double_revisit_runtime import replay_online_a, sha256_file
-from shared_online_role_pair_contract import runtime_query
+from shared_online_role_pair_contract import runtime_query as shared_runtime_query
+from hm3d_table3_length_contract import runtime_query as table3_runtime_query
 
 
 args = base.args
@@ -30,6 +32,18 @@ CEC_LATENCY_FIELDS = (
     "cec_context_shadow_ms",
     "cec_total_decision_ms",
 )
+
+
+def audit_benchmark(root: Path) -> dict:
+    if args.role_pair_scope == "table3_length":
+        return audit_table3_benchmark(root)
+    return audit_shared_benchmark(root)
+
+
+def runtime_query(query: dict) -> dict:
+    if args.role_pair_scope == "table3_length":
+        return table3_runtime_query(query)
+    return shared_runtime_query(query)
 
 
 def require(condition: bool, message: str) -> None:
@@ -160,7 +174,8 @@ def validate_cli() -> tuple[str, str | None]:
         else:
             require(
                 args.role_pair_scope in (
-                    "consumed_integration", "paper_heldout"),
+                    "consumed_integration", "paper_heldout",
+                    "paper_replication"),
                 "bounded bearing alignment has an unsupported scope",
             )
             if args.role_pair_scope == "consumed_integration":
@@ -449,7 +464,22 @@ def main() -> None:
     require(bool(episode_dirs), "no role-pair episodes selected")
     selected_episode_names = {path.name for path in episode_dirs}
 
-    simulator = base.make_sim(str(scene_file), "", agent_radius=args.agent_radius)
+    if args.pinned_navmesh:
+        pinned_navmesh = Path(args.pinned_navmesh).resolve()
+        require(
+            pinned_navmesh.is_file()
+            and sha256_path(pinned_navmesh)
+            == args.expected_pinned_navmesh_sha256,
+            "pinned runtime navmesh receipt changed",
+        )
+        simulator = base.make_sim(
+            str(scene_file), str(pinned_navmesh),
+            agent_radius=args.agent_radius, recompute_navmesh=False,
+        )
+    else:
+        simulator = base.make_sim(
+            str(scene_file), "", agent_radius=args.agent_radius,
+        )
     pathfinder = simulator.pathfinder
     metrics = []
     try:
@@ -461,19 +491,37 @@ def main() -> None:
                 sha256_file(scene_file) == receipt["source_asset_sha256"],
                 "scene asset hash differs from online-A materialization",
             )
-            source_parquet = (
-                Path(receipt["source_episode"])
-                / "data/chunk-000/episode_000000.parquet"
-            )
-            require(
-                sha256_file(source_parquet) == receipt["source_parquet_sha256"],
-                "source parquet hash changed",
-            )
-            rows = pd.read_parquet(source_parquet)
-            intrinsic_raw = rows.iloc[0]["observation.camera_intrinsic"]
-            camera_intrinsic = np.stack(
-                [np.asarray(row, dtype=np.float64) for row in intrinsic_raw]
-            )
+            if (receipt.get("history_source")
+                    == "controlled_causal_rgb_geodesic_survey"):
+                camera_intrinsic = np.asarray(
+                    receipt.get("camera_intrinsic"), dtype=np.float64
+                )
+                require(
+                    camera_intrinsic.shape == (3, 3)
+                    and np.isfinite(camera_intrinsic).all(),
+                    "causal-survey camera intrinsic changed",
+                )
+                require(
+                    int(receipt.get("episode_seed", -1))
+                    == int(frozen["trace"].get("episode_seed", -2)) >= 0,
+                    "causal-survey seed receipt changed",
+                )
+            else:
+                source_parquet = (
+                    Path(receipt["source_episode"])
+                    / "data/chunk-000/episode_000000.parquet"
+                )
+                require(
+                    sha256_file(source_parquet)
+                    == receipt["source_parquet_sha256"],
+                    "source parquet hash changed",
+                )
+                rows = pd.read_parquet(source_parquet)
+                intrinsic_raw = rows.iloc[0]["observation.camera_intrinsic"]
+                camera_intrinsic = np.stack(
+                    [np.asarray(row, dtype=np.float64)
+                     for row in intrinsic_raw]
+                )
             camera_height = float(receipt["camera_height_m"])
             require(
                 math.isclose(camera_height, float(base.CAM_H), abs_tol=1e-12),
@@ -688,8 +736,14 @@ def main() -> None:
                 "consumed-scene integration unless externally promoted"
             ),
             "paper_heldout": "paper held-out role-pair evaluation",
+            "paper_replication": (
+                "paper reused-scene/history new-query replication"
+            ),
             "replica_cross_dataset": (
                 "Replica cross-dataset role-pair evaluation"
+            ),
+            "table3_length": (
+                "HM3D causal-RGB Novel/Revisit evaluation by geodesic length"
             ),
         }
         summary = {

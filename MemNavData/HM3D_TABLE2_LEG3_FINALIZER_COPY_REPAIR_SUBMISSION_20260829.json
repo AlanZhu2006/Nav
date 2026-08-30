@@ -1,0 +1,13 @@
+{
+  "construction_cells_changed": false,
+  "future_policy_evaluation_submitted": false,
+  "jobs": {
+    "replacement_finalize": 16546714,
+    "replacement_independent_verify": 16546717
+  },
+  "query_policy_outcomes_read": false,
+  "schema_version": "hm3d_table2_leg3_finalizer_copy_repair_submission_v1_20260829",
+  "scope": "reuse immutable fragments; repair private copy modes; rerun finalizer and verifier only",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table2_leg3_finalize_copy_repair_98847db205f00d2c",
+  "task_receipt_sha256": "98847db205f00d2c998117f1e0508f0b77063f30c4682bbad41be1c20e454dac"
+}

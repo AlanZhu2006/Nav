@@ -64,6 +64,7 @@ def materialize_scene(
     episode_root: Path,
     source_episode_order: list[str],
     out: Path,
+    purpose: str | None = None,
 ) -> dict[str, Any]:
     if out.exists():
         raise FileExistsError(out)
@@ -132,7 +133,7 @@ def materialize_scene(
             ))
         manifest = {
             "schema_version": SCHEMA_VERSION,
-            "purpose": (
+            "purpose": purpose or (
                 "actual-online monocular HM3D Goal-A histories for a "
                 "role-unknown full-monocular mixed-role evaluation"
             ),
@@ -176,4 +177,3 @@ def materialize_scene(
 
 
 __all__ = ["END_MARGIN", "MINIMUM_FRAME", "materialize_scene"]
-

@@ -19,12 +19,16 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${FORMAL_RUN_ROOT:?}" "${BENCH_ROOT:?}"
 : "${CONSTRUCTION_VERIFICATION:?}"
 : "${EXPECTED_CONSTRUCTION_VERIFICATION_SHA:?}"
+DATASET=${DATASET:-HM3D}
+CLAIM_SCOPE=${CLAIM_SCOPE:-conference_table_hm3d_fresh_query_scene_overlap}
 PY=/scratch/lg154/conda-envs/memnav/bin/python
 RUN_ROOT=${FORMAL_RUN_ROOT}/formal/vint
 SUMMARY=${RUN_ROOT}/vint_table1_summary.json
 VERIFICATION=${RUN_ROOT}/vint_table1_independent_verification.json
 MANIFEST=${BENCH_ROOT}/manifest.json
 fail() { echo "ABORT: $*" >&2; exit 2; }
+[[ "${DATASET}" == HM3D || "${DATASET}" == MP3D ]] || \
+  fail "unsupported Table-1 dataset"
 
 [[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_TASK_RECEIPT_SHA}" ]] || fail "task receipt changed"
@@ -51,7 +55,7 @@ case "${MODE}" in
       "${TASK_ROOT}/MemNavData/aggregate_vint_controller_native_hm3d.py" \
       --run-root "${RUN_ROOT}" --benchmark-manifest "${MANIFEST}" \
       --expected-histories "${counts[0]}" --expected-scenes "${counts[1]}" \
-      --claim-scope conference_table_hm3d_fresh_query_scene_overlap \
+      --claim-scope "${CLAIM_SCOPE}" --dataset "${DATASET}" \
       --expected-grant-alignment first_certified_bounded \
       --out "${SUMMARY}"
     sha256sum "${SUMMARY}" >"${SUMMARY}.sha256"
@@ -62,7 +66,8 @@ case "${MODE}" in
     "${PY}" -u \
       "${TASK_ROOT}/MemNavData/independent_verify_vint_controller_native_hm3d.py" \
       --run-root "${RUN_ROOT}" --summary "${SUMMARY}" \
-      --benchmark-manifest "${MANIFEST}" --out "${VERIFICATION}"
+      --benchmark-manifest "${MANIFEST}" --dataset "${DATASET}" \
+      --out "${VERIFICATION}"
     sha256sum "${VERIFICATION}" >"${VERIFICATION}.sha256"
     "${PY}" - "${VERIFICATION}" <<'PY'
 import json,sys

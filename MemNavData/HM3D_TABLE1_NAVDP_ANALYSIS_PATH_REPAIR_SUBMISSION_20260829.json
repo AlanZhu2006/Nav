@@ -1,0 +1,20 @@
+{
+  "failure_class": "aggregator_read_noncanonical_history_level_direction_stratum",
+  "jobs": {
+    "replacement_joint_seal": 16542548,
+    "replacement_navdp_aggregate": 16542535,
+    "replacement_navdp_verify": 16542536,
+    "retained_vint_verify": 16540208
+  },
+  "partial_policy_outcomes_read_before_repair": false,
+  "repair_scope": "analysis_only_same_raw_rollouts",
+  "schema_version": "hm3d_table1_navdp_analysis_path_repair_submission_v1_20260829",
+  "scientific_guards": {
+    "population_changed": false,
+    "policy_rollout_resubmitted": false,
+    "statistics_changed": false
+  },
+  "seal_dependency_note": "Slurm rejected a new dependency on the already-completed retained ViNT verifier. The replacement seal depends on the new NavDP verifier and fail-closes by loading and validating the retained read-only ViNT verifier at runtime.",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_navdp_analysis_path_repair_77e2cd08de5f82b7",
+  "task_receipt_sha256": "77e2cd08de5f82b71ac309ad9ac554e8cc49603330b27b799d7f254ca828ae79"
+}

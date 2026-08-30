@@ -1,0 +1,29 @@
+{
+  "arms_changed": false,
+  "budgets_changed": false,
+  "completed_construction_job_verified_before_dependency_free_submission": true,
+  "construction_verification_sha256": "82805d559bf52c0b8ad93084473042a588f0fe91e9ec6b3f91964c56489d0b56",
+  "delayed_transaction_api_verified": true,
+  "dynamic_lifetime_held_port_allocator": true,
+  "fallback_allowed": false,
+  "fresh_policy_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_b_expansion_execution_20260830/formal_20260830T045416Z_1f4979a7/table2_leg3_power/policy_runtime_repair_v2",
+  "missing_modules_added": [
+    "MemNavData.cec_handoff_contract",
+    "MemNavData.controller_portability_contract",
+    "MemNavData.monocular_depth_runtime"
+  ],
+  "partial_policy_outcomes_read_at_submission": false,
+  "population_changed": false,
+  "previous_formal_policy_rows": 0,
+  "production_container_evaluator_import_preflight": true,
+  "production_memnav_runtime_module_provenance_verified": true,
+  "replacement_launcher_job": 16601678,
+  "rows_deleted": false,
+  "schema_version": "hm3d_table2_policy_import_repair_submission_v2_20260830",
+  "scientific_protocol_changed": false,
+  "scope": "pre-formal immutable-overlay delayed-runtime provenance repair",
+  "superseded_failed_smoke_job": 16601475,
+  "thresholds_changed": false,
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table2_policy_import_repair_ca9966a9ebf56387",
+  "wrapper_receipt_sha256": "ca9966a9ebf56387bc2562d420ea0991acf31de8cfc7f84b426ee2aeb3cdd973"
+}

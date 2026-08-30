@@ -1,0 +1,19 @@
+{
+  "depends_afterok_on": 16595726,
+  "fallback_completion_allowed": false,
+  "job_id": 16595792,
+  "partial_results_allowed": false,
+  "policy_rerun": false,
+  "raw_rows_expected": 192,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_execution_20260830/formal_20260830T072821Z_8c8f8c25",
+  "schema_version": "hm3d_table3_result_verifier_v2_submission_v1_20260830",
+  "verifies": [
+    "SR",
+    "SPL",
+    "paired_gain_loss",
+    "exact_McNemar",
+    "authorization_counts"
+  ],
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_result_verifier_v2_d3d5df96ba7ed884",
+  "wrapper_bundle_sha256": "d3d5df96ba7ed884374703ba0904918bdb306795ef6a8c2f4b87855848323c51"
+}

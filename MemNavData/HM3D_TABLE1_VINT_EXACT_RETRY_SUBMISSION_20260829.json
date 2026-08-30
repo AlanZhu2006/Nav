@@ -1,0 +1,29 @@
+{
+  "archive_manifest_sha256": "1cf562864f59b11120798761defe7bcd610b67939843d56214a226fc38ef7946",
+  "archive_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829/formal_20260828T231109Z/repairs/vint_exact_retry1_20260829/failed_attempts/018_b28CWbpQvor_episode_0001",
+  "failure_class": "habitat_native_sigabrt_before_pair_audit",
+  "failed_indices": [
+    18
+  ],
+  "jobs": {
+    "exact_retry": 16540176,
+    "final_cross_branch_joint_seal": 16541369,
+    "replacement_vint_aggregate": 16540207,
+    "replacement_vint_verify": 16540208,
+    "replacement_navdp_verify": 16541368
+  },
+  "method_or_population_changed": false,
+  "original_array": 16526731,
+  "partial_policy_outcomes_read_before_repair": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_controller_portability_20260829/formal_20260828T231109Z",
+  "schema_version": "hm3d_table1_vint_exact_retry_submission_v1_20260829",
+  "superseded_jobs": {
+    "joint_seal_initial": 16528391,
+    "joint_seal_vint_only_repair": 16540209,
+    "navdp_verify_after_later_cache_incident": 16528385,
+    "vint_aggregate": 16526745,
+    "vint_verify": 16526759
+  },
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_controller_portability_c0c373bf2ed63087",
+  "task_receipt_sha256": "c0c373bf2ed630873751e72769643c7d52ee0493f17a8a7bece381f9d52ff955"
+}

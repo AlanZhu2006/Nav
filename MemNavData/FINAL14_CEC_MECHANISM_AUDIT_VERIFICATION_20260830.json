@@ -1,0 +1,34 @@
+{
+  "audit_sha256": "1420432d78d58fb2860d41848e373e7ac1a78eef8e178eff18bcaae936355042",
+  "authority_summary_sha256": "5669fcb50ee2c26c764a2179c7b3f88ed513520fe6f3e2a118ae1908f0821fe2",
+  "fresh_confirmation": false,
+  "ledger_sha256": "4e2abfd2f6781e636260206ae0675813f1b7227e09ab4709742bd8bcc2715277",
+  "mono_summary_sha256": "ae24138b3cd7fecb737dffe8454eb91aaae8f5aa19d4e679e67e039d793e17b7",
+  "navigation_threshold_selected_or_changed": false,
+  "queries_recomputed": 42,
+  "recount": {
+    "novel": {
+      "dino_top1_supported": 0,
+      "dino_top8_contains_supported_anchor": 0,
+      "finite_pnp_authorized": 18,
+      "finite_pnp_successes": 5,
+      "geometry_selected_supported": 0,
+      "raw_dino_successes": 3,
+      "strict_cec_authorized": 2,
+      "strict_cec_successes": 8
+    },
+    "revisit": {
+      "dino_top1_supported": 19,
+      "dino_top8_contains_supported_anchor": 21,
+      "finite_pnp_authorized": 21,
+      "finite_pnp_successes": 20,
+      "geometry_selected_supported": 19,
+      "raw_dino_successes": 20,
+      "strict_cec_authorized": 21,
+      "strict_cec_successes": 20
+    }
+  },
+  "runtime_role_visibility": "none",
+  "schema_version": "final14_cec_mechanism_independent_verification_v1_20260830",
+  "verified": true
+}

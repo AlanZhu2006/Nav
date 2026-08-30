@@ -76,6 +76,28 @@ class FullMonoLifelongContractTest(unittest.TestCase):
         ])
         self.assertFalse(payload["post_prefix_query_outcomes_read_before_freeze"])
 
+    def test_natural_b_expansion_execution_protocol_is_result_blind(self):
+        path = Path(__file__).with_name(
+            "hm3d_fullmono_lifelong_natural_b_expansion_execution_protocol_20260830.json"
+        )
+        payload = contract.load_protocol(path)
+        self.assertEqual(
+            payload["schema_version"],
+            contract.NATURAL_B_EXPANSION_EXECUTION_PROTOCOL_SCHEMA,
+        )
+        self.assertEqual(
+            payload["construction_power_gate"][
+                "expected_exact_candidate_histories"
+            ],
+            84,
+        )
+        self.assertFalse(payload["prior_result_use"][
+            "expansion_factual_B_or_leg3_outcomes_read_before_freeze"
+        ])
+        self.assertTrue(payload["population_union"][
+            "halt_leg3_construction_if_not_met"
+        ])
+
     def test_arm_rotation_is_balanced_and_deterministic(self):
         self.assertEqual(contract.rotated_arm_order(0), contract.ARMS)
         self.assertEqual(

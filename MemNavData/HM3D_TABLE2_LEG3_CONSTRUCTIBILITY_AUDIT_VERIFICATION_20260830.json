@@ -1,0 +1,35 @@
+{
+  "audit_sha256": "e28d95c6176a42a211b610bb0c399a457c261d6df703fbf3762f1d5e9ab9e40a",
+  "completion_count": 22,
+  "construction_verification_sha256": "75da29bdd6fccaf73843694f0d9820f75b528fd2d5d23c5a7c8f19ca79f433e8",
+  "navigation_success_rate_computed": false,
+  "population_receipt_sha256": "6ec8e202754ac716f055e11967564a049d36c4b0bd4f9d5fd2e70d80eb1ba948",
+  "query_policy_outcomes_read": false,
+  "recomputed": {
+    "attrition": {
+      "accepted": 8,
+      "no_new_standard_revisit_after_combined_AB": 1,
+      "no_new_unsupported_novel_after_combined_AB": 13
+    },
+    "constructible_histories": 8,
+    "constructible_scene_clusters": 6,
+    "deterministic_local_attempts": 2366,
+    "final_support_checks": 6660,
+    "novel_attempts": 195000,
+    "novel_failure_histories": 13,
+    "novel_stratum_searches": 39,
+    "revisit_fully_scored": 1256,
+    "revisit_grid_attempts": 3456,
+    "revisit_support_rejects": 1256,
+    "support_checks_by_stratum": {
+      "front": 881,
+      "rear": 2932,
+      "side": 2847
+    },
+    "uniform_attempts": 192634
+  },
+  "schema_version": "independent_hm3d_table2_leg3_constructibility_audit_v1_20260830",
+  "source_completion_digest_sha256": "800c0987da592d2bb947b773f528eef90056de3496911657eaf316cbc83a74b2",
+  "status": "independent_raw_construction_recount_passed",
+  "verified": true
+}

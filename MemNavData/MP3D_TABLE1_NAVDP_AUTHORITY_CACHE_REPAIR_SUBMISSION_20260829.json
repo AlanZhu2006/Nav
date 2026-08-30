@@ -1,0 +1,31 @@
+{
+  "archive_manifest_sha256": "e24dbb3d7ba60d1485bf0f4ae4af5bbf82acb7692ff5e078948e02c9606f30aa",
+  "archive_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/mp3d_table1_controller_portability_20260829/formal_20260829T085025Z/repairs/mp3d_table1_navdp_authority_cache_exact_retry2_20260829/failed_attempts",
+  "exact_histories": [
+    29,
+    30
+  ],
+  "exception_and_runtime_failure_fields_inspected": true,
+  "failure_class": "cache_fixed_but_obsolete_memnav_authority_endpoint",
+  "initial_seal_rejected_reason": "dependency on already-completed ViNT verifier was rejected by Slurm",
+  "jobs": {
+    "navdp_aggregate": 16559034,
+    "navdp_exact_retry2": 16559033,
+    "navdp_verify": 16559035,
+    "replacement_joint_seal": 16559083,
+    "retained_vint_verify": 16558669
+  },
+  "method_or_population_changed": false,
+  "navigation_success_or_distance_read": false,
+  "original_exact_retry": 16558664,
+  "partial_aggregate_or_sr_computed": false,
+  "replacement_seal_depends_on_navdp_verify_only": true,
+  "retained_vint_verification_sha256": "9596e85fa78a94070d3cd0e21ce93b5b80207bf1d868db4e7652ca92d116c3bd",
+  "retained_vint_verifier_was_completed_and_sha_pinned_before_seal_submission": true,
+  "schema_version": "mp3d_table1_navdp_authority_cache_repair_submission_v1_20260829",
+  "seal_dependency_submission_incident": true,
+  "server_source": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mp3d_table1_controller_portability_eb7cdf82477f6aa1",
+  "server_source_receipt_sha256": "eb7cdf82477f6aa192b5becf42c85e93d490de7bfe7564132bbff285910a32c4",
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mp3d_table1_controller_exact_repair_ce18c5fee73b9664",
+  "wrapper_receipt_sha256": "ce18c5fee73b96649a69ac222848981b06f632b7f3060dbc675016b2c6db5db2"
+}

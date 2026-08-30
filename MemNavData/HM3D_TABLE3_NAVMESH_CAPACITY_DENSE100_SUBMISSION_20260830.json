@@ -1,0 +1,17 @@
+{
+  "bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_capacity_dense100_5a3c38e05c13f880",
+  "bundle_receipt_sha256": "5a3c38e05c13f880ebca324f19454f79ed2a5f8e16f53b273b2ca9a702ac5a46",
+  "finalize_job": 16593272,
+  "independent_verify_job": 16593290,
+  "navigation_outcomes_read": false,
+  "policy_evaluation_authorized": false,
+  "query_policy_outcomes_read": false,
+  "rendered_support_verified": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_navmesh_capacity_dense100_20260830/capacity_dense100_20260830T060412Z_5a3c38e0",
+  "scene_array": "0-99",
+  "scene_array_job": 16593267,
+  "schema_version": "hm3d_table3_navmesh_capacity_submission_v1_20260830",
+  "scope": "result-blind geometry capacity only",
+  "smoke_job": 16593257,
+  "smoke_scene_index": 0
+}

@@ -3,8 +3,11 @@
 set -euo pipefail
 umask 0022
 
-MODE=${MODE:?set collect, smoke, eval, or lifelong_b}
+MODE=${MODE:?set collect, mp3d_collect, smoke, eval, lifelong_b, or table3_a}
 TASK_ROOT=${TASK_ROOT:?set immutable task root}
+WRAPPER_ROOT=${WRAPPER_ROOT:-${TASK_ROOT}}
+QUERY_SOURCE_ROOT=${QUERY_SOURCE_ROOT:-${TASK_ROOT}}
+RUNTIME_CLOSURE_ROOT=${RUNTIME_CLOSURE_ROOT:-}
 SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT:-${TASK_ROOT}}
 BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT:?set verified Final14 mono source root}
 RUN_ROOT=${RUN_ROOT:?set isolated run root}
@@ -20,21 +23,44 @@ EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA:?set base receipt sha}
 RUNTIME_ATTEMPT=${RUNTIME_ATTEMPT:-}
 RESUME_INCOMPLETE=${RESUME_INCOMPLETE:-0}
 FORMAL_INDICES_OVERRIDE=${FORMAL_INDICES_OVERRIDE:-}
+HISTORY_CONTRACT=${HISTORY_CONTRACT:-goal_a}
+SCENE_RANK_FIELD=${SCENE_RANK_FIELD:-final14_scene_rank}
 
-[[ "${MODE}" == collect || "${MODE}" == smoke || "${MODE}" == eval \
-   || "${MODE}" == lifelong_b ]] || {
+[[ "${MODE}" == collect || "${MODE}" == mp3d_collect \
+   || "${MODE}" == smoke || "${MODE}" == eval \
+   || "${MODE}" == lifelong_b || "${MODE}" == table3_a ]] || {
   echo "invalid MODE=${MODE}" >&2; exit 2; }
 [[ "${SCENE_INDEX}" =~ ^[0-9]+$ ]] || { echo "bad scene index" >&2; exit 2; }
 [[ "${RESUME_INCOMPLETE}" =~ ^[01]$ ]] || {
   echo "RESUME_INCOMPLETE must be 0 or 1" >&2; exit 2; }
+[[ "${HISTORY_CONTRACT}" == goal_a || "${HISTORY_CONTRACT}" == actual_ab \
+   || "${HISTORY_CONTRACT}" == causal_survey ]] || {
+  echo "HISTORY_CONTRACT must be goal_a, actual_ab, or causal_survey" >&2; exit 2; }
 if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
   [[ "${RUNTIME_ATTEMPT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
     echo "invalid runtime attempt" >&2; exit 2; }
 fi
-if [[ "${MODE}" == lifelong_b || "${MODE}" == eval ]]; then
+[[ "${SCENE_RANK_FIELD}" == final14_scene_rank \
+   || "${SCENE_RANK_FIELD}" == scene_index ]] || {
+  echo "unsupported scene-rank field" >&2; exit 2; }
+if [[ "${MODE}" == table3_a ]]; then
+  : "${TABLE3_PLAN:?set frozen Table-3 candidate plan}"
+  scene_count=$(${MEMNAV_PY} - "${TABLE3_PLAN}" <<'PY'
+import json,sys
+print(len(json.load(open(sys.argv[1]))["episodes"]))
+PY
+  )
+elif [[ "${MODE}" == lifelong_b || "${MODE}" == eval \
+   || "${MODE}" == smoke ]]; then
   scene_count=$(${MEMNAV_PY} - "${PARENT_MANIFEST}" <<'PY'
 import json,sys
-print(len(json.load(open(sys.argv[1]))["scenes"]))
+p=json.load(open(sys.argv[1]))
+if "scenes" in p:
+    print(len(p["scenes"]))
+elif p.get("episodes") and all("scene_index" in row for row in p["episodes"]):
+    print(1 + max(int(row["scene_index"]) for row in p["episodes"]))
+else:
+    raise SystemExit("parent manifest has neither scenes nor indexed episodes")
 PY
   )
 else
@@ -96,11 +122,12 @@ FORMAL_INDICES=
 if [[ "${MODE}" == eval || "${MODE}" == lifelong_b ]]; then
   BENCH_ROOT=${BENCH_ROOT:?set sealed natural-direction benchmark}
   manifest=${BENCH_ROOT}/manifest.json
-  FORMAL_INDICES=$(${MEMNAV_PY} - "${manifest}" "${SCENE_INDEX}" <<'PY'
+  FORMAL_INDICES=$(${MEMNAV_PY} - "${manifest}" "${SCENE_INDEX}" \
+    "${SCENE_RANK_FIELD}" <<'PY'
 import json,sys
-m=json.load(open(sys.argv[1])); rank=int(sys.argv[2])
+m=json.load(open(sys.argv[1])); rank=int(sys.argv[2]); field=sys.argv[3]
 print(" ".join(str(i) for i,row in enumerate(m["episodes"])
-               if int(row["final14_scene_rank"]) == rank))
+               if int(row[field]) == rank))
 PY
 )
   if [[ -n "${FORMAL_INDICES_OVERRIDE}" ]]; then
@@ -130,7 +157,21 @@ HAB_PYTHONPATH=${HAB_SITE}/pip/_vendor
 # transport-only server overlay may deliberately omit unchanged heavy runtime
 # assets (for example NavDP's vendored Depth-Anything package), so expose both
 # the receipt-bound overlay and its receipt-bound base implementation roots.
-PYTHONPATH_VALUE=${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
+PYTHONPATH_PREFIX=${WRAPPER_ROOT}:${WRAPPER_ROOT}/MemNavData
+if [[ -n "${RUNTIME_CLOSURE_ROOT}" ]]; then
+  [[ -d "${RUNTIME_CLOSURE_ROOT}/MemNavData" ]] || {
+    echo "invalid runtime closure root" >&2; exit 2; }
+  PYTHONPATH_PREFIX+=:${RUNTIME_CLOSURE_ROOT}:${RUNTIME_CLOSURE_ROOT}/MemNavData
+fi
+PYTHONPATH_PREFIX+=:${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData
+PYTHONPATH_SUFFIX=${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
+# Both servers use a script-local module named ``policy_agent``.  A single
+# shared sibling order can therefore make NavDP import MemNav's agent (or the
+# reverse) when a minimal overlay contains only one side.  Keep a common
+# receipt-bound source set, but give each process its own sibling precedence.
+MEMNAV_PYTHONPATH_VALUE=${PYTHONPATH_PREFIX}:${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${PYTHONPATH_SUFFIX}
+NAVDP_PYTHONPATH_VALUE=${PYTHONPATH_PREFIX}:${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:${PYTHONPATH_SUFFIX}
+PYTHONPATH_VALUE=${PYTHONPATH_PREFIX}:${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav:${PYTHONPATH_SUFFIX}
 REQUESTS_INIT=${HAB_PYTHONPATH}/requests/__init__.py
 REQUESTS_VERSION=${HAB_PYTHONPATH}/requests/__version__.py
 [[ -r "${REQUESTS_INIT}" && -r "${REQUESTS_VERSION}" ]] || {
@@ -156,13 +197,24 @@ else
     'import requests; assert "/pip/_vendor/requests/" in requests.__file__'
 fi
 
-port_key=$(( (${SLURM_JOB_ID:-1000} + SCENE_INDEX * 47) % 14000 ))
-MEMNAV_PORT=${MEMNAV_PORT:-$((25000 + port_key))}
-NAVDP_PORT=${NAVDP_PORT:-$((MEMNAV_PORT + 1))}
-for port in "${MEMNAV_PORT}" "${NAVDP_PORT}"; do
-  ! ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${port}$" || {
-    echo "port ${port} in use" >&2; exit 2; }
+# Several independent arrays can share one GPU node.  A job-id hash alone is
+# not a namespace: modulo collisions previously killed otherwise valid formal
+# tasks before server startup.  Always use the repository-wide lifetime-held
+# allocator.  In particular, do not inherit arithmetic ports from a caller:
+# two partially overlapping explicit pairs cannot be made atomic with one
+# block lock.
+PORT_HELPER=""
+for source_root in "${WRAPPER_ROOT}" "${TASK_ROOT}" \
+                   "${SERVER_SOURCE_ROOT}" "${BASE_SOURCE_ROOT}"; do
+  if [[ -r "${source_root}/MemNavData/slurm_port_pair.sh" ]]; then
+    PORT_HELPER=${source_root}/MemNavData/slurm_port_pair.sh
+    break
+  fi
 done
+[[ -n "${PORT_HELPER}" ]] || { echo "missing port allocator" >&2; exit 2; }
+source "${PORT_HELPER}"
+unset MEMNAV_PORT NAVDP_PORT
+claim_slurm_tcp_port_pair h3fullmono 12000 6000 || exit $?
 runtime_tmp=${SLURM_TMPDIR:-/tmp}/h3fullmono_${SLURM_JOB_ID:-local}_${task_label}
 mkdir -p "${runtime_tmp}/memnav" "${runtime_tmp}/navdp"
 MEMNAV_PID= NAVDP_PID=
@@ -173,13 +225,14 @@ cleanup() {
       wait "${pid}" 2>/dev/null || true
     fi
   done
+  release_slurm_tcp_port_pair
 }
 trap cleanup EXIT INT TERM
 (
   cd "${runtime_tmp}/memnav"
   exec env PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-    PYTHONPATH="${PYTHONPATH_VALUE}" TORCH_HOME="${TORCH_HOME}" \
+    PYTHONPATH="${MEMNAV_PYTHONPATH_VALUE}" TORCH_HOME="${TORCH_HOME}" \
     LINGBOT_REPO="${LINGBOT_REPO}" LINGBOT_WEIGHTS="${LINGBOT_WEIGHTS}" \
     MEMNAV_WINDOW=32 MEMNAV_NUM_SCALE=8 MEMNAV_MAX_FRAME_NUM=2048 \
     MEMNAV_GROUND_SCALE_MAX=6.0 MEMNAV_GATE_FUSION=complementary \
@@ -198,7 +251,7 @@ MEMNAV_PID=$!
 (
   cd "${runtime_tmp}/navdp"
   exec env NAVDP_DISABLE_VIDEO=1 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${PYTHONPATH_VALUE}" "${MEMNAV_PY}" -u \
+    PYTHONPATH="${NAVDP_PYTHONPATH_VALUE}" "${MEMNAV_PY}" -u \
     "${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py" \
       --port "${NAVDP_PORT}" --checkpoint "${NAVDP_CKPT}" \
       --depth_source metric_request --allow_depth_source_override \
@@ -206,12 +259,25 @@ MEMNAV_PID=$!
       --require_monocular_depth_transaction
 ) >"${task_run}/logs/server_navdp.log" 2>&1 &
 NAVDP_PID=$!
+# ``ss`` has returned a stale/empty listener table inside the CUDA container
+# on a subset of H100 nodes even though both Flask processes are already
+# accepting connections.  Readiness is therefore established by an actual
+# loopback TCP connection.  This checks the transport contract directly and
+# avoids turning a node-specific procfs observation into a false startup
+# failure.
+tcp_ready() {
+  "${MEMNAV_PY}" - "$1" <<'PY' >/dev/null 2>&1
+import socket, sys
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=0.5):
+    pass
+PY
+}
 for spec in "memnav:${MEMNAV_PID}:${MEMNAV_PORT}" "navdp:${NAVDP_PID}:${NAVDP_PORT}"; do
   IFS=: read -r label pid port <<<"${spec}"; ready=0
   for _ in $(seq 1 240); do
     kill -0 "${pid}" 2>/dev/null || {
       tail -n 120 "${task_run}/logs/server_${label}.log"; exit 2; }
-    if ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${port}$"; then
+    if tcp_ready "${port}"; then
       ready=1; break
     fi
     sleep 2
@@ -234,6 +300,18 @@ if [[ "${MODE}" == collect ]]; then
   PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
     "${HAB_PY}" -u "${collector[@]}" \
       >"${task_run}/logs/collector.log" 2>&1
+elif [[ "${MODE}" == mp3d_collect ]]; then
+  collector=("${TASK_ROOT}/MemNavData/collect_mp3d_table1_fullmono_goal_a.py"
+      --source-root "${TASK_ROOT}" --run-root "${RUN_ROOT}"
+      --protocol "${PROTOCOL}" --manifest "${PARENT_MANIFEST}"
+      --scene-index "${SCENE_INDEX}" --hab-python "${HAB_PY}"
+      --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}")
+  if [[ "${MP3D_SOURCE_SMOKE:-0}" == 1 ]]; then
+    collector+=(--smoke --smoke-max-steps "${MAX_STEPS:-80}")
+  fi
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
+    "${HAB_PY}" -u "${collector[@]}" \
+      >"${task_run}/logs/collector.log" 2>&1
 elif [[ "${MODE}" == lifelong_b ]]; then
   BENCH_ROOT=${BENCH_ROOT:?set sealed lifelong A/B role-pair benchmark}
   manifest=${BENCH_ROOT}/manifest.json
@@ -250,8 +328,19 @@ elif [[ "${MODE}" == lifelong_b ]]; then
         --history-index "${history_index}" --hab-python "${HAB_PY}" \
         --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}" \
         --max-steps "${MAX_STEPS}" \
-        >"${task_run}/logs/factual_b_${history_index}.log" 2>&1
+      >"${task_run}/logs/factual_b_${history_index}.log" 2>&1
   done
+elif [[ "${MODE}" == table3_a ]]; then
+  : "${TABLE3_PLAN:?}" "${TABLE3_EXECUTION_PROTOCOL:?}"
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
+    "${HAB_PY}" -u \
+    "${WRAPPER_ROOT}/MemNavData/collect_hm3d_table3_actual_mono_a.py" \
+      --source-root "${WRAPPER_ROOT}" --run-root "${RUN_ROOT}" \
+      --candidate-plan "${TABLE3_PLAN}" \
+      --execution-protocol "${TABLE3_EXECUTION_PROTOCOL}" \
+      --history-index "${SCENE_INDEX}" --hab-python "${HAB_PY}" \
+      --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}" \
+      >"${task_run}/logs/table3_factual_a_${SCENE_INDEX}.log" 2>&1
 else
   BENCH_ROOT=${BENCH_ROOT:?set sealed natural-direction benchmark}
   manifest=${BENCH_ROOT}/manifest.json
@@ -261,7 +350,17 @@ else
     MAX_STEPS=${MAX_STEPS:-80}
   else
     MAX_STEPS=${MAX_STEPS:-600}
-    [[ "${MAX_STEPS}" -eq 600 ]] || { echo "formal max steps changed" >&2; exit 2; }
+    if [[ "${ROLE_PAIR_SCOPE:-}" == table3_length ]]; then
+      [[ "${MAX_STEPS}" =~ ^[0-9]+$ \
+         && "${MAX_STEPS}" -ge 600 && "${MAX_STEPS}" -le 3400 ]] || {
+        echo "Table-III max steps outside frozen 600..3400 contract" >&2
+        exit 2
+      }
+    else
+      [[ "${MAX_STEPS}" -eq 600 ]] || {
+        echo "formal max steps changed" >&2; exit 2;
+      }
+    fi
     indices=${FORMAL_INDICES}
   fi
   if [[ -z "${indices}" ]]; then
@@ -269,14 +368,14 @@ else
       "${SCENE_INDEX}" >"${task_run}/empty_scene_receipt.json"
   else
     for history_index in ${indices}; do
-      runner=("${TASK_ROOT}/MemNavData/run_hm3d_fullmono_query_history.py"
+      runner=("${QUERY_SOURCE_ROOT}/MemNavData/run_hm3d_fullmono_query_history.py"
         --source-root "${BASE_SOURCE_ROOT}" --run-root "${RUN_ROOT}"
-        --evaluator-source-root "${TASK_ROOT}"
+        --evaluator-source-root "${QUERY_SOURCE_ROOT}"
         --bench-root "${BENCH_ROOT}"
         --expected-manifest-sha256 "${expected_manifest_sha}"
         --history-index "${history_index}" --hab-python "${HAB_PY}"
         --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}"
-        --max-steps "${MAX_STEPS}")
+        --max-steps "${MAX_STEPS}" --history-contract "${HISTORY_CONTRACT}")
       if [[ -n "${QUERY_ARMS:-}" ]]; then
         runner+=(--arms "${QUERY_ARMS}")
       fi

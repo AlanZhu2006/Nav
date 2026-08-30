@@ -25,9 +25,10 @@ PROTOCOL=${SOURCE_RUN_ROOT}/hm3d_table2_leg3_power_protocol.json
 EXPECTED_PROTOCOL_SHA=28352498de740add233b783caad79ac2665f13313ec49912a72ec1db5a6a69b0
 PARENT_MANIFEST=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6/sealed_inputs/parent_manifest.json
 CONSTRUCTION_VERIFY_JOB=${CONSTRUCTION_VERIFY_JOB:-16599079}
-PREVIOUS_FAILED_SMOKE_JOB=${PREVIOUS_FAILED_SMOKE_JOB:-16601072}
-POLICY_RUN_NAME=${POLICY_RUN_NAME:-policy_import_repair_v1}
-OUT_RECEIPT=${OUT_RECEIPT:-MemNavData/HM3D_TABLE2_POLICY_IMPORT_REPAIR_SUBMISSION_20260830.json}
+PREVIOUS_FAILED_SMOKE_JOB=${PREVIOUS_FAILED_SMOKE_JOB:-16601475}
+PREVIOUS_POLICY_RUN_NAME=${PREVIOUS_POLICY_RUN_NAME:-policy_import_repair_v1}
+POLICY_RUN_NAME=${POLICY_RUN_NAME:-policy_runtime_repair_v2}
+OUT_RECEIPT=${OUT_RECEIPT:-MemNavData/HM3D_TABLE2_POLICY_RUNTIME_REPAIR_V2_SUBMISSION_20260830.json}
 SSH_CONTROL_PATH=${SSH_CONTROL_PATH:-$(ssh -G "${SSH_ALIAS}" 2>/dev/null | awk '$1=="controlpath"{v=$2} END{print v}')}
 
 cd "${ROOT}"
@@ -44,6 +45,8 @@ timeout 15 ssh -O check -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" \
   >/dev/null 2>&1 || fail "shared SSH unavailable"
 [[ ! -e "${OUT_RECEIPT}" ]] || fail "submission receipt already exists"
 [[ "${POLICY_RUN_NAME}" =~ ^policy[A-Za-z0-9_.-]*$ ]] || fail "bad run name"
+[[ "${PREVIOUS_POLICY_RUN_NAME}" =~ ^policy[A-Za-z0-9_.-]*$ ]] || \
+  fail "bad previous run name"
 
 files=(
   MemNavData/slurm_hm3d_table2_leg3_power_policy_launch.sbatch
@@ -54,6 +57,8 @@ files=(
   MemNavData/slurm_port_pair.sh
   MemNavData/cec_handoff_contract.py
   MemNavData/controller_portability_contract.py
+  MemNavData/monocular_depth_runtime.py
+  MemNavData/test_monocular_depth_runtime.py
   MemNavData/submit_hm3d_table2_policy_import_repair_hpc.sh
 )
 for path in "${files[@]}"; do
@@ -69,9 +74,11 @@ bash -n \
 "${LOCAL_PY}" -m py_compile \
   MemNavData/cec_handoff_contract.py \
   MemNavData/controller_portability_contract.py \
+  MemNavData/monocular_depth_runtime.py \
   MemNavData/independent_verify_hm3d_table2_meeting_result.py
 "${LOCAL_PY}" -c \
   'from MemNavData.cec_handoff_contract import verify_handoff_packet_envelope'
+"${LOCAL_PY}" -m pytest -q MemNavData/test_monocular_depth_runtime.py
 
 scratch=$(mktemp -d /tmp/h3_table2_policy_import_repair.XXXXXX)
 cleanup() { rm -rf -- "${scratch}"; }
@@ -88,7 +95,7 @@ wrapper_sha=$(sha256sum "${scratch}/root/SOURCE_BUNDLE.sha256" | awk '{print $1}
 wrapper_root=${REMOTE_BUNDLES}/hm3d_table2_policy_import_repair_${wrapper_sha:0:16}
 construction=${TABLE2_RUN_ROOT}/hm3d_table2_leg3_construction_verification.json
 new_policy_root=${TABLE2_RUN_ROOT}/${POLICY_RUN_NAME}
-old_formal=${TABLE2_RUN_ROOT}/policy/formal/navdp
+old_formal=${TABLE2_RUN_ROOT}/${PREVIOUS_POLICY_RUN_NAME}/formal/navdp
 
 remote_identity=$(remote 'id -un' | tr -d '\r')
 [[ "${remote_identity}" == yz11502 ]] || fail "wrong remote identity"
@@ -126,6 +133,29 @@ remote "singularity exec -B /scratch/lg154 -B /scratch/yz11502 \
   /scratch/lg154/conda-envs/habitat/bin/python \
   '${TASK_ROOT}/MemNavData/eval_shared_online_role_pairs.py' --help >/dev/null"
 
+# The MemNav endpoint imports this module lazily on the first online append.
+# A normal import is insufficient because MemNavData is a namespace package:
+# it can silently resolve an older base-bundle file.  Bind both provenance and
+# the delayed transaction API before scheduling another smoke.
+remote "singularity exec -B /scratch/lg154 -B /scratch/yz11502 \
+  /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env \
+  PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONPATH='${wrapper_root}:${wrapper_root}/MemNavData:${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData' \
+  /scratch/lg154/conda-envs/memnav/bin/python - '${wrapper_root}' <<'PY'
+from pathlib import Path
+import sys
+from MemNavData import cec_handoff_contract as handoff
+from MemNavData import monocular_depth_runtime as runtime
+root = Path(sys.argv[1]).resolve()
+assert Path(handoff.__file__).resolve() == root/'MemNavData/cec_handoff_contract.py'
+assert Path(runtime.__file__).resolve() == root/'MemNavData/monocular_depth_runtime.py'
+for name in ('bind_monocular_depth_transaction',
+             'monocular_depth_transaction_token',
+             'validate_monocular_depth_transaction'):
+    assert callable(getattr(runtime, name))
+print('runtime_provenance_verified=true')
+PY"
+
 construction_sha=$(remote "sha256sum '${construction}' | awk '{print \$1}'" | tr -d '\r')
 [[ "${construction_sha}" =~ ^[0-9a-f]{64}$ ]] || fail "bad construction SHA"
 launcher=${wrapper_root}/MemNavData/slurm_hm3d_table2_leg3_power_policy_launch.sbatch
@@ -143,16 +173,19 @@ launcher_job=$(printf '%s\n' "${raw}" | job_id)
 import json,sys
 path,bundle,bundle_sha,construction_sha,failed,launcher,run_root=sys.argv[1:]
 p={
- "schema_version":"hm3d_table2_policy_import_repair_submission_v1_20260830",
- "scope":"pre-formal immutable-overlay import repair",
+ "schema_version":"hm3d_table2_policy_import_repair_submission_v2_20260830",
+ "scope":"pre-formal immutable-overlay delayed-runtime provenance repair",
  "wrapper_bundle":bundle,"wrapper_receipt_sha256":bundle_sha,
  "construction_verification_sha256":construction_sha,
  "superseded_failed_smoke_job":int(failed),
  "replacement_launcher_job":int(launcher),"fresh_policy_run_root":run_root,
  "missing_modules_added":[
    "MemNavData.cec_handoff_contract",
-   "MemNavData.controller_portability_contract"],
+   "MemNavData.controller_portability_contract",
+   "MemNavData.monocular_depth_runtime"],
  "production_container_evaluator_import_preflight":True,
+ "production_memnav_runtime_module_provenance_verified":True,
+ "delayed_transaction_api_verified":True,
  "completed_construction_job_verified_before_dependency_free_submission":True,
  "dynamic_lifetime_held_port_allocator":True,
  "previous_formal_policy_rows":0,

@@ -367,14 +367,19 @@ contract 没有变化。
 - A100 launcher `16601041` 成功建立第一条 policy DAG，但 smoke `16601072` 在两个模型
   server 正常启动后、evaluator import 阶段暴露旧 task bundle 漏封
   `MemNavData.cec_handoff_contract`；formal 及其下游自动取消，正式 policy rows 为 `0`。
-- exact repair 以新 run root `policy_import_repair_v1` 封存缺失 handoff contract 及其纯
-  Python dependency，并切换到已验证的 lifetime-held 动态端口 runner。生产容器中的真实
-  evaluator `--help` 导入预检已通过；launcher `16601464` 完成后生成 smoke `16601475`、
-  formal `16601476_[0-53%4]`、aggregate `16601478`、raw verifier `16601479` 与 meeting
-  verifier `16601480`。截至 19:14 CST，smoke 正在 A100 `ga008` 运行。
+- 第一轮 exact repair 封存了 handoff contract 并通过 evaluator import preflight，但 smoke
+  `16601475` 在约 100 秒 memory replay 后、第一次在线 `/memory_step` 才触发另一个已知
+  namespace 问题：新版 server 延迟导入 `monocular_depth_runtime`，却解析到旧 base bundle
+  中不含 `bind_monocular_depth_transaction` 的同名文件。formal rows 仍为 `0`。
+- 第二轮 exact repair 使用新 run root `policy_runtime_repair_v2`，显式封存当前 mono-depth
+  transaction runtime，并在生产 MemNav Python 中验证 `module.__file__` 精确指向 wrapper，
+  三个 delayed transaction API 均存在；同时保留 evaluator 全导入 preflight 与
+  lifetime-held 动态端口 runner。launcher `16601678` 已生成 smoke `16601690`、formal
+  `16601691_[0-53%4]`、aggregate `16601692`、raw verifier `16601693` 与 meeting verifier
+  `16601694`。截至 19:44 CST，smoke 因 A100 QOS GPU 配额等待，尚未运行。
 - 当前 repair immutable bundle：
-  `hm3d_table2_policy_import_repair_7d6f2591282fae61`，receipt SHA
-  `7d6f2591282fae6191b0f434c10b88d7dc4a05a4f70e248e4464baf6191d1ad9`。
+  `hm3d_table2_policy_import_repair_ca9966a9ebf56387`，receipt SHA
+  `ca9966a9ebf56387bc2562d420ea0991acf31de8cfc7f84b426ee2aeb3cdd973`。
 
 ### 新增 post-seal meeting verifier，防止 Table II 漏报 Leg-1/Leg-2
 
@@ -394,7 +399,7 @@ unconditional three-leg joint cohort；它报告的是会议要求的逐段 fact
 
 相关本地回执与测试：
 
-- `HM3D_TABLE2_POLICY_IMPORT_REPAIR_SUBMISSION_20260830.json`；
+- `HM3D_TABLE2_POLICY_RUNTIME_REPAIR_V2_SUBMISSION_20260830.json`；
 - `independent_verify_hm3d_table2_meeting_result.py`；
 - synthetic provenance / escaped-identity / absolute-sidecar 三项回归测试全部通过。
 

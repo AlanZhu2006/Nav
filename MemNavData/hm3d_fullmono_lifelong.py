@@ -19,6 +19,9 @@ POWERED_EXPANSION_PROTOCOL_SCHEMA = (
 DIRECT_NATURAL_PROTOCOL_SCHEMA = (
     "hm3d_fullmono_lifelong_direct_natural_power_v4_20260827"
 )
+NATURAL_B_EXPANSION_EXECUTION_PROTOCOL_SCHEMA = (
+    "hm3d_fullmono_lifelong_natural_b_expansion_execution_v5_20260830"
+)
 PREFIX_SCHEMA = "hm3d_fullmono_lifelong_factual_prefix_v1_20260824"
 RESULT_SCHEMA = "hm3d_fullmono_lifelong_eval_v1_20260824"
 ARMS = ("all_prior", "initial_leg_only", "forced_reject_native")
@@ -45,6 +48,7 @@ def load_protocol(path: Path) -> dict[str, Any]:
         EXPANSION_PROTOCOL_SCHEMA,
         POWERED_EXPANSION_PROTOCOL_SCHEMA,
         DIRECT_NATURAL_PROTOCOL_SCHEMA,
+        NATURAL_B_EXPANSION_EXECUTION_PROTOCOL_SCHEMA,
     },
             "lifelong protocol schema changed")
     require(payload.get("post_prefix_query_outcomes_read_before_freeze") is False,
@@ -124,6 +128,37 @@ def load_protocol(path: Path) -> dict[str, Any]:
         require(runtime["C2_role"]
                 == "secondary_full_sequence_survival_and_anchor_provenance",
                 "v4 C2 role changed")
+    if payload["schema_version"] == NATURAL_B_EXPANSION_EXECUTION_PROTOCOL_SCHEMA:
+        construction = payload["novel_b_construction"]
+        require(construction["source"]
+                == "sealed_result_blind_natural_B_expansion_audit",
+                "v5 does not consume the sealed expansion ledger")
+        require(int(construction["slot_start_inclusive"]) == 4
+                and int(construction["slot_stop_exclusive"]) == 16,
+                "v5 expansion slot range changed")
+        require(int(construction["maximum_new_candidates_per_recipient"]) == 2,
+                "v5 expansion candidate ceiling changed")
+        require(int(construction["legacy_episode_rank_multiplier"]) == 4,
+                "v5 expansion seed contract changed")
+        require(float(construction[
+            "minimum_candidate_planar_separation_m"
+        ]) == 2.0, "v5 expansion separation changed")
+        require(construction["candidate_outcomes_read"] is False,
+                "v5 expansion selected candidates by navigation outcome")
+        audit = payload["sealed_natural_b_expansion_audit"]
+        require(int(audit["expected_scene_fragments"]) == 54
+                and int(audit["expected_candidate_histories"]) == 84
+                and int(audit["expected_recipient_histories"]) == 53
+                and int(audit["expected_scene_clusters"]) == 30,
+                "v5 expansion audit ledger changed")
+        require(audit["independent_verification_required"] is True,
+                "v5 omitted independent expansion verification")
+        union = payload["population_union"]
+        require(int(union["minimum_target_histories"]) == 40
+                and int(union["minimum_target_scene_clusters"]) == 15,
+                "v5 union power target changed")
+        require(union["selection_reads_leg3_navigation_outcomes"] is False,
+                "v5 union selection may read Leg-3 outcomes")
     return payload
 
 

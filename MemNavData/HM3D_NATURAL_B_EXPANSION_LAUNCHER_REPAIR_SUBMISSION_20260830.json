@@ -1,0 +1,11 @@
+{
+  "depends_on_materialization_verifier": 16591452,
+  "factual_B_outputs_before_repair": 0,
+  "fallback_completion_allowed": false,
+  "navigation_outcomes_read": false,
+  "replacement_launcher_job": 16591609,
+  "replaces_cancelled_zero_elapsed_job": 16591458,
+  "schema_version": "hm3d_natural_b_expansion_launcher_repair_submission_v1_20260830",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natbx_launcher_repair_49ca32aae755d5f6",
+  "task_receipt_sha256": "49ca32aae755d5f67c913480adc1b15c23ba4ed7ea0aee9dab065f32d8669665"
+}

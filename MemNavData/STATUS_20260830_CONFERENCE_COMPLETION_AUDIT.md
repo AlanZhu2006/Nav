@@ -1,5 +1,40 @@
 # 2026-08-30 会议实验完成度审计
 
+> **13:02 CST no-fallback execution addendum.** 作者要求继续完成原始会议清单，不能把
+> constructibility null、低样本 smoke、旧结果或删表当作完成。为此，Table II 不再停在
+> 下文第 3--6 节所述的“保留 null”方案。一次早于任何扩样 factual-B/Leg-3 outcome、且已
+> 独立复算的 Natural-B construction audit 封存了 84 个额外候选，覆盖 53 个 source
+> recipients / 30 scenes（front/side/rear `19/14/51`，max covis `<.10`）。完整执行协议
+> `hm3d_fullmono_lifelong_natural_b_expansion_execution_protocol_20260830.json` 保持原
+> `.10/.55/.90` support 门、16 histories / 10 scenes / each-stratum>=3 的 Leg-3 门、
+> 600-step budget、mono-native/mono-CEC arms 全部不变。
+>
+> 已提交的正式链为 smoke `16591442` -> 54-scene materialization `16591445` -> seal
+> `16591447` -> independent verifier `16591452` -> factual-B deferred launcher
+> `16591458`。Smoke 已在 H100 `gh003` 上 `47 s` 正常完成，复现 scene 0 的 `2`
+> candidates / `2` recipients，且 `navigation_outcomes_read=false`；formal array 已启动。
+> 后续链只有在逐级 verifier 通过后才会依次提交：84 次 exactly-once factual-B、84 个
+> factual-prefix support checks、原始 22 + 扩样 supported prefix 的 exact union、完整
+> Table-II Leg-3 construction、power/strata gate、以及同 prefix 的 mono-native/mono-CEC
+> paired policy evaluation。任何一级不足都 fail closed，并继续扩 source population；不
+> 降阈值、不挑结果、不把失败链或 B2 支线替代表格。
+>
+> 权威 submission receipt：
+> `HM3D_NATURAL_B_EXPANSION_EXECUTION_SUBMISSION_20260830.json`；bundle receipt SHA：
+> `1f4979a7fd37d46700011558063be34a8fba0a0b8746668469dba7e7955f4282`；run root：
+> `/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_b_expansion_execution_20260830/formal_20260830T045416Z_1f4979a7`。
+> 在最终 policy independent verifier 出现前，Table II 仍是“未完成”，不得读取 partial
+> SR 或把 84 个候选写成 navigation population。
+>
+> 提交后静态审计在任何 factual-B 输出出现前发现首个 deferred launcher 的 shard size
+> `1` 与冻结 raw-file verifier 的原始 max-`2` 合约冲突。旧 launcher `16591458` 以
+> elapsed `0 s` 精确取消；materialization 与其 verifier 保留不动。修复只把 shard size
+> 恢复为 `2` 并从 sealed shard manifest 动态派生 array 长度，replacement launcher
+> `16591609` 继续依赖同一 `16591452`。修复 bundle SHA 为
+> `49ca32aae755d5f67c913480adc1b15c23ba4ed7ea0aee9dab065f32d8669665`；
+> `factual_b/`、`prefix_fragments/` 与 Leg-3 outcomes 在修复前均不存在。这是零 outcome 的
+> infrastructure repair，不改变候选、threshold、controller 或统计口径。
+
 本文件只回答两个问题：会议清单现在完成到哪里，以及下一份 GPU/真机时间应该花在哪。
 
 ## 1. 当前完成度

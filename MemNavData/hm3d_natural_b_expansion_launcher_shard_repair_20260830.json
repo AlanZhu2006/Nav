@@ -1,0 +1,23 @@
+{
+  "schema_version": "hm3d_natural_b_expansion_launcher_shard_repair_v1_20260830",
+  "frozen_at": "2026-08-30T13:08:00+08:00",
+  "parent_submission_job": 16591458,
+  "parent_job_state_at_repair": "CANCELLED_before_start",
+  "parent_elapsed_seconds": 0,
+  "repair_scope": "deferred factual-B launcher only",
+  "defect": "the first launcher scheduled one history per shard while the frozen independent population verifier requires the original two-history maximum shard contract",
+  "repair": "set maximum_histories_per_shard to 2 and derive the array range from the sealed shard manifest",
+  "unchanged": [
+    "84 candidate identities",
+    "factual-B controller and maximum steps",
+    "support thresholds",
+    "population union rule",
+    "Table-II construction thresholds",
+    "Table-II policy arms and success rule"
+  ],
+  "factual_B_outputs_present_before_repair": 0,
+  "prefix_outputs_present_before_repair": 0,
+  "leg3_navigation_outcomes_read": false,
+  "reuse_completed_materialization_and_independent_verifier": true,
+  "fallback_completion_allowed": false
+}

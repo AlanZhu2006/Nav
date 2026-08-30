@@ -12,6 +12,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,9 @@ SCHEMA = (
     "verification_v1_20260828"
 )
 PROTOCOL_SCHEMA = "hm3d_fullmono_lifelong_direct_natural_power_v4_20260827"
+EXPANSION_PROTOCOL_SCHEMA = (
+    "hm3d_fullmono_lifelong_natural_b_expansion_execution_v5_20260830"
+)
 B_SCHEMA = "hm3d_fullmono_lifelong_b_collection_v1_20260824"
 PREFIX_SCHEMA = "hm3d_fullmono_lifelong_factual_prefix_v1_20260824"
 PREFIX_COMPLETION_SCHEMA = "hm3d_fullmono_lifelong_prefix_fragment_v1_20260824"
@@ -149,17 +153,24 @@ def expected_attrition_reasons(completion: dict[str, Any],
 
 def verify(*, run_root: Path, protocol_path: Path) -> dict[str, Any]:
     protocol = read_json(protocol_path)
-    require(protocol.get("schema_version") == PROTOCOL_SCHEMA,
-            "frozen v4 protocol schema changed")
+    protocol_schema = protocol.get("schema_version")
+    require(protocol_schema in {PROTOCOL_SCHEMA, EXPANSION_PROTOCOL_SCHEMA},
+            "frozen factual-B protocol schema changed")
     require(protocol.get("post_prefix_query_outcomes_read_before_freeze") is False,
             "protocol permits post-prefix outcome filtering")
     require(protocol["guards"]["no_post_prefix_outcome_filtering"] is True,
             "protocol post-prefix guard changed")
     protocol_sha = sha256(protocol_path)
 
-    materialization_verify_path = (
-        run_root / "independent_natural_v4_materialization_verification.json"
+    expected_candidates = int(protocol["construction_power_gate"][
+        "expected_exact_candidate_histories"
+    ])
+    materialization_verify_name = (
+        "independent_natural_b_expansion_materialization_verification.json"
+        if protocol_schema == EXPANSION_PROTOCOL_SCHEMA
+        else "independent_natural_v4_materialization_verification.json"
     )
+    materialization_verify_path = run_root / materialization_verify_name
     verify_sidecar(materialization_verify_path)
     materialization = read_json(materialization_verify_path)
     require(materialization.get("verified") is True
@@ -177,7 +188,7 @@ def verify(*, run_root: Path, protocol_path: Path) -> dict[str, Any]:
     manifest_sha = verify_sidecar(manifest_path)
     manifest = read_json(manifest_path)
     episodes = manifest.get("episodes")
-    require(isinstance(episodes, list) and len(episodes) == 99,
+    require(isinstance(episodes, list) and len(episodes) == expected_candidates,
             "A/B manifest population changed")
     require(ab_receipt["benchmark_manifest_sha256"] == manifest_sha,
             "A/B receipt no longer binds the manifest")
@@ -195,11 +206,17 @@ def verify(*, run_root: Path, protocol_path: Path) -> dict[str, Any]:
         int(index) for shard in schedule["shards"]
         for index in shard["history_indices"]
     ]
-    require(sorted(flattened) == list(range(99))
+    require(sorted(flattened) == list(range(expected_candidates))
             and len(flattened) == len(set(flattened)),
             "factual-B schedule did not partition all candidates once")
-    require(schedule["shard_count"] == len(schedule["shards"]) == 59
-            and schedule["maximum_histories_per_shard"] == 2,
+    shard_size = int(schedule["maximum_histories_per_shard"])
+    require(shard_size == 2, "factual-B shard size changed")
+    per_scene = Counter(int(item["final14_scene_rank"]) for item in episodes)
+    expected_shards = sum(
+        math.ceil(count / shard_size) for count in per_scene.values()
+    )
+    require(schedule["shard_count"] == len(schedule["shards"])
+            == expected_shards,
             "factual-B shard contract changed")
     require(schedule["query_policy_outcomes_read"] is False
             and schedule["navigation_outcomes_read"] is False,
@@ -374,10 +391,11 @@ def verify(*, run_root: Path, protocol_path: Path) -> dict[str, Any]:
             == sha256(ab_receipt_path)
             and population["AB_manifest_sha256"] == manifest_sha,
             "population source binding changed")
-    require(population["intention_to_collect_B"] == 99
+    require(population["intention_to_collect_B"] == expected_candidates
             and population["supported_population"] == len(eligible_indices)
             and len(population["accepted"]) == len(eligible_indices)
-            and len(population["attrition"]) == 99 - len(eligible_indices),
+            and len(population["attrition"])
+            == expected_candidates - len(eligible_indices),
             "population counts changed")
     accepted_indices = [
         int(row["source_AB_history_index"]) for row in population["accepted"]
@@ -386,7 +404,8 @@ def verify(*, run_root: Path, protocol_path: Path) -> dict[str, Any]:
         int(row["history_index"]) for row in population["attrition"]
     ]
     require(accepted_indices == eligible_indices
-            and sorted(accepted_indices + attrition_indices) == list(range(99)),
+            and sorted(accepted_indices + attrition_indices)
+            == list(range(expected_candidates)),
             "population does not exactly reproduce prefix eligibility")
     for row in population["accepted"]:
         index = int(row["source_AB_history_index"])
@@ -429,7 +448,11 @@ def verify(*, run_root: Path, protocol_path: Path) -> dict[str, Any]:
         {"POPULATION_FILES.sha256", "SEALED"},
     )
     return {
-        "schema_version": SCHEMA,
+        "schema_version": (
+            "hm3d_fullmono_lifelong_natural_b_expansion_population_"
+            "independent_verification_v1_20260830"
+            if protocol_schema == EXPANSION_PROTOCOL_SCHEMA else SCHEMA
+        ),
         "verified": True,
         "scope": "pre-query factual-B and population raw-file audit only",
         "protocol_sha256": protocol_sha,
@@ -438,11 +461,11 @@ def verify(*, run_root: Path, protocol_path: Path) -> dict[str, Any]:
         ),
         "AB_manifest_sha256": manifest_sha,
         "factual_B_schedule_sha256": schedule_sha,
-        "factual_B_rollouts": 99,
+        "factual_B_rollouts": expected_candidates,
         "factual_B_successes": factual_success,
         "metric_depth_sensor_reads": 0,
         "monocular_plan_receipts_verified": mono_plan_receipts,
-        "prefix_fragments_verified": 99,
+        "prefix_fragments_verified": expected_candidates,
         "supported_population": len(eligible_indices),
         "scene_clusters": len(accepted_scenes),
         "strong_support_histories": strong_support,

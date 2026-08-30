@@ -1,0 +1,149 @@
+{
+  "schema_version": "hm3d_fullmono_lifelong_natural_b_expansion_execution_v5_20260830",
+  "frozen_at": "2026-08-30T12:45:00+08:00",
+  "scope": "result-blind execution of the sealed HM3D Natural-B expansion for the conference continual-memory table",
+  "amendment_of": {
+    "protocol": "hm3d_fullmono_lifelong_natural_b_expansion_audit_protocol_20260828.json",
+    "protocol_sha256": "62a067e75be9b1849dc690765acd4a85f35f9ab1dab11b8dcbaf791839d43827",
+    "reason": "the independent construction audit sealed 84 additional non-overlapping Natural-B candidates; this protocol authorizes exactly-once factual-B execution without changing any navigation, support, certificate, or success threshold"
+  },
+  "prior_result_use": {
+    "original_v4_factual_B_outcomes_read": true,
+    "expansion_factual_B_or_leg3_outcomes_read_before_freeze": false,
+    "used_only_to_identify_the_pre_registered_40_history_power_shortfall": true,
+    "used_to_select_expansion_candidate_identity": false,
+    "used_to_change_controller_certificate_support_or_success_thresholds": false
+  },
+  "post_prefix_query_outcomes_read_before_freeze": false,
+  "parent": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6",
+    "parent_manifest": "sealed_inputs/parent_manifest.json",
+    "parent_manifest_sha256": "a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5",
+    "fullmono_population_receipt": "benchmarks/population_receipt.json",
+    "fullmono_population_receipt_sha256": "4dd6b8dcb759dff1c0835bef8e755e7291a5f049c9adec88b954d1fda62e30d5"
+  },
+  "source_controlled_revisit": {
+    "protocol": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_lifelong_375f0b6879b2ff87/MemNavData/hm3d_fullmono_lifelong_power_expansion_protocol_20260826.json",
+    "protocol_sha256": "127a6796c64eeafd4b48906baad09c48c41edb925fefe0fa964ccb584d4af228",
+    "construction_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_power_v3_20260826/formal_20260826T141733Z_375f0b68/construct_ab/scenes",
+    "expected_materialized_A_histories": 130,
+    "expected_controlled_revisit_histories": 80
+  },
+  "sealed_natural_b_expansion_audit": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_b_expansion_20260828/natural_b_expansion_audit_20260828T014626Z_994cfe95",
+    "scene_fragments": "expansion_audit/scenes",
+    "summary": "expansion_audit/summary.json",
+    "summary_sha256": "b3ba1ffee79aba0e6aa002fb1bd5b26ae1616350be231aee52a8cc31533da59d",
+    "independent_verification": "independent_expansion_audit_verification.json",
+    "independent_verification_sha256": "2d56a9d6e5c3178567139709c04270a2cb144aaab8a4c0a573ce39e007ce118d",
+    "audit_source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_expansion_994cfe9585d2467c",
+    "audit_source_bundle_receipt_sha256": "994cfe9585d2467c1c214e923bfd080408b5c8c23f9229d2be57f3c5e15a25a4",
+    "original_v4_manifest": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d/ab_population/role_pairs/manifest.json",
+    "original_v4_manifest_sha256": "e5c97dad42b26c67032c5b42a8467d857ce57f4b627a3f4851616a159ecef978",
+    "expected_scene_fragments": 54,
+    "expected_candidate_histories": 84,
+    "expected_recipient_histories": 53,
+    "expected_scene_clusters": 30,
+    "independent_verification_required": true,
+    "query_policy_outcomes_read": false,
+    "navigation_outcomes_read": false
+  },
+  "novel_b_construction": {
+    "source": "sealed_result_blind_natural_B_expansion_audit",
+    "selection_rule": "materialize_every_candidate_identity_in_the_independently_verified_expansion_ledger",
+    "slot_start_inclusive": 4,
+    "slot_stop_exclusive": 16,
+    "maximum_new_candidates_per_recipient": 2,
+    "legacy_episode_rank_multiplier": 4,
+    "minimum_candidate_planar_separation_m": 2.0,
+    "separation_reference": "all_original_v4_candidates_for_the_recipient_plus_earlier_expansion_candidates",
+    "recipient_A_to_B_geodesic_band_m": [2.0, 9.0],
+    "B_to_C_geodesic_band_m": [2.0, 9.0],
+    "B_max_recipient_A_covis_exclusive": 0.1,
+    "same_scene_navmesh": true,
+    "goal_rendered_at_frozen_camera_height": true,
+    "candidate_outcomes_read": false,
+    "synthetic_query_identity": "recipient_episode__natural_b_SLOT",
+    "materialization_must_reproduce_audit_candidate_metadata": true,
+    "materialization_must_serialize_floor_position": true
+  },
+  "construction_power_gate": {
+    "minimum_candidate_histories": 84,
+    "minimum_scene_clusters": 30,
+    "expected_exact_candidate_histories": 84,
+    "expected_exact_recipient_histories": 53,
+    "expected_exact_scene_clusters": 30,
+    "halt_before_factual_B_if_not_met": true,
+    "halt_if_materialization_differs_from_audit": true
+  },
+  "factual_b_collection": {
+    "controller": "frozen NavDP native_sidecar",
+    "navdp_depth_source": "monocular_sidecar",
+    "maximum_steps": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "run_once_per_frozen_candidate": true,
+    "metric_depth_sensor_reads_allowed": 0,
+    "failed_B_prefixes_retained_in_attrition_ledger": true,
+    "successful_B_trace_is_canonical_and_hash_sealed": true,
+    "B_goal_support_by_factual_B_minimum_inclusive": 0.2,
+    "B_goal_support_strong_threshold_inclusive": 0.5,
+    "actual_B_end_to_C_geodesic_band_m": [2.0, 9.0],
+    "post_prefix_query_outcomes_read": false
+  },
+  "population": {
+    "selection_rule": "retain_every_expansion_candidate_whose_single_actual_mono_B_rollout_succeeds_and_has_at_least_0.20_factual_B_covis_support",
+    "minimum_target_histories": 0,
+    "minimum_target_scene_clusters": 0,
+    "expansion_alone_is_not_a_promotion_endpoint": true,
+    "no_replacement_no_threshold_relaxation": true,
+    "C_B2_C2_outcomes_may_not_affect_population": true,
+    "primary_cluster_unit": "scene",
+    "shared_recipient_A_dependencies_reported": true
+  },
+  "population_union": {
+    "original_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_v4_20260827/formal_materialize_20260827T133704Z_d85fc50d",
+    "original_population": "population/population.json",
+    "original_population_sha256": "ec11c0dbc43a4abe585330c1ce52a8c14ad1d4b1da6fd8397e1d15592707a6d5",
+    "original_population_file_ledger_sha256": "2ad025349f16caf4089822f021da6a29691c0683a10f03a3fe1e1fa166180521",
+    "original_supported_histories": 22,
+    "selection_rule": "exact_union_of_the_frozen_original_supported_population_and_every_supported_expansion_prefix",
+    "minimum_target_histories": 40,
+    "minimum_target_scene_clusters": 15,
+    "halt_leg3_construction_if_not_met": true,
+    "selection_reads_leg3_navigation_outcomes": false
+  },
+  "query_runtime": {
+    "sequence": ["A", "B", "C", "B2", "C2"],
+    "maximum_steps_per_query": 600,
+    "execution_horizon": 8,
+    "success_radius_m": 1.0,
+    "navdp_depth_source": "monocular_sidecar",
+    "primary_endpoint": "conference_Table_II_Leg3_after_a_frozen_actual_AB_prefix",
+    "arms": [
+      {"name": "all_prior", "CEC_takeover_authority": true},
+      {"name": "initial_leg_only", "CEC_takeover_authority": true},
+      {"name": "forced_reject_native", "CEC_takeover_authority": false}
+    ]
+  },
+  "analysis": {
+    "pairing_key": ["scene", "synthetic_candidate_episode"],
+    "primary_cluster_unit": "scene",
+    "source_history_dependency_key": ["scene", "recipient_episode"],
+    "source_history_clustered_sensitivity_required": true,
+    "bootstrap_seed": 20260830,
+    "bootstrap_resamples": 100000,
+    "exact_mcnemar": "two-sided exact binomial on discordant pairs"
+  },
+  "guards": {
+    "no_training": true,
+    "no_threshold_tuning": true,
+    "no_metric_depth_for_control_or_CEC": true,
+    "no_runtime_role_label": true,
+    "no_post_prefix_outcome_filtering": true,
+    "no_claim_of_fresh_scene_generalization": true,
+    "independent_raw_file_verifier_required": true,
+    "immutable_source_bundle_and_receipt_required": true,
+    "materialization_must_finish_and_seal_before_any_expansion_B_rollout": true
+  }
+}

@@ -25,8 +25,15 @@ POPULATION=${RUN_ROOT}/population
 
 case "${MODE}" in
   finalize)
+    expected=$("${PY}" - "${PROTOCOL}" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+print(int(p['source_population']['actual_AB_successful_histories']))
+PY
+)
+    [[ "${expected}" =~ ^[1-9][0-9]*$ ]]
     [[ "$(find "${RUN_ROOT}/construction/fragments" -mindepth 2 -maxdepth 2 \
-      -name completion.json -type f | wc -l)" -eq 22 ]]
+      -name completion.json -type f | wc -l)" -eq "${expected}" ]]
     [[ ! -e "${POPULATION}" ]]
     PYTHONPATH="${TASK_ROOT}:${TASK_ROOT}/MemNavData" \
       "${PY}" -u \

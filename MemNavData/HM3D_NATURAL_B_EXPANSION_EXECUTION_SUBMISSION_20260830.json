@@ -1,0 +1,19 @@
+{
+  "factual_B_or_leg3_outcomes_read_at_submission": false,
+  "fallback_completion_allowed": false,
+  "jobs": {
+    "factual_B_deferred_launcher": 16591458,
+    "materialization_array": 16591445,
+    "materialization_independent_verify": 16591452,
+    "materialization_seal": 16591447,
+    "materialization_smoke": 16591442
+  },
+  "protocol_sha256": "28101fe2574e9ea428306dbf12932cb3da7cf3c24d88f82f573c1cb3209d9edd",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_b_expansion_execution_20260830/formal_20260830T045416Z_1f4979a7",
+  "schema_version": "hm3d_natural_b_expansion_execution_submission_v1_20260830",
+  "scope": "complete result-blind expansion through deferred Table-II evaluation",
+  "smoke_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_b_expansion_execution_20260830/formal_20260830T045416Z_1f4979a7_smoke",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_expansion_execution_1f4979a7fd37d467",
+  "task_receipt_sha256": "1f4979a7fd37d46700011558063be34a8fba0a0b8746668469dba7e7955f4282",
+  "threshold_relaxation": false
+}

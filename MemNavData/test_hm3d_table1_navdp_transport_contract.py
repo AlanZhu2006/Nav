@@ -68,6 +68,15 @@ def test_server_processes_have_namespace_specific_sibling_precedence():
     assert 'assert hasattr(policy_agent,\\"NavDP_Agent\\")' in SUBMITTER.read_text()
 
 
+def test_server_readiness_uses_a_real_loopback_connection():
+    text = RUNNER.read_text()
+    assert 'tcp_ready() {' in text
+    assert 'socket.create_connection(("127.0.0.1", int(sys.argv[1]))' in text
+    readiness = text.split('for spec in "memnav:', 1)[1]
+    assert 'if tcp_ready "${port}"; then' in readiness
+    assert "if ss -ltn | awk '{print $4}'" not in readiness
+
+
 def test_portability_runner_accepts_the_frozen_mp3d_replication_scope():
     text = PORTABILITY_RUNNER.read_text()
     assert "consumed_integration|paper_heldout|paper_replication" in text

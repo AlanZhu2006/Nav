@@ -219,12 +219,25 @@ MEMNAV_PID=$!
       --require_monocular_depth_transaction
 ) >"${task_run}/logs/server_navdp.log" 2>&1 &
 NAVDP_PID=$!
+# ``ss`` has returned a stale/empty listener table inside the CUDA container
+# on a subset of H100 nodes even though both Flask processes are already
+# accepting connections.  Readiness is therefore established by an actual
+# loopback TCP connection.  This checks the transport contract directly and
+# avoids turning a node-specific procfs observation into a false startup
+# failure.
+tcp_ready() {
+  "${MEMNAV_PY}" - "$1" <<'PY' >/dev/null 2>&1
+import socket, sys
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=0.5):
+    pass
+PY
+}
 for spec in "memnav:${MEMNAV_PID}:${MEMNAV_PORT}" "navdp:${NAVDP_PID}:${NAVDP_PORT}"; do
   IFS=: read -r label pid port <<<"${spec}"; ready=0
   for _ in $(seq 1 240); do
     kill -0 "${pid}" 2>/dev/null || {
       tail -n 120 "${task_run}/logs/server_${label}.log"; exit 2; }
-    if ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${port}$"; then
+    if tcp_ready "${port}"; then
       ready=1; break
     fi
     sleep 2

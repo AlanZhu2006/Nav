@@ -1,0 +1,11 @@
+{
+  "bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_actual_mono_plan_3b848b5c5565b360",
+  "bundle_receipt_sha256": "3b848b5c5565b360e734db049c556d38f2e7c46376db42b1904a9573530019c1",
+  "factual_A_outcomes_read": false,
+  "freeze_job": 16593845,
+  "independent_verify_job": 16593853,
+  "query_policy_evaluation_authorized": false,
+  "query_policy_outcomes_read": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_20260830/plan_20260830T061943Z_3b848b5c",
+  "schema_version": "hm3d_table3_actual_mono_plan_submission_v1_20260830"
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": "hm3d_table3_causal_survey_expansion_selection_v1_20260831",
+  "frozen_at": "2026-08-31T00:55:00+08:00",
+  "scope": "append-only result-blind expansion of the controlled HM3D Table-III causal-survey population",
+  "base": {
+    "candidate_plan": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_20260830/plan_20260830T061943Z_3b848b5c/candidate_plan.json",
+    "candidate_plan_sha256": "1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d",
+    "candidate_count": 125,
+    "construction_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_20260830/formal_20260830T150042Z_3d811e0f",
+    "construction_protocol": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_causal_survey_3d811e0f63298480/MemNavData/hm3d_table3_causal_survey_protocol_20260830.json",
+    "construction_protocol_sha256": "0f2f3b02e2e2bb3253bdcb386f501ec293533e4bf0014f6d853146d8e29723ea"
+  },
+  "capacity_source": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_navmesh_capacity_replenishment_20260831/capacity_replenishment_20260830T160351Z_7d4e0756",
+    "summary": "formal/capacity_summary.json",
+    "summary_sha256": "9faa519882bd0641e6ded9b6d2042e333dfc2c352007197392d9334974820c4d",
+    "independent_verification": "formal/independent_capacity_verification.json",
+    "independent_verification_sha256": "b21b16ddd9acd941748177e5b927441e94f7387f8c8cc6219ed8f63caa977190",
+    "source_bundle_receipt_sha256": "7d4e0756994404da0da7f7dbbbe8fb402cca1e033fe1c474cfe43528dbb60516"
+  },
+  "parent": {
+    "manifest": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_capacity_replenishment_7d4e0756994404da/MemNavData/hm3d_table3_combined_assets_20260830.json",
+    "manifest_sha256": "e555c6a6e1cea896c2af010b4342fb168ce3e423b545108aa019b77486822d34",
+    "expected_scenes": 100
+  },
+  "selection": {
+    "bin_order": ["0_to_20_m", "20_to_30_m", "30_to_50_m"],
+    "deficient_bin_rule": "append only when the complete base construction has fewer than 16 constructible histories or fewer than 10 constructible scene clusters",
+    "candidate_rule": "for each deficient bin append every unused verified-capacity candidate in deterministic scene-round-robin order",
+    "candidate_identity_fields": ["scene", "bin", "query_start", "first_goal", "second_goal"],
+    "global_history_index_offset": 125,
+    "delete_or_replace_base_candidates": false,
+    "read_query_policy_outcomes": false,
+    "read_navigation_policy_outcomes": false
+  },
+  "guards": {
+    "all_125_base_completion_receipts_required": true,
+    "capacity_independent_verifier_required": true,
+    "candidate_identity_deduplication_required": true,
+    "same_history_query_and_population_contract_as_base": true,
+    "query_policy_evaluation_authorized": false,
+    "threshold_relaxation": false,
+    "partial_population_allowed": false,
+    "fallback_completion_allowed": false
+  }
+}

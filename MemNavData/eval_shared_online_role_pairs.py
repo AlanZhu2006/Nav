@@ -464,7 +464,22 @@ def main() -> None:
     require(bool(episode_dirs), "no role-pair episodes selected")
     selected_episode_names = {path.name for path in episode_dirs}
 
-    simulator = base.make_sim(str(scene_file), "", agent_radius=args.agent_radius)
+    if args.pinned_navmesh:
+        pinned_navmesh = Path(args.pinned_navmesh).resolve()
+        require(
+            pinned_navmesh.is_file()
+            and sha256_path(pinned_navmesh)
+            == args.expected_pinned_navmesh_sha256,
+            "pinned runtime navmesh receipt changed",
+        )
+        simulator = base.make_sim(
+            str(scene_file), str(pinned_navmesh),
+            agent_radius=args.agent_radius, recompute_navmesh=False,
+        )
+    else:
+        simulator = base.make_sim(
+            str(scene_file), "", agent_radius=args.agent_radius,
+        )
     pathfinder = simulator.pathfinder
     metrics = []
     try:
@@ -476,19 +491,37 @@ def main() -> None:
                 sha256_file(scene_file) == receipt["source_asset_sha256"],
                 "scene asset hash differs from online-A materialization",
             )
-            source_parquet = (
-                Path(receipt["source_episode"])
-                / "data/chunk-000/episode_000000.parquet"
-            )
-            require(
-                sha256_file(source_parquet) == receipt["source_parquet_sha256"],
-                "source parquet hash changed",
-            )
-            rows = pd.read_parquet(source_parquet)
-            intrinsic_raw = rows.iloc[0]["observation.camera_intrinsic"]
-            camera_intrinsic = np.stack(
-                [np.asarray(row, dtype=np.float64) for row in intrinsic_raw]
-            )
+            if (receipt.get("history_source")
+                    == "controlled_causal_rgb_geodesic_survey"):
+                camera_intrinsic = np.asarray(
+                    receipt.get("camera_intrinsic"), dtype=np.float64
+                )
+                require(
+                    camera_intrinsic.shape == (3, 3)
+                    and np.isfinite(camera_intrinsic).all(),
+                    "causal-survey camera intrinsic changed",
+                )
+                require(
+                    int(receipt.get("episode_seed", -1))
+                    == int(frozen["trace"].get("episode_seed", -2)) >= 0,
+                    "causal-survey seed receipt changed",
+                )
+            else:
+                source_parquet = (
+                    Path(receipt["source_episode"])
+                    / "data/chunk-000/episode_000000.parquet"
+                )
+                require(
+                    sha256_file(source_parquet)
+                    == receipt["source_parquet_sha256"],
+                    "source parquet hash changed",
+                )
+                rows = pd.read_parquet(source_parquet)
+                intrinsic_raw = rows.iloc[0]["observation.camera_intrinsic"]
+                camera_intrinsic = np.stack(
+                    [np.asarray(row, dtype=np.float64)
+                     for row in intrinsic_raw]
+                )
             camera_height = float(receipt["camera_height_m"])
             require(
                 math.isclose(camera_height, float(base.CAM_H), abs_tol=1e-12),
@@ -710,7 +743,7 @@ def main() -> None:
                 "Replica cross-dataset role-pair evaluation"
             ),
             "table3_length": (
-                "HM3D actual-mono Novel/Revisit evaluation by geodesic length"
+                "HM3D causal-RGB Novel/Revisit evaluation by geodesic length"
             ),
         }
         summary = {

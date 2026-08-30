@@ -1,0 +1,20 @@
+{
+  "construction_array_job": 16610812,
+  "fallback_completion_allowed": false,
+  "frozen_candidates": 125,
+  "history_source": "controlled_causal_rgb_geodesic_survey",
+  "population_finalize_job": 16610818,
+  "population_gate": {
+    "histories_per_bin": 16,
+    "maximum_histories_per_scene_per_bin": 2,
+    "scene_clusters_per_bin": 10
+  },
+  "population_independent_verification_job": 16610823,
+  "query_policy_jobs_submitted": false,
+  "query_policy_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_20260830/formal_20260830T150042Z_3d811e0f",
+  "schema_version": "hm3d_table3_causal_survey_construction_submission_v1_20260830",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_causal_survey_3d811e0f63298480",
+  "source_bundle_sha256": "3d811e0f632984806ea4f72bfea947620a27aa61e08604a32d17fedf963732ad",
+  "threshold_relaxation": false
+}

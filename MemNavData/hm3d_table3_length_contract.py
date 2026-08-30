@@ -1,4 +1,4 @@
-"""Fail-closed contract for the HM3D actual-mono length benchmark."""
+"""Fail-closed contract for the HM3D causal-history length benchmark."""
 
 from __future__ import annotations
 
@@ -7,6 +7,10 @@ from collections import Counter
 
 
 SCHEMA_VERSION = "hm3d_table3_length_role_pair_v1_20260830"
+ONLINE_HISTORY_CONTRACTS = frozenset({
+    "actual_frozen_navdp_goal_a_causal_rgb_trace",
+    "controlled_causal_rgb_geodesic_survey",
+})
 ROLES = frozenset({"novel", "revisit"})
 RUNTIME_VISIBLE_QUERY_FIELDS = frozenset({
     "query_id", "goal_rgb", "goal_rgb_sha256", "goal_depth",
@@ -148,8 +152,7 @@ def validate_manifest(manifest: dict) -> dict:
             "Table-III manifest schema changed")
     contract = manifest.get("contract")
     require(isinstance(contract, dict), "Table-III contract is missing")
-    require(contract.get("online_history")
-            == "actual_frozen_navdp_goal_a_causal_rgb_trace",
+    require(contract.get("online_history") in ONLINE_HISTORY_CONTRACTS,
             "Table-III online-history contract changed")
     require(contract.get("query_execution")
             == "independent_reset_and_exact_online_a_replay",

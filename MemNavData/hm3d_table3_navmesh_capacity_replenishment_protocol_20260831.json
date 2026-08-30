@@ -1,0 +1,60 @@
+{
+  "schema_version": "hm3d_table3_navmesh_capacity_protocol_v1_20260830",
+  "frozen_at": "2026-08-31T00:20:00+08:00",
+  "scope": "result-blind deterministic geometry replenishment for the controlled HM3D Table-III causal-survey population",
+  "amendment_of": {
+    "protocol": "hm3d_table3_navmesh_capacity_dense100_protocol_20260830.json",
+    "reason": "the first 49 of 125 rendered construction receipts exposed a pre-policy population-capacity risk (34/40 short and 2/9 mid constructible; no query policy had been submitted or read); this replenishment freezes a new deterministic navmesh sample before the remaining construction or any policy evaluation, while preserving every bin, support, pairing, power, controller, and success threshold",
+    "observed_construction_only_state": {
+      "completion_receipts": 49,
+      "query_policy_jobs_submitted": false,
+      "query_policy_outcomes_read": false,
+      "navigation_policy_outcomes_used_for_replenishment": false
+    }
+  },
+  "parent": {
+    "run_root": "immutable_source_bundle",
+    "manifest": "MemNavData/hm3d_table3_combined_assets_20260830.json",
+    "manifest_sha256": "e555c6a6e1cea896c2af010b4342fb168ce3e423b545108aa019b77486822d34",
+    "expected_scenes": 100
+  },
+  "sampling": {
+    "base_seed": 20260831,
+    "points_per_scene": 512,
+    "maximum_draws_per_scene": 10240,
+    "largest_navmesh_island_only": true,
+    "deduplicate_rounding_decimals": 4
+  },
+  "length_definition": {
+    "metric": "Habitat shortest-path geodesic from the frozen query start to the goal position",
+    "computed_before_policy_execution": true,
+    "method_execution_path_used": false,
+    "bins_m": [
+      {"name": "0_to_20_m", "lower_inclusive": 2.0, "upper": 20.0, "upper_inclusive": false},
+      {"name": "20_to_30_m", "lower_inclusive": 20.0, "upper": 30.0, "upper_inclusive": false},
+      {"name": "30_to_50_m", "lower_inclusive": 30.0, "upper": 50.0, "upper_inclusive": true}
+    ]
+  },
+  "paired_geometry": {
+    "one_query_start_two_goal_hypotheses": true,
+    "maximum_goal_distance_mismatch": 2.0,
+    "minimum_initial_bearing_separation_deg": 60.0,
+    "minimum_goal_to_goal_geodesic_m": 2.0,
+    "maximum_candidates_saved_per_scene_per_bin": 8
+  },
+  "prospective_power_gate": {
+    "minimum_histories_per_bin": 16,
+    "minimum_scene_clusters_per_bin": 10,
+    "maximum_selected_histories_per_scene_per_bin": 2,
+    "all_three_bins_required": true
+  },
+  "authority_boundary": {
+    "this_audit_authorizes_policy_evaluation": false,
+    "next_required_gate": "append-only de-duplicated rendered construction followed by a new independent 16/16/16 population verifier",
+    "query_policy_outcomes_read": false,
+    "navigation_outcomes_read": false,
+    "threshold_relaxation_after_audit": false,
+    "base_candidates_or_receipts_may_be_deleted": false,
+    "missing_capacity_action": "continue deterministic result-blind replenishment; never lower the three-bin power gate or substitute a partial population"
+  }
+}

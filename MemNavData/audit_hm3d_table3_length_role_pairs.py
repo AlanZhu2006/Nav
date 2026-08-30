@@ -49,6 +49,7 @@ def audit(root: Path) -> dict:
             == [digest, "manifest.json"], "manifest receipt changed")
     manifest = json.loads(manifest_path.read_text())
     validate_manifest(manifest)
+    contract = manifest["contract"]
     counts = Counter()
     scenes: dict[str, set[str]] = {}
     for episode in manifest["episodes"]:
@@ -78,6 +79,46 @@ def audit(root: Path) -> dict:
         require(trace["reached"] is True
                 and len(trace["poses"]) == int(episode["online_a_steps"]),
                 f"{scene}/{name}: online history changed")
+        if contract["online_history"] == "controlled_causal_rgb_geodesic_survey":
+            receipt = json.loads((online / "receipt.json").read_text())
+            require(
+                receipt.get("schema_version")
+                == "hm3d_table3_causal_survey_materialized_v1_20260830"
+                and receipt.get("history_source")
+                == "controlled_causal_rgb_geodesic_survey"
+                and trace.get("schema_version")
+                == "hm3d_table3_causal_survey_trace_v1_20260830"
+                and trace.get("source_hybrid_route") == "causal_survey",
+                f"{scene}/{name}: causal-survey provenance changed",
+            )
+            survey = receipt.get("survey_contract")
+            intrinsic = receipt.get("camera_intrinsic")
+            require(
+                isinstance(survey, dict)
+                and survey.get("runtime_memory_input") == "RGB only"
+                and survey.get("construction_only_simulator_depth") is True
+                and survey.get("metric_depth_for_query_control_or_CEC") is False
+                and int(trace.get("metric_depth_sensor_reads", -1)) == 0,
+                f"{scene}/{name}: survey runtime modality changed",
+            )
+            require(
+                isinstance(intrinsic, list) and len(intrinsic) == 3
+                and all(isinstance(row, list) and len(row) == 3
+                        for row in intrinsic)
+                and all(math.isfinite(float(value))
+                        for row in intrinsic for value in row)
+                and int(receipt.get("episode_seed", -1))
+                == int(trace.get("episode_seed", -2)) >= 0,
+                f"{scene}/{name}: survey camera/seed receipt changed",
+            )
+            hashes = receipt.get("rgb_frame_hashes")
+            require(isinstance(hashes, list) and len(hashes) == len(trace["poses"]),
+                    f"{scene}/{name}: survey RGB receipt changed")
+            for pose, expected in zip(trace["poses"], hashes):
+                step = int(pose["step"])
+                rgb = online / "rgb" / f"{step:06d}.jpg"
+                require(sha256(rgb) == expected == pose["jpg_sha256"],
+                        f"{scene}/{name}: survey RGB changed at {step}")
         for query in episode["pairs"][0]["queries"]:
             label = f"{scene}/{name}/{query['analysis_role']}"
             rgb = episode_root / query["goal_rgb"]
@@ -90,7 +131,6 @@ def audit(root: Path) -> dict:
             require("analysis_role" not in projected
                     and "covis_curve" not in projected,
                     f"{label}: runtime role/support leak")
-    contract = manifest["contract"]
     minimum_histories = int(contract["minimum_histories_per_bin"])
     minimum_scenes = int(contract["minimum_scene_clusters_per_bin"])
     for spec in contract["bins_m"]:
@@ -106,6 +146,7 @@ def audit(root: Path) -> dict:
         "scene_clusters_by_bin": {key: len(value) for key, value in scenes.items()},
         "query_policy_outcomes_read": False,
         "runtime_role_visibility": "none",
+        "online_history": contract["online_history"],
     }
 
 

@@ -13,6 +13,27 @@ from audit_hm3d_table3_navmesh_capacity import (
 )
 
 
+def test_replenishment_protocol_preserves_geometry_and_authority_contract() -> None:
+    path = Path(__file__).with_name(
+        "hm3d_table3_navmesh_capacity_replenishment_protocol_20260831.json"
+    )
+    payload = load_protocol(path)
+    assert payload["sampling"]["base_seed"] == 20260831
+    assert payload["sampling"]["points_per_scene"] == 512
+    assert payload["length_definition"]["bins_m"] == [
+        {"name": "0_to_20_m", "lower_inclusive": 2.0, "upper": 20.0,
+         "upper_inclusive": False},
+        {"name": "20_to_30_m", "lower_inclusive": 20.0, "upper": 30.0,
+         "upper_inclusive": False},
+        {"name": "30_to_50_m", "lower_inclusive": 30.0, "upper": 50.0,
+         "upper_inclusive": True},
+    ]
+    boundary = payload["authority_boundary"]
+    assert boundary["query_policy_outcomes_read"] is False
+    assert boundary["navigation_outcomes_read"] is False
+    assert boundary["this_audit_authorizes_policy_evaluation"] is False
+
+
 PROTOCOL = Path(__file__).with_name(
     "hm3d_table3_navmesh_capacity_protocol_20260830.json"
 )

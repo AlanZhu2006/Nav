@@ -33,8 +33,9 @@ SCENE_RANK_FIELD=${SCENE_RANK_FIELD:-final14_scene_rank}
 [[ "${SCENE_INDEX}" =~ ^[0-9]+$ ]] || { echo "bad scene index" >&2; exit 2; }
 [[ "${RESUME_INCOMPLETE}" =~ ^[01]$ ]] || {
   echo "RESUME_INCOMPLETE must be 0 or 1" >&2; exit 2; }
-[[ "${HISTORY_CONTRACT}" == goal_a || "${HISTORY_CONTRACT}" == actual_ab ]] || {
-  echo "HISTORY_CONTRACT must be goal_a or actual_ab" >&2; exit 2; }
+[[ "${HISTORY_CONTRACT}" == goal_a || "${HISTORY_CONTRACT}" == actual_ab \
+   || "${HISTORY_CONTRACT}" == causal_survey ]] || {
+  echo "HISTORY_CONTRACT must be goal_a, actual_ab, or causal_survey" >&2; exit 2; }
 if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
   [[ "${RUNTIME_ATTEMPT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
     echo "invalid runtime attempt" >&2; exit 2; }
@@ -349,7 +350,17 @@ else
     MAX_STEPS=${MAX_STEPS:-80}
   else
     MAX_STEPS=${MAX_STEPS:-600}
-    [[ "${MAX_STEPS}" -eq 600 ]] || { echo "formal max steps changed" >&2; exit 2; }
+    if [[ "${ROLE_PAIR_SCOPE:-}" == table3_length ]]; then
+      [[ "${MAX_STEPS}" =~ ^[0-9]+$ \
+         && "${MAX_STEPS}" -ge 600 && "${MAX_STEPS}" -le 3400 ]] || {
+        echo "Table-III max steps outside frozen 600..3400 contract" >&2
+        exit 2
+      }
+    else
+      [[ "${MAX_STEPS}" -eq 600 ]] || {
+        echo "formal max steps changed" >&2; exit 2;
+      }
+    fi
     indices=${FORMAL_INDICES}
   fi
   if [[ -z "${indices}" ]]; then

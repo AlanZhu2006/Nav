@@ -1,0 +1,21 @@
+{
+  "base_candidates_deleted_or_replaced": false,
+  "base_population_independent_verification_job": 16610823,
+  "deferred_expansion_launcher_job": 16614853,
+  "dependency_expansion_plan_independent_verification_job": 16614445,
+  "downstream_target": {
+    "histories": 48,
+    "queries": 96,
+    "raw_arm_role_rows": 192
+  },
+  "fallback_completion_allowed": false,
+  "history_source": "controlled_causal_rgb_geodesic_survey",
+  "query_policy_jobs_submitted": false,
+  "query_policy_outcomes_read": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e",
+  "schema_version": "hm3d_table3_causal_survey_deferred_submission_v1_20260831",
+  "smoke_substitution": false,
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_causal_survey_deferred_b03fd773b66de298",
+  "source_bundle_sha256": "b03fd773b66de29821c8699c794efd3187fc0edd22c8629186f35cb49472852f",
+  "threshold_relaxation": false
+}

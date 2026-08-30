@@ -557,3 +557,191 @@ launcher `16597086` 等待原数组 `afterany` 后按 completion receipt 与 byt
   `16a9daba00f0cd59f50be319d9c781ece0f9474cf1a72ce73ee1a6c39c117691`。
 - 至此 Table II 的会议字段（逐段分母、SR、SPL、Leg-3 hidden-role Novel/Revisit paired
   contrast）均已有封存证据；仍不得把分层 waterfall 相乘为 unconditional 3-leg joint。
+
+## 17. 23:50 CST Table III 历史来源边界与 causal-survey 正式链
+
+### 原 actual-mono source gate 的结论只到 constructibility
+
+- `125/125` factual-A 与 `125/125` construction receipts 已完整。按
+  `0--20/20--30/30--50 m` 三桶，factual-A reached 为 `8/40, 4/40, 3/45`，满足至少
+  40 帧的可用 history 为 `8/40, 2/40, 2/45`；最终可构造 role pair 只有
+  `2/40, 0/40, 0/45`。
+- 该链没有生成任何 query-policy metric 或 completion。它证明原设计把长度分析条件在
+  “NavDP 先自主完成一个同样长的 Goal-A”上后，source population 无法达到三个桶各
+  `16 histories / 10 scenes`；它不是 CEC 的 SR 结果，也不能以 2 条短桶 history 填表。
+
+### 新链测量历史跨度，不冒充 actual NavDP Goal-A
+
+- 新协议 `hm3d_table3_causal_survey_protocol_20260830.json` 保留原三个 query geodesic
+  bins、每桶 16 histories / 10 scenes、每 scene 每桶至多 2 条、Novel/Revisit 距离匹配、
+  `covis < .10 / >= .55`、hidden role、mono-native/mono-CEC、固定 controller、success
+  radius 与按距离增长的预算；唯一改变并明确披露的是 history source。
+- History 是沿冻结 geodesic、按 `0.0376 m / 4.5 deg` 上限生成的物理有序 causal RGB
+  survey。构造阶段使用 simulator pose/depth 生成与审计 query；运行时 replay 只向
+  LingBot/CEC/NavDP 发送 RGB，既不发送 pose，也不读取 survey depth。它回答的是
+  “相同 controller 在不同历史/查询跨度上能否利用被观察过的目标”，不是
+  “NavDP 能否先自主完成 20--50 m Goal-A”。若会议单元格坚持后一个 estimand，这条链只能
+  作为额外 controlled length analysis，不能改名替代。
+- Construction-only DAG 为 `16610812_[0-124%4] -> 16610818 -> 16610823`；run root：
+  `/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_20260830/formal_20260830T150042Z_3d811e0f`。
+  23:50 CST 时 `35/125` completion 已写出，均属于首个短桶，其中 `30` 条可构造、覆盖
+  `30` scenes；无 failed array cell。其余因账户 GPU QOS 当前只给一张 A100 而串行推进。
+- 正式 query 尚未提交。只有 `16610823` 写出并哈希封存
+  `verified=true, formal_policy_evaluation_authorized=true`，且三个桶严格各 16 histories 后，
+  `submit_hm3d_table3_causal_survey_queries_hpc.sh` 才能提交 `48 histories x 2 roles x 2 arms
+  = 192` 个 raw rows；不存在 smoke、partial 或降低门限入口。
+- 为避免语义漂移，aggregate/verifier 已拆成 survey 专用文件：
+  `analyze_hm3d_table3_causal_survey.py` 与
+  `independent_verify_hm3d_table3_causal_survey_result.py`。后者重新读取全部 metric、plan、
+  replay 与 completion artifacts，复核 RGB-only depth receipts、role 未前传、四个
+  arm-role replay 的 history equality、reject exact fallback、SR/SPL、paired gain/loss、McNemar 与
+  scene-cluster bootstrap。相关纯契约回归测试当前 `54 passed`。
+
+### 00:30 CST 后续预检
+
+- construction 已推进到 `40/125` completion，仍为 `0` failed task；array 任务 40/41
+  正在 A100 上运行。此时中长桶尚未开始，因此没有 query SR，也没有提前读取结果。
+- query-side 独立 verifier 进一步改为从 `query_result.final_goal_dist_m <= 1.0 m`
+  重新计算 success，并逐 plan 重算 certificate accept 与 runtime failure；所有 plan 必须
+  继续记录 `role_label_visible=false`。全拒绝 query 除 diffusion seed、trajectory SHA 与
+  executed trace 外，现在还要求完整 `query_result` 相同。
+- artifact seal 不再只哈希“去重后的 digest 集合”，而是哈希排序后的
+  `relative_path + digest` 清单；正式规模必须恰好是 48 个 completion 与 288 个原始
+  metric/plan artifacts。这样同内容文件、文件缺失或路径替换都不能被集合去重掩盖。
+- 与 Table-III、shared-role、Full-Mono 及 controller contract 相关的扩展本地回归为
+  `110 passed`；两套 runtime Python 编译、全部相关 sbatch/shell 语法与
+  `git diff --check` 通过。Habitat 依赖文件仍由锁定 habitat Python 做 `py_compile`，不向
+  memnav 测试环境临时安装 quaternion。
+
+### 00:45 CST result-blind 容量补充链
+
+- 在 `49/125` construction receipts 时，短桶为 `34/40` constructed，中桶前 9 条为
+  `2/9`；其余是 covis、受控 Revisit 或 survey-frame navigability 的构造失败。此时仍未
+  提交任何 query policy，因此这里只能用于判断预注册人口门是否有容量风险，不能形成
+  方法结果或选择 policy 超参。
+- 为避免跑完后降低 `16 histories / 10 scenes` 门限，已在读取任何 query outcome 前冻结
+  `hm3d_table3_navmesh_capacity_replenishment_protocol_20260831.json`：保持三个距离桶、
+  2 m role 距离匹配、60 度 bearing 分离与每 scene 每桶最多 2 条，只把 result-blind
+  navmesh sampling 改成独立 seed `20260831`、`512 points/scene`。它不会 render，不加载
+  NavDP/CEC，也不能授权 policy evaluation。
+- CPU geometry DAG 已提交：smoke `16612322`、100-scene array `16612340`、finalize
+  `16612357`、independent verifier `16612387`；immutable bundle receipt SHA 为
+  `7d4e0756994404da0da7f7dbbbe8fb402cca1e033fe1c474cfe43528dbb60516`。Smoke 只验证
+  geometry runtime，不是结果替代。若原 125 条本身通过，补充容量不会改变冻结人口；若
+  不足，只允许按新的 verified geometry ledger 追加去重候选并重新做 16/16/16 独立人口
+  gate，仍禁止删除旧 receipts、改阈值或读取 policy outcome。
+
+## 18. 2026-08-31 01:20 CST Table III append-only power closure
+
+### Result-blind navmesh capacity 已完整封存
+
+- `16612322 / 16612340 / 16612357 / 16612387` 均为 `COMPLETED 0:0`；独立 verifier
+  返回 `verified=true`，并确认没有读取 query-policy 或 navigation-policy outcome，仍未
+  授权 policy evaluation。
+- 三个桶的去重 geometry capacity 分别为 `200 histories / 100 scenes`、
+  `102 / 54`、`30 / 15`；在原冻结的每桶 `16 histories / 10 scenes` 与每 scene 至多
+  2 条规则下，三个桶均有足够候选容量。capacity summary SHA 为
+  `9faa519882bd0641e6ded9b6d2042e333dfc2c352007197392d9334974820c4d`，独立
+  verifier SHA 为
+  `b21b16ddd9acd941748177e5b927441e94f73867f8c8cc6219ed8f63caa977190`。
+
+### 扩样规则先于完整 census 冻结，且只允许追加
+
+- 新的 selection protocol 要求完整读取全部 `125/125` base construction receipts，保留
+  每一条 base candidate 及其失败收据；只有最终不足 `16 histories` 或 `10 scenes` 的桶
+  才从上述 verified capacity ledger 追加全部未使用候选。顺序固定为 scene-round-robin，
+  不删除、不替换、不改阈值，也不读取任何 policy outcome。
+- CPU plan freezer / independent verifier 已作为依赖链提交为 `16614442 -> 16614445`，
+  run root 为
+  `/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e`；
+  source-bundle SHA 为
+  `a8dd232ef5e64347a7e0ca529d24eedb6cbbe3864a883f02f7260023b85f5eca`。
+  两个 CPU job 仍只因 base array 依赖而 pending。
+
+### 当前调度与后续正式链
+
+- base construction 已写出 `61/125` 哈希收据，其中 `40` 条 constructed、`21` 条
+  geometry-ineligible；所有收据继续记录 `query_policy_outcomes_read=false`，没有 query
+  SR 被生成或读取。余下 array `16610812_[61-124%4]` 的精确 pending reason 是
+  `QOSGrpGRES`；本账号没有重复 GPU 作业。按 HPC 手册应等待 `gpu48` 总额度释放，不能
+  临时换未验证 QoS 或重复提交。
+- 已实现并测试 expansion construction -> merged finalizer -> independent population
+  verifier。它动态执行 verified expansion plan 的每一条 candidate，并且最终仍硬要求
+  `16/16/16 histories`、每桶至少 `10 scenes`、48 histories / 96 queries；base 的 125 条
+  completion ledger 全部进入最终 provenance。
+- merged query 链已提前完成但尚未提交：`48` 个同进程 paired elements，每条同时执行
+  Novel/Revisit × mono-native/mono-CEC，共 `192` 个 raw arm-role rows。扩样 scene 可能不在
+  原 54-scene plan 中，因此 v2 runner 以 sealed merged manifest 自身作为 scene-index
+  namespace，并把 analyzer 与独立 verifier 显式绑定到
+  `hm3d_table3_causal_survey_population_verification_v2_20260831`。不存在 smoke、partial、
+  旧结果替代或降低门限入口。
+- 新链补齐 shared-SSH `yz11502` 身份 gate、local/remote immutable bundle self-test、
+  exact composed-runtime import smoke 与所有 `afterok` 依赖。全部 Table-III 本地测试目前
+  `44 passed`；相关 Python 编译、shell/sbatch 语法检查均通过。
+
+## 19. 2026-08-31 01:55 CST Table III dependency-held formal handoff
+
+- base array 的外部状态未变：`16610812_[61-124%4]` 仍以 `QOSGrpGRES` pending；Slurm
+  估计的最早启动时间是 `2026-08-31 04:20 EDT`，该估计不构成资源保证。没有重复提交
+  base，也没有切换未验证 QoS。
+- 为避免完整 base census 后再等待人工接力，当前有效的 CPU-only deferred launcher 是
+  `16614853`，严格依赖 expansion-plan independent verifier `16614445`，同时绑定 base
+  population verifier `16610823`。本地提交收据是
+  `HM3D_TABLE3_CAUSAL_SURVEY_DEFERRED_V2_SUBMISSION_20260831.json`，SHA 为
+  `84ccc8daf2e24a287bf869bffa929ecb8347b8e9dae31b287587ab17c4783c08`；远端 immutable
+  bundle SHA 为
+  `b03fd773b66de29821c8699c794efd3187fc0edd22c8629186f35cb49472852f`。
+- launcher 只能执行两个 fail-closed 阶段。第一阶段要求完整 `125/125` base receipts，
+  动态执行 verified append-only expansion 的每一个 candidate，再经 merged finalizer 与
+  independent verifier 硬验证三个桶严格 `16/16/16`、每桶至少 10 scenes。第二阶段只有在
+  该 verifier `formal_policy_evaluation_authorized=true` 后才能提交 query；它保留最大预算
+  的正式 history 作为 full-stack gate，再以 `afterok` 提交其余精确 47 histories，最终仍
+  要求 48 completions、96 queries 与 192 raw arm-role rows。gate 本身属于最终总体，不能
+  用作 smoke 或 partial 替代。
+- expansion plan 合法为空时，表示 base 自身已经通过全部冻结人口门，而不是构造失败。
+  launcher 此时不创建伪 expansion，而是在 `16610823` 独立验证原始 base population 后走
+  同一 maximum-budget gate 与 48-history query contract；非空时才走 append-only merged
+  population。两条路径互斥，均禁止旧总体替代、删 receipt 或降低门限。首版 launcher
+  `16614810` 未覆盖这个边界；在它仍为未运行的 `Dependency` 状态时被精确取消，并由
+  `16614853` 替换，因而没有留下运行输出或 policy row。
+- 第一次远端 composed-runtime preflight 在任何 `sbatch` 写操作前拦住缺失的
+  `MemNavData.cec_handoff_contract`。修复没有改变方法或协议：新 bundle 显式包含
+  `cec_handoff_contract / controller_portability_contract /
+  monocular_depth_runtime / certified_relocalization_runtime`，并绑定此前 Table-I/II 验证过的
+  authority runtime closure
+  `82e71f19ee7f4e5233fae499633ce5a233c9c036bb41b9e2bf7d4f0f18effd7d`。
+  第二次 preflight 强制复核各 module 的 `__file__` 来源与 delayed mono-depth transaction
+  API 后通过；相关本地回归为 `58 passed`。
+- 截至本节写入时，`16614853` 仍为 `Dependency`；它没有提交任何 policy GPU job，未生成
+  或读取 partial SR。该结果若完成，论文中仍只能称为 controlled causal-history-length
+  analysis，不能重命名为 actual-NavDP-prefix 结果。
+
+## 20. 2026-08-31 02:02 CST Table III recovery closure and live state
+
+- Slurm 现场先在 `61/125` 后释放三张卡，array 61--63 均以 `0:0` 完成；随后 64--65
+  也完成。当前为 `66/125` base completion receipts：`41 constructed / 25
+  geometry-ineligible`。余下 `16610812_[66-124%4]` 精确 pending reason 又回到
+  `QOSGrpGRES`；
+  `16610818 -> 16610823 -> 16614442 -> 16614445 -> 16614853` 均保持
+  dependency-held。Slurm 的 start estimate 已发生变化，因此不把它写成完成时限或资源保证。
+- 尚无 Table-III query policy job。上面的 construction receipt 只含构造状态；没有 SR、SPL
+  或 arm outcome 被用于改变 population、门限、长度桶或后续作业图。
+- 对已封存 capacity 的逐 fragment 复核澄清了一个容易误读的数字：summary 中
+  `200/102/30` 是按最终每 scene 每桶最多两条计算的 geometry-gate capacity；不可变的
+  100-scene fragments 实际保留短/中/长 `800/307/87` 个确定性 triads。Expansion freezer
+  会在 deficient bin 中对这些 triads 做 identity 去重后追加全部未使用候选。因此长桶除了
+  45 条 base candidates 外，最多还有 87 条当前 seed 的 result-blind rendered-construction
+  尝试；不需要改变 covis、距离、方向、scene breadth 或最终 `16/16/16` 门。
+- 自动 deferred bundle 已经不可变，不能用本地修改偷换正在排队的正式链。为保证万一需要
+  人工恢复时仍执行同一协议，两个 recovery submitter
+  `submit_hm3d_table3_causal_survey_queries_hpc.sh` 与
+  `submit_hm3d_table3_causal_survey_merged_queries_hpc.sh` 现也显式绑定并哈希验证相同 runtime
+  closure；远端 preflight 检查 CEC overlay、LingBot PnP 来源与 delayed mono-depth
+  transaction API 的 module provenance。
+- base recovery 不再直接并发提交 `0-47`。它和 merged/deferred 路径一样，先选冻结总体中
+  computed step budget 最大的 population element 作为完整 full-stack formal gate；只有
+  `afterok` 才提交其余精确 47 条。该 gate 保留在最终 48 条总体中，不能作为 smoke 或
+  partial result。
+- 更新后的 shell/sbatch syntax、`git diff --check` 与同一组契约回归均通过，结果为
+  `58 passed`。这些改动只修复恢复路径的运行时闭包和提交顺序，不修改冻结 population、
+  controller、threshold、query、budget 或 success definition，也没有触发新 job。

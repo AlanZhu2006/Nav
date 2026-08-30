@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 import sys
 
+import numpy as np
+
 from MemNavData.hm3d_fullmono_mixed_role import (
     ARMS,
     DEPTH_SOURCE,
@@ -31,6 +33,7 @@ from MemNavData.run_final14_mono_factorial_episode import (
 SCHEMAS = {
     "goal_a": "hm3d_fullmono_mixed_role_history_v1_20260820",
     "actual_ab": "hm3d_table2_leg3_history_v1_20260829",
+    "causal_survey": "hm3d_table3_causal_survey_history_v1_20260830",
 }
 SCHEMA = SCHEMAS["goal_a"]
 
@@ -49,6 +52,40 @@ def audit_history_contract(
     """Validate and name the immutable history that precedes each query."""
 
     require(history_contract in SCHEMAS, "unsupported history contract")
+    if history_contract == "causal_survey":
+        require(
+            receipt.get("schema_version")
+            == "hm3d_table3_causal_survey_materialized_v1_20260830",
+            "Table-III survey receipt schema changed",
+        )
+        require(
+            receipt.get("history_source")
+            == "controlled_causal_rgb_geodesic_survey"
+            and trace.get("schema_version")
+            == "hm3d_table3_causal_survey_trace_v1_20260830"
+            and trace.get("source_hybrid_route") == "causal_survey",
+            "Table-III history is not the frozen causal survey",
+        )
+        survey = receipt.get("survey_contract")
+        intrinsic = np.asarray(receipt.get("camera_intrinsic"), dtype=float)
+        require(
+            isinstance(survey, dict)
+            and survey.get("runtime_memory_input") == "RGB only"
+            and survey.get("construction_only_simulator_depth") is True
+            and survey.get("metric_depth_for_query_control_or_CEC") is False
+            and int(trace.get("metric_depth_sensor_reads", -1)) == 0,
+            "Table-III survey leaked simulator depth at runtime",
+        )
+        require(
+            intrinsic.shape == (3, 3) and np.isfinite(intrinsic).all()
+            and int(receipt.get("episode_seed", -1))
+            == int(trace.get("episode_seed", -2)) >= 0,
+            "Table-III survey camera/seed receipt changed",
+        )
+        return (
+            len(trace["poses"]), 0,
+            "controlled_causal_rgb_geodesic_survey_replay",
+        )
     if history_contract == "actual_ab":
         require(
             receipt.get("prefix_receipt_schema")
@@ -148,13 +185,20 @@ def main() -> None:
     )
     receipt = json.loads((source_episode / "receipt.json").read_text())
     trace = json.loads((source_episode / "online_a_trace.json").read_text())
-    control_audit = receipt.get("online_a_control_audit")
-    require(
-        isinstance(control_audit, dict) and control_audit.get("ok") is True,
-        "history was not generated under audited native Goal-A control",
-    )
-    require(trace.get("source_hybrid_route") in {"native_sidecar", "phase"},
-            "history route is outside audited mono native Goal-A sources")
+    if args.history_contract == "causal_survey":
+        require(
+            receipt.get("history_source")
+            == "controlled_causal_rgb_geodesic_survey",
+            "history is outside the sealed causal-survey source",
+        )
+    else:
+        control_audit = receipt.get("online_a_control_audit")
+        require(
+            isinstance(control_audit, dict) and control_audit.get("ok") is True,
+            "history was not generated under audited native Goal-A control",
+        )
+        require(trace.get("source_hybrid_route") in {"native_sidecar", "phase"},
+                "history route is outside audited mono native Goal-A sources")
     require(all(plan.get("navdp_depth_source") == "monocular_sidecar"
                 for plan in trace["plans"]),
             "history Goal-A contains a non-mono plan")

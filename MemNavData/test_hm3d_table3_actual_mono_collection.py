@@ -10,6 +10,10 @@ RUNNER = ROOT / "MemNavData/run_hm3d_fullmono_server_scene.sh"
 SBATCH = ROOT / "MemNavData/slurm_hm3d_table3_actual_mono_a.sbatch"
 COLLECTOR = ROOT / "MemNavData/collect_hm3d_table3_actual_mono_a.py"
 SUBMITTER = ROOT / "MemNavData/submit_hm3d_table3_actual_mono_a_hpc.sh"
+PAIR_SBATCH = ROOT / "MemNavData/slurm_hm3d_table3_actual_mono_pair.sbatch"
+DOWNSTREAM_SUBMITTER = (
+    ROOT / "MemNavData/submit_hm3d_table3_actual_mono_downstream_hpc.sh"
+)
 
 
 def test_final_goal_yaw_uses_the_last_nontrivial_path_segment():
@@ -70,3 +74,11 @@ def test_factual_a_bundle_import_tests_the_local_runtime_closure():
     assert "MemNavData/cec_handoff_contract.py" in text
     assert "MemNavData/deterministic_eval_protocol.py" in text
     assert "eval_2leg_habitat.py' --help" in text
+
+
+def test_formal_pair_uses_the_same_lifetime_port_allocator_as_collection():
+    pair = PAIR_SBATCH.read_text()
+    downstream = DOWNSTREAM_SUBMITTER.read_text()
+    assert "MEMNAV_PORT=" not in pair
+    assert "NAVDP_PORT=" not in pair
+    assert "MemNavData/slurm_port_pair.sh" in downstream

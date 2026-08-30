@@ -34,8 +34,6 @@ print(r['scene_index']); print(budget)
 PY
 )
 [[ "${#row[@]}" -eq 2 ]]
-port_key=$(( (${SLURM_JOB_ID} + SLURM_ARRAY_TASK_ID * 71) % 14000 ))
-memnav_port=$((25000 + port_key)); navdp_port=$((memnav_port + 1))
 BASE_SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
 exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   "${BASE_SIF}" env MODE=eval TASK_ROOT="${TASK_ROOT}" \
@@ -47,7 +45,7 @@ exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   RUNTIME_ATTEMPT="table3Pair$(printf '%03d' "${SLURM_ARRAY_TASK_ID}")" \
   BENCH_ROOT="${population}/role_pairs" MAX_STEPS="${row[1]}" \
   HISTORY_CONTRACT=goal_a ROLE_PAIR_SCOPE=table3_length \
-  QUERY_ARMS=mono_native,mono_cec MEMNAV_PORT="${memnav_port}" NAVDP_PORT="${navdp_port}" \
+  QUERY_ARMS=mono_native,mono_cec \
   HAB_PY=/scratch/lg154/conda-envs/habitat/bin/python \
   MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python \
   TASK_RECEIPT="${TASK_RECEIPT}" EXPECTED_TASK_RECEIPT_SHA="${EXPECTED_TASK_RECEIPT_SHA}" \

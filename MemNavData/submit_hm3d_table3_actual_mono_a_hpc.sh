@@ -62,6 +62,7 @@ files=(
   MemNavData/hm3d_table3_actual_mono_execution_protocol_20260830.json
   MemNavData/run_hm3d_fullmono_server_scene.sh
   MemNavData/slurm_hm3d_table3_actual_mono_a.sbatch
+  MemNavData/slurm_port_pair.sh
   MemNavData/test_hm3d_table3_actual_mono_collection.py
 )
 for path in "${files[@]}"; do [[ -f "${path}" && ! -L "${path}" ]] || fail "missing ${path}"; done

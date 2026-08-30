@@ -189,13 +189,24 @@ else
     'import requests; assert "/pip/_vendor/requests/" in requests.__file__'
 fi
 
-port_key=$(( (${SLURM_JOB_ID:-1000} + SCENE_INDEX * 47) % 14000 ))
-MEMNAV_PORT=${MEMNAV_PORT:-$((25000 + port_key))}
-NAVDP_PORT=${NAVDP_PORT:-$((MEMNAV_PORT + 1))}
-for port in "${MEMNAV_PORT}" "${NAVDP_PORT}"; do
-  ! ss -ltn | awk '{print $4}' | grep -Eq "(^|:)${port}$" || {
-    echo "port ${port} in use" >&2; exit 2; }
+# Several independent arrays can share one GPU node.  A job-id hash alone is
+# not a namespace: modulo collisions previously killed otherwise valid formal
+# tasks before server startup.  Always use the repository-wide lifetime-held
+# allocator.  In particular, do not inherit arithmetic ports from a caller:
+# two partially overlapping explicit pairs cannot be made atomic with one
+# block lock.
+PORT_HELPER=""
+for source_root in "${WRAPPER_ROOT}" "${TASK_ROOT}" \
+                   "${SERVER_SOURCE_ROOT}" "${BASE_SOURCE_ROOT}"; do
+  if [[ -r "${source_root}/MemNavData/slurm_port_pair.sh" ]]; then
+    PORT_HELPER=${source_root}/MemNavData/slurm_port_pair.sh
+    break
+  fi
 done
+[[ -n "${PORT_HELPER}" ]] || { echo "missing port allocator" >&2; exit 2; }
+source "${PORT_HELPER}"
+unset MEMNAV_PORT NAVDP_PORT
+claim_slurm_tcp_port_pair h3fullmono 12000 6000 || exit $?
 runtime_tmp=${SLURM_TMPDIR:-/tmp}/h3fullmono_${SLURM_JOB_ID:-local}_${task_label}
 mkdir -p "${runtime_tmp}/memnav" "${runtime_tmp}/navdp"
 MEMNAV_PID= NAVDP_PID=
@@ -206,6 +217,7 @@ cleanup() {
       wait "${pid}" 2>/dev/null || true
     fi
   done
+  release_slurm_tcp_port_pair
 }
 trap cleanup EXIT INT TERM
 (

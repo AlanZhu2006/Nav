@@ -77,6 +77,14 @@ def test_server_readiness_uses_a_real_loopback_connection():
     assert "if ss -ltn | awk '{print $4}'" not in readiness
 
 
+def test_navdp_server_pair_uses_the_shared_lifetime_port_allocator():
+    text = RUNNER.read_text()
+    assert "claim_slurm_tcp_port_pair h3fullmono 12000 6000" in text
+    assert "release_slurm_tcp_port_pair" in text
+    assert "slurm_port_pair.sh" in text
+    assert "unset MEMNAV_PORT NAVDP_PORT" in text
+
+
 def test_portability_runner_accepts_the_frozen_mp3d_replication_scope():
     text = PORTABILITY_RUNNER.read_text()
     assert "consumed_integration|paper_heldout|paper_replication" in text

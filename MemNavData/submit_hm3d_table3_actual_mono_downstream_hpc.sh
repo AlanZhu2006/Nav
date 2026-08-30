@@ -86,6 +86,7 @@ files=(
   MemNavData/slurm_hm3d_table3_actual_mono_analysis.sbatch
   MemNavData/slurm_hm3d_table3_actual_mono_construct.sbatch
   MemNavData/slurm_hm3d_table3_actual_mono_pair.sbatch
+  MemNavData/slurm_port_pair.sh
   MemNavData/slurm_hm3d_table3_actual_mono_population.sbatch
   MemNavData/shared_online_double_revisit_runtime.py
   MemNavData/shared_online_role_pair_contract.py

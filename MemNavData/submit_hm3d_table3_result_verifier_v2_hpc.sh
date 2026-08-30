@@ -7,6 +7,7 @@ ROOT=${ROOT:-/home/asus/Research/Nav-graph-blind}
 SSH_ALIAS=${SSH_ALIAS:-alantorch}
 LOCAL_MEMNAV_PY=${LOCAL_MEMNAV_PY:-/home/asus/miniconda3/envs/memnav/bin/python}
 DOWNSTREAM_RECEIPT=${DOWNSTREAM_RECEIPT:-${ROOT}/MemNavData/HM3D_TABLE3_ACTUAL_MONO_DOWNSTREAM_SUBMISSION_20260830.json}
+OUT_RECEIPT=${OUT_RECEIPT:-MemNavData/HM3D_TABLE3_RESULT_VERIFIER_V2_SUBMISSION_20260830.json}
 TASK_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_expansion_execution_1f4979a7fd37d467
 SAFE=${TASK_ROOT}/MemNavData/slurm_safe_submit.sh
 REMOTE_BUNDLES=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles
@@ -59,7 +60,7 @@ remote "source '${SAFE}'; safe_sbatch --lint-fatal --test-only --partition=cpu_s
 raw=$(remote "source '${SAFE}'; safe_sbatch --lint-fatal --parsable --partition=cpu_short --time=00:20:00 --dependency='afterok:${old_verifier}' --kill-on-invalid-dep=yes --export='${common}' '${sbatch}'")
 job=$(printf '%s\n' "${raw}" | job_id)
 [[ "${job}" =~ ^[0-9]+$ ]] || fail "bad strengthened verifier job id"
-receipt=MemNavData/HM3D_TABLE3_RESULT_VERIFIER_V2_SUBMISSION_20260830.json
+receipt=${OUT_RECEIPT}
 [[ ! -e "${receipt}" ]] || fail "strengthened verifier receipt exists"
 "${LOCAL_MEMNAV_PY}" - "${receipt}" "${job}" "${old_verifier}" \
   "${run_root}" "${wrapper_root}" "${receipt_sha}" <<'PY'

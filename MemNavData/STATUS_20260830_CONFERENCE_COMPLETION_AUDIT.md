@@ -67,6 +67,21 @@
 > HPC 链中；真机仍等待物理执行。论文只会接收最终 independent verifier 通过的数字，
 > Abstract/Introduction 保持作者当前版本不动。
 
+> **16:10 CST Table-III native-crash repair addendum.** v3 factual-A gate
+> `16595631_0` 在 `gh009` 上完成 pinned-navmesh 验证、服务启动和约 18 分钟真实策略推理
+> 后，Habitat evaluator 收到 native `SIGABRT (-6)`；作业未 OOM、未超时，stderr 为空，
+> 且没有写出 `completion.json`。依赖的 remainder 和原下游 DAG 因此全部取消，任何
+> partial artifact 都没有进入 population 或 SR。Clean repair 沿用完全相同的 125 个
+> candidate identity、seed、GLB/navmesh hash、模型、600-step contract、长度桶和门限；
+> 唯一运行时加固是 `PYTHONFAULTHANDLER=1`，并将 GPU 调度固定到已稳定使用的项目
+> A100 partition，以便 native crash 若重现时留下可审计栈。新的正式 factual-A gate/
+> remainder 为 `16596239 -> 16596273`，run root 为
+> `/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_execution_20260830/formal_20260830T080030Z_8ff97ca6`。
+> 重接的完整 DAG 是 `16596354 -> 16596365 -> 16596374 -> 16596376 -> 16596377 ->
+> 16596380 -> 16596401`；最后一级仍从 192 个 raw arm-role rows 独立复算所有正式数字。
+> 新收据继续声明 `partial_results_allowed=false`、`fallback_completion_allowed=false`、
+> `threshold_relaxation=false`。
+
 本文件只回答两个问题：会议清单现在完成到哪里，以及下一份 GPU/真机时间应该花在哪。
 
 ## 1. 当前完成度

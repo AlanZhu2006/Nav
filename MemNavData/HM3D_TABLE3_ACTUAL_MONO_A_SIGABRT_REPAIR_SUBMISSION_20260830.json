@@ -1,0 +1,31 @@
+{
+  "all_frozen_reserves_submitted": true,
+  "arrays": [
+    "0",
+    "1-124%4"
+  ],
+  "candidate_count": 125,
+  "candidate_plan_sha256": "1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d",
+  "factual_A_outcomes_read_at_submission": false,
+  "factual_A_remainder_array_job": 16596273,
+  "fallback_completion_allowed": false,
+  "first_formal_candidate_job": 16596239,
+  "gpu_partitions": "a100_tandon",
+  "native_crash_forensics_enabled": true,
+  "query_policy_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_execution_20260830/formal_20260830T080030Z_8ff97ca6",
+  "schema_version": "hm3d_table3_actual_mono_a_submission_v3_20260830",
+  "supersedes_aborted_jobs": [
+    16594607,
+    16594617,
+    16595187,
+    16595189,
+    16595631,
+    16595636
+  ],
+  "supersession_reason": "The v3 gate completed server startup, pinned-navmesh verification, and live policy inference, then its Habitat evaluator received native SIGABRT before any completion receipt; this clean rerun preserves all 125 identities, seeds, model inputs, navmeshes, budgets, and thresholds, enables crash traceback capture, and uses the stable A100 project partition without reading any policy outcome.",
+  "threshold_relaxation": false,
+  "time_limit": "02:00:00",
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_actual_mono_a_8ff97ca621aa1ae4",
+  "wrapper_bundle_sha256": "8ff97ca621aa1ae4606b0bba4ed35015d688461652d3af03da94e97e95de3ad6"
+}

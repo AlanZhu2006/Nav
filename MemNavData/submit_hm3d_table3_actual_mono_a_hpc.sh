@@ -21,12 +21,19 @@ EXPECTED_TABLE3_PLAN_SHA=1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e833
 REMOTE_BUNDLES=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles
 REMOTE_RESULTS=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_execution_20260830
 SSH_CONTROL_PATH=${SSH_CONTROL_PATH:-$(ssh -G "${SSH_ALIAS}" 2>/dev/null | awk '$1=="controlpath"{v=$2} END{print v}')}
+GPU_PARTITIONS=${GPU_PARTITIONS:-h100_tandon,a100_tandon}
+OUT_RECEIPT=${OUT_RECEIPT:-MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_COMPLETE_SUBMISSION_20260830.json}
+SUPERSEDES_ABORTED_JOBS=${SUPERSEDES_ABORTED_JOBS:-16594607,16594617,16595187,16595189}
+SUPERSESSION_REASON=${SUPERSESSION_REASON:-first chain mixed capacity and recomputed navmeshes; second chain proved pinned geometry but exposed an incomplete immutable Python import closure before evaluator startup; v3 preserves the same candidates and scientific contract while sealing and import-testing the complete local dependency closure}
+export GPU_PARTITIONS SUPERSEDES_ABORTED_JOBS SUPERSESSION_REASON
 
 cd "${ROOT}"
 fail() { echo "ABORT: $*" >&2; exit 2; }
 remote() { timeout 300 ssh -n -T -o BatchMode=yes -o ControlMaster=no -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" "$@"; }
 job_id() { tr -d '\r' | awk -F';' '/^[0-9]+(;|$)/ {print $1; exit}'; }
 [[ -x "${LOCAL_MEMNAV_PY}" && -x "${LOCAL_HAB_PY}" && -S "${SSH_CONTROL_PATH}" ]] || fail "local prerequisite missing"
+[[ "${GPU_PARTITIONS}" =~ ^(h100_tandon|a100_tandon|h100_tandon,a100_tandon)$ ]] || fail "invalid GPU_PARTITIONS"
+[[ -n "${OUT_RECEIPT}" && -n "${SUPERSEDES_ABORTED_JOBS}" && -n "${SUPERSESSION_REASON}" ]] || fail "empty submission provenance"
 timeout 15 ssh -O check -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" >/dev/null 2>&1 || fail "shared SSH unavailable"
 files=(
   MemNavData/arrival_shadow.py
@@ -96,27 +103,30 @@ remote "mkdir -p '${run_root}/sealed_inputs' '${run_root}/factual_a' '${run_root
 common="ALL,WRAPPER_ROOT=${wrapper_root},WRAPPER_RECEIPT=${wrapper_root}/SOURCE_BUNDLE.sha256,EXPECTED_WRAPPER_RECEIPT_SHA=${receipt_sha},TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},RUN_ROOT=${run_root},TABLE3_PLAN=${TABLE3_PLAN},TABLE3_EXECUTION_PROTOCOL=${protocol}"
 safe=${TASK_ROOT}/MemNavData/slurm_safe_submit.sh
 sbatch=${wrapper_root}/MemNavData/slurm_hm3d_table3_actual_mono_a.sbatch
-remote "source '${safe}'; safe_sbatch --lint-fatal --test-only --qos=gpu48 --time=02:00:00 --array=0 --export='${common}' '${sbatch}' >/dev/null"
-remote "source '${safe}'; safe_sbatch --lint-fatal --test-only --qos=gpu48 --time=02:00:00 --array=1-124%4 --export='${common}' '${sbatch}' >/dev/null"
-gate_raw=$(remote "source '${safe}'; safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=02:00:00 --array=0 --export='${common}' '${sbatch}'")
+remote "source '${safe}'; safe_sbatch --lint-fatal --test-only --partition='${GPU_PARTITIONS}' --qos=gpu48 --time=02:00:00 --array=0 --export='${common}' '${sbatch}' >/dev/null"
+remote "source '${safe}'; safe_sbatch --lint-fatal --test-only --partition='${GPU_PARTITIONS}' --qos=gpu48 --time=02:00:00 --array=1-124%4 --export='${common}' '${sbatch}' >/dev/null"
+gate_raw=$(remote "source '${safe}'; safe_sbatch --lint-fatal --parsable --partition='${GPU_PARTITIONS}' --qos=gpu48 --time=02:00:00 --array=0 --export='${common}' '${sbatch}'")
 gate_job=$(printf '%s\n' "${gate_raw}" | job_id)
 [[ "${gate_job}" =~ ^[0-9]+$ ]] || fail "bad first formal candidate job id"
-raw=$(remote "source '${safe}'; safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=02:00:00 --array=1-124%4 --dependency='afterok:${gate_job}' --kill-on-invalid-dep=yes --export='${common}' '${sbatch}'")
+raw=$(remote "source '${safe}'; safe_sbatch --lint-fatal --parsable --partition='${GPU_PARTITIONS}' --qos=gpu48 --time=02:00:00 --array=1-124%4 --dependency='afterok:${gate_job}' --kill-on-invalid-dep=yes --export='${common}' '${sbatch}'")
 job=$(printf '%s\n' "${raw}" | job_id)
 [[ "${job}" =~ ^[0-9]+$ ]] || fail "bad remaining factual Goal-A job id"
-receipt=MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_COMPLETE_SUBMISSION_20260830.json
+receipt=${OUT_RECEIPT}
 [[ ! -e "${receipt}" ]] || fail "submission receipt exists"
 "${LOCAL_MEMNAV_PY}" - "${receipt}" "${gate_job}" "${job}" "${run_root}" "${wrapper_root}" "${receipt_sha}" <<'PY'
-import json,sys
+import json,os,sys
 path,gate,job,run,bundle,bundle_sha=sys.argv[1:]
+supersedes=[int(value) for value in os.environ['SUPERSEDES_ABORTED_JOBS'].split(',')]
 p={'schema_version':'hm3d_table3_actual_mono_a_submission_v3_20260830',
  'first_formal_candidate_job':int(gate),'factual_A_remainder_array_job':int(job),
  'arrays':['0','1-124%4'],'time_limit':'02:00:00',
  'run_root':run,'wrapper_bundle':bundle,'wrapper_bundle_sha256':bundle_sha,
  'candidate_plan_sha256':'1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d',
  'candidate_count':125,'all_frozen_reserves_submitted':True,
- 'supersedes_aborted_jobs':[16594607,16594617,16595187,16595189],
- 'supersession_reason':'first chain mixed capacity and recomputed navmeshes; second chain proved pinned geometry but exposed an incomplete immutable Python import closure before evaluator startup; v3 preserves the same candidates and scientific contract while sealing and import-testing the complete local dependency closure',
+ 'gpu_partitions':os.environ['GPU_PARTITIONS'],
+ 'native_crash_forensics_enabled':True,
+ 'supersedes_aborted_jobs':supersedes,
+ 'supersession_reason':os.environ['SUPERSESSION_REASON'],
  'factual_A_outcomes_read_at_submission':False,
  'query_policy_outcomes_read_at_submission':False,
  'threshold_relaxation':False,'fallback_completion_allowed':False}

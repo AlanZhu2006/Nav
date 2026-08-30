@@ -7,6 +7,7 @@ MODE=${MODE:?set collect, mp3d_collect, smoke, eval, lifelong_b, or table3_a}
 TASK_ROOT=${TASK_ROOT:?set immutable task root}
 WRAPPER_ROOT=${WRAPPER_ROOT:-${TASK_ROOT}}
 QUERY_SOURCE_ROOT=${QUERY_SOURCE_ROOT:-${TASK_ROOT}}
+RUNTIME_CLOSURE_ROOT=${RUNTIME_CLOSURE_ROOT:-}
 SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT:-${TASK_ROOT}}
 BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT:?set verified Final14 mono source root}
 RUN_ROOT=${RUN_ROOT:?set isolated run root}
@@ -155,7 +156,13 @@ HAB_PYTHONPATH=${HAB_SITE}/pip/_vendor
 # transport-only server overlay may deliberately omit unchanged heavy runtime
 # assets (for example NavDP's vendored Depth-Anything package), so expose both
 # the receipt-bound overlay and its receipt-bound base implementation roots.
-PYTHONPATH_PREFIX=${WRAPPER_ROOT}:${WRAPPER_ROOT}/MemNavData:${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData
+PYTHONPATH_PREFIX=${WRAPPER_ROOT}:${WRAPPER_ROOT}/MemNavData
+if [[ -n "${RUNTIME_CLOSURE_ROOT}" ]]; then
+  [[ -d "${RUNTIME_CLOSURE_ROOT}/MemNavData" ]] || {
+    echo "invalid runtime closure root" >&2; exit 2; }
+  PYTHONPATH_PREFIX+=:${RUNTIME_CLOSURE_ROOT}:${RUNTIME_CLOSURE_ROOT}/MemNavData
+fi
+PYTHONPATH_PREFIX+=:${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData
 PYTHONPATH_SUFFIX=${DEPENDENCY_ROOT}:${LIGHTGLUE_REPO}:${INTERNNAV_ROOT}/src/diffusion-policy:${HAB_PYTHONPATH}
 # Both servers use a script-local module named ``policy_agent``.  A single
 # shared sibling order can therefore make NavDP import MemNav's agent (or the

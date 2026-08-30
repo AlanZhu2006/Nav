@@ -372,14 +372,18 @@ contract 没有变化。
   namespace 问题：新版 server 延迟导入 `monocular_depth_runtime`，却解析到旧 base bundle
   中不含 `bind_monocular_depth_transaction` 的同名文件。formal rows 仍为 `0`。
 - 第二轮 exact repair 使用新 run root `policy_runtime_repair_v2`，显式封存当前 mono-depth
-  transaction runtime，并在生产 MemNav Python 中验证 `module.__file__` 精确指向 wrapper，
-  三个 delayed transaction API 均存在；同时保留 evaluator 全导入 preflight 与
-  lifetime-held 动态端口 runner。launcher `16601678` 已生成 smoke `16601690`、formal
-  `16601691_[0-53%4]`、aggregate `16601692`、raw verifier `16601693` 与 meeting verifier
-  `16601694`。截至 19:44 CST，smoke 因 A100 QOS GPU 配额等待，尚未运行。
+  transaction runtime。smoke `16601690` 已完整跑完 native 的两个 80-step queries，CEC
+  arm 在 reset 时暴露同类 namespace fallback：旧 `certified_relocalization_runtime` 缺少
+  authority-policy 两个字段。formal rows 仍为 `0`。
+- 第三轮不再逐文件猜依赖，而是显式绑定已完成 Table-I 正式闭环的完整
+  authority-transaction closure `82e71f19...`。八个关键 runtime 文件与当前仓库 SHA
+  逐字节一致；生产环境检查同时约束 evaluator import、mono transaction API、certificate
+  authority contract 与 PnP module provenance。launcher `16602096` 已生成 smoke `16602104`、
+  formal `16602105_[0-53%4]`、aggregate `16602106`、raw verifier `16602107` 与内含修正版
+  meeting verifier `16602108`。截至 20:03 CST，smoke 等待 A100 配额。
 - 当前 repair immutable bundle：
-  `hm3d_table2_policy_import_repair_ca9966a9ebf56387`，receipt SHA
-  `ca9966a9ebf56387bc2562d420ea0991acf31de8cfc7f84b426ee2aeb3cdd973`。
+  `hm3d_table2_policy_import_repair_e8c4530f3ffc4bfe`，receipt SHA
+  `e8c4530f3ffc4bfe2307b81203bb921815616ace412a43f877e46bd471955773`。
 
 ### 新增 post-seal meeting verifier，防止 Table II 漏报 Leg-1/Leg-2
 
@@ -388,7 +392,8 @@ contract 没有变化。
 meeting verifier 只在最终 policy raw verifier 通过并封存后运行，联结以下哈希绑定输入：
 
 - actual-mono Goal-A source：`131/196`；
-- result-blind factual-B candidate rollouts：`54/183`，来自 `130` 个唯一成功 A history；
+- result-blind factual-B candidate rollouts：`54/183`；上游 materialize 了 `130` 条 eligible
+  成功 A history，实际 183 个 B candidates 覆盖 `67` 条唯一 A，且存在重复 candidate；
 - 其中进入 Leg-3 构造的 supported A+B histories：`41`；
 - 最终 policy verifier 逐 role 复算的 Natural Novel / Revisit / balanced-all Leg-3。
 
@@ -397,9 +402,13 @@ meeting verifier 只在最终 policy raw verifier 通过并封存后运行，联
 unconditional three-leg joint cohort；它报告的是会议要求的逐段 factual waterfall 和
 同 prefix 条件 C 效应。这是补齐可辨识口径，不是 fallback，也不修改任何 rollout。
 
+修正版 verifier 已用全部真实 sealed upstream receipts 和一个临时零值 policy receipt 做
+pre-policy dry-run，独立复现 `131/196, 54/183, 130 eligible, 67 covered, 41 supported,
+20 constructible`；没有读取真实 Leg-3 outcome。
+
 相关本地回执与测试：
 
-- `HM3D_TABLE2_POLICY_RUNTIME_REPAIR_V2_SUBMISSION_20260830.json`；
+- `HM3D_TABLE2_POLICY_AUTHORITY_CLOSURE_V3_SUBMISSION_20260830.json`；
 - `independent_verify_hm3d_table2_meeting_result.py`；
 - synthetic provenance / escaped-identity / absolute-sidecar 三项回归测试全部通过。
 

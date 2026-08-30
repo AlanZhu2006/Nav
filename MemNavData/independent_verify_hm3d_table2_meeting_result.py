@@ -93,10 +93,20 @@ def verify(
         and parent_verification.get("authorized") is True,
         "Goal-A independent verifier did not authorize the source",
     )
-    parent_episodes = {
-        (str(row["scene"]), str(row["episode"]))
-        for row in parent_manifest["episodes"]
-    }
+    parent_rows = parent_manifest["episodes"]
+    if isinstance(parent_rows, dict):
+        parent_episodes = {
+            (str(scene), str(row["episode"]))
+            for scene, rows in parent_rows.items()
+            for row in rows
+        }
+    elif isinstance(parent_rows, list):
+        parent_episodes = {
+            (str(row["scene"]), str(row["episode"]))
+            for row in parent_rows
+        }
+    else:
+        raise RuntimeError("Goal-A parent episode layout changed")
     goal_a_attempts = int(parent_verification["goal_a_sources"])
     goal_a_successes = int(parent_verification["goal_a_successes"])
     require(
@@ -197,9 +207,11 @@ def verify(
         materialized_a_counts.add(int(ab_receipt["source_materialized_A_histories"]))
         candidate_rows = ab_receipt["benchmark_audit"]["rows"]
         require(len(candidate_rows) == b_rollouts, f"{name}: B candidate rows changed")
+        source_a_identities: set[tuple[str, str]] = set()
         for row in candidate_rows:
             identity = (str(row["scene"]), base_episode(str(row["episode"])))
             require(identity in parent_episodes, f"{name}: B candidate escaped Goal A")
+            source_a_identities.add(identity)
             b_candidate_a_identities.add(identity)
         factual_b_rollouts += b_rollouts
         factual_b_successes += b_successes
@@ -209,6 +221,10 @@ def verify(
             "factual_B_rollouts": b_rollouts,
             "factual_B_successes": b_successes,
             "supported_AB_prefixes": source_supported,
+            "candidate_covered_unique_A_histories": len(source_a_identities),
+            "repeated_B_candidates_beyond_unique_A": (
+                b_rollouts - len(source_a_identities)
+            ),
             "population_sha256": source_population_sha,
             "independent_verification_sha256": source_verification_sha,
         }
@@ -216,9 +232,9 @@ def verify(
     require(len(materialized_a_counts) == 1, "source A population changed")
     eligible_a_histories = materialized_a_counts.pop()
     require(
-        len(b_candidate_a_identities) == eligible_a_histories
+        0 < len(b_candidate_a_identities) <= eligible_a_histories
         and eligible_a_histories <= goal_a_successes,
-        "B candidates do not reproduce the eligible successful-A set",
+        "B candidates escaped the eligible successful-A set",
     )
     require(
         factual_b_rollouts == int(union_population["intention_to_collect_B"])
@@ -282,7 +298,10 @@ def verify(
         },
         "leg2_novel": {
             "denominator": "result-blind factual-B candidate rollouts from successful Goal-A prefixes",
-            "eligible_unique_A_histories": eligible_a_histories,
+            "eligible_materialized_A_histories": eligible_a_histories,
+            "candidate_covered_unique_A_histories": len(
+                b_candidate_a_identities
+            ),
             "attempts": factual_b_rollouts,
             "successes": factual_b_successes,
             "sr": factual_b_successes / factual_b_rollouts,
@@ -302,9 +321,10 @@ def verify(
             "unconditional_three_leg_joint_sr_reported": False,
             "selected_prefix_joint_equals_conditional_C": True,
             "reason": (
-                "The powered B stage contains multiple result-blind B candidates "
-                "for some successful A prefixes; multiplying stage rates would "
-                "not define one intention-to-treat three-leg cohort."
+                "The powered B stage materializes an eligible successful-A pool "
+                "but samples multiple result-blind B candidates for only a subset "
+                "of those A prefixes; multiplying stage rates would not define one "
+                "intention-to-treat three-leg cohort."
             ),
         },
         "receipts": {

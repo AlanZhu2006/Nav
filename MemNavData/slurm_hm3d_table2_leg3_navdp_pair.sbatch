@@ -28,6 +28,8 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${EXPECTED_CONSTRUCTION_VERIFICATION_SHA:?}" "${FORMAL_RUN_ROOT:?}"
 : "${POLICY_LAUNCHER_ROOT:?}" "${POLICY_LAUNCHER_RECEIPT:?}"
 : "${EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA:?}"
+: "${RUNTIME_CLOSURE_ROOT:?}" "${RUNTIME_CLOSURE_RECEIPT:?}"
+: "${EXPECTED_RUNTIME_CLOSURE_RECEIPT_SHA:?}"
 ROLE_PAIR_SCOPE=${ROLE_PAIR_SCOPE:-paper_heldout}
 
 SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
@@ -46,6 +48,11 @@ fail() { echo "ABORT: $*" >&2; exit 2; }
   fail "policy wrapper receipt changed"
 (cd "${POLICY_LAUNCHER_ROOT}" && sha256sum -c --quiet \
   "${POLICY_LAUNCHER_RECEIPT}") || fail "policy wrapper changed"
+[[ "$(sha256sum "${RUNTIME_CLOSURE_RECEIPT}" | awk '{print $1}')" == \
+   "${EXPECTED_RUNTIME_CLOSURE_RECEIPT_SHA}" ]] || \
+  fail "runtime closure receipt changed"
+(cd "${RUNTIME_CLOSURE_ROOT}" && sha256sum -c --quiet \
+  "${RUNTIME_CLOSURE_RECEIPT}") || fail "runtime closure changed"
 [[ "$(sha256sum "${BASE_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_BASE_RECEIPT_SHA}" ]] || fail "base receipt changed"
 (cd "${BASE_SOURCE_ROOT}" && sha256sum -c --quiet "${BASE_RECEIPT}") || \
@@ -97,6 +104,7 @@ fi
 exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   "${SIF}" env MODE="${MODE}" TASK_ROOT="${TASK_ROOT}" \
   WRAPPER_ROOT="${POLICY_LAUNCHER_ROOT}" QUERY_SOURCE_ROOT="${TASK_ROOT}" \
+  RUNTIME_CLOSURE_ROOT="${RUNTIME_CLOSURE_ROOT}" \
   SERVER_SOURCE_ROOT="${SERVER_SOURCE_ROOT}" \
   SERVER_SOURCE_RECEIPT="${SERVER_SOURCE_RECEIPT}" \
   EXPECTED_SERVER_SOURCE_RECEIPT_SHA="${EXPECTED_SERVER_SOURCE_RECEIPT_SHA}" \

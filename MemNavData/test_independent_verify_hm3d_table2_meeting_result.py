@@ -141,7 +141,8 @@ def test_builds_complete_factual_waterfall(tmp_path: Path) -> None:
     assert result["verified"] is True
     assert result["leg1_novel"]["successes"] == 3
     assert result["leg1_novel"]["attempts"] == 4
-    assert result["leg2_novel"]["eligible_unique_A_histories"] == 3
+    assert result["leg2_novel"]["eligible_materialized_A_histories"] == 3
+    assert result["leg2_novel"]["candidate_covered_unique_A_histories"] == 3
     assert result["leg2_novel"]["successes"] == 2
     assert result["leg2_novel"]["attempts"] == 3
     assert result["leg2_novel"]["supported_AB_prefixes"] == 2
@@ -162,6 +163,44 @@ def test_accepts_absolute_path_sha256_sidecars(tmp_path: Path) -> None:
         policy_verification_path=policy,
     )
     assert result["verified"] is True
+
+
+def test_accepts_scene_keyed_parent_episode_manifest(tmp_path: Path) -> None:
+    parent, union, construction, policy = fixture(tmp_path)
+    payload = json.loads(parent.read_text())
+    grouped: dict[str, list[dict]] = {}
+    for row in payload["episodes"]:
+        grouped.setdefault(row["scene"], []).append({"episode": row["episode"]})
+    payload["episodes"] = grouped
+    write_json(parent, payload, sidecar=False)
+    parent_sha = sha256(parent)
+    for source_name in ("original_v4", "natural_b_expansion"):
+        receipt = tmp_path / source_name / "ab_population/population_receipt.json"
+        source = json.loads(receipt.read_text())
+        source["parent_manifest_sha256"] = parent_sha
+        write_json(receipt, source, sidecar=False)
+        population = tmp_path / source_name / "population/population.json"
+        pop = json.loads(population.read_text())
+        pop["AB_population_receipt_sha256"] = sha256(receipt)
+        write_json(population, pop)
+        union_population = union / "population/population.json"
+        merged = json.loads(union_population.read_text())
+        for row in merged["source_populations"]:
+            if row["name"] == source_name:
+                row["population_sha256"] = sha256(population)
+        write_json(union_population, merged)
+    union_population = union / "population/population.json"
+    union_verification = union / "independent_population_union_verification.json"
+    verification = json.loads(union_verification.read_text())
+    verification["population_sha256"] = sha256(union_population)
+    write_json(union_verification, verification)
+    result = verify(
+        parent_manifest_path=parent,
+        source_union_root=union,
+        construction_verification_path=construction,
+        policy_verification_path=policy,
+    )
+    assert result["leg1_novel"]["attempts"] == 4
 
 
 def test_rejects_b_candidate_outside_goal_a(tmp_path: Path) -> None:
@@ -192,3 +231,36 @@ def test_rejects_b_candidate_outside_goal_a(tmp_path: Path) -> None:
             construction_verification_path=construction,
             policy_verification_path=policy,
         )
+
+
+def test_reports_candidate_coverage_below_materialized_a(tmp_path: Path) -> None:
+    parent, union, construction, policy = fixture(tmp_path)
+    source = tmp_path / "natural_b_expansion"
+    receipt = source / "ab_population/population_receipt.json"
+    payload = json.loads(receipt.read_text())
+    payload["benchmark_audit"]["rows"][0] = {
+        "scene": "s0", "episode": "episode_0000__natural_b_04"
+    }
+    write_json(receipt, payload, sidecar=False)
+    population = source / "population/population.json"
+    pop = json.loads(population.read_text())
+    pop["AB_population_receipt_sha256"] = sha256(receipt)
+    write_json(population, pop)
+    union_population = union / "population/population.json"
+    merged = json.loads(union_population.read_text())
+    for row in merged["source_populations"]:
+        if row["name"] == "natural_b_expansion":
+            row["population_sha256"] = sha256(population)
+    write_json(union_population, merged)
+    union_verification = union / "independent_population_union_verification.json"
+    verification = json.loads(union_verification.read_text())
+    verification["population_sha256"] = sha256(union_population)
+    write_json(union_verification, verification)
+    result = verify(
+        parent_manifest_path=parent,
+        source_union_root=union,
+        construction_verification_path=construction,
+        policy_verification_path=policy,
+    )
+    assert result["leg2_novel"]["eligible_materialized_A_histories"] == 3
+    assert result["leg2_novel"]["candidate_covered_unique_A_histories"] == 2

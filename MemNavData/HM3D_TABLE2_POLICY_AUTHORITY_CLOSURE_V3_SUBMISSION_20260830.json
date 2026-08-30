@@ -1,0 +1,32 @@
+{
+  "arms_changed": false,
+  "budgets_changed": false,
+  "completed_construction_job_verified_before_dependency_free_submission": true,
+  "construction_verification_sha256": "82805d559bf52c0b8ad93084473042a588f0fe91e9ec6b3f91964c56489d0b56",
+  "delayed_transaction_api_verified": true,
+  "dynamic_lifetime_held_port_allocator": true,
+  "fallback_allowed": false,
+  "fresh_policy_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fullmono_lifelong_natural_b_expansion_execution_20260830/formal_20260830T045416Z_1f4979a7/table2_leg3_power/policy_authority_closure_repair_v3",
+  "missing_modules_added": [
+    "MemNavData.cec_handoff_contract",
+    "MemNavData.controller_portability_contract",
+    "MemNavData.monocular_depth_runtime",
+    "MemNavData.certified_relocalization_runtime"
+  ],
+  "partial_policy_outcomes_read_at_submission": false,
+  "population_changed": false,
+  "previous_formal_policy_rows": 0,
+  "production_container_evaluator_import_preflight": true,
+  "production_memnav_runtime_module_provenance_verified": true,
+  "replacement_launcher_job": 16602096,
+  "rows_deleted": false,
+  "schema_version": "hm3d_table2_policy_import_repair_submission_v3_20260830",
+  "scientific_protocol_changed": false,
+  "scope": "pre-formal receipt-bound authority runtime closure repair",
+  "superseded_failed_smoke_job": 16601690,
+  "thresholds_changed": false,
+  "validated_runtime_closure_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_navdp_authority_transaction_repair_82e71f19ee7f4e52",
+  "validated_runtime_closure_receipt_sha256": "82e71f19ee7f4e5233fae499633ce5a233c9c036bb41b9e2bf7d4f0f18effd7d",
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table2_policy_import_repair_e8c4530f3ffc4bfe",
+  "wrapper_receipt_sha256": "e8c4530f3ffc4bfe2307b81203bb921815616ace412a43f877e46bd471955773"
+}

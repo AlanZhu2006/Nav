@@ -104,10 +104,17 @@ controller smoke、20--50 m length buckets，以及在现有 22 条 A/B prefix �
   SR/SPL、`+gain/-loss` 与 exact McNemar 只能从 40 个 finalize 后的 hash-sealed run 独立
   复算；verifier 同时检查 Odin `S_i/L_i/P_i/SPL_i`、场景/目标/dataset 绑定、显式
   authority mode，以及 native 臂零 CEC takeover。
+- `ed80bbf`：关闭 exact-goal formal 启动门。每轮必须提供 registry 中的 scene/run ID、
+  external frozen goal、goal SHA 与 sealed-dataset SHA；source、Jetson installed goal、RTX
+  active goal 或 dataset manifest 任一不一致都会在运动仍锁止时失败。Novel/Revisit 不再
+  对应两个 launcher 分支，而只是同一种 frozen goal 是否获得 causal-history support；
+  runtime 不读取 role。Survey 自动候选只保留为 lifelong/engineering demo。
 
 相关非 ROS 单元/协议测试为 `146 passed`；公开 release verifier 为 `failures=0`。三个依赖
 ROS `message_filters` 的 Jetson-side collection tests 无法在当前桌面 conda 环境收集，这一
 点属于环境边界，不是此次代码回归。当前 plan-only verifier 读出 40 个结构合法的注册
 run 和 0 个 outcome，并明确列出四个 scene registry 尚未冻结；因此依旧没有可报告的
-真机 SR/SPL。剩余的真实 P0 已压缩为物理工作：独立 arrival 标定/held-out confirmation、
-候选时刻 pose 收据、scene freeze，然后才执行 20 个 matched pairs。
+真机 SR/SPL。剩余的真实 P0 已基本压缩为物理工作：独立 arrival 标定/held-out
+confirmation、scene goal/start/path freeze 与 Odin 现场验收，然后才执行 20 个 matched
+pairs。若 formal 全部使用 external frozen goal，自动 candidate 的 SportModeState pose
+收据不再阻塞这张主表，只阻塞另行报告的自动 lifelong target-selection demo。

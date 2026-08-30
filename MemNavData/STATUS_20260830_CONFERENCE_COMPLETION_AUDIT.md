@@ -58,10 +58,11 @@ successful A+B prefixes，或改用更大场景数据集；然后原封不动地
 
 ## 5. 当前 HPC
 
-截至 2026-08-30 10:48（北京时间）的再次核验：
+截至 2026-08-30 11:08（北京时间）的再次核验：
 
 - `16540468_[0]`：HM3D B2 true-stack smoke，`h100_tandon`，1 小时，因
-  `Priority` 等待；先前的 scheduler estimate 已撤回，当前 `StartTime=Unknown`；
+  `Priority` 等待；调度器当前给出 `StartTime=2026-08-31 07:55 EDT`，即北京时间
+  2026-08-31 19:55。这个估计依赖 `gh005` 上现有长任务释放，不能视为启动保证；
 - `16540469`：CPU deferred launcher，正确等待 smoke dependency；
 - 没有新的 B2 SR，不能读取 partial result。
 
@@ -91,3 +92,22 @@ successful A+B prefixes，或改用更大场景数据集；然后原封不动地
 
 以下支线不再进入投稿关键路径：GOAT/Replica 适配、X-NavDP、Pi3X/CDEC 继续训练、更多
 controller smoke、20--50 m length buckets，以及在现有 22 条 A/B prefix 上重复采样。
+
+## 7. 真机 formal 软件边界更新
+
+截至本次审计，真机仓库 `AlanZhu2006/MemNav-RealWorld` 已连续完成两项关键修复：
+
+- `d658aed`：增加显式 `mono_native / mono_cec` authority arm。Native 臂保持相同
+  causal-monocular depth 与目标输入，但跳过 certificate 和 direct-local bearing；不再用
+  “CEC 恰好 reject”冒充 native 对照；
+- `7a2f827`：增加 outcome-blind paired-campaign verifier。预注册 JSON 永远保持结果空白，
+  SR/SPL、`+gain/-loss` 与 exact McNemar 只能从 40 个 finalize 后的 hash-sealed run 独立
+  复算；verifier 同时检查 Odin `S_i/L_i/P_i/SPL_i`、场景/目标/dataset 绑定、显式
+  authority mode，以及 native 臂零 CEC takeover。
+
+相关非 ROS 单元/协议测试为 `146 passed`；公开 release verifier 为 `failures=0`。三个依赖
+ROS `message_filters` 的 Jetson-side collection tests 无法在当前桌面 conda 环境收集，这一
+点属于环境边界，不是此次代码回归。当前 plan-only verifier 读出 40 个结构合法的注册
+run 和 0 个 outcome，并明确列出四个 scene registry 尚未冻结；因此依旧没有可报告的
+真机 SR/SPL。剩余的真实 P0 已压缩为物理工作：独立 arrival 标定/held-out confirmation、
+候选时刻 pose 收据、scene freeze，然后才执行 20 个 matched pairs。

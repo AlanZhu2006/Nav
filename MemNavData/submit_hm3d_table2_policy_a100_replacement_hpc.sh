@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Replace the still-pending mixed-GPU Table-II policy launcher with an
-# immutable A100-only launcher.  Construction, population, arms, budgets,
-# thresholds, and result-blind analysis remain byte-identical.
+# Replace a still-pending Table-II policy launcher with an immutable A100-only
+# launcher.  The wrapper also carries the post-seal conference waterfall
+# verifier; construction, population, arms, budgets, thresholds, and the
+# result-blind policy analysis remain byte-identical.
 set -euo pipefail
 umask 0022
 
@@ -24,8 +25,8 @@ PROTOCOL=${SOURCE_RUN_ROOT}/hm3d_table2_leg3_power_protocol.json
 EXPECTED_PROTOCOL_SHA=28352498de740add233b783caad79ac2665f13313ec49912a72ec1db5a6a69b0
 PARENT_MANIFEST=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6/sealed_inputs/parent_manifest.json
 CONSTRUCTION_VERIFY_JOB=${CONSTRUCTION_VERIFY_JOB:-16599079}
-REPLACED_LAUNCHER_JOB=${REPLACED_LAUNCHER_JOB:-16599080}
-OUT_RECEIPT=${OUT_RECEIPT:-MemNavData/HM3D_TABLE2_POLICY_A100_REPLACEMENT_SUBMISSION_20260830.json}
+REPLACED_LAUNCHER_JOB=${REPLACED_LAUNCHER_JOB:-16600350}
+OUT_RECEIPT=${OUT_RECEIPT:-MemNavData/HM3D_TABLE2_POLICY_MEETING_V2_SUBMISSION_20260830.json}
 SSH_CONTROL_PATH=${SSH_CONTROL_PATH:-$(ssh -G "${SSH_ALIAS}" 2>/dev/null | awk '$1=="controlpath"{v=$2} END{print v}')}
 
 cd "${ROOT}"
@@ -44,6 +45,8 @@ timeout 15 ssh -O check -S "${SSH_CONTROL_PATH}" "${SSH_ALIAS}" \
 
 files=(
   MemNavData/slurm_hm3d_table2_leg3_power_policy_launch.sbatch
+  MemNavData/slurm_hm3d_table2_meeting_result.sbatch
+  MemNavData/independent_verify_hm3d_table2_meeting_result.py
   MemNavData/submit_hm3d_table2_policy_a100_replacement_hpc.sh
 )
 for path in "${files[@]}"; do
@@ -122,8 +125,9 @@ exit 2"
 import json,sys
 path,bundle,bundle_sha,verify,old,new=sys.argv[1:]
 p={
- "schema_version":"hm3d_table2_policy_a100_replacement_submission_v1_20260830",
+ "schema_version":"hm3d_table2_policy_a100_replacement_submission_v2_20260830",
  "scope":"infrastructure-only partition binding before policy evaluation",
+ "post_seal_conference_waterfall_verifier_included":True,
  "wrapper_bundle":bundle,"wrapper_receipt_sha256":bundle_sha,
  "construction_independent_verify_job":int(verify),
  "replaced_pending_launcher_job":int(old),

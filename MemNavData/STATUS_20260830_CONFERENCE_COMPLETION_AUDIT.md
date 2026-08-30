@@ -89,7 +89,7 @@
 | 会议项目 | 状态 | 最准确结论 |
 |---|---|---|
 | Table I：跨 controller / dataset | **完成** | HM3D 与 MP3D 上 NavDP、ViNT 的 native/CEC 四行均已 sealed、独立复算；只作 controller 内 paired claim |
-| Table II：HM3D continual by leg | **正式运行中，powered gate 已通过** | exact union 已冻结 41 histories / 20 scenes；hidden-role Leg-3 construction、双臂 policy 与 verifier 尚未完成 |
+| Table II：HM3D continual by leg | **正式运行中，powered gate 与 construction verifier 已通过** | exact union 为 41 supported A+B histories / 20 scenes；41/41 construction 完成后封存 20 个可构造 C histories / 13 scenes，A100 修复链 smoke 正在运行 |
 | Real robot | **未完成** | transport、hash、fail-stop 与启动框架可用；尚无冻结的 paired autonomous outcome |
 | Depth ablation | **完成** | 同 Final14 query population 的 metric/mono/zero 与 CEC 对照完成；Goal-A history 仍是 metric replay，须保留边界 |
 | CEC mechanism | **完成** | proposal、finite-PnP witness、strict authority 与闭环已统一复算；authority 行为成立，阈值特定 SR superiority 未显著 |
@@ -350,3 +350,57 @@ SR 或允许 fallback。
 - 真机目标仍是 4 scenes x 5 matched blocks = 20 pairs / 40 autonomous rollouts。Jetson
   当前离线，且正式运动必须作者现场确认；因此该行仍是“尚未执行”，不能用 plan-only、
   no-motion、手动 trace 或仿真替代。
+
+## 11. 18:55 CST Table-II 完整会议口径与最终 launcher
+
+本节覆盖第 10 节中仍指向 `16600350` 的 launcher 状态；科学 population 与 policy
+contract 没有变化。
+
+### 41/41 construction 已完成，正式 policy 尚未读取
+
+- `16599077_[0-40%4]` 的 41 个 hidden-role C-query construction 全部完成；finalizer
+  `16599078` 与独立 construction verifier `16599079` 均以 `exit=0` 完成。41 条是输入的
+  supported A+B pool；Natural Novel/Revisit 两个查询都能按冻结方向约束构造的最终
+  population 是 `20 histories / 13 scene clusters`，超过预注册 `>=16 / >=10` 门。
+- construction 只建立查询与历史，不运行 `mono_native/mono_cec`，因此截至本节仍没有
+  partial policy SR 被读取。
+- A100 launcher `16601041` 成功建立第一条 policy DAG，但 smoke `16601072` 在两个模型
+  server 正常启动后、evaluator import 阶段暴露旧 task bundle 漏封
+  `MemNavData.cec_handoff_contract`；formal 及其下游自动取消，正式 policy rows 为 `0`。
+- exact repair 以新 run root `policy_import_repair_v1` 封存缺失 handoff contract 及其纯
+  Python dependency，并切换到已验证的 lifetime-held 动态端口 runner。生产容器中的真实
+  evaluator `--help` 导入预检已通过；launcher `16601464` 完成后生成 smoke `16601475`、
+  formal `16601476_[0-53%4]`、aggregate `16601478`、raw verifier `16601479` 与 meeting
+  verifier `16601480`。截至 19:14 CST，smoke 正在 A100 `ga008` 运行。
+- 当前 repair immutable bundle：
+  `hm3d_table2_policy_import_repair_7d6f2591282fae61`，receipt SHA
+  `7d6f2591282fae6191b0f434c10b88d7dc4a05a4f70e248e4464baf6191d1ad9`。
+
+### 新增 post-seal meeting verifier，防止 Table II 漏报 Leg-1/Leg-2
+
+原 policy verifier 的 estimand 有意只覆盖
+`C | successful, supported factual A+B`。它不能单独填完整会议 Table II。新增的独立
+meeting verifier 只在最终 policy raw verifier 通过并封存后运行，联结以下哈希绑定输入：
+
+- actual-mono Goal-A source：`131/196`；
+- result-blind factual-B candidate rollouts：`54/183`，来自 `130` 个唯一成功 A history；
+- 其中进入 Leg-3 构造的 supported A+B histories：`41`；
+- 最终 policy verifier 逐 role 复算的 Natural Novel / Revisit / balanced-all Leg-3。
+
+这里 `183` 个 B 是为同一批成功 A prefix 冻结的不同 factual-B candidates，部分 A 会被
+重复使用。因此 verifier 明确禁止把 `131/196`、`54/183` 与条件 C 机械相乘成一个不存在的
+unconditional three-leg joint cohort；它报告的是会议要求的逐段 factual waterfall 和
+同 prefix 条件 C 效应。这是补齐可辨识口径，不是 fallback，也不修改任何 rollout。
+
+相关本地回执与测试：
+
+- `HM3D_TABLE2_POLICY_IMPORT_REPAIR_SUBMISSION_20260830.json`；
+- `independent_verify_hm3d_table2_meeting_result.py`；
+- synthetic provenance / escaped-identity / absolute-sidecar 三项回归测试全部通过。
+
+### Table III 同步状态
+
+原 125-candidate factual-A array 已启动到 index 84：当前 `69 COMPLETED / 13 FAILED /
+2 RUNNING`，其余保持 array throttle 排队。13 个失败 identity 不删除、不替换；exact-repair
+launcher `16597086` 等待原数组 `afterany` 后按 completion receipt 与 byte hash 精确补齐
+同一身份，再封存三个长度桶各 16 histories。

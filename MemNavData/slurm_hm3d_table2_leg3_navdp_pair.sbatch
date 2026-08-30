@@ -26,10 +26,12 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${SOURCE_RUN_ROOT:?}" "${BENCH_ROOT:?}" "${PARENT_MANIFEST:?}"
 : "${PROTOCOL:?}" "${CONSTRUCTION_VERIFICATION:?}"
 : "${EXPECTED_CONSTRUCTION_VERIFICATION_SHA:?}" "${FORMAL_RUN_ROOT:?}"
+: "${POLICY_LAUNCHER_ROOT:?}" "${POLICY_LAUNCHER_RECEIPT:?}"
+: "${EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA:?}"
 ROLE_PAIR_SCOPE=${ROLE_PAIR_SCOPE:-paper_heldout}
 
 SIF=/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif
-RUNNER=${TASK_ROOT}/MemNavData/run_hm3d_fullmono_server_scene.sh
+RUNNER=${POLICY_LAUNCHER_ROOT}/MemNavData/run_hm3d_fullmono_server_scene.sh
 fail() { echo "ABORT: $*" >&2; exit 2; }
 
 [[ "${PHASE}" == smoke || "${PHASE}" == formal ]] || fail "invalid phase"
@@ -39,6 +41,11 @@ fail() { echo "ABORT: $*" >&2; exit 2; }
    "${EXPECTED_TASK_RECEIPT_SHA}" ]] || fail "task receipt changed"
 (cd "${TASK_ROOT}" && sha256sum -c --quiet "${TASK_RECEIPT}") || \
   fail "task bundle changed"
+[[ "$(sha256sum "${POLICY_LAUNCHER_RECEIPT}" | awk '{print $1}')" == \
+   "${EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA}" ]] || \
+  fail "policy wrapper receipt changed"
+(cd "${POLICY_LAUNCHER_ROOT}" && sha256sum -c --quiet \
+  "${POLICY_LAUNCHER_RECEIPT}") || fail "policy wrapper changed"
 [[ "$(sha256sum "${BASE_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_BASE_RECEIPT_SHA}" ]] || fail "base receipt changed"
 (cd "${BASE_SOURCE_ROOT}" && sha256sum -c --quiet "${BASE_RECEIPT}") || \
@@ -89,6 +96,7 @@ fi
 
 exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   "${SIF}" env MODE="${MODE}" TASK_ROOT="${TASK_ROOT}" \
+  WRAPPER_ROOT="${POLICY_LAUNCHER_ROOT}" QUERY_SOURCE_ROOT="${TASK_ROOT}" \
   SERVER_SOURCE_ROOT="${SERVER_SOURCE_ROOT}" \
   SERVER_SOURCE_RECEIPT="${SERVER_SOURCE_RECEIPT}" \
   EXPECTED_SERVER_SOURCE_RECEIPT_SHA="${EXPECTED_SERVER_SOURCE_RECEIPT_SHA}" \

@@ -1,0 +1,20 @@
+{
+  "arms_changed": false,
+  "budgets_changed": false,
+  "construction_independent_verify_job": 16599079,
+  "fallback_allowed": false,
+  "policy_gpu_partition": "a100_tandon",
+  "population_changed": false,
+  "post_seal_conference_waterfall_verifier_included": true,
+  "query_policy_outcomes_read_at_submission": false,
+  "replaced_pending_launcher_job": 16600350,
+  "replacement_launcher_job": 16600961,
+  "replacement_submitted_before_obsolete_launcher_cancelled": true,
+  "rows_deleted": false,
+  "schema_version": "hm3d_table2_policy_a100_replacement_submission_v2_20260830",
+  "scientific_protocol_changed": false,
+  "scope": "infrastructure-only partition binding before policy evaluation",
+  "thresholds_changed": false,
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table2_policy_a100_77147622bae17128",
+  "wrapper_receipt_sha256": "77147622bae17128be4f68d91ae43c9d2f2a234f0644a7751fc6d127617f0c33"
+}

@@ -19,11 +19,16 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${SOURCE_RUN_ROOT:?}" "${TABLE2_RUN_ROOT:?}" "${PROTOCOL:?}"
 : "${PARENT_MANIFEST:?}"
 POLICY_GPU_PARTITION=${POLICY_GPU_PARTITION:-a100_tandon}
+POLICY_RUN_NAME=${POLICY_RUN_NAME:-policy}
 POLICY_LAUNCHER_ROOT=${POLICY_LAUNCHER_ROOT:-${TASK_ROOT}}
 POLICY_LAUNCHER_RECEIPT=${POLICY_LAUNCHER_RECEIPT:-${TASK_RECEIPT}}
 EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA=${EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA:-${EXPECTED_TASK_RECEIPT_SHA}}
 [[ "${POLICY_GPU_PARTITION}" == a100_tandon ]] || {
   echo "ABORT: Table-2 formal policy evaluation is pinned to a100_tandon" >&2
+  exit 2
+}
+[[ "${POLICY_RUN_NAME}" =~ ^policy[A-Za-z0-9_.-]*$ ]] || {
+  echo "ABORT: invalid policy run name" >&2
   exit 2
 }
 [[ "$(sha256sum "${POLICY_LAUNCHER_RECEIPT}" | awk '{print $1}')" == \
@@ -54,13 +59,19 @@ PY
 )
 [[ "${#gate[@]}" -eq 4 && "${gate[0]}" -ge 16 && "${gate[1]}" -ge 10 ]]
 last=$((gate[3] - 1))
-formal_root=${TABLE2_RUN_ROOT}/policy
+formal_root=${TABLE2_RUN_ROOT}/${POLICY_RUN_NAME}
+[[ ! -e "${formal_root}" ]] || {
+  echo "ABORT: policy run root already exists: ${formal_root}" >&2
+  exit 2
+}
 mkdir -p "${formal_root}/smoke" "${formal_root}/formal" \
   "${RUN_ROOT:-${TABLE2_RUN_ROOT}}/deferred_submission"
-pair=${TASK_ROOT}/MemNavData/slurm_hm3d_table2_leg3_navdp_pair.sbatch
+pair=${POLICY_LAUNCHER_ROOT}/MemNavData/slurm_hm3d_table2_leg3_navdp_pair.sbatch
 analysis=${TASK_ROOT}/MemNavData/slurm_hm3d_table2_leg3_navdp_analysis.sbatch
+meeting=${POLICY_LAUNCHER_ROOT}/MemNavData/slurm_hm3d_table2_meeting_result.sbatch
 safe=${TASK_ROOT}/MemNavData/slurm_safe_submit.sh
-common="ALL,TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},SOURCE_RUN_ROOT=${SOURCE_RUN_ROOT},BENCH_ROOT=${bench},PARENT_MANIFEST=${PARENT_MANIFEST},PROTOCOL=${PROTOCOL},CONSTRUCTION_VERIFICATION=${verification},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${gate[2]},FORMAL_RUN_ROOT=${formal_root},ROLE_PAIR_SCOPE=paper_heldout"
+common="ALL,TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},SOURCE_RUN_ROOT=${SOURCE_RUN_ROOT},TABLE2_RUN_ROOT=${TABLE2_RUN_ROOT},BENCH_ROOT=${bench},PARENT_MANIFEST=${PARENT_MANIFEST},PROTOCOL=${PROTOCOL},CONSTRUCTION_VERIFICATION=${verification},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${gate[2]},FORMAL_RUN_ROOT=${formal_root},ROLE_PAIR_SCOPE=paper_heldout,POLICY_LAUNCHER_ROOT=${POLICY_LAUNCHER_ROOT},POLICY_LAUNCHER_RECEIPT=${POLICY_LAUNCHER_RECEIPT},EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA=${EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA}"
+meeting_common="${common},POLICY_LAUNCHER_ROOT=${POLICY_LAUNCHER_ROOT},POLICY_LAUNCHER_RECEIPT=${POLICY_LAUNCHER_RECEIPT},EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA=${EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA}"
 source "${safe}"
 safe_sbatch --lint-fatal --test-only --partition="${POLICY_GPU_PARTITION}" \
   --qos=gpu48 --time=01:00:00 \
@@ -70,6 +81,8 @@ safe_sbatch --lint-fatal --test-only --partition="${POLICY_GPU_PARTITION}" \
   --array="0-${last}%4" --export="${common},PHASE=formal" "${pair}" >/dev/null
 safe_sbatch --lint-fatal --test-only --partition=cpu_short \
   --export="${common},MODE=aggregate" "${analysis}" >/dev/null
+safe_sbatch --lint-fatal --test-only --partition=cpu_short \
+  --export="${meeting_common}" "${meeting}" >/dev/null
 
 s_raw=$(safe_sbatch --lint-fatal --parsable \
   --partition="${POLICY_GPU_PARTITION}" --qos=gpu48 --time=01:00:00 \
@@ -92,17 +105,23 @@ v_raw=$(safe_sbatch --lint-fatal --parsable --partition=cpu_short \
   --export="${common},MODE=verify" "${analysis}")
 v_job=$(printf '%s\n' "${v_raw}" | tr -d '\r' | awk -F';' '/^[0-9]+(;|$)/ {print $1; exit}')
 [[ "${v_job}" =~ ^[0-9]+$ ]]
+m_raw=$(safe_sbatch --lint-fatal --parsable --partition=cpu_short \
+  --dependency="afterok:${v_job}" --kill-on-invalid-dep=yes \
+  --export="${meeting_common}" "${meeting}")
+m_job=$(printf '%s\n' "${m_raw}" | tr -d '\r' | awk -F';' '/^[0-9]+(;|$)/ {print $1; exit}')
+[[ "${m_job}" =~ ^[0-9]+$ ]]
 
-receipt=${TABLE2_RUN_ROOT}/policy_submission.json
+receipt=${formal_root}/policy_submission.json
 "${py}" - "${receipt}" "${gate[0]}" "${gate[1]}" "${s_job}" \
-  "${f_job}" "${a_job}" "${v_job}" <<'PY'
+  "${f_job}" "${a_job}" "${v_job}" "${m_job}" <<'PY'
 import json,sys
-path,histories,scenes,smoke,formal,aggregate,verify=sys.argv[1:]
+path,histories,scenes,smoke,formal,aggregate,verify,meeting=sys.argv[1:]
 p={'schema_version':'hm3d_table2_power_policy_submission_v1_20260830',
    'leg3_histories':int(histories),'scene_clusters':int(scenes),
    'policy_gpu_partition':'a100_tandon',
    'smoke_job':int(smoke),'formal_scene_array_job':int(formal),
    'aggregate_job':int(aggregate),'independent_verify_job':int(verify),
+   'conference_meeting_result_verify_job':int(meeting),
    'partial_policy_outcomes_read_at_submission':False,
    'runtime_role_visibility':'none'}
 open(path,'x').write(json.dumps(p,indent=2,sort_keys=True)+'\n')

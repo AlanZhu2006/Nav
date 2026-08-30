@@ -23,6 +23,7 @@ def test_downstream_dag_is_full_power_and_fail_closed():
     assert "FACTUAL_DEPENDENCY_OVERRIDE" in text
     assert "HM3D_TABLE3_ACTUAL_MONO_A_SIGABRT_REPAIR_SUBMISSION_20260830.json" in text
     assert "HM3D_TABLE3_ACTUAL_MONO_A_DIRECTED_GEODESIC_REPAIR_SUBMISSION_20260830.json" in text
+    assert "HM3D_TABLE3_ACTUAL_MONO_DOWNSTREAM_RUNROOT_REPAIR_SUBMISSION_20260830.json" in text
     assert "factual-A receipt and directed repair bind different arrays" in text
     assert "factual dependency override is not the receipt-bound repair verifier" in text
     assert "hm3d_table3_actual_mono_downstream_submission_v2_20260830" in text

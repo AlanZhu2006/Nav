@@ -69,10 +69,27 @@ def materialize_carrier(row: dict, destination: Path) -> dict:
         recompute_navmesh=False,
     )
     try:
+        # Capacity measured the eventual query direction
+        # ``query_start -> first_goal``.  Factual Goal A deliberately traverses
+        # the reverse direction to end at query_start and build causal history.
+        # Detour endpoint projection can make those two directed measurements
+        # differ near polygon boundaries, so verify the frozen capacity receipt
+        # in its original direction and use the reverse path only for rollout.
         ok, distance, points = geodesic(simulator.pathfinder, start, goal)
         require(ok and math.isfinite(distance), "factual Goal-A path is invalid")
-        require(abs(float(distance) - float(geometry["first_goal_geodesic_m"])) <= 0.05,
-                "capacity/factual Goal-A geodesic changed")
+        capacity_ok, capacity_distance, _ = geodesic(
+            simulator.pathfinder, goal, start
+        )
+        require(
+            capacity_ok
+            and math.isfinite(capacity_distance)
+            and abs(
+                float(capacity_distance)
+                - float(geometry["first_goal_geodesic_m"])
+            )
+            <= 0.05,
+            "capacity query-direction geodesic changed",
+        )
         start_yaw = float(first_path_yaw(points, start))
         goal_yaw = final_path_yaw(points, goal)
         camera_height = 0.5

@@ -17,11 +17,14 @@ export PYTHONFAULTHANDLER=1
 : "${SLURM_ARRAY_TASK_ID:?}" "${WRAPPER_ROOT:?}" "${WRAPPER_RECEIPT:?}"
 : "${EXPECTED_WRAPPER_RECEIPT_SHA:?}" "${TASK_ROOT:?}" "${RUN_ROOT:?}"
 : "${TABLE3_PLAN:?}" "${TABLE3_EXECUTION_PROTOCOL:?}" "${REPAIR_PLAN:?}"
+: "${REPAIR_CONTRACT:?}" "${EXPECTED_REPAIR_CONTRACT_SHA:?}"
 [[ "$(sha256sum "${WRAPPER_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_WRAPPER_RECEIPT_SHA}" ]]
 (cd "${WRAPPER_ROOT}" && sha256sum -c --quiet "${WRAPPER_RECEIPT}")
 (cd "$(dirname "${REPAIR_PLAN}")" && \
   sha256sum -c --quiet "$(basename "${REPAIR_PLAN}").sha256")
+[[ "$(sha256sum "${REPAIR_CONTRACT}" | awk '{print $1}')" == \
+   "${EXPECTED_REPAIR_CONTRACT_SHA}" ]]
 /scratch/lg154/conda-envs/memnav/bin/python - "${REPAIR_PLAN}" \
   "${SLURM_ARRAY_TASK_ID}" <<'PY'
 import json,sys
@@ -39,7 +42,7 @@ exec singularity exec --nv -B /scratch/lg154 -B /scratch/yz11502 \
   PARENT_MANIFEST="${TABLE3_PLAN}" PROTOCOL="${TABLE3_EXECUTION_PROTOCOL}" \
   TABLE3_PLAN="${TABLE3_PLAN}" TABLE3_EXECUTION_PROTOCOL="${TABLE3_EXECUTION_PROTOCOL}" \
   SCENE_INDEX="${SLURM_ARRAY_TASK_ID}" \
-  RUNTIME_ATTEMPT="transportRepair$(printf '%03d' "${SLURM_ARRAY_TASK_ID}")" \
+  RUNTIME_ATTEMPT="exactRepair$(printf '%03d' "${SLURM_ARRAY_TASK_ID}")" \
   HAB_PY=/scratch/lg154/conda-envs/habitat/bin/python \
   MEMNAV_PY=/scratch/lg154/conda-envs/memnav/bin/python \
   TASK_RECEIPT="${TASK_RECEIPT}" EXPECTED_TASK_RECEIPT_SHA="${EXPECTED_TASK_RECEIPT_SHA}" \

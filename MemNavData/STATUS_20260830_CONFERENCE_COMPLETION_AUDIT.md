@@ -418,3 +418,47 @@ pre-policy dry-run，独立复现 `131/196, 54/183, 130 eligible, 67 covered, 41
 2 RUNNING`，其余保持 array throttle 排队。13 个失败 identity 不删除、不替换；exact-repair
 launcher `16597086` 等待原数组 `afterany` 后按 completion receipt 与 byte hash 精确补齐
 同一身份，再封存三个长度桶各 16 histories。
+
+## 12. 20:38 CST Table-II 正式运行与 Table-III directed-geodesic 精确修复
+
+### Table II 已进入正式 policy array
+
+- runtime-closure v3 smoke `16602104` 在 A100 上以 `exit=0` 完成，用时 `10:56`；此前三次
+  smoke 暴露的 handoff、mono-depth transaction 与 authority-policy namespace 缺口均未
+  复现。
+- 正式 array `16602105_[0-53%4]` 已启动，后续 aggregate `16602106`、raw verifier
+  `16602107` 与 meeting verifier `16602108` 仍保持依赖锁。运行中只查看 scheduler 与
+  infrastructure log，不读取任何 partial SR。
+
+### Table III 原数组完成，19 个缺失身份全部保留
+
+- 原 factual-A array `16596273` 已结束：125 个冻结 identity 中 `106` 个形成带 SHA 的
+  completion receipt，`19` 个在 receipt 前退出。这个计数来自文件完整性，不解析
+  completion outcome。
+- 失败日志指纹证明旧的单一“transport collision”归因不完整：index `2` 是端口占用；
+  另外 18 个 identity 是 `capacity/factual Goal-A geodesic changed`。它们不是导航失败，
+  也不能通过再次运行旧代码解决。
+- 对同一 pinned navmesh 的 outcome-blind 复算定位了根因：capacity 收据测量
+  `query_start -> first_goal`，factual Goal-A 实际走
+  `first_goal -> query_start`。Detour 的端点投影使这两个有向测量在 18 条中相差
+  `0.064--1.641 m`；旧 collector 错误地用反向距离校验正向收据。
+- 修复保留原 `0.05 m` 门槛，并在收据的原方向重算；反向距离只用于实际 Goal-A 路径。
+  Candidate、goal、三个 length bins、seed、step budget、controller、success radius 与模型
+  均未改变。冻结契约为
+  `hm3d_table3_directed_geodesic_repair_contract_20260830.json`。
+- 已取消会确定性重现错误的旧 launcher `16597086`。新 immutable bundle 为
+  `hm3d_table3_actual_mono_a_transport_repair_3f481a0da0b5b9d0`，receipt SHA
+  `3f481a0da0b5b9d00aa9ec7b0c71f3b45c02ed561c79a736a3a3ca38d2a5d66d`。
+  Launcher `16603024` 从 completion receipt+SHA 冻结全部 19 个 missing identities，提交
+  A100 exact-repair array `16603035` 与 finish verifier `16603036`。重复 launcher
+  `16603049` 因 immutable repair plan 已存在而在导航前拒绝，不产生污染。
+
+### 真机软件链恢复到 formal-ready、运动仍锁止
+
+- Workstation、GitHub 与 Jetson 已同步到 `MemNav-RealWorld` commit `d81a201`；设备工作树
+  干净。新增 camera-recovery 只允许 fail-closed 操作。
+- Jetson 实机发现 RGB-D 帧已 stale 约 212 秒。调用
+  `/navdp_camera_recovery/restart` 后验证新 RGB/depth `11/10` 帧，恢复后
+  `rgbd_age=0.027 s`，并继续保持 `enabled=false, estop=true, cmd=0`。
+- 这关闭的是采集基础设施风险，不是导航结果。Odin1 当前未连接，arrival/path 标定和
+  4 scenes x 5 matched blocks 的 `40` 次正式 rollout 仍未执行，不能由旧工程轨迹替代。

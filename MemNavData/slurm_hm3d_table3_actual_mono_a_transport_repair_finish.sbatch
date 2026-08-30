@@ -15,9 +15,12 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${WRAPPER_ROOT:?}" "${WRAPPER_RECEIPT:?}" "${EXPECTED_WRAPPER_RECEIPT_SHA:?}"
 : "${RUN_ROOT:?}" "${TABLE3_PLAN:?}" "${EXPECTED_TABLE3_PLAN_SHA:?}"
 : "${REPAIR_PLAN:?}" "${REPAIR_ARRAY_JOB:?}"
+: "${REPAIR_CONTRACT:?}" "${EXPECTED_REPAIR_CONTRACT_SHA:?}"
 [[ "$(sha256sum "${WRAPPER_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_WRAPPER_RECEIPT_SHA}" ]]
 (cd "${WRAPPER_ROOT}" && sha256sum -c --quiet "${WRAPPER_RECEIPT}")
+[[ "$(sha256sum "${REPAIR_CONTRACT}" | awk '{print $1}')" == \
+   "${EXPECTED_REPAIR_CONTRACT_SHA}" ]]
 repair_root=$(dirname "${REPAIR_PLAN}")
 out=${repair_root}/completion.json
 test ! -e "${out}"

@@ -45,7 +45,8 @@ def test_server_runner_has_an_explicit_table3_actual_history_mode():
     assert 'collect_hm3d_table3_actual_mono_a.py' in text
     assert '--candidate-plan "${TABLE3_PLAN}"' in text
     assert '--source-root "${WRAPPER_ROOT}"' in text
-    assert 'PYTHONPATH_PREFIX=${WRAPPER_ROOT}:${WRAPPER_ROOT}/MemNavData:' in text
+    assert 'PYTHONPATH_PREFIX=${WRAPPER_ROOT}:${WRAPPER_ROOT}/MemNavData' in text
+    assert 'PYTHONPATH_PREFIX+=:${RUNTIME_CLOSURE_ROOT}' in text
     assert 'SCENE_RANK_FIELD=${SCENE_RANK_FIELD:-final14_scene_rank}' in text
     assert '"${SCENE_RANK_FIELD}" == scene_index' in text
     assert 'QUERY_SOURCE_ROOT=${QUERY_SOURCE_ROOT:-${TASK_ROOT}}' in text
@@ -67,6 +68,15 @@ def test_table3_collection_uses_the_capacity_navmesh_verbatim():
     assert '"--pinned_navmesh", row["asset"]["navmesh_path"]' in text
     assert '"--expected_pinned_navmesh_sha256"' in text
     assert '"runtime_geometry": "content_addressed_pinned_navmesh"' in text
+
+
+def test_capacity_receipt_is_checked_in_its_original_query_direction():
+    text = COLLECTOR.read_text()
+    assert "capacity_ok, capacity_distance, _ = geodesic(" in text
+    assert "simulator.pathfinder, goal, start" in text
+    assert 'float(geometry["first_goal_geodesic_m"])' in text
+    assert '"capacity query-direction geodesic changed"' in text
+    assert '"capacity/factual Goal-A geodesic changed"' not in text
 
 
 def test_factual_a_bundle_import_tests_the_local_runtime_closure():

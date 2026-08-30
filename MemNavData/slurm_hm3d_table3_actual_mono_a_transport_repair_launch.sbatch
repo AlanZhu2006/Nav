@@ -15,11 +15,26 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${WRAPPER_ROOT:?}" "${WRAPPER_RECEIPT:?}" "${EXPECTED_WRAPPER_RECEIPT_SHA:?}"
 : "${TASK_ROOT:?}" "${RUN_ROOT:?}" "${TABLE3_PLAN:?}"
 : "${EXPECTED_TABLE3_PLAN_SHA:?}" "${TABLE3_EXECUTION_PROTOCOL:?}"
+: "${REPAIR_CONTRACT:?}" "${EXPECTED_REPAIR_CONTRACT_SHA:?}"
+REPAIR_NAMESPACE=${REPAIR_NAMESPACE:-table3_a_transport_repair_20260830}
+[[ "${REPAIR_NAMESPACE}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
 [[ "$(sha256sum "${WRAPPER_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_WRAPPER_RECEIPT_SHA}" ]]
 (cd "${WRAPPER_ROOT}" && sha256sum -c --quiet "${WRAPPER_RECEIPT}")
-repair_root=${RUN_ROOT}/table3_a_transport_repair_20260830
-archive=${RUN_ROOT}/failed_attempts/table3_a_transport_repair_20260830
+[[ "$(sha256sum "${REPAIR_CONTRACT}" | awk '{print $1}')" == \
+   "${EXPECTED_REPAIR_CONTRACT_SHA}" ]]
+/scratch/lg154/conda-envs/memnav/bin/python - "${REPAIR_CONTRACT}" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1]))
+assert p['schema_version']=='hm3d_table3_directed_geodesic_repair_contract_v1_20260830'
+assert p['diagnosis']['navigation_outcomes_read'] is False
+assert p['diagnosis']['query_policy_outcomes_read'] is False
+assert p['repair']['candidate_identities_changed'] is False
+assert p['repair']['scientific_thresholds_changed'] is False
+assert p['repair']['fallback_completion_allowed'] is False
+PY
+repair_root=${RUN_ROOT}/${REPAIR_NAMESPACE}
+archive=${RUN_ROOT}/failed_attempts/${REPAIR_NAMESPACE}
 plan=${repair_root}/repair_plan.json
 verify=${repair_root}/independent_verification.json
 mkdir -p "${repair_root}"
@@ -45,7 +60,7 @@ print(','.join(map(str,missing))); print(len(missing))
 PY
 )
 [[ "${#repair_values[@]}" -eq 2 && -n "${repair_values[0]}" ]]
-common="ALL,WRAPPER_ROOT=${WRAPPER_ROOT},WRAPPER_RECEIPT=${WRAPPER_RECEIPT},EXPECTED_WRAPPER_RECEIPT_SHA=${EXPECTED_WRAPPER_RECEIPT_SHA},REPAIR_PLAN=${plan},TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},RUN_ROOT=${RUN_ROOT},TABLE3_PLAN=${TABLE3_PLAN},EXPECTED_TABLE3_PLAN_SHA=${EXPECTED_TABLE3_PLAN_SHA},TABLE3_EXECUTION_PROTOCOL=${TABLE3_EXECUTION_PROTOCOL}"
+common="ALL,WRAPPER_ROOT=${WRAPPER_ROOT},WRAPPER_RECEIPT=${WRAPPER_RECEIPT},EXPECTED_WRAPPER_RECEIPT_SHA=${EXPECTED_WRAPPER_RECEIPT_SHA},REPAIR_PLAN=${plan},REPAIR_CONTRACT=${REPAIR_CONTRACT},EXPECTED_REPAIR_CONTRACT_SHA=${EXPECTED_REPAIR_CONTRACT_SHA},TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},RUN_ROOT=${RUN_ROOT},TABLE3_PLAN=${TABLE3_PLAN},EXPECTED_TABLE3_PLAN_SHA=${EXPECTED_TABLE3_PLAN_SHA},TABLE3_EXECUTION_PROTOCOL=${TABLE3_EXECUTION_PROTOCOL}"
 safe=${TASK_ROOT}/MemNavData/slurm_safe_submit.sh
 repair=${WRAPPER_ROOT}/MemNavData/slurm_hm3d_table3_actual_mono_a_transport_repair.sbatch
 finish=${WRAPPER_ROOT}/MemNavData/slurm_hm3d_table3_actual_mono_a_transport_repair_finish.sbatch

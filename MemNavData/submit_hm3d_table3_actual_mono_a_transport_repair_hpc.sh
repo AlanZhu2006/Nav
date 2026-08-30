@@ -8,6 +8,8 @@ SSH_ALIAS=${SSH_ALIAS:-alantorch}
 LOCAL_MEMNAV_PY=${LOCAL_MEMNAV_PY:-/home/asus/miniconda3/envs/memnav/bin/python}
 LOCAL_HAB_PY=${LOCAL_HAB_PY:-/home/asus/miniconda3/envs/habitat/bin/python}
 ORIGINAL_ARRAY_JOB=16596273
+REPAIR_NAMESPACE=${REPAIR_NAMESPACE:-table3_a_directed_geodesic_repair_20260830}
+SUBMISSION_RECEIPT=${SUBMISSION_RECEIPT:-MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_DIRECTED_GEODESIC_REPAIR_SUBMISSION_20260830.json}
 RUN_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_execution_20260830/formal_20260830T080030Z_8ff97ca6
 TASK_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_expansion_execution_1f4979a7fd37d467
 TASK_RECEIPT=${TASK_ROOT}/SOURCE_BUNDLE.sha256
@@ -46,6 +48,7 @@ files=(
   MemNavData/generate_twoleg.py
   MemNavData/hm3d_fullmono_mixed_role.py
   MemNavData/hm3d_table3_actual_mono_execution_protocol_20260830.json
+  MemNavData/hm3d_table3_directed_geodesic_repair_contract_20260830.json
   MemNavData/independent_verify_hm3d_table3_actual_mono_a_transport_repair.py
   MemNavData/materialize_online_a_traces.py
   MemNavData/mdtec_raw_depth_gate_d.py
@@ -98,21 +101,26 @@ else
   remote "cd '${stage}'; sha256sum -c --quiet SOURCE_BUNDLE.sha256; chmod -R a-w '${stage}'; mv '${stage}' '${wrapper_root}'"
 fi
 execution=${wrapper_root}/MemNavData/hm3d_table3_actual_mono_execution_protocol_20260830.json
-common="ALL,WRAPPER_ROOT=${wrapper_root},WRAPPER_RECEIPT=${wrapper_root}/SOURCE_BUNDLE.sha256,EXPECTED_WRAPPER_RECEIPT_SHA=${receipt_sha},TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},RUN_ROOT=${RUN_ROOT},TABLE3_PLAN=${TABLE3_PLAN},EXPECTED_TABLE3_PLAN_SHA=${EXPECTED_TABLE3_PLAN_SHA},TABLE3_EXECUTION_PROTOCOL=${execution}"
+repair_contract=${wrapper_root}/MemNavData/hm3d_table3_directed_geodesic_repair_contract_20260830.json
+repair_contract_sha=$(sha256sum MemNavData/hm3d_table3_directed_geodesic_repair_contract_20260830.json | awk '{print $1}')
+common="ALL,WRAPPER_ROOT=${wrapper_root},WRAPPER_RECEIPT=${wrapper_root}/SOURCE_BUNDLE.sha256,EXPECTED_WRAPPER_RECEIPT_SHA=${receipt_sha},TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},RUN_ROOT=${RUN_ROOT},TABLE3_PLAN=${TABLE3_PLAN},EXPECTED_TABLE3_PLAN_SHA=${EXPECTED_TABLE3_PLAN_SHA},TABLE3_EXECUTION_PROTOCOL=${execution},REPAIR_NAMESPACE=${REPAIR_NAMESPACE},REPAIR_CONTRACT=${repair_contract},EXPECTED_REPAIR_CONTRACT_SHA=${repair_contract_sha}"
 safe=${TASK_ROOT}/MemNavData/slurm_safe_submit.sh
 launcher=${wrapper_root}/MemNavData/slurm_hm3d_table3_actual_mono_a_transport_repair_launch.sbatch
 remote "source '${safe}'; safe_sbatch --lint-fatal --test-only --partition=cpu_short --dependency='afterany:${ORIGINAL_ARRAY_JOB}' --export='${common}' '${launcher}' >/dev/null"
 raw=$(remote "source '${safe}'; safe_sbatch --lint-fatal --parsable --partition=cpu_short --dependency='afterany:${ORIGINAL_ARRAY_JOB}' --export='${common}' '${launcher}'")
 job=$(printf '%s\n' "${raw}" | job_id)
 [[ "${job}" =~ ^[0-9]+$ ]] || fail "bad repair launcher job id"
-receipt=MemNavData/HM3D_TABLE3_ACTUAL_MONO_A_TRANSPORT_REPAIR_SUBMISSION_20260830.json
+receipt=${SUBMISSION_RECEIPT}
 [[ ! -e "${receipt}" ]] || fail "submission receipt exists"
-"${LOCAL_MEMNAV_PY}" - "${receipt}" "${job}" "${wrapper_root}" "${receipt_sha}" <<'PY'
+"${LOCAL_MEMNAV_PY}" - "${receipt}" "${job}" "${wrapper_root}" \
+  "${receipt_sha}" "${REPAIR_NAMESPACE}" "${repair_contract_sha}" <<'PY'
 import json,sys
-path,job,bundle,bundle_sha=sys.argv[1:]
-p={'schema_version':'hm3d_table3_actual_mono_a_transport_repair_launcher_submission_v1_20260830',
+path,job,bundle,bundle_sha,namespace,contract_sha=sys.argv[1:]
+p={'schema_version':'hm3d_table3_actual_mono_a_directed_geodesic_repair_launcher_submission_v1_20260830',
    'original_factual_A_array_job':16596273,'repair_launcher_job':int(job),
    'wrapper_bundle':bundle,'wrapper_bundle_sha256':bundle_sha,
+   'repair_namespace':namespace,'repair_contract_sha256':contract_sha,
+   'supersedes_cancelled_repair_launcher_job':16597086,
    'navigation_outcomes_read_at_submission':False,
    'query_policy_outcomes_read_at_submission':False,
    'scientific_thresholds_changed':False,'fallback_completion_allowed':False}

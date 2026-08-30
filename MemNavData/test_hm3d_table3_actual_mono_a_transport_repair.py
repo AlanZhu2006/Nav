@@ -16,6 +16,9 @@ VERIFY = (
 LAUNCH = ROOT / "MemNavData/slurm_hm3d_table3_actual_mono_a_transport_repair_launch.sbatch"
 REPAIR = ROOT / "MemNavData/slurm_hm3d_table3_actual_mono_a_transport_repair.sbatch"
 FINISH = ROOT / "MemNavData/slurm_hm3d_table3_actual_mono_a_transport_repair_finish.sbatch"
+CONTRACT = (
+    ROOT / "MemNavData/hm3d_table3_directed_geodesic_repair_contract_20260830.json"
+)
 
 
 def sha(path: Path) -> str:
@@ -97,6 +100,33 @@ def test_repair_dag_is_exact_fail_closed_and_a100_pinned():
     assert "missing_history_indices" in launch
     assert "--array=0-124" not in launch
     assert "i in p['missing_history_indices']" in repair
-    assert "RUNTIME_ATTEMPT=\"transportRepair" in repair
+    assert "RUNTIME_ATTEMPT=\"exactRepair" in repair
+    assert "REPAIR_CONTRACT" in launch
+    assert "EXPECTED_REPAIR_CONTRACT_SHA" in launch
+    assert "REPAIR_NAMESPACE" in launch
     assert "completion_payloads_deserialized':False" in finish
     assert "json.load(completion" not in finish
+
+
+def test_directed_geodesic_repair_changes_no_scientific_identity_or_threshold():
+    contract = json.loads(CONTRACT.read_text())
+    assert contract["diagnosis"]["navigation_outcomes_read"] is False
+    assert contract["diagnosis"]["capacity_direction"] == (
+        "query_start_to_first_goal"
+    )
+    assert contract["diagnosis"]["factual_goal_A_direction"] == (
+        "first_goal_to_query_start"
+    )
+    repair = contract["repair"]
+    for field in (
+        "candidate_identities_changed",
+        "goals_changed",
+        "distance_bins_changed",
+        "model_or_controller_changed",
+        "seed_changed",
+        "step_budget_changed",
+        "success_definition_changed",
+        "scientific_thresholds_changed",
+        "fallback_completion_allowed",
+    ):
+        assert repair[field] is False

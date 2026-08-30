@@ -1,0 +1,11 @@
+{
+  "factual_B_shard_manifest_sha256": "bdc9048b0a1421ba5b405feff6fc1ca2bb8515a50c96c5c99babb5045fe4f3ec",
+  "fallback_completion_allowed": false,
+  "navigation_outcomes_read_at_submission": false,
+  "original_factual_B_array_job": 16592875,
+  "repair_launcher_job": 16594267,
+  "schema_version": "hm3d_natural_b_transport_repair_launcher_submission_v1_20260830",
+  "scientific_thresholds_changed": false,
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_natural_b_transport_repair_fc09859111dde5ad",
+  "wrapper_bundle_sha256": "fc09859111dde5ad68173b251fa035d0ddad996ec3e109955f0ecb3dfcba1d69"
+}

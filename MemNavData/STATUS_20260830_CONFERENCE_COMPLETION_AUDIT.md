@@ -303,3 +303,50 @@ paired history。它同时满足：
 Abstract/Introduction 的前提下压缩重复的实验协议、limitations 与 caption；Tectonic
 重新编译为严格 8 页，正文占 1--6 页、References 从第 7 页开始。会议交付物没有被删掉
 或移入不存在的 supplementary。
+
+## 10. 18:26 CST powered Table-II gate 与 A100 policy 固定
+
+本节是当前权威运行状态，覆盖上文仍把 Table II 写成 22-history constructibility null 的
+历史描述。
+
+### Table II 已形成预注册规模的 result-blind population
+
+- 84 个 factual-B rollout、84 个 factual-prefix check 与独立 population verifier 已全部
+  完成；扩样产生 `19 histories / 13 scenes`，其中 `15` 条为 strong support。
+- 与原始 sealed population 做 exact union 后，Table-II population 为
+  `41 histories / 20 scene clusters`；population SHA 为
+  `341f8102102948fc6467895833c91c9816eb8c5fa9f4505422e8fccf4d3cc0b5`。
+- union verifier 明确记录 `target_met=true`、`result_blind=true`、
+  `leg3_query_navigation_outcomes_read=false`。因此这不是旧 8-history/6-scene null 的包装，
+  而是已经越过原始 `>=40 histories / >=15 scenes` power gate 的新 population。
+- hidden-role C-query construction array `16599077_[0-40%4]` 正式运行；18:26 CST 已推进至
+  indices `23--26`。它完成后依次执行 finalize `16599078` 与 independent verifier
+  `16599079`。在 verifier 前仍不读取任何 query policy outcome。
+
+### 正式 policy evaluation 只固定基础设施，不改变实验
+
+H100 上已两次出现 Habitat evaluator native `SIGABRT`，而相同 identity 的 A100 exact
+repair 已全部完成。为避免已经 powered 的 Table-II policy 链再次掉入相同基础设施故障，
+在 construction verifier 触发前完成了 A100-only replacement：
+
+- 新 immutable launcher bundle：
+  `hm3d_table2_policy_a100_4e11647ad496f6f9`；receipt SHA
+  `4e11647ad496f6f9e0dd0938e58a026a3d7a7098828091659069c5270811add8`；
+- 新 launcher `16600350` 继续只依赖原 independent verifier `16599079`；
+- 旧 mixed-partition launcher `16599080` 在新 job 已被 Slurm 接受后才取消，状态为
+  `CANCELLED`；没有运行过 policy；
+- replacement receipt：
+  `HM3D_TABLE2_POLICY_A100_REPLACEMENT_SUBMISSION_20260830.json`。
+
+替换仅增加 `--partition=a100_tandon`。41-history population、Natural Novel/Revisit C、
+`mono_native/mono_cec` 两臂、actual-A/B history、600-step budget、hidden role、certificate
+门限、aggregate 与 raw independent verifier 均不变；没有删行、降低阈值、读取 partial
+SR 或允许 fallback。
+
+### Table III 与真机仍未完成
+
+- Table III 原 125-candidate array `16596273` 已运行到 index `71`；`72--124` 继续排队。
+  精确补缺 launcher `16597086` 仍等待原数组 `afterany`，不会删除任何失败 identity。
+- 真机目标仍是 4 scenes x 5 matched blocks = 20 pairs / 40 autonomous rollouts。Jetson
+  当前离线，且正式运动必须作者现场确认；因此该行仍是“尚未执行”，不能用 plan-only、
+  no-motion、手动 trace 或仿真替代。

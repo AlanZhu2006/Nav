@@ -18,6 +18,18 @@ export PYTHONDONTWRITEBYTECODE=1
 : "${EXPECTED_SERVER_SOURCE_RECEIPT_SHA:?}"
 : "${SOURCE_RUN_ROOT:?}" "${TABLE2_RUN_ROOT:?}" "${PROTOCOL:?}"
 : "${PARENT_MANIFEST:?}"
+POLICY_GPU_PARTITION=${POLICY_GPU_PARTITION:-a100_tandon}
+POLICY_LAUNCHER_ROOT=${POLICY_LAUNCHER_ROOT:-${TASK_ROOT}}
+POLICY_LAUNCHER_RECEIPT=${POLICY_LAUNCHER_RECEIPT:-${TASK_RECEIPT}}
+EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA=${EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA:-${EXPECTED_TASK_RECEIPT_SHA}}
+[[ "${POLICY_GPU_PARTITION}" == a100_tandon ]] || {
+  echo "ABORT: Table-2 formal policy evaluation is pinned to a100_tandon" >&2
+  exit 2
+}
+[[ "$(sha256sum "${POLICY_LAUNCHER_RECEIPT}" | awk '{print $1}')" == \
+   "${EXPECTED_POLICY_LAUNCHER_RECEIPT_SHA}" ]]
+(cd "${POLICY_LAUNCHER_ROOT}" && sha256sum -c --quiet \
+  "${POLICY_LAUNCHER_RECEIPT}")
 [[ "$(sha256sum "${TASK_RECEIPT}" | awk '{print $1}')" == \
    "${EXPECTED_TASK_RECEIPT_SHA}" ]]
 (cd "${TASK_ROOT}" && sha256sum -c --quiet "${TASK_RECEIPT}")
@@ -50,18 +62,22 @@ analysis=${TASK_ROOT}/MemNavData/slurm_hm3d_table2_leg3_navdp_analysis.sbatch
 safe=${TASK_ROOT}/MemNavData/slurm_safe_submit.sh
 common="ALL,TASK_ROOT=${TASK_ROOT},TASK_RECEIPT=${TASK_RECEIPT},EXPECTED_TASK_RECEIPT_SHA=${EXPECTED_TASK_RECEIPT_SHA},BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT},BASE_RECEIPT=${BASE_RECEIPT},EXPECTED_BASE_RECEIPT_SHA=${EXPECTED_BASE_RECEIPT_SHA},SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT},SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_RECEIPT},EXPECTED_SERVER_SOURCE_RECEIPT_SHA=${EXPECTED_SERVER_SOURCE_RECEIPT_SHA},SOURCE_RUN_ROOT=${SOURCE_RUN_ROOT},BENCH_ROOT=${bench},PARENT_MANIFEST=${PARENT_MANIFEST},PROTOCOL=${PROTOCOL},CONSTRUCTION_VERIFICATION=${verification},EXPECTED_CONSTRUCTION_VERIFICATION_SHA=${gate[2]},FORMAL_RUN_ROOT=${formal_root},ROLE_PAIR_SCOPE=paper_heldout"
 source "${safe}"
-safe_sbatch --lint-fatal --test-only --qos=gpu48 --time=01:00:00 \
+safe_sbatch --lint-fatal --test-only --partition="${POLICY_GPU_PARTITION}" \
+  --qos=gpu48 --time=01:00:00 \
   --array=0 --export="${common},PHASE=smoke" "${pair}" >/dev/null
-safe_sbatch --lint-fatal --test-only --qos=gpu48 --time=01:00:00 \
+safe_sbatch --lint-fatal --test-only --partition="${POLICY_GPU_PARTITION}" \
+  --qos=gpu48 --time=01:00:00 \
   --array="0-${last}%4" --export="${common},PHASE=formal" "${pair}" >/dev/null
 safe_sbatch --lint-fatal --test-only --partition=cpu_short \
   --export="${common},MODE=aggregate" "${analysis}" >/dev/null
 
-s_raw=$(safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=01:00:00 \
+s_raw=$(safe_sbatch --lint-fatal --parsable \
+  --partition="${POLICY_GPU_PARTITION}" --qos=gpu48 --time=01:00:00 \
   --array=0 --export="${common},PHASE=smoke" "${pair}")
 s_job=$(printf '%s\n' "${s_raw}" | tr -d '\r' | awk -F';' '/^[0-9]+(;|$)/ {print $1; exit}')
 [[ "${s_job}" =~ ^[0-9]+$ ]]
-f_raw=$(safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=01:00:00 \
+f_raw=$(safe_sbatch --lint-fatal --parsable \
+  --partition="${POLICY_GPU_PARTITION}" --qos=gpu48 --time=01:00:00 \
   --array="0-${last}%4" --dependency="afterok:${s_job}" \
   --kill-on-invalid-dep=yes --export="${common},PHASE=formal" "${pair}")
 f_job=$(printf '%s\n' "${f_raw}" | tr -d '\r' | awk -F';' '/^[0-9]+(;|$)/ {print $1; exit}')
@@ -84,6 +100,7 @@ import json,sys
 path,histories,scenes,smoke,formal,aggregate,verify=sys.argv[1:]
 p={'schema_version':'hm3d_table2_power_policy_submission_v1_20260830',
    'leg3_histories':int(histories),'scene_clusters':int(scenes),
+   'policy_gpu_partition':'a100_tandon',
    'smoke_job':int(smoke),'formal_scene_array_job':int(formal),
    'aggregate_job':int(aggregate),'independent_verify_job':int(verify),
    'partial_policy_outcomes_read_at_submission':False,

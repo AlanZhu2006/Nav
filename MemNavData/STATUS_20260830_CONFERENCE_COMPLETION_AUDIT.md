@@ -462,3 +462,29 @@ launcher `16597086` 等待原数组 `afterany` 后按 completion receipt 与 byt
   `rgbd_age=0.027 s`，并继续保持 `enabled=false, estop=true, cmd=0`。
 - 这关闭的是采集基础设施风险，不是导航结果。Odin1 当前未连接，arrival/path 标定和
   4 scenes x 5 matched blocks 的 `40` 次正式 rollout 仍未执行，不能由旧工程轨迹替代。
+
+## 13. 20:53 CST 两条正式仿真链同步推进
+
+### Table II：38/54 formal queries 完成，零失败
+
+- `16602105_[0-53%4]` 当前为 `38 COMPLETED / 2 RUNNING / 14 PENDING / 0 FAILED`。
+- aggregate `16602106`、raw verifier `16602107` 与 meeting verifier `16602108` 仍由
+  `afterok` 锁住；未读取任何 partial policy outcome 或 partial SR。
+- 正式数值只会在三个最终节点全部 `exit=0` 后进入论文；否则只允许对原 identity 做
+  基础设施精确修复，不删行、不换场景、不降门槛。
+
+### Table III：directed-geodesic repair 继续运行，下游完整 DAG 已冻结提交
+
+- `16603035` 的 19 个原 identity 当前为
+  `14 COMPLETED / 3 RUNNING / 2 PENDING / 0 FAILED`；完成审计 `16603036` 仍等待该数组。
+- 26 项本地提交前测试通过。新的下游 immutable bundle 为
+  `hm3d_table3_actual_mono_downstream_a6583b0b516371de`，receipt SHA
+  `a6583b0b516371de60f43e46a070b1711a8697a46f54ee0ae6c930a70d8ade2e`。
+- 已提交完整正式链：construction `16608231_[0-124%4]` -> population finalize
+  `16608333` -> independent population verifier `16608340` -> paired query
+  `16608351_[0-47%4]` -> analysis `16608364` -> independent result verifier
+  `16608376`。首节点严格依赖 repair verifier `16603036`，因此不会读取不完整 factual-A。
+- 冻结规模保持为 `125 candidates -> 48 histories -> 96 role queries -> 192 paired
+  arm-role rows`，三个长度桶各 16 histories；`partial_results_allowed=false`、
+  `fallback_completion_allowed=false`、`threshold_relaxation=false`、
+  `smoke_substitution=false`。旧的已取消下游回执保留作审计记录，未覆盖。

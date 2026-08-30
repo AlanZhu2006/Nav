@@ -3,8 +3,9 @@
 set -euo pipefail
 umask 0022
 
-MODE=${MODE:?set collect, mp3d_collect, smoke, eval, or lifelong_b}
+MODE=${MODE:?set collect, mp3d_collect, smoke, eval, lifelong_b, or table3_a}
 TASK_ROOT=${TASK_ROOT:?set immutable task root}
+WRAPPER_ROOT=${WRAPPER_ROOT:-${TASK_ROOT}}
 SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT:-${TASK_ROOT}}
 BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT:?set verified Final14 mono source root}
 RUN_ROOT=${RUN_ROOT:?set isolated run root}
@@ -24,7 +25,7 @@ HISTORY_CONTRACT=${HISTORY_CONTRACT:-goal_a}
 
 [[ "${MODE}" == collect || "${MODE}" == mp3d_collect \
    || "${MODE}" == smoke || "${MODE}" == eval \
-   || "${MODE}" == lifelong_b ]] || {
+   || "${MODE}" == lifelong_b || "${MODE}" == table3_a ]] || {
   echo "invalid MODE=${MODE}" >&2; exit 2; }
 [[ "${SCENE_INDEX}" =~ ^[0-9]+$ ]] || { echo "bad scene index" >&2; exit 2; }
 [[ "${RESUME_INCOMPLETE}" =~ ^[01]$ ]] || {
@@ -35,7 +36,14 @@ if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
   [[ "${RUNTIME_ATTEMPT}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
     echo "invalid runtime attempt" >&2; exit 2; }
 fi
-if [[ "${MODE}" == lifelong_b || "${MODE}" == eval \
+if [[ "${MODE}" == table3_a ]]; then
+  : "${TABLE3_PLAN:?set frozen Table-3 candidate plan}"
+  scene_count=$(${MEMNAV_PY} - "${TABLE3_PLAN}" <<'PY'
+import json,sys
+print(len(json.load(open(sys.argv[1]))["episodes"]))
+PY
+  )
+elif [[ "${MODE}" == lifelong_b || "${MODE}" == eval \
    || "${MODE}" == smoke ]]; then
   scene_count=$(${MEMNAV_PY} - "${PARENT_MANIFEST}" <<'PY'
 import json,sys
@@ -288,8 +296,19 @@ elif [[ "${MODE}" == lifelong_b ]]; then
         --history-index "${history_index}" --hab-python "${HAB_PY}" \
         --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}" \
         --max-steps "${MAX_STEPS}" \
-        >"${task_run}/logs/factual_b_${history_index}.log" 2>&1
+      >"${task_run}/logs/factual_b_${history_index}.log" 2>&1
   done
+elif [[ "${MODE}" == table3_a ]]; then
+  : "${TABLE3_PLAN:?}" "${TABLE3_EXECUTION_PROTOCOL:?}"
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PYTHONPATH_VALUE}" \
+    "${HAB_PY}" -u \
+    "${WRAPPER_ROOT}/MemNavData/collect_hm3d_table3_actual_mono_a.py" \
+      --source-root "${TASK_ROOT}" --run-root "${RUN_ROOT}" \
+      --candidate-plan "${TABLE3_PLAN}" \
+      --execution-protocol "${TABLE3_EXECUTION_PROTOCOL}" \
+      --history-index "${SCENE_INDEX}" --hab-python "${HAB_PY}" \
+      --memnav-port "${MEMNAV_PORT}" --navdp-port "${NAVDP_PORT}" \
+      >"${task_run}/logs/table3_factual_a_${SCENE_INDEX}.log" 2>&1
 else
   BENCH_ROOT=${BENCH_ROOT:?set sealed natural-direction benchmark}
   manifest=${BENCH_ROOT}/manifest.json

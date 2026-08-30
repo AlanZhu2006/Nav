@@ -1,0 +1,48 @@
+{
+  "schema_version": "hm3d_table3_actual_mono_execution_v1_20260830",
+  "frozen_at": "2026-08-30T15:02:00+08:00",
+  "candidate_plan": {
+    "path": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_20260830/plan_20260830T061943Z_3b848b5c/candidate_plan.json",
+    "sha256": "1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d",
+    "independent_verification": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_20260830/plan_20260830T061943Z_3b848b5c/independent_candidate_plan_verification.json",
+    "independent_verification_sha256": "69bf626f6aa6d58ee5affa58aa28fae3653d2e382952e1b385f54f374e4988df",
+    "candidate_count": 125,
+    "factual_A_outcomes_read_at_freeze": false,
+    "query_policy_outcomes_read_at_freeze": false
+  },
+  "factual_A": {
+    "controller": "frozen_navdp_native_sidecar",
+    "depth_source": "monocular_sidecar",
+    "start": "capacity first_goal",
+    "goal": "capacity query_start",
+    "start_yaw": "first nontrivial geodesic segment",
+    "goal_image_yaw": "final nontrivial geodesic segment",
+    "camera_height_m": 0.5,
+    "success_radius_m": 1.0,
+    "execution_horizon": 8,
+    "v_max_m_per_frame": 0.0376,
+    "step_budget_formula": "max(600, ceil(2.5 * first_goal_geodesic_m / 0.0376))",
+    "maximum_steps_cap": 3400,
+    "minimum_successful_history_frames": 40,
+    "terminal_uturn": "off",
+    "terminal_visual_refine": "off",
+    "deterministic_plan_seeds": true,
+    "base_seed": 310000,
+    "metric_depth_for_control": false
+  },
+  "collection": {
+    "candidate_indices": "0-124",
+    "maximum_parallel_gpus": 4,
+    "one_candidate_per_gpu_task": true,
+    "all_frozen_reserves_are_collected": true,
+    "failed_transport_may_be_retried_by_exact_identity": true,
+    "failed_navigation_may_not_be_relabelled_or_removed": true
+  },
+  "guards": {
+    "factual_A_success_may_define_history_eligibility": true,
+    "query_construction_before_query_policy": true,
+    "query_policy_outcomes_read_before_population_seal": false,
+    "threshold_relaxation_after_outcomes": false,
+    "fallback_completion_allowed": false
+  }
+}

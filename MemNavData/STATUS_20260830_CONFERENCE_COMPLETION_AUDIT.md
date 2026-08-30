@@ -200,3 +200,51 @@ run 和 0 个 outcome，并明确列出四个 scene registry 尚未冻结；因�
 confirmation、scene goal/start/path freeze 与 Odin 现场验收，然后才执行 20 个 matched
 pairs。若 formal 全部使用 external frozen goal，自动 candidate 的 SportModeState pose
 收据不再阻塞这张主表，只阻塞另行报告的自动 lifelong target-selection demo。
+
+## 8. 16:40 CST 原始会议目标无 fallback 执行更新
+
+本节覆盖上文早期的“低优先级/可删项/constructibility null 可替代”等排期判断；旧文字仅
+作为过程审计保留。当前唯一完成标准仍是原会议清单：Table II、Table III 与真机正式
+双臂都必须得到预注册规模、完整原始行和独立 verifier，不能以 smoke、旧结果、低样本、
+删项或降低门限补位。
+
+### Table III：正式数组继续，缺失身份已自动化精确修复
+
+- A100 gate `16596239` 已完成；正式 125-candidate factual-A array 为 `16596273`。
+- index `2` 在任何 completion receipt 写出前因两个独立数组的算术端口碰撞退出；这不是
+  policy outcome。其余已完成项不会重跑，数组仍继续执行全部冻结 reserves。
+- 运行器现统一使用节点本地、持有到两个 server 退出的 TCP pair `flock`；collection 和
+  paired-query 均不能再由调用方注入算术端口。修复提交对应 Git commit `94b44dd`。
+- outcome-blind exact-repair launcher `16597086` 已以 `afterany:16596273` 提交。它只按
+  `completion.json` 与 sidecar SHA 的字节完整性冻结 missing indices，完全不反序列化
+  `reached_A`；半成品先逐字节归档，只在 A100 上重跑缺失 identity。repair 完成后必须
+  先验证 `125/125` receipt，才会重新提交 125 constructions、48-history population、
+  96 paired queries、aggregate 与 raw-row independent verifier。实现 commit 为
+  `977c49a`；本地相关契约测试 `23 passed`。
+
+### Table II：H100 native crash 与科学结果分离，转 A100 精确补缺
+
+- 第一轮 outcome-blind repair array `16596509` 的 cell 0 在 gh009 运行 18:28 后由
+  Habitat evaluator `SIGABRT (-6)` 退出，没有 completion receipt；这与此前 H100 原生
+  crash 指纹一致，不是模型失败。该数组已有一个 failed cell，原 `afterok` finish 已不
+  可能成立。
+- 新 A100 repair launcher `16597232` 已先以 `afterany:16596509` 提交；随后才精确取消
+  旧数组剩余 cell 与失效 finish `16596510`，避免继续占用 H100。新 launcher 会再次按
+  receipt 完整性枚举所有仍缺失 history，并归档被取消/崩溃的 partial output；候选、seed、
+  600-step budget、controller、certificate 与统计门限均不改变。
+- 新 repair tag 为 `transport_repair_a100_20260830`，GPU 固定 `a100_tandon`，并使用同一
+  生命周期端口分配器；提交 receipt 明确
+  `navigation_outcomes_read_at_submission=false`、
+  `scientific_thresholds_changed=false`、`fallback_completion_allowed=false`。实现与
+  receipt commit 为 `a7209c8`。launcher 已完成并由独立 verifier 确认仍缺 24 histories、
+  分为 11 个 scene groups，`navigation_outcomes_read=false`；正式 A100 repair/finish 为
+  `16597248 -> 16597249`。
+
+### 真机与论文
+
+- 真机仍为正式 `0/40`，不是失败数字而是尚未物理执行；软件侧 formal CLI 修复已推送
+  `MemNav-RealWorld main` commit `9d83edb`。完成仍需用户在场、Tailscale 认证、独立
+  arrival/path calibration、4 个场景冻结与 20 对自主 rollouts，任何 no-motion 或手动
+  trace 都不会替代。
+- 在 Table II/Table III 最终 verifier 出现前不读取 partial SR。论文 Abstract 与
+  Introduction 保持作者版本不动；最终仅把 verifier-sealed 数字写入会议矩阵与表格。

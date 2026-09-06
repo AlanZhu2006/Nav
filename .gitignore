@@ -32,6 +32,7 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+.ruff_cache/
 .mypy_cache/
 .ipynb_checkpoints
 
@@ -43,6 +44,8 @@ coverage.xml
 
 # --- Environments ---
 .env
+.env.*
+!.env.example
 .venv
 venv/
 ENV/
@@ -114,6 +117,9 @@ NavDP/checkpoints/
 /eval2leg_results*/
 /.diagnostics/
 /.worktrees/
+/eval2leg_out/
+/.ssh/
+/.secrets/
 
 # --- Workspace-owned artifacts maintained outside AlanZhu2006/Nav ---
 /paper/

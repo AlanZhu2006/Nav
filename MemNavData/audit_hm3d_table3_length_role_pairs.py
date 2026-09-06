@@ -42,7 +42,12 @@ def finite_curve(query: dict, steps: int, label: str) -> None:
             f"{label}: eligible support argmax changed")
 
 
-def audit(root: Path) -> dict:
+def audit(
+    root: Path,
+    *,
+    exact_bin_population: dict[str, tuple[int, int]] | None = None,
+    require_route_tangent_fresh: bool = False,
+) -> dict:
     manifest_path = root / "manifest.json"
     digest = sha256(manifest_path)
     require((root / "manifest.json.sha256").read_text().split()
@@ -54,6 +59,16 @@ def audit(root: Path) -> dict:
     scenes: dict[str, set[str]] = {}
     for episode in manifest["episodes"]:
         scene, name = str(episode["scene"]), str(episode["episode"])
+        if require_route_tangent_fresh:
+            require(
+                episode.get("longrange_route_tangent_fresh") is True,
+                f"{scene}/{name}: fresh route-tangent marker is missing",
+            )
+            vertical = float(episode.get("revisit_vertical_error_m", math.inf))
+            require(
+                math.isfinite(vertical) and vertical <= 0.5 + 1e-12,
+                f"{scene}/{name}: fresh Revisit escaped the same-floor stratum",
+            )
         counts[episode["bin_name"]] += 1
         scenes.setdefault(episode["bin_name"], set()).add(scene)
         episode_root = root / scene / name
@@ -131,14 +146,32 @@ def audit(root: Path) -> dict:
             require("analysis_role" not in projected
                     and "covis_curve" not in projected,
                     f"{label}: runtime role/support leak")
-    minimum_histories = int(contract["minimum_histories_per_bin"])
-    minimum_scenes = int(contract["minimum_scene_clusters_per_bin"])
-    for spec in contract["bins_m"]:
-        name = spec["name"]
-        require(counts[name] >= minimum_histories,
-                f"{name}: history power gate failed")
-        require(len(scenes.get(name, set())) >= minimum_scenes,
-                f"{name}: scene-cluster power gate failed")
+    if exact_bin_population is None:
+        minimum_histories = int(contract["minimum_histories_per_bin"])
+        minimum_scenes = int(contract["minimum_scene_clusters_per_bin"])
+        for spec in contract["bins_m"]:
+            name = spec["name"]
+            require(counts[name] >= minimum_histories,
+                    f"{name}: history power gate failed")
+            require(len(scenes.get(name, set())) >= minimum_scenes,
+                    f"{name}: scene-cluster power gate failed")
+        audit_scope = "complete_length_population"
+    else:
+        require(
+            set(counts) == set(exact_bin_population),
+            "selected population contains an unexpected distance bin",
+        )
+        for name, expected in exact_bin_population.items():
+            expected_histories, expected_scenes = expected
+            require(
+                counts[name] == int(expected_histories),
+                f"{name}: exact selected history count changed",
+            )
+            require(
+                len(scenes.get(name, set())) == int(expected_scenes),
+                f"{name}: exact selected scene count changed",
+            )
+        audit_scope = "exact_selected_population"
     return {
         "schema_version": "hm3d_table3_length_role_pair_audit_v1_20260830",
         "ok": True, "manifest_sha256": digest,
@@ -147,6 +180,8 @@ def audit(root: Path) -> dict:
         "query_policy_outcomes_read": False,
         "runtime_role_visibility": "none",
         "online_history": contract["online_history"],
+        "audit_scope": audit_scope,
+        "route_tangent_fresh_required": bool(require_route_tangent_fresh),
     }
 
 

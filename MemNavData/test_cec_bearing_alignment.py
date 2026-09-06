@@ -6,9 +6,13 @@ import pytest
 from MemNavData.cec_bearing_alignment import (
     bounded_turn_delta,
     certified_alignment_turn,
+    certified_route_alignment_turn,
     validate_bounded_turn_trace,
 )
 from MemNavData.cec_handoff_contract import build_handoff_packet
+from MemNavData.route_alignment_contract import (
+    build_route_alignment_packet,
+)
 
 
 def packet(direction=(0.0, 1.0)) -> dict:
@@ -118,3 +122,52 @@ def test_bounded_turn_trace_rejects_missing_observation_progress() -> None:
     with pytest.raises(ValueError, match="sequential"):
         validate_bounded_turn_trace(
             trace, expected_turn_rad=math.radians(75.0))
+
+
+def route_packet(direction=(-1.0, 0.0)) -> dict:
+    proof = {
+        "ok": True,
+        "accepted": True,
+        "reason": "certificate_accepted",
+        "selected_anchor": 40,
+        "selected_anchor_image_sha256": "a" * 64,
+        "certificate": {"accepted": True},
+    }
+    return build_route_alignment_packet(
+        authority_proof=proof,
+        current_frame=64,
+        goal_start_frame=64,
+        target_anchor=40,
+        current_rgb_sha256="b" * 64,
+        goal_image_sha256="c" * 64,
+        anchor_image_sha256="a" * 64,
+        history_edge_receipt_sha256="d" * 64,
+        unit_bearing=direction,
+        tangent_baseline_m=0.30,
+        controller_radius_m=2.5,
+    )
+
+
+def test_route_packet_authorizes_only_rear_tangent() -> None:
+    result = certified_route_alignment_turn({
+        "certified_relocalization_accepted": True,
+        "certified_relocalization_guidance_mode": "monocular_route_tangent",
+        "local_tangent_alignment_packet": route_packet(),
+    })
+    assert result is not None
+    assert result.forward == -1.0
+    assert abs(abs(result.turn_rad) - math.pi) < 1e-12
+
+    assert certified_route_alignment_turn({
+        "certified_relocalization_accepted": True,
+        "certified_relocalization_guidance_mode": "monocular_route_tangent",
+        "local_tangent_alignment_packet": route_packet((1.0, 0.0)),
+    }) is None
+
+
+def test_route_packet_does_not_accept_endpoint_authority() -> None:
+    assert certified_route_alignment_turn({
+        "certified_relocalization_accepted": True,
+        "certified_relocalization_guidance_mode": "endpoint_bearing",
+        "local_tangent_alignment_packet": route_packet(),
+    }) is None

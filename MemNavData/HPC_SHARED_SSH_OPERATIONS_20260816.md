@@ -597,3 +597,21 @@ Flask response 返回时 CUDA work 仍在队列中，随后 Habitat EGL/CUDA 被
 HPC 上不要 `conda activate`，统一使用绝对 interpreter 路径。状态改变命令优先通过
 已验证的共享 PTY；read-only 查询可通过正常工作的 no-PTY channel。本文应作为以后
 所有 HPC 工作的强制 preflight 与故障分类入口。
+
+## 11. 用户文件数配额与全盘空间（2026-09-06 核验）
+
+Torch 上先运行站点命令 `myquota`。`quota -s` 可能因 NFS 权限返回
+`Operation not permitted`；这不表示无法检查配额，也不代表配额无限。
+
+本轮 yz11502 实测：scratch 1.37TB/5TB（27.39%），文件数
+4,897,908/5,000,000（站点显示97%）；与此同时 `df -h /scratch` 显示全盘仍有603TB。
+所以 `Disk quota exceeded` 的检查必须同时看 **用户字节配额和文件数配额**，
+不能拿 `df` 的全盘剩余容量排除配额问题。以上只是2026-09-06快照，不是长期常数。
+
+逐帧JPEG、重复runtime、源代码/依赖快照都应估算文件数预算。只对已确认的实验目录
+做 `du --inodes -s EXACT_RUN_ROOT`；该命令包括目录，链接复用的run也不代表被引用
+源目录的全部占用。避免无目的地递归扫描整个scratch。
+
+准备新的长任务时，优先评估节点临时空间录制、结束后按query/arm归档持久化的可行性，
+并保留内部文件SHA与可恢复索引；这是待验证的存储方案，不可未经verifier兼容检查
+直接改变冻结产物布局。不要自动删除旧失败/成功记录来换空间；先确定恢复与保留范围。

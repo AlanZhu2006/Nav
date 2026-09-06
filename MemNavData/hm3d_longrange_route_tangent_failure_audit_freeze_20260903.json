@@ -1,0 +1,93 @@
+{
+  "schema_version": "hm3d_longrange_route_tangent_failure_audit_freeze_v1_20260903",
+  "frozen_at": "2026-09-03T14:42:55+08:00",
+  "scope": "result-blind diagnostic decomposition after the independently verified 23-history fresh result",
+  "formal_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_c47bec283de0db94",
+  "formal_source_receipt_sha256": "c47bec283de0db94a67375b16f2903e375ee09f807f5837ed82765d612fd11c4",
+  "formal_protocol_sha256": "435fe26646a8c42229230213ff70d9fc07c3d7b746b44641251d4eb4ce84227e",
+  "result_visibility_at_freeze": {
+    "population_frozen_and_independently_verified": true,
+    "technical_gate_running": true,
+    "completed_query_outcomes_read": false,
+    "aggregate_success_rates_read": false
+  },
+  "population": {
+    "primary_histories": 23,
+    "scene_clusters": 8,
+    "balanced_max_two_per_scene_histories": 15
+  },
+  "arms": [
+    "mono_native",
+    "mono_cec_endpoint",
+    "mono_cec_route_tangent"
+  ],
+  "fixed_panels": {
+    "navigation": [
+      "success_count_and_rate",
+      "final_3d_distance_mean_median_p90",
+      "minimum_planned_3d_goal_distance_mean_median_p90",
+      "realized_path_length_mean_median_p90",
+      "steps_mean_median_p90",
+      "termination_reason_counts",
+      "blocked_step_fraction"
+    ],
+    "cec_authority": [
+      "initial_certificate_accept_episode_count",
+      "initial_certificate_reject_episode_count",
+      "selected_anchor_distribution",
+      "fully_rejected_exact_native_count",
+      "initial_proof_equality"
+    ],
+    "route_geometry": [
+      "history_edge_count_distribution",
+      "history_route_extent_m_distribution",
+      "geometry_stream_stop_episode_count_and_reason",
+      "adjacent_pnp_inlier_distribution",
+      "adjacent_pnp_reprojection_rmse_distribution",
+      "final_and_max_route_progress_fraction",
+      "cross_track_error_m_median_and_p90"
+    ],
+    "controller_interface": [
+      "absolute_requested_heading_deg_median_and_p90",
+      "requested_heading_above_90deg_fraction",
+      "requested_heading_at_least_165deg_fraction",
+      "post_navdp_forward_clip_pointgoal_norm_min_and_median",
+      "navdp_critic_max_mean_median_and_fraction_below_minus_0p5"
+    ],
+    "realized_motion": [
+      "rollout_trace_recomputed_planar_path_m",
+      "reported_vs_recomputed_path_error_m",
+      "stationary_transition_count_and_fraction",
+      "vertical_span_m"
+    ]
+  },
+  "fixed_failure_partition_order": [
+    "success",
+    "initial_certificate_reject_exact_native",
+    "post_accept_geometry_stream_failure",
+    "post_accept_stuck_termination",
+    "post_accept_budget_exhaustion",
+    "post_accept_other_termination"
+  ],
+  "paired_decomposition": {
+    "primary_contrast": [
+      "mono_cec_route_tangent",
+      "mono_cec_endpoint"
+    ],
+    "report_every_gain_and_loss": true,
+    "stratify_by_scene_without_dropping_rows": true,
+    "report_balanced_max_two_per_scene_sensitivity": true
+  },
+  "visualization_policy": {
+    "render_all_primary_discordant_pairs": true,
+    "post_hoc_video_is_illustrative_only": true,
+    "video_never_changes_the_frozen_decision": true
+  },
+  "guards": {
+    "formal_summary_and_independent_verifier_must_complete_first": true,
+    "no_new_threshold_or_radius_sweep": true,
+    "no_episode_exclusion_after_outcome_read": true,
+    "no_failure_relabeling_from_video": true,
+    "diagnostic_panel_does_not_change_primary_confirmation_rule": true
+  }
+}

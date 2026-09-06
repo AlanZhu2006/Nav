@@ -695,6 +695,55 @@ def navdp_resample_mixgoal():
     if goal_contrast is not None:
         payload['goal_contrast'] = goal_contrast
     return jsonify(payload)
+
+
+@app.route("/pointgoal_resample", methods=["POST"])
+def navdp_resample_pointgoal():
+    """Read-only pure-PointGoal proposal from the current NavDP FIFO."""
+    global navdp_navigator
+    if navdp_navigator is None:
+        return jsonify({"error": "navigator is not initialized"}), 409
+    batch_size = navdp_navigator.batch_size
+    point_goal_data = json.loads(request.form.get('goal_data'))
+    point_goal_x = np.asarray(point_goal_data['goal_x'])
+    point_goal_y = np.asarray(point_goal_data['goal_y'])
+    point_goal = np.stack(
+        (point_goal_x, point_goal_y, np.zeros_like(point_goal_x)), axis=1)
+
+    image_bytes = request.files['image'].read()
+    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    image = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+    current_image_bgr = image
+    image = image.reshape((batch_size, -1, image.shape[1], 3))
+    depth, depth_receipt = _resolve_observation_depth(
+        image_bytes, current_image_bgr, request.files.get('depth'), batch_size,
+        transaction_token=request.form.get(
+            "monocular_depth_transaction_token"),
+        expected_frame_index=request.form.get(
+            "monocular_depth_frame_index"),
+    )
+
+    before_lengths = [len(queue) for queue in navdp_navigator.memory_queue]
+    before_hashes = memory_queue_fingerprints(navdp_navigator)
+    diffusion_seed = apply_seed(request.form.get('diffusion_seed'))
+    execute_trajectory, all_trajectory, all_values, _trajectory_mask = (
+        navdp_navigator.resample_pointgoal(point_goal, image, depth))
+    after_lengths = [len(queue) for queue in navdp_navigator.memory_queue]
+    after_hashes = memory_queue_fingerprints(navdp_navigator)
+    if after_lengths != before_lengths or after_hashes != before_hashes:
+        return jsonify({"error": "PointGoal resampling mutated NavDP memory"}), 500
+    return jsonify({
+        'trajectory': execute_trajectory.tolist(),
+        'all_trajectory': all_trajectory.tolist(),
+        'all_values': all_values.tolist(),
+        'diffusion_seed': diffusion_seed,
+        **_critic_receipt(all_values),
+        'memory_mutated': False,
+        'queue_lengths': after_lengths,
+        'queue_hashes_before': before_hashes,
+        'queue_hashes_after': after_hashes,
+        **_depth_response_fields(depth_receipt),
+    })
     
 
 if __name__ == "__main__":

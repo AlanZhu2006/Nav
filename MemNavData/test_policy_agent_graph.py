@@ -29,6 +29,24 @@ class CandidateCeilingTest(unittest.TestCase):
             effective_candidate_ceiling(250, -1)
 
 
+class DepthObservationOnlyContractTest(unittest.TestCase):
+    def test_planning_cache_fails_closed(self):
+        agent = object.__new__(MemNavAgent)
+        agent.depth_observation_only = True
+
+        with self.assertRaisesRegex(
+                RuntimeError, "does not materialize planning caches"):
+            agent._live_cache()
+
+    def test_plan_fails_before_reading_navigation_state(self):
+        agent = object.__new__(MemNavAgent)
+        agent.depth_observation_only = True
+
+        with self.assertRaisesRegex(
+                RuntimeError, "planning is disabled"):
+            agent.plan(b"goal")
+
+
 class LifelongGoalSessionTest(unittest.TestCase):
     @staticmethod
     def make_agent():
@@ -46,6 +64,7 @@ class LifelongGoalSessionTest(unittest.TestCase):
                 "_certified_graph_routes", "_certified_candidate_cache"):
             setattr(agent, name, {})
         agent._certified_reference_depth_cache = {42: "history-only"}
+        agent._certified_route_live_depth_cache = {}
         return agent
 
     def test_repeated_goal_opens_a_new_session_without_erasing_history_cache(self):
@@ -437,6 +456,7 @@ class CertifiedRelocalizationLifecycleTest(unittest.TestCase):
         agent._goal_start_frame = {}
         agent.certified_relocalization_matcher = object()
         agent._certified_candidate_cache = {}
+        agent._certified_route_live_depth_cache = {}
 
         receipt = agent.plan(goal, retrieval_only=True)
         self.assertEqual(receipt["goal_start_frame"], 11)
@@ -774,6 +794,51 @@ class CertifiedCascadeRuntimeTest(unittest.TestCase):
             np.testing.assert_allclose(call.args[0], raw_intrinsic)
             self.assertEqual(call.kwargs["raw_height"], 518)
             self.assertEqual(call.kwargs["raw_width"], 518)
+
+    def test_cached_path_field_uses_visual_route_observation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            agent, goal = self.make_agent(Path(temporary))
+            agent.cdec_pairwise_ranker = None
+
+            def pnp(_reference_points, _query_points, _depth, _confidence,
+                    reference_pose, **_kwargs):
+                return self.accepted_pose(reference_pose)
+
+            candidates = [
+                {"anchor": 8, "score": 0.9},
+                {"anchor": 9, "score": 0.8},
+            ]
+            with mock.patch(
+                    "MemNavData.certified_relocalization_runtime.fundamental_support",
+                    side_effect=self.support), mock.patch(
+                    "MemNavData.lingbot_pnp_localization.correspondence_pnp_localize",
+                    side_effect=pnp), mock.patch(
+                    "MemNavData.lingbot_pnp_localization.jsonable_pnp",
+                    side_effect=lambda value: value):
+                first = agent.certified_relocalize(goal, candidates)
+            self.assertTrue(first["accepted"])
+
+            agent.certified_path_field_reanchor = mock.Mock(return_value={
+                "state_updated": True,
+                "status": "active",
+                "reason": "route_coordinate_updated",
+                "direction_vector": [0.0, 1.0],
+                "endpoint_fallback_available": False,
+                "native_fallback_available": False,
+                "distance_gate_present": False,
+                "episodic_path_field_status": "active",
+                "path_progress_m": 6.0,
+                "path_remaining_m": 12.0,
+            })
+            second = agent.certified_relocalize(
+                goal, candidates, guidance_mode="episodic_path_field")
+            self.assertTrue(second["accepted"])
+            self.assertTrue(second["cached"])
+            self.assertEqual(second["aux_pose"], [0.0, 1.0])
+            self.assertTrue(second["route_coordinate_state_updated"])
+            self.assertFalse(
+                second["route_coordinate_native_fallback_available"])
+            agent.certified_path_field_reanchor.assert_called_once_with(goal)
 
     def test_invalid_goal_intrinsic_fails_closed_before_matching(self):
         with tempfile.TemporaryDirectory() as temporary:

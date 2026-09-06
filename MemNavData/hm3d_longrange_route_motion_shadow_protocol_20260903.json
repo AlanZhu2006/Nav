@@ -1,0 +1,48 @@
+{
+  "schema_version": "hm3d_longrange_route_motion_shadow_protocol_v1_20260903",
+  "date": "2026-09-03",
+  "status": "consumed_result_dependent_diagnostic",
+  "question": "At the first geometry-stop edge, does direct depth PnP recover a valid same-edge local motion when the unchanged Fundamental-MAGSAC-plus-PnP primary rejects?",
+  "formal_parent": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_751efdcbb436c99b",
+    "benchmark_manifest_sha256": "0491632af1925fb14fe0bf69d9aaf8d769590552f343df38e2e30a0380655a47",
+    "summary_sha256": "b3f55c8bf90f1897556931f05795dd94787864a0682ec4b6ba59995b7bea421a",
+    "independent_verification_sha256": "3cb3d3c77d9de2a013fe223183750ca3588c595b83dbf33f3b67f18c26e2c2d5",
+    "failure_audit_sha256": "56fb3eda192902f5573f7ef645cc181617af6c3af19a00fa2132627a81bedcef"
+  },
+  "selected_history_indices": [
+    0,
+    1,
+    2,
+    6,
+    7,
+    9,
+    12,
+    14,
+    16,
+    17,
+    18,
+    19,
+    20,
+    22
+  ],
+  "selection_rule": "all 14 formal route-tangent episodes whose terminal partition was post_accept_geometry_stream_failure",
+  "primary_estimator": "fundamental_magsac_1p5px_then_depth_pnp_ransac",
+  "shadow_estimator": "direct_depth_pnp_ransac_on_identical_matches_and_reference_depth",
+  "shadow_authority": "none",
+  "control_contract": "the primary estimator alone determines motion and termination; the shadow is computed after it and is receipt-only",
+  "open_set_certificate_changed": false,
+  "navigation_claim_allowed": false,
+  "fresh_confirmation_required_after_method_selection": true,
+  "diagnostic_outputs": [
+    "same-edge primary and shadow validity",
+    "PnP status, inliers and reprojection RMSE",
+    "shadow planar-motion error against the already-executed evaluator pose interval",
+    "whether the original typed geometry stop is reproduced"
+  ],
+  "decision_rule": {
+    "supports_epipolar_degeneracy": "the unfiltered shadow is valid on at least 10 of 14 reproduced primary-stop edges and its median translation error is at most 0.10 m and median yaw error is at most 5 degrees",
+    "rejects_simple_epipolar_explanation": "fewer than 10 of 14 reproduced primary-stop edges have a valid and geometrically accurate unfiltered shadow",
+    "no_threshold_search": true
+  }
+}

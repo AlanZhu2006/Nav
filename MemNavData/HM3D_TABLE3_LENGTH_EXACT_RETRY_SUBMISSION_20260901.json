@@ -1,0 +1,74 @@
+{
+  "schema_version": "hm3d_table3_length_exact_retry_submission_v1_20260901",
+  "submitted_at": "2026-09-01T10:49:00+08:00",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e",
+  "history_source": "controlled_causal_rgb_geodesic_survey",
+  "population": {
+    "histories": 48,
+    "histories_by_bin": {
+      "0_to_20_m": 16,
+      "20_to_30_m": 16,
+      "30_to_50_m": 16
+    },
+    "scene_clusters_by_bin": {
+      "0_to_20_m": 16,
+      "20_to_30_m": 15,
+      "30_to_50_m": 11
+    },
+    "population_independent_verification_sha256": "8398456ec71503698b3cef60f3b49be6917111d7c76b5e038279dff44b0b4ace",
+    "benchmark_manifest_sha256": "cbc518cea991fd252893f97fd5e730c277e4d899369932536a745351d47e7451"
+  },
+  "retained": {
+    "completion_count": 33,
+    "indices": "0-31,45",
+    "completion_sidecars_verified": true
+  },
+  "retry": {
+    "indices": "32-44,46-47",
+    "count": 15,
+    "array_concurrency": 4,
+    "partitions": [
+      "h100_tandon",
+      "a100_tandon"
+    ],
+    "qos": "gpu48",
+    "time_limit_per_element": "02:00:00",
+    "evaluation_job": 16697907,
+    "analysis_job": 16697908,
+    "independent_verification_job": 16697909,
+    "dependency_contract": "16697907 -> 16697908 -> 16697909, all afterok"
+  },
+  "infrastructure_repair": {
+    "failure": "scratch file-count quota exhausted; evaluator recorded OSError Errno 122",
+    "scratch_usage_before": {
+      "bytes": "1.37TB/5.00TB",
+      "files": "5000204/5000000"
+    },
+    "scratch_usage_after_completed_buffer_cleanup": {
+      "bytes": "1.36TB/5.00TB",
+      "files": "4834546/5000000"
+    },
+    "cleared_completed_runtime_buffer_targets": 33,
+    "cleared_completed_runtime_buffer_files_pre_audit": 183845,
+    "additional_regenerable_cache_cleanup": "personal /scratch/yz11502/conda_envs Python .pyc files only",
+    "second_retry_partial_archive": "failed_attempts/16690806_disk_quota_retry2_20260901"
+  },
+  "source_bundles": {
+    "query_api_closure_sha256": "e226a4b4568462831e726a4f486f485233dc4c90bfef72012898cc34ba4744e6",
+    "task_sha256": "1f4979a7fd37d46700011558063be34a8fba0a0b8746668469dba7e7955f4282",
+    "server_authority_sha256": "718661db1733d5de16cd86687eec880a8d02fc5ae5ca982e1ab7d5bde5e96f7d",
+    "base_sha256": "5690569a4373f2d2768671418f0c604c4a03aa4b0ffe01baf70b288af03ba216",
+    "runtime_closure_sha256": "82e71f19ee7f4e5233fae499633ce5a233c9c036bb41b9e2bf7d4f0f18effd7d"
+  },
+  "guards": {
+    "method_changed": false,
+    "population_changed": false,
+    "threshold_changed": false,
+    "seed_changed": false,
+    "episode_budget_changed": false,
+    "completed_indices_rerun": false,
+    "query_policy_outcomes_read_for_repair": false,
+    "partial_results_allowed": false,
+    "fallback_completion_allowed": false
+  }
+}

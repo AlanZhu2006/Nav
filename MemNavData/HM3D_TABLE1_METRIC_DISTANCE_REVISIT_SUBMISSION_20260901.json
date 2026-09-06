@@ -1,0 +1,23 @@
+{
+  "arms": [
+    "fixed_2p5m",
+    "full_metric"
+  ],
+  "benchmark_manifest_sha256": "f82dbcbc6255219aae94b6d77bffdfa454f36835cf803a70df5cf8616193ad01",
+  "closed_loop_rollouts": 56,
+  "construction_verification_sha256": "2a7b8f86f61a6f55762640dcbaef4b975539ec3d93cfb06649bddd6fa4c96dc8",
+  "formal_scene_rank_spec": "5,8,10,12,14,16,17,18,20,22,23,26,27,28,29,32,35,36,38,39,41",
+  "histories": 28,
+  "jobs": {
+    "aggregate": 16677315,
+    "formal": 16677314,
+    "smoke": 16677309,
+    "verify": 16677332
+  },
+  "partial_policy_outcomes_read_at_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_metric_distance_revisit_20260901/formal_20260831T192426Z",
+  "scene_clusters": 21,
+  "schema_version": "hm3d_table1_metric_distance_revisit_submission_v1_20260901",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_metric_distance_3e8acfbb08351e12",
+  "task_receipt_sha256": "3e8acfbb08351e1267b9b1cc0c1d638acff5b40d91092bf54681b2a35c7e016b"
+}

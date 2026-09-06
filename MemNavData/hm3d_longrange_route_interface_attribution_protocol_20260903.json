@@ -1,0 +1,86 @@
+{
+  "schema_version": "hm3d_longrange_route_interface_attribution_protocol_v1_20260903",
+  "date": "2026-09-03",
+  "status": "preregistered_consumed_mechanism_pending_shadow_gate",
+  "question": "After replacing only a diagnosed-degenerate adjacent-motion prefilter, does norm-preserving projection of rear bearings into frozen NavDP's supported PointGoal half-plane improve long-range route-tangent execution?",
+  "formal_parent": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_751efdcbb436c99b",
+    "benchmark_manifest_sha256": "0491632af1925fb14fe0bf69d9aaf8d769590552f343df38e2e30a0380655a47",
+    "summary_sha256": "b3f55c8bf90f1897556931f05795dd94787864a0682ec4b6ba59995b7bea421a",
+    "independent_verification_sha256": "3cb3d3c77d9de2a013fe223183750ca3588c595b83dbf33f3b67f18c26e2c2d5"
+  },
+  "required_parent_diagnostic": {
+    "protocol_sha256": "589af0882063bca63b47892938887c8a93e74477ccb68f2f9cfb02778da99943",
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_motion_shadow_20260903/consumed_b2aa056a8ca27688",
+    "must_be_independently_verified": true,
+    "must_support_epipolar_degeneracy": true,
+    "failure_action": "do_not_run_this_attribution; retain the formal result and investigate correspondence spacing or motion observability"
+  },
+  "population": {
+    "history_indices": "all 0--22 formal histories",
+    "histories": 23,
+    "scene_clusters": 8,
+    "result_dependent_consumed_population": true,
+    "navigation_claim_allowed": false,
+    "fresh_confirmation_required": true
+  },
+  "shared_runtime": {
+    "initial_open_set_proof": "unchanged canonical DINO proposal plus SuperPoint-LightGlue, Fundamental-MAGSAC, LingBot depth, and PnP certificate",
+    "adjacent_route_motion": "direct depth PnP-RANSAC on causal adjacent RGB correspondences",
+    "adjacent_route_motion_reason": "enabled only if the no-authority same-edge diagnostic independently passes",
+    "route_readout": "monocular first-feasible local tangent",
+    "controller": "frozen mixed ImageGoal-PointGoal NavDP",
+    "controller_radius_m": 2.5,
+    "depth": "causal monocular sidecar with immutable first-40 camera-height scale",
+    "success": "3-D Euclidean distance strictly below 1 m",
+    "same_prefix_proof_seed_fifo_budget": true
+  },
+  "arms": [
+    {
+      "name": "direct_pnp_canonical_bearing",
+      "adapter": "verified_bearing_v1",
+      "bearing_transform": "identity",
+      "post_navdp_preprocess_effect": "negative forward components are clipped by frozen NavDP"
+    },
+    {
+      "name": "direct_pnp_support_projected_bearing",
+      "adapter": "verified_navdp_support_projection_v1",
+      "bearing_transform": "identity for forward >= 0; nearest signed lateral unit boundary for forward < 0",
+      "post_navdp_preprocess_effect": "the 2.5 m token norm is preserved throughout the supported front half-plane"
+    }
+  ],
+  "support_projection_contract": {
+    "certificate_changed": false,
+    "role_read": false,
+    "distance_gate": false,
+    "stuck_trigger": false,
+    "critic_gate": false,
+    "native_fallback_after_accept": false,
+    "endpoint_fallback_after_accept": false,
+    "direct_executor_action": false,
+    "controller_weights_changed": false,
+    "threshold_or_radius_tuning": false,
+    "rear_exact_tie": "positive-left deterministic symmetry break"
+  },
+  "primary_contrast": [
+    "direct_pnp_support_projected_bearing",
+    "direct_pnp_canonical_bearing"
+  ],
+  "selection_rule_for_fresh_confirmation": {
+    "support_projection_selected": "positive paired net success over direct-PnP canonical bearing, zero new geometry stops, and all support-transform audits pass",
+    "direct_pnp_canonical_selected": "direct-PnP canonical has positive success net over the sealed formal route-tangent result and support projection has no positive paired net over it",
+    "neither_selected": "direct PnP introduces invalid route evidence or neither direct-PnP arm improves on the sealed formal route-tangent result",
+    "significance_claim_from_consumed_data": false,
+    "fresh_population_required_for_method_claim": true
+  },
+  "forbidden": [
+    "distance bins",
+    "failure-triggered rescue",
+    "outcome-conditioned switching",
+    "threshold sweeps",
+    "radius sweeps",
+    "policy finetuning",
+    "simulator pose in runtime control",
+    "calling consumed success a paper result"
+  ]
+}

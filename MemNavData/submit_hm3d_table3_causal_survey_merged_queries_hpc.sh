@@ -14,9 +14,9 @@ OUT_RECEIPT=${OUT_RECEIPT:-MemNavData/HM3D_TABLE3_CAUSAL_SURVEY_MERGED_QUERY_SUB
 TASK_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_lifelong_natural_b_expansion_execution_1f4979a7fd37d467
 TASK_RECEIPT=${TASK_ROOT}/SOURCE_BUNDLE.sha256
 EXPECTED_TASK_RECEIPT_SHA=1f4979a7fd37d46700011558063be34a8fba0a0b8746668469dba7e7955f4282
-SERVER_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_fullmono_lifelong_375f0b6879b2ff87
+SERVER_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_navdp_authority_transaction_718661db1733d5de
 SERVER_SOURCE_RECEIPT=${SERVER_SOURCE_ROOT}/SOURCE_BUNDLE.sha256
-EXPECTED_SERVER_SOURCE_RECEIPT_SHA=375f0b6879b2ff87b7019dae4727880d1b03fd3185a1862e6239942a76b5bcc8
+EXPECTED_SERVER_SOURCE_RECEIPT_SHA=718661db1733d5de16cd86687eec880a8d02fc5ae5ca982e1ab7d5bde5e96f7d
 BASE_SOURCE_ROOT=/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_5690569a4373f2d2
 BASE_RECEIPT=${BASE_SOURCE_ROOT}/source_inputs.sha256
 EXPECTED_BASE_RECEIPT_SHA=5690569a4373f2d2768671418f0c604c4a03aa4b0ffe01baf70b288af03ba216
@@ -142,7 +142,9 @@ files=(
   MemNavData/cec_handoff_contract.py
   MemNavData/certified_relocalization_runtime.py
   MemNavData/controller_portability_contract.py
+  MemNavData/eval_2leg_habitat.py
   MemNavData/eval_shared_online_role_pairs.py
+  MemNavData/generate_twoleg.py
   MemNavData/hm3d_table3_causal_survey_contract.py
   MemNavData/hm3d_table3_causal_survey_protocol_20260830.json
   MemNavData/hm3d_table3_length_contract.py
@@ -165,7 +167,9 @@ done
   MemNavData/test_hm3d_table3_length_contract.py \
   MemNavData/test_hm3d_table3_causal_survey_submission.py
 "${LOCAL_HAB_PY}" -m py_compile \
+  MemNavData/eval_2leg_habitat.py \
   MemNavData/eval_shared_online_role_pairs.py \
+  MemNavData/generate_twoleg.py \
   MemNavData/run_hm3d_fullmono_query_history.py
 "${LOCAL_MEMNAV_PY}" -m py_compile \
   MemNavData/analyze_hm3d_table3_causal_survey.py \
@@ -232,11 +236,54 @@ remote "set -euo pipefail
 test \"\$(id -un)\" = '${EXPECTED_SSH_USER}'
 test \"\$(sha256sum '${TASK_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_TASK_RECEIPT_SHA}'
 test \"\$(sha256sum '${SERVER_SOURCE_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_SERVER_SOURCE_RECEIPT_SHA}'
+cd '${SERVER_SOURCE_ROOT}'; sha256sum -c --quiet SOURCE_BUNDLE.sha256
 test \"\$(sha256sum '${BASE_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_BASE_RECEIPT_SHA}'
 test \"\$(sha256sum '${RUNTIME_CLOSURE_RECEIPT}' | awk '{print \$1}')\" = '${EXPECTED_RUNTIME_CLOSURE_RECEIPT_SHA}'
 cd '${RUNTIME_CLOSURE_ROOT}'; sha256sum -c --quiet SOURCE_BUNDLE.sha256
 test \"\$(sha256sum '${candidate_plan}' | awk '{print \$1}')\" = '${candidate_plan_sha}'
-singularity exec -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${source_root}:${source_root}/MemNavData:${RUNTIME_CLOSURE_ROOT}:${RUNTIME_CLOSURE_ROOT}/MemNavData:${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:/scratch/yz11502/Research/Nav-axis-uturn/InternNav/src/diffusion-policy:/scratch/lg154/conda-envs/habitat/lib/python3.9/site-packages/pip/_vendor' /scratch/lg154/conda-envs/habitat/bin/python '${source_root}/MemNavData/eval_shared_online_role_pairs.py' --help >/dev/null
+help_output=$(singularity exec -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${source_root}:${source_root}/MemNavData:${RUNTIME_CLOSURE_ROOT}:${RUNTIME_CLOSURE_ROOT}/MemNavData:${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:/scratch/yz11502/Research/Nav-axis-uturn/InternNav/src/diffusion-policy:/scratch/lg154/conda-envs/habitat/lib/python3.9/site-packages/pip/_vendor' /scratch/lg154/conda-envs/habitat/bin/python '${source_root}/MemNavData/eval_shared_online_role_pairs.py' --help 2>&1)
+grep -q -- 'table3_length' <<<"${help_output}"
+grep -q -- '--pinned_navmesh' <<<"${help_output}"
+singularity exec -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${source_root}:${source_root}/MemNavData:${RUNTIME_CLOSURE_ROOT}:${RUNTIME_CLOSURE_ROOT}/MemNavData:${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData:/scratch/yz11502/Research/Nav-axis-uturn/InternNav/src/diffusion-policy:/scratch/lg154/conda-envs/habitat/lib/python3.9/site-packages/pip/_vendor' /scratch/lg154/conda-envs/habitat/bin/python - '${source_root}' <<'PY'
+import inspect, sys
+from pathlib import Path
+root = Path(sys.argv[1]).resolve()
+sys.argv = [
+    'eval_shared_online_role_pairs.py',
+    '--episode_root', '/tmp/dummy', '--scene', '/tmp/dummy.glb',
+    '--role_pair_scope', 'table3_length',
+    '--pinned_navmesh', '/tmp/dummy.navmesh',
+    '--expected_pinned_navmesh_sha256', '0' * 64,
+]
+import eval_shared_online_role_pairs as evaluator
+assert Path(evaluator.__file__).resolve() == root / 'MemNavData/eval_shared_online_role_pairs.py'
+assert Path(evaluator.base.__file__).resolve() == root / 'MemNavData/eval_2leg_habitat.py'
+assert Path(inspect.getsourcefile(evaluator.base.make_sim)).resolve() == root / 'MemNavData/generate_twoleg.py'
+assert 'recompute_navmesh' in inspect.signature(evaluator.base.make_sim).parameters
+assert evaluator.args.role_pair_scope == 'table3_length'
+print('table3_evaluator_api_closure_verified=true')
+PY
+grep -q 'authority_policy = request.form.get' '${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav/memnav_server.py'
+grep -q 'require_monocular_depth_transaction' '${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp/navdp_server.py'
+grep -q 'def causal_goal_support_indices' '${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav/router_candidates.py'
+singularity exec -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav' /scratch/lg154/conda-envs/memnav/bin/python - '${SERVER_SOURCE_ROOT}' <<'PY'
+from pathlib import Path
+import sys
+import policy_agent, router_candidates
+root = Path(sys.argv[1]).resolve()
+assert Path(policy_agent.__file__).resolve() == root / 'NavDP/baselines/memnav/policy_agent.py'
+assert Path(router_candidates.__file__).resolve() == root / 'NavDP/baselines/memnav/router_candidates.py'
+assert callable(router_candidates.causal_goal_support_indices)
+PY
+singularity exec -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${SERVER_SOURCE_ROOT}/NavDP/baselines/navdp:${BASE_SOURCE_ROOT}/NavDP/baselines/navdp:${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav:${BASE_SOURCE_ROOT}/NavDP/baselines/memnav' /scratch/lg154/conda-envs/memnav/bin/python - '${SERVER_SOURCE_ROOT}' <<'PY'
+from pathlib import Path
+import sys
+import policy_agent
+base = Path('${BASE_SOURCE_ROOT}').resolve()
+assert Path(policy_agent.__file__).resolve() == base / 'NavDP/baselines/navdp/policy_agent.py'
+assert hasattr(policy_agent, 'NavDP_Agent')
+print('table3_server_authority_namespace_verified=true')
+PY
 singularity exec -B /scratch/lg154 -B /scratch/yz11502 /share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH='${source_root}:${source_root}/MemNavData:${RUNTIME_CLOSURE_ROOT}:${RUNTIME_CLOSURE_ROOT}/MemNavData:${TASK_ROOT}:${TASK_ROOT}/MemNavData:${SERVER_SOURCE_ROOT}:${SERVER_SOURCE_ROOT}/MemNavData:${BASE_SOURCE_ROOT}:${BASE_SOURCE_ROOT}/MemNavData' /scratch/lg154/conda-envs/habitat/bin/python '${source_root}/MemNavData/run_hm3d_fullmono_query_history.py' --help >/dev/null
 source '${safe}'
 safe_sbatch --lint-fatal --test-only --qos=gpu48 --time=04:00:00 --array='${gate_index}' --export='${common}' '${pair}' >/dev/null
@@ -267,7 +314,7 @@ for name in ('bind_monocular_depth_transaction','monocular_depth_transaction_tok
 print('runtime_provenance_verified=true')
 PY"
 
-raw=$(remote "set -euo pipefail; test \"\$(id -un)\" = '${EXPECTED_SSH_USER}'; source '${safe}'; safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=04:00:00 --array='${gate_index}' --dependency='afterok:${population_verify_job}' --kill-on-invalid-dep=yes --export='${common}' '${pair}'")
+raw=$(remote "set -euo pipefail; test \"\$(id -un)\" = '${EXPECTED_SSH_USER}'; source '${safe}'; safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=04:00:00 --array='${gate_index}' --export='${common}' '${pair}'")
 gate_job=$(printf '%s\n' "${raw}" | job_id)
 [[ "${gate_job}" =~ ^[0-9]+$ ]] || fail "bad paired-query gate job id"
 raw=$(remote "set -euo pipefail; test \"\$(id -un)\" = '${EXPECTED_SSH_USER}'; source '${safe}'; safe_sbatch --lint-fatal --parsable --qos=gpu48 --time=04:00:00 --array='${remaining_array}' --dependency='afterok:${gate_job}' --kill-on-invalid-dep=yes --export='${common}' '${pair}'")

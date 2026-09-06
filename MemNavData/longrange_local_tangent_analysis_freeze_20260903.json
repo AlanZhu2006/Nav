@@ -1,0 +1,46 @@
+{
+  "analysis_frozen_at": "2026-09-03T11:54:48+08:00",
+  "analysis_script": {
+    "path": "MemNavData/analyze_hm3d_longrange_local_tangent_attribution.py",
+    "sha256": "5d0970230bc9c37d80c070fd74e643e50828346fcdb1fdc2bfc6228127467991"
+  },
+  "analysis_test": {
+    "path": "MemNavData/test_analyze_hm3d_longrange_local_tangent_attribution.py",
+    "sha256": "600e4c1c5a888909923458f38bb52898cd8f9191e668c9fe9e94c95a7f45295f"
+  },
+  "arms": [
+    "oracle_chord_mixed_realized",
+    "oracle_tangent_mixed_realized",
+    "oracle_tangent_then_native_realized"
+  ],
+  "claim_scope": "consumed one-failure mechanism attribution only",
+  "fixed_interpretation_order": [
+    "continuous first tangent versus 2.5 m chord isolates local route semantics",
+    "selective tangent versus continuous tangent isolates persistent mixed conditioning",
+    "vertical span and final vertical error isolate floor progress",
+    "critic and stationary-motion fractions isolate downstream trajectory support"
+  ],
+  "fixed_metrics": [
+    "floor-aware outcome",
+    "final 3-D, planar, and vertical distance",
+    "minimum planned geodesic and maximum reduction",
+    "post-snap realized path length",
+    "stationary transition fraction",
+    "critic below -0.5 fraction",
+    "absolute heading distribution",
+    "heading beyond 90 degrees fraction",
+    "heading in the 165-degree rear dead zone fraction",
+    "PointGoal norm after frozen NavDP forward clipping",
+    "mixed versus native plan count"
+  ],
+  "navigation_final_distance_read": false,
+  "navigation_outcome_read": false,
+  "post_hoc_pass_threshold_defined": false,
+  "root_cause_audit_snapshot": {
+    "path": "MemNavData/LONG_RANGE_REVISIT_ROOT_CAUSE_AUDIT_20260903.md",
+    "sha256": "43177b72829514e5419a2beb4bbeb9373cf33a432e6235556e69342e43a7d66d"
+  },
+  "schema_version": "longrange_local_tangent_analysis_freeze_v1_20260903",
+  "slurm_job": "16822227_32",
+  "threshold_or_radius_sweep_authorized": false
+}

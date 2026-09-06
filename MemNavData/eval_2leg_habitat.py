@@ -67,7 +67,14 @@ from deterministic_eval_protocol import (
 )
 from arrival_shadow import ArrivalShadowConfig, ArrivalShadowDetector
 from bearing_diagnostics import evaluation_geodesic_bearing_error_deg
-from cec_bearing_alignment import bounded_turn_delta, certified_alignment_turn
+from cec_bearing_alignment import (
+    bounded_turn_delta,
+    certified_alignment_turn,
+    certified_route_alignment_turn,
+)
+from route_alignment_contract import (
+    route_alignment_executor_source,
+)
 from cec_authority_receipt import authority_plan_receipt_fields
 from navdp_goal_switch import (
     RESET_MODES,
@@ -80,7 +87,10 @@ from navdp_goal_switch import (
     trajectory_selector_for_leg,
 )
 from revisit_bearing_adapter import (
+    FIXED_BEARING_MODES,
+    NAVDP_POINTGOAL_RADIUS_MAX_M,
     REVISIT_ADAPTER_MODES,
+    SCALED_METRIC_MODES,
     VERIFIED_BEARING_RADIUS_M,
     adapt_revisit_pointgoal,
     validate_revisit_adapter_configuration,
@@ -170,14 +180,44 @@ parser.add_argument(
           "legacy_metric preserves earlier evaluations; "
           "verified_bearing_v1 removes metric distance, supplies one frozen "
           "2.5 m bearing token to navdp_mixed, and otherwise falls back "
-          "exactly to native ImageGoal. It is also the only permitted "
-          "adapter for scale-free certified relocalization"),
+          "exactly to native ImageGoal. "
+          "verified_navdp_support_projection_v1 is a route-tangent-only "
+          "attribution arm that preserves the fixed token norm when a "
+          "verified bearing lies behind NavDP's representable half-plane. "
+          "verified_bounded_metric_v1 is an "
+          "experimental full-mono arm that uses the frozen first-40 height "
+          "scale only to shrink that 2.5 m residual; it never expands "
+          "authority. verified_metric_v1 exposes the complete metricized "
+          "distance up to NavDP's native 10 m PointGoal support. These are "
+          "the permitted adapters for LingBot "
+          "scale-free certified relocalization"),
 )
 parser.add_argument(
     "--contract_dry_run", action="store_true",
     help=("validate the full argument contract (routes, adapters, seeds, "
           "thresholds) and exit before touching Habitat, servers, or any "
           "output; lets submit scripts fail fast on a login node"),
+)
+parser.add_argument(
+    "--certified_guidance_mode",
+    choices=[
+        "endpoint_bearing", "episodic_path_field",
+        "action_coordinate_compass", "se2_route_compass",
+        "monocular_route_tangent",
+    ],
+    default="endpoint_bearing",
+    help=("post-certificate direction readout. endpoint_bearing is canonical "
+          "CEC; episodic_path_field is the preregistered long-range challenger "
+          "that continuously follows the ordered causal LingBot pose curve "
+          "without a distance switch or stuck trigger; "
+          "action_coordinate_compass parameterizes that curve with realized "
+          "executor translation/yaw receipts and has no post-authorization "
+          "visual gate or endpoint/native fallback; se2_route_compass rebuilds "
+          "a local executor route from those receipts and uses monotone 2-D "
+          "projection so off-route travel cannot masquerade as progress; "
+          "monocular_route_tangent replaces evaluator/executor odometry with "
+          "height-scaled adjacent RGB PnP and continuously reads the first "
+          "feasible local tangent from the certified historical route"),
 )
 parser.add_argument(
     "--certified_cdec_rescue",
@@ -392,13 +432,19 @@ parser.add_argument("--max_steps", type=int, default=1200, help="frame budget pe
 parser.add_argument("--exec_horizon", type=int, default=8, help="frames between replans")
 parser.add_argument(
     "--cec_initial_bearing_alignment",
-    choices=["off", "first_certified", "first_certified_bounded"],
+    choices=[
+        "off", "first_certified", "first_certified_bounded",
+        "first_route_tangent_rear_bounded",
+    ],
     default="off",
     help=("on the first accepted or shadow-accepted CEC handoff, rotate by "
           "the sealed robot-local bearing without oracle pose. "
           "first_certified is the consumed ideal-yaw mechanism; "
           "first_certified_bounded uses <=30-degree zero-translation actions, "
-          "a fresh observation after every action, and replans before moving"),
+          "a fresh observation after every action, and replans before moving; "
+          "first_route_tangent_rear_bounded applies the same physical action "
+          "only when a proof-bound route tangent lies in NavDP's clipped "
+          "rear half-plane"),
 )
 parser.add_argument(
     "--trajectory_selector",
@@ -601,10 +647,15 @@ parser.add_argument(
         "paper_replication",
         "replica_cross_dataset",
         "table3_length",
+        "table3_longrange_oracle",
+        "table3_longrange_route_tangent",
     ],
     default="consumed_integration",
     help=("eval_shared_online_role_pairs.py only: provenance label for the "
-          "role-pair population; it never changes policy decisions"),
+          "role-pair population; table3_longrange_oracle is a consumed "
+          "evaluator-pose attribution fork and never a paper result; "
+          "table3_longrange_route_tangent is the fresh same-floor, "
+          "Revisit-only deployment confirmation"),
 )
 parser.add_argument(
     "--role_pair_query_role",
@@ -727,6 +778,7 @@ MEMNAV_DIAGNOSTIC_KEYS = (
     "selected_anchor_score", "candidate_count", "anchor_gap",
     "goal_start_frame", "candidate_ceiling",
     "anchor", "aux_pose", "goal_rel_yaw", "current_goal_cos", "frame_idx",
+    "executor_motion_receipt",
     "graph_subgoal_enabled", "graph_subgoal_node", "graph_subgoal_cursor",
     "graph_subgoal_count", "graph_subgoal_complete", "goal_aux_pose",
 )
@@ -873,6 +925,30 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
                         "pnp_pose_available"]):
                 raise RuntimeError(
                     "certified relocalization runtime contract changed")
+            if args.certified_guidance_mode in (
+                    "action_coordinate_compass", "se2_route_compass"):
+                if (certified.get("supported_guidance_modes") is None
+                        or args.certified_guidance_mode not in certified[
+                            "supported_guidance_modes"]
+                        or certified.get(
+                            "action_coordinate_receipt_contract") != (
+                                "frame_bound_realized_executor_motion_v1")):
+                    raise RuntimeError(
+                        "server does not expose the frozen action-coordinate "
+                        "receipt contract")
+                if (args.certified_guidance_mode == "se2_route_compass"
+                        and certified.get("se2_route_receipt_contract")
+                        != "frame_bound_local_se2_v1"):
+                    raise RuntimeError(
+                        "server does not expose the local SE(2) receipt contract")
+            if args.certified_guidance_mode == "monocular_route_tangent":
+                if (certified.get("monocular_route_tangent_contract")
+                        != "causal_rgb_height_scaled_adjacent_pnp_v1"
+                        or int(certified.get(
+                            "route_depth_cache_stride", -1)) != 8):
+                    raise RuntimeError(
+                        "server does not expose the frozen monocular route-"
+                        "tangent contract at depth stride 8")
             learned = certified.get("learned_rescue_proposal")
             if args.certified_cdec_rescue == "on":
                 if (not isinstance(learned, dict)
@@ -988,7 +1064,119 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
     return memnav_info["algo"]
 
 
-def srv_memory(image_jpg):
+def local_se2_delta(previous_position, previous_yaw, current_position, current_yaw):
+    """Return realized (forward, left, yaw) in the previous body frame."""
+
+    previous = np.asarray(previous_position, dtype=np.float64)
+    current = np.asarray(current_position, dtype=np.float64)
+    if previous.shape == (3,):
+        previous = previous[[0, 2]]
+    if current.shape == (3,):
+        current = current[[0, 2]]
+    if (previous.shape != (2,) or current.shape != (2,)
+            or not np.isfinite(previous).all()
+            or not np.isfinite(current).all()
+            or not np.isfinite(float(previous_yaw))
+            or not np.isfinite(float(current_yaw))):
+        raise ValueError("local SE(2) endpoints must be finite planar poses")
+    dx, dz = (float(value) for value in current - previous)
+    yaw = float(previous_yaw)
+    forward = -dx * np.sin(yaw) - dz * np.cos(yaw)
+    left = -dx * np.cos(yaw) + dz * np.sin(yaw)
+    delta_yaw = float(wrap_angle(float(current_yaw) - yaw))
+    return float(forward), float(left), delta_yaw
+
+
+def executor_motion_form(
+        executed_translation_m=None, executed_yaw_rad=None,
+        executed_forward_m=None, executed_left_m=None,
+        executor_local_se2_source=None):
+    """Serialize one frame-bound realized action receipt, or no receipt."""
+
+    legacy_absent = (
+        executed_translation_m is None and executed_yaw_rad is None)
+    local_absent = (
+        executed_forward_m is None and executed_left_m is None
+        and executor_local_se2_source is None)
+    if legacy_absent and local_absent:
+        return {}
+    if executed_translation_m is None or executed_yaw_rad is None:
+        raise ValueError("executor translation and yaw must be bound together")
+    translation = float(executed_translation_m)
+    yaw = float(executed_yaw_rad)
+    if (not np.isfinite(translation) or translation < 0.0
+            or not np.isfinite(yaw)):
+        raise ValueError("executor motion receipt is not finite")
+    result = {
+        "executed_translation_m": repr(translation),
+        "executed_yaw_rad": repr(yaw),
+    }
+    if not local_absent:
+        if executed_forward_m is None or executed_left_m is None:
+            raise ValueError(
+                "executor forward and left deltas must be bound together")
+        forward = float(executed_forward_m)
+        left = float(executed_left_m)
+        if not np.isfinite(forward) or not np.isfinite(left):
+            raise ValueError("executor local SE(2) translation is not finite")
+        result.update(
+            executed_forward_m=repr(forward),
+            executed_left_m=repr(left),
+            executor_local_se2_contract="frame_bound_local_se2_v1",
+            executor_local_se2_source=(
+                "habitat_pose_difference_odometry_proxy_v1"
+                if executor_local_se2_source is None
+                else str(executor_local_se2_source)),
+        )
+    return result
+
+
+def runtime_executor_motion_form(
+        executed_translation_m=None, executed_yaw_rad=None,
+        executed_forward_m=None, executed_left_m=None,
+        executor_local_se2_source=None):
+    """Expose evaluator odometry only to the historical ablation modes.
+
+    The deployable monocular route-tangent arm reconstructs both history and
+    query motion from RGB.  Simulator-pose differences are therefore omitted
+    from its HTTP request entirely, rather than merely ignored downstream.
+    """
+
+    if args.certified_guidance_mode == "monocular_route_tangent":
+        if executor_local_se2_source is None:
+            return {}
+        if (args.cec_initial_bearing_alignment
+                != "first_route_tangent_rear_bounded"):
+            raise ValueError(
+                "monocular route cannot consume an executor receipt outside "
+                "the proof-bound alignment mode")
+        source = str(executor_local_se2_source)
+        expected_prefix = route_alignment_executor_source("0" * 64)[:-64]
+        if not source.startswith(expected_prefix):
+            raise ValueError(
+                "monocular route received an unauthorized executor source")
+        if (float(executed_translation_m) != 0.0
+                or float(executed_forward_m) != 0.0
+                or float(executed_left_m) != 0.0
+                or abs(float(executed_yaw_rad))
+                > np.deg2rad(30.0) + 1e-9):
+            raise ValueError(
+                "route alignment receipt is not a bounded zero-translation "
+                "yaw edge")
+        return executor_motion_form(
+            executed_translation_m, executed_yaw_rad,
+            executed_forward_m, executed_left_m,
+            executor_local_se2_source=source)
+    return executor_motion_form(
+        executed_translation_m, executed_yaw_rad,
+        executed_forward_m, executed_left_m,
+        executor_local_se2_source=executor_local_se2_source)
+
+
+def srv_memory(
+        image_jpg, *, executed_translation_m=None, executed_yaw_rad=None,
+        executed_forward_m=None, executed_left_m=None,
+        executor_local_se2_source=None):
     # NavDP's memory is the last eight *decision observations* and is advanced
     # inside imagegoal_step.  Streaming the seven controller interpolation
     # frames would change its intended temporal stride, and its server has no
@@ -998,10 +1186,21 @@ def srv_memory(image_jpg):
     if args.server_backend == "cec_portability":
         r = requests.post(
             f"{BASE}/memory_step",
-            files={"image": ("image.jpg", image_jpg)})
+            files={"image": ("image.jpg", image_jpg)},
+            data=runtime_executor_motion_form(
+                executed_translation_m, executed_yaw_rad,
+                executed_forward_m, executed_left_m,
+                executor_local_se2_source))
         r.raise_for_status()
         return r.json()
-    r = requests.post(f"{BASE}/memory_step", files={"image": ("image.jpg", image_jpg)})
+    r = requests.post(
+        f"{BASE}/memory_step",
+        files={"image": ("image.jpg", image_jpg)},
+        data=runtime_executor_motion_form(
+            executed_translation_m, executed_yaw_rad,
+            executed_forward_m, executed_left_m,
+            executor_local_se2_source),
+    )
     r.raise_for_status()
     return r.json()
 
@@ -1055,6 +1254,44 @@ def bind_navdp_monocular_transaction(navdp_data, append_receipt, image_jpg):
         "monocular_depth_frame_index": str(frame_index),
     })
     return bound
+
+
+def metric_scale_from_append_receipt(append_receipt):
+    """Read one validated compact first-40 scale without recomputation.
+
+    The status is produced by the same causal LingBot stream that supplies
+    NavDP's monocular depth.  This helper deliberately returns ``None`` on any
+    absent or malformed evidence so the experimental adapter falls back to
+    native ImageGoal instead of inventing a scale.
+    """
+
+    if not isinstance(append_receipt, dict):
+        return None
+    depth_status = append_receipt.get("monocular_depth")
+    if not isinstance(depth_status, dict):
+        return None
+    scale_status = depth_status.get("longrange_metric_scale")
+    if not isinstance(scale_status, dict):
+        return None
+    scale = scale_status.get("metric_scale_m_per_raw")
+    receipt_hash = scale_status.get("scale_receipt_sha256")
+    try:
+        scale = float(scale)
+        frame_count = int(scale_status.get("frame_count", -1))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if (scale_status.get("available") is not True
+            or scale_status.get("reason") != (
+                "mdtec_first40_causal_scale_available")
+            or frame_count != 40
+            or not np.isfinite(scale)
+            or scale <= 0.0
+            or not isinstance(receipt_hash, str)
+            or re.fullmatch(r"[0-9a-f]{64}", receipt_hash) is None
+            or scale_status.get("scale_evidence_contract") != (
+                "causal_first_prefix_rgb_only_v1")):
+        return None
+    return scale
 
 
 def srv_navdp_memory_replay(image_jpg):
@@ -1210,6 +1447,7 @@ def srv_plan_certified_relocalization(
                     "1" if args.certified_cdec_rescue == "on" else "0"),
                 "proposal_order": expected_proposal_order,
                 "authority_policy": expected_authority_policy,
+                "guidance_mode": args.certified_guidance_mode,
             },
         )
         response.raise_for_status()
@@ -1221,6 +1459,12 @@ def srv_plan_certified_relocalization(
         if relocalized.get("authority_policy") != expected_authority_policy:
             raise RuntimeError("certificate endpoint used wrong authority policy")
     except Exception as error:
+        if args.certified_guidance_mode in (
+                "episodic_path_field", "action_coordinate_compass",
+                "se2_route_compass", "monocular_route_tangent"):
+            raise RuntimeError(
+                "long-range certificate request failed; the strict "
+                "long-range arm does not silently fall back") from error
         # The current frame was already appended by retrieval_probe_step.  An
         # optional localization failure must not skip the native controller or
         # append the frame a second time.
@@ -1233,9 +1477,69 @@ def srv_plan_certified_relocalization(
             "frame_idx": probe_out.get("frame_idx"),
             "cached": False,
         }
+    if relocalized.get("guidance_mode") != args.certified_guidance_mode:
+        raise RuntimeError("certificate endpoint used wrong guidance mode")
+    path_field_status = relocalized.get("episodic_path_field_status")
+    if (args.certified_guidance_mode == "episodic_path_field"
+            and relocalized.get("accepted") is True
+            and path_field_status not in ("active", "complete")):
+        raise RuntimeError(
+            "accepted certificate did not produce a valid episodic path-field "
+            f"receipt: {path_field_status!r} "
+            f"{relocalized.get('episodic_path_field_error')!r}; "
+            "route observation="
+            f"{json.dumps(relocalized.get('route_coordinate_local_witness'), sort_keys=True)}")
+    if (args.certified_guidance_mode == "episodic_path_field"
+            and relocalized.get("accepted") is True
+            and path_field_status == "complete"):
+        # Position success is checked after every executed action and returns
+        # before another plan request. Reaching the learned route terminal here
+        # without benchmark success is therefore a geometry-stream failure,
+        # not permission to change back to endpoint or native guidance.
+        raise RuntimeError(
+            "episodic route completed before benchmark position success; "
+            "the strict long-range arm has no endpoint/native fallback")
+    action_coordinate_status = relocalized.get(
+        "action_coordinate_compass_status")
+    if (args.certified_guidance_mode == "action_coordinate_compass"
+            and relocalized.get("accepted") is True
+            and action_coordinate_status not in ("active", "terminal_tangent")):
+        raise RuntimeError(
+            "accepted certificate did not produce a valid action-coordinate "
+            f"receipt: {action_coordinate_status!r} "
+            f"{relocalized.get('action_coordinate_compass_error')!r}; "
+            "the strict long-range arm has no fallback")
+    se2_route_status = relocalized.get("se2_route_compass_status")
+    if (args.certified_guidance_mode == "se2_route_compass"
+            and relocalized.get("accepted") is True
+            and se2_route_status not in ("active", "terminal_tangent")):
+        raise RuntimeError(
+            "accepted certificate did not produce a valid SE(2) route "
+            f"receipt: {se2_route_status!r} "
+            f"{relocalized.get('se2_route_compass_error')!r}; "
+            "the strict long-range arm has no fallback")
+    local_tangent_status = relocalized.get("local_tangent_status")
+    geometry_stream_stop_reason = None
+    if (args.certified_guidance_mode == "monocular_route_tangent"
+            and relocalized.get("accepted") is True
+            and local_tangent_status not in ("active", "terminal_tangent")):
+        # This is a method outcome, not an infrastructure exception.  The
+        # initial target proof has already authorized one causal interval, so
+        # silently issuing either the endpoint bearing or the native request
+        # would change the method after observing its failure.  Return a
+        # typed stop packet; ``run_policy_leg`` records the evidence and ends
+        # the rollout at the current physical state.
+        geometry_stream_stop_reason = (
+            "accepted certificate did not produce a valid monocular local-"
+            "tangent receipt: "
+            f"{local_tangent_status!r} "
+            f"{relocalized.get('local_tangent_error')!r}"
+        )
     router_active = bool(
         relocalized.get("ok") is True
-        and relocalized.get("accepted") is True)
+        and relocalized.get("accepted") is True
+        and path_field_status != "complete"
+        and geometry_stream_stop_reason is None)
     certified_units = relocalized.get("pointgoal_units")
     if (router_active
             and certified_units != "lingbot_raw_direction_only"):
@@ -1313,6 +1617,8 @@ def srv_plan_certified_relocalization(
         "certified_relocalization_authority": relocalized.get("authority"),
         "certified_relocalization_authority_policy": relocalized.get(
             "authority_policy"),
+        "certified_relocalization_guidance_mode": relocalized.get(
+            "guidance_mode"),
         "certified_relocalization_pnp": relocalized.get("pnp"),
         "certified_relocalization_metric_scale": relocalized.get(
             "metric_scale"),
@@ -1344,7 +1650,61 @@ def srv_plan_certified_relocalization(
                 "certified_graph_reason",
             )
         },
+        **{
+            key: value
+            for key, value in relocalized.items()
+            if key.startswith("episodic_path_field_")
+        },
+        **{
+            key: value
+            for key, value in relocalized.items()
+            if key.startswith("path_")
+        },
+        **{
+            key: value
+            for key, value in relocalized.items()
+            if key.startswith("route_coordinate_")
+        },
+        **{
+            key: value
+            for key, value in relocalized.items()
+            if key.startswith("action_coordinate_")
+        },
+        **{
+            key: value
+            for key, value in relocalized.items()
+            if key.startswith("se2_route_")
+        },
+        **{
+            key: value
+            for key, value in relocalized.items()
+            if key.startswith("local_tangent_")
+        },
     }
+    if geometry_stream_stop_reason is not None:
+        requested_seed = navdp_data.get("diffusion_seed")
+        stop = {
+            "diffusion_seed": (
+                None if requested_seed is None else int(requested_seed)),
+            "depth_source": args.navdp_depth_source,
+            "metric_depth_sensor_consumed": False,
+            "geometry_stream_stop": True,
+            "geometry_stream_stop_reason": geometry_stream_stop_reason,
+            "geometry_stream_stop_contract": (
+                "cec_accept_then_geometry_failure_stops_without_controller_v1"
+            ),
+            "geometry_stream_native_fallback_executed": False,
+            "geometry_stream_endpoint_fallback_executed": False,
+            "geometry_stream_controller_called": False,
+        }
+        result = attach_memnav_diagnostics(
+            stop,
+            mem_out,
+            "geometry_stream_stop",
+            error=geometry_stream_stop_reason,
+        )
+        result.update(router_diag)
+        return result
     aux_pose_raw = mem_out.get("aux_pose")
     try:
         aux_pose = (np.asarray(aux_pose_raw, dtype=float)
@@ -1358,8 +1718,24 @@ def srv_plan_certified_relocalization(
         mode=args.revisit_adapter,
         router_active=router_active,
         pointgoal=(aux_pose if pose_valid else aux_pose_raw),
-        source="lightglue_lingbot_pnp_v2_scale_free",
+        source=(
+            "cec_monocular_route_tangent_v1"
+            if args.certified_guidance_mode == "monocular_route_tangent"
+            else (
+                "cec_se2_projected_route_compass_v1"
+                if args.certified_guidance_mode == "se2_route_compass"
+                else (
+                    "cec_action_coordinate_route_compass_v1"
+                    if args.certified_guidance_mode
+                    == "action_coordinate_compass"
+                    else "lightglue_lingbot_pnp_v2_scale_free"
+                )
+            )),
         pointgoal_units="lingbot_raw_direction_only",
+        metric_scale_m_per_raw=(
+            metric_scale_from_append_receipt(probe_out)
+            if args.revisit_adapter in SCALED_METRIC_MODES
+            else None),
     )
     if not adapter_decision.takeover:
         nav = requests.post(
@@ -1585,8 +1961,14 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
              robot_position=None, robot_yaw=None,
              candidate_ceiling_override=None,
              certified_route_start_anchor=None,
-             certified_graph_rescue=False):
-    data = {}
+             certified_graph_rescue=False,
+             executed_translation_m=None, executed_yaw_rad=None,
+             executed_forward_m=None, executed_left_m=None,
+             executor_local_se2_source=None):
+    data = runtime_executor_motion_form(
+        executed_translation_m, executed_yaw_rad,
+        executed_forward_m, executed_left_m,
+        executor_local_se2_source)
     if forced_anchor is not None:
         data["forced_anchor"] = str(int(forced_anchor))
     if forced_gate is not None:
@@ -2133,13 +2515,13 @@ def srv_plan(image_jpg, goal_jpg, depth=None, forced_anchor=None,
         # NavDP owns the decision, but MemNav must still receive this planning
         # frame exactly once so its long-term memory is complete at the A->B
         # switch.  NavDP itself advances only on decision observations.
+        stream_data = dict(data)
+        stream_data["materialize_monocular_depth"] = (
+            "1" if args.navdp_depth_source == "monocular_sidecar" else "0")
         streamed = requests.post(
             f"{BASE}/memory_step",
             files={"image": ("image.jpg", image_jpg)},
-            data={
-                "materialize_monocular_depth": "1"
-                if args.navdp_depth_source == "monocular_sidecar" else "0"
-            },
+            data=stream_data,
         )
         streamed.raise_for_status()
         streamed_out = streamed.json()
@@ -2282,6 +2664,8 @@ def replay_shared_leg1(
         raise RuntimeError("shared trace contains duplicate plan steps")
     plan_step_set = set(plan_steps)
     navdp_queue_lengths = None
+    previous_floor_position = None
+    previous_yaw = None
     for pose in poses:
         floor_position = np.asarray(
             [pose["x"], pose["y"], pose["z"]], dtype=float)
@@ -2292,7 +2676,30 @@ def replay_shared_leg1(
         frame = jpg_bytes(rgb)
         if bytes_sha256(frame) != pose.get("jpg_sha256"):
             raise RuntimeError("shared trace rendered RGB mismatch")
-        response = srv_memory(frame)
+        if previous_floor_position is None:
+            executed_translation_m = 0.0
+            executed_yaw_rad = 0.0
+            executed_forward_m = 0.0
+            executed_left_m = 0.0
+        else:
+            executed_translation_m = float(np.linalg.norm(
+                floor_position[[0, 2]] - previous_floor_position[[0, 2]]))
+            (executed_forward_m, executed_left_m,
+             executed_yaw_rad) = local_se2_delta(
+                previous_floor_position,
+                previous_yaw,
+                floor_position,
+                float(pose["yaw"]),
+            )
+        response = srv_memory(
+            frame,
+            executed_translation_m=executed_translation_m,
+            executed_yaw_rad=executed_yaw_rad,
+            executed_forward_m=executed_forward_m,
+            executed_left_m=executed_left_m,
+        )
+        previous_floor_position = floor_position
+        previous_yaw = float(pose["yaw"])
         frame_idx = response.get("frame_idx")
         if frame_idx is not None:
             memory_trace.append({
@@ -2424,9 +2831,11 @@ def pursuit_step(pos, psi, path_xz, pf):
         cand2 = pos + 0.3 * v * fwd                      # creep when grazing geometry
         snap2 = np.array(pf.snap_point(cand2), float)
         if np.isfinite(snap2).all() and np.linalg.norm(snap2[[0, 2]] - cand2[[0, 2]]) <= 0.06:
-            return snap2, psi_new, 0.3 * v
+            return snap2, psi_new, float(np.linalg.norm(
+                snap2[[0, 2]] - np.asarray(pos, float)[[0, 2]]))
         return pos, psi_new, 0.0                         # rotate in place (blocked)
-    return snap, psi_new, v
+    return snap, psi_new, float(np.linalg.norm(
+        snap[[0, 2]] - np.asarray(pos, float)[[0, 2]]))
 
 
 def select_plan_trajectory(
@@ -2550,7 +2959,12 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                    policy_backend=None, success_dist=None,
                    episode_seed=None, leg_index=None,
                    candidate_ceiling_override=None,
-                   certified_route_start_anchor=None):
+                   certified_route_start_anchor=None,
+                   initial_executor_translation_m=0.0,
+                   initial_executor_yaw_rad=0.0,
+                   initial_executor_forward_m=None,
+                   initial_executor_left_m=None,
+                   success_goal_position=None):
     """Policy-driven leg with optional forward-only terminal pose alignment.
 
     Navigation success remains the benchmark's distance-only event.  When a
@@ -2559,6 +2973,20 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
     image's orientation and whether direct visual similarity improves.
     """
     success_dist = args.success_dist if success_dist is None else float(success_dist)
+    success_goal_xyz = None
+    if success_goal_position is not None:
+        success_goal_xyz = np.asarray(success_goal_position, dtype=np.float64)
+        if (success_goal_xyz.shape != (3,)
+                or not np.isfinite(success_goal_xyz).all()):
+            raise ValueError("success_goal_position must be one finite xyz")
+
+    def benchmark_goal_distance(position):
+        current = np.asarray(position, dtype=np.float64)
+        if success_goal_xyz is not None:
+            return float(np.linalg.norm(current - success_goal_xyz))
+        return float(np.linalg.norm(
+            current[[0, 2]] - np.asarray(goal_xz, dtype=np.float64)))
+
     leg_trajectory_selector = trajectory_selector_for_leg(
         args.trajectory_selector,
         args.trajectory_selector_scope,
@@ -2615,10 +3043,86 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
     cec_bounded_alignment_remaining_rad = None
     cec_bounded_alignment_packet_sha256 = None
     cec_bounded_alignment_force_replan = False
+    pending_executor_translation_m = float(initial_executor_translation_m)
+    pending_executor_yaw_rad = float(initial_executor_yaw_rad)
+    pending_executor_local_se2_source = None
+    if (initial_executor_forward_m is None
+            and initial_executor_left_m is None):
+        # The only legacy boundary accepted here is the frozen executor's
+        # yaw-then-forward atom.  Normal goal boundaries are exactly zero.
+        pending_executor_forward_m = float(
+            pending_executor_translation_m
+            * np.cos(pending_executor_yaw_rad))
+        pending_executor_left_m = float(
+            pending_executor_translation_m
+            * np.sin(pending_executor_yaw_rad))
+    elif (initial_executor_forward_m is None
+          or initial_executor_left_m is None):
+        raise ValueError(
+            "initial executor forward/left receipt must be bound together")
+    else:
+        pending_executor_forward_m = float(initial_executor_forward_m)
+        pending_executor_left_m = float(initial_executor_left_m)
+    if (not np.isfinite(pending_executor_translation_m)
+            or pending_executor_translation_m < 0.0
+            or not np.isfinite(pending_executor_yaw_rad)
+            or not np.isfinite(pending_executor_forward_m)
+            or not np.isfinite(pending_executor_left_m)):
+        raise ValueError("initial executor receipt is invalid")
+
+    def bind_next_executor_receipt(
+            before_position, before_yaw, translation_m):
+        """Bind realized motion to the next causal RGB observation."""
+
+        nonlocal pending_executor_translation_m
+        nonlocal pending_executor_yaw_rad
+        nonlocal pending_executor_forward_m
+        nonlocal pending_executor_left_m
+        nonlocal pending_executor_local_se2_source
+        translation = float(translation_m)
+        if not np.isfinite(translation) or translation < 0.0:
+            raise RuntimeError("executor returned an invalid translation")
+        pending_executor_translation_m = translation
+        (pending_executor_forward_m, pending_executor_left_m,
+         pending_executor_yaw_rad) = local_se2_delta(
+            before_position,
+            before_yaw,
+            pos,
+            psi,
+        )
+        pending_executor_local_se2_source = None
+
+    def bind_next_route_alignment_receipt(
+            *, turn_delta_rad: float, packet_sha256: str) -> None:
+        """Bind an issued atomic yaw, never a simulator pose difference."""
+
+        nonlocal pending_executor_translation_m
+        nonlocal pending_executor_yaw_rad
+        nonlocal pending_executor_forward_m
+        nonlocal pending_executor_left_m
+        nonlocal pending_executor_local_se2_source
+        delta = float(turn_delta_rad)
+        if not np.isfinite(delta) or abs(delta) > np.deg2rad(30.0) + 1e-9:
+            raise RuntimeError("route alignment issued an invalid yaw action")
+        pending_executor_translation_m = 0.0
+        pending_executor_yaw_rad = delta
+        pending_executor_forward_m = 0.0
+        pending_executor_left_m = 0.0
+        pending_executor_local_se2_source = route_alignment_executor_source(
+            packet_sha256)
 
     def result(steps, final_response=None, termination_reason=None):
-        final_dist = float(np.linalg.norm(
+        final_planar_dist = float(np.linalg.norm(
             np.asarray([pos[0], pos[2]]) - np.asarray(goal_xz)))
+        final_vertical_error = (
+            None if success_goal_xyz is None
+            else float(abs(float(pos[1]) - float(success_goal_xyz[1])))
+        )
+        final_3d_dist = (
+            None if success_goal_xyz is None
+            else float(np.linalg.norm(np.asarray(pos) - success_goal_xyz))
+        )
+        final_dist = benchmark_goal_distance(pos)
         final_yaw_err = (abs(wrap_angle(float(goal_yaw) - psi))
                          if goal_yaw is not None else None)
         final_yaw_signed_err = (wrap_angle(float(goal_yaw) - psi)
@@ -2749,6 +3253,12 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             final_yaw_hab=float(psi),
             goal_yaw_hab=(float(goal_yaw) if goal_yaw is not None else None),
             final_goal_dist_m=final_dist,
+            final_goal_planar_dist_m=final_planar_dist,
+            final_goal_vertical_error_m=final_vertical_error,
+            final_goal_3d_dist_m=final_3d_dist,
+            success_distance_contract=(
+                "floor_aware_3d_euclidean_v1"
+                if success_goal_xyz is not None else "legacy_planar_xz_v1"),
             loop_closed=loop_closed,
             arrival_shadow_mode=args.arrival_shadow,
             arrival_shadow_first_pose_gt_dist_m=(
@@ -2777,12 +3287,22 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             certified_stagnation_intervention_step=(
                 certified_stagnation_intervention_step),
             certified_route_start_anchor=certified_route_start_anchor,
+            executor_receipt_pending_translation_m=float(
+                pending_executor_translation_m),
+            executor_receipt_pending_yaw_rad=float(
+                pending_executor_yaw_rad),
+            executor_receipt_pending_forward_m=float(
+                pending_executor_forward_m),
+            executor_receipt_pending_left_m=float(
+                pending_executor_left_m),
+            executor_receipt_pending_local_se2_source=(
+                pending_executor_local_se2_source),
             **shadow_summary,
         )
 
     def execute_bounded_alignment_action(
             *, step: int, frame_sha256: str,
-            memory_frame_idx=None) -> None:
+            memory_frame_idx=None) -> float:
         """Execute one bounded yaw action and require a later fresh replan."""
 
         nonlocal psi
@@ -2795,7 +3315,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
         if delta == 0.0:
             cec_bounded_alignment_remaining_rad = None
             cec_bounded_alignment_force_replan = True
-            return
+            return 0.0
         yaw_before = float(psi)
         psi = float(wrap_angle(psi + delta))
         remainder = float(remaining - delta)
@@ -2819,6 +3339,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             "translation_m": 0.0,
             "fresh_observation_required_before_next_action": True,
         })
+        return float(delta)
 
     total_budget = (
         args.max_steps
@@ -2826,6 +3347,19 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
         + (1 if arrival_detector is not None and terminal_mode == "off" else 0)
     )
     for step in range(total_budget):
+        frame_executor_translation_m = pending_executor_translation_m
+        frame_executor_yaw_rad = pending_executor_yaw_rad
+        frame_executor_forward_m = pending_executor_forward_m
+        frame_executor_left_m = pending_executor_left_m
+        frame_executor_local_se2_source = (
+            pending_executor_local_se2_source)
+        pending_executor_translation_m = 0.0
+        pending_executor_yaw_rad = 0.0
+        pending_executor_forward_m = 0.0
+        pending_executor_left_m = 0.0
+        pending_executor_local_se2_source = None
+        frame_pose_position = np.asarray(pos, dtype=np.float64).copy()
+        frame_pose_yaw = float(psi)
         rgb, depth = render(sim, pos + np.array([0, CAM_H, 0]), psi)
         frame = jpg_bytes(rgb)
         rollout_trace.append({
@@ -2835,6 +3369,16 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             "z": float(pos[2]),
             "yaw": float(psi),
             "jpg_sha256": bytes_sha256(frame),
+            "executed_translation_m_since_previous_frame": float(
+                frame_executor_translation_m),
+            "executed_yaw_rad_since_previous_frame": float(
+                frame_executor_yaw_rad),
+            "executed_forward_m_since_previous_frame": float(
+                frame_executor_forward_m),
+            "executed_left_m_since_previous_frame": float(
+                frame_executor_left_m),
+            "executor_local_se2_source_since_previous_frame": (
+                frame_executor_local_se2_source),
         })
         if writer is not None:
             writer.append_data(rgb)
@@ -2954,9 +3498,20 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                 # The final coarse-pose frame has not yet been
                                 # streamed.  Consume it exactly once, then take
                                 # the first deterministic correction step.
-                                srv_memory(frame)
+                                srv_memory(
+                                    frame,
+                                    executed_translation_m=(
+                                        frame_executor_translation_m),
+                                    executed_yaw_rad=frame_executor_yaw_rad,
+                                    executed_forward_m=frame_executor_forward_m,
+                                    executed_left_m=frame_executor_left_m,
+                                    executor_local_se2_source=(
+                                        frame_executor_local_se2_source),
+                                )
                                 pos, psi, dl = terminal.step(
                                     pos, psi, pf, float(pos[1]))
+                                bind_next_executor_receipt(
+                                    frame_pose_position, frame_pose_yaw, dl)
                                 path_len += dl
                                 history.append(np.array([pos[0], pos[2]]))
                                 if terminal.failed:
@@ -2970,8 +3525,17 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 return result(
                     step + 1, final_response,
                     termination_reason="terminal_complete")
-            srv_memory(frame)
+            srv_memory(
+                frame,
+                executed_translation_m=frame_executor_translation_m,
+                executed_yaw_rad=frame_executor_yaw_rad,
+                executed_forward_m=frame_executor_forward_m,
+                executed_left_m=frame_executor_left_m,
+                executor_local_se2_source=(
+                    frame_executor_local_se2_source),
+            )
             pos, psi, dl = terminal.step(pos, psi, pf, float(pos[1]))
+            bind_next_executor_receipt(frame_pose_position, frame_pose_yaw, dl)
             path_len += dl
             history.append(np.array([pos[0], pos[2]]))
             if terminal.failed:
@@ -2993,7 +3557,15 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
         # which is written exactly once without sampling or executing a ViNT
         # trajectory.  The final fresh view forces a new controller plan.
         if cec_bounded_alignment_remaining_rad is not None:
-            memory_response = srv_memory(frame)
+            memory_response = srv_memory(
+                frame,
+                executed_translation_m=frame_executor_translation_m,
+                executed_yaw_rad=frame_executor_yaw_rad,
+                executed_forward_m=frame_executor_forward_m,
+                executed_left_m=frame_executor_left_m,
+                executor_local_se2_source=(
+                    frame_executor_local_se2_source),
+            )
             memory_frame_idx = memory_response.get("frame_idx")
             if memory_frame_idx is not None:
                 memory_trace.append(dict(
@@ -3003,11 +3575,20 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                     z=float(pos[2]),
                     yaw=float(psi),
                 ))
-            execute_bounded_alignment_action(
+            executed_turn_delta = execute_bounded_alignment_action(
                 step=step,
                 frame_sha256=bytes_sha256(frame),
                 memory_frame_idx=memory_frame_idx,
             )
+            if (args.cec_initial_bearing_alignment
+                    == "first_route_tangent_rear_bounded"):
+                bind_next_route_alignment_receipt(
+                    turn_delta_rad=executed_turn_delta,
+                    packet_sha256=cec_bounded_alignment_packet_sha256,
+                )
+            else:
+                bind_next_executor_receipt(
+                    frame_pose_position, frame_pose_yaw, 0.0)
             way_world = None
             continue
 
@@ -3032,12 +3613,55 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 robot_yaw=psi,
                 candidate_ceiling_override=candidate_ceiling_override,
                 certified_route_start_anchor=certified_route_start_anchor,
-                certified_graph_rescue=certified_graph_rescue_active)
+                certified_graph_rescue=certified_graph_rescue_active,
+                executed_translation_m=frame_executor_translation_m,
+                executed_yaw_rad=frame_executor_yaw_rad,
+                executed_forward_m=frame_executor_forward_m,
+                executed_left_m=frame_executor_left_m,
+                executor_local_se2_source=(
+                    frame_executor_local_se2_source))
             if request_seed is not None:
                 echoed_seed = response.get("diffusion_seed")
                 if echoed_seed is None or int(echoed_seed) != request_seed:
                     raise RuntimeError(
                         "NavDP server did not echo the requested diffusion seed")
+            if response.get("geometry_stream_stop") is True:
+                if (args.certified_guidance_mode != "monocular_route_tangent"
+                        or response.get("geometry_stream_controller_called")
+                        is not False
+                        or response.get(
+                            "geometry_stream_native_fallback_executed")
+                        is not False
+                        or response.get(
+                            "geometry_stream_endpoint_fallback_executed")
+                        is not False):
+                    raise RuntimeError(
+                        "invalid geometry-stream stop packet")
+                stop_plan = dict(response)
+                stop_plan.update({
+                    "step": int(step),
+                    "requested_diffusion_seed": request_seed,
+                    "policy_path_len_m": float(path_len),
+                    "evaluation_gt_goal_distance_m": (
+                        benchmark_goal_distance(pos)),
+                    "evaluation_gt_arrived": False,
+                    "navdp_depth_source": response.get("depth_source"),
+                })
+                plans.append(stop_plan)
+                memory_frame_idx = response.get("memory_frame_idx")
+                if memory_frame_idx is not None:
+                    memory_trace.append({
+                        "frame_idx": int(memory_frame_idx),
+                        "step": int(step),
+                        "x": float(pos[0]),
+                        "z": float(pos[2]),
+                        "yaw": float(psi),
+                    })
+                return result(
+                    step + 1,
+                    final_response=response,
+                    termination_reason="geometry_stream_failure",
+                )
             if (leg_trajectory_selector == "oracle_geodesic"
                     and args.oracle_candidate_seed_count > 1):
                 if request_seed is None:
@@ -3083,22 +3707,43 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                     "cec_initial_bearing_alignment_yaw_after_rad": None,
                     "cec_initial_bearing_alignment_motion_contract": None,
                 }
+                generic_alignment_authority = bool(
+                    response.get("cec_takeover") is True
+                    or response.get("cec_shadow_takeover") is True)
+                route_alignment_authority = bool(
+                    response.get("certified_relocalization_accepted") is True
+                    and response.get(
+                        "certified_relocalization_guidance_mode")
+                    == "monocular_route_tangent")
+                alignment_authorized = (
+                    route_alignment_authority
+                    if args.cec_initial_bearing_alignment
+                    == "first_route_tangent_rear_bounded"
+                    else generic_alignment_authority)
                 if (args.cec_initial_bearing_alignment != "off"
                         and cec_initial_bearing_alignment_count == 0
-                        and (response.get("cec_takeover") is True
-                             or response.get("cec_shadow_takeover") is True)):
+                        and alignment_authorized):
                     try:
-                        alignment = certified_alignment_turn(response)
+                        alignment = (
+                            certified_route_alignment_turn(response)
+                            if args.cec_initial_bearing_alignment
+                            == "first_route_tangent_rear_bounded"
+                            else certified_alignment_turn(response))
                     except ValueError as exc:
                         raise RuntimeError(
                             "bearing alignment packet is invalid") from exc
-                    if alignment is None:
+                    if (alignment is None
+                            and args.cec_initial_bearing_alignment
+                            != "first_route_tangent_rear_bounded"):
                         raise RuntimeError(
                             "bearing alignment lost its accepted authority")
-                    direction = [alignment.forward, alignment.left]
-                    turn_rad = float(alignment.turn_rad)
-                    yaw_before = float(psi)
-                    if args.cec_initial_bearing_alignment == "first_certified":
+                    if alignment is not None:
+                        direction = [alignment.forward, alignment.left]
+                        turn_rad = float(alignment.turn_rad)
+                        yaw_before = float(psi)
+                    if (alignment is not None
+                            and args.cec_initial_bearing_alignment
+                            == "first_certified"):
                         psi = float(wrap_angle(psi + turn_rad))
                         cec_initial_bearing_alignment_count += 1
                         cec_initial_bearing_alignment_turn_deg = float(
@@ -3117,7 +3762,7 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                 "idealized_zero_translation_yaw_then_unchanged_"
                                 "controller_local_trajectory"),
                         })
-                    elif abs(turn_rad) > 1e-9:
+                    elif alignment is not None and abs(turn_rad) > 1e-9:
                         cec_initial_bearing_alignment_count += 1
                         cec_initial_bearing_alignment_turn_deg = float(
                             np.degrees(turn_rad))
@@ -3136,12 +3781,16 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                             "cec_initial_bearing_alignment_yaw_after_rad": (
                                 float(wrap_angle(yaw_before + turn_rad))),
                             "cec_initial_bearing_alignment_motion_contract": (
+                                "proof_bound_route_yaw_control_edges_"
+                                "max_30deg_fresh_observation_then_replan"
+                                if args.cec_initial_bearing_alignment
+                                == "first_route_tangent_rear_bounded"
+                                else
                                 "bounded_zero_translation_turns_max_30deg_"
                                 "fresh_observation_each_action_then_replan"),
                         })
                 way_world = waypoints_to_world(way, [pos[0], pos[2]], psi)
-                evaluation_gt_goal_distance_m = float(np.linalg.norm(
-                    np.asarray([pos[0], pos[2]]) - np.asarray(goal_xz)))
+                evaluation_gt_goal_distance_m = benchmark_goal_distance(pos)
                 learned_pi3x_evaluation_gt_bearing_error_deg = None
                 if response.get(
                         "learned_pi3x_relocalization_accepted") is True:
@@ -3353,6 +4002,30 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                           "memory_controller_pointgoal_distance_m")),
                                   memory_pointgoal_fixed_radius_m=response.get(
                                       "memory_pointgoal_fixed_radius_m"),
+                                  navdp_support_projection_schema_version=(
+                                      response.get(
+                                          "navdp_support_projection_schema_version")),
+                                  memory_navdp_support_projection_applied=(
+                                      response.get(
+                                          "memory_navdp_support_projection_applied")),
+                                  memory_controller_bearing_unit=response.get(
+                                      "memory_controller_bearing_unit"),
+                                  memory_source_bearing_heading_deg=(
+                                      response.get(
+                                          "memory_source_bearing_heading_deg")),
+                                  memory_controller_bearing_heading_deg=(
+                                      response.get(
+                                          "memory_controller_bearing_heading_deg")),
+                                  bounded_metric_adapter_schema_version=(
+                                      response.get(
+                                          "bounded_metric_adapter_schema_version")),
+                                  full_metric_adapter_schema_version=(
+                                      response.get(
+                                          "full_metric_adapter_schema_version")),
+                                  memory_metric_scale_m_per_raw=response.get(
+                                      "memory_metric_scale_m_per_raw"),
+                                  memory_pointgoal_radius_cap_m=response.get(
+                                      "memory_pointgoal_radius_cap_m"),
                                   **{
                                       key: response.get(key)
                                       for key in ACTION_SHADOW_KEYS
@@ -3467,6 +4140,86 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                   certified_relocalization_pointgoal_units=(
                                       response.get(
                                           "certified_relocalization_pointgoal_units")),
+                                  certified_relocalization_guidance_mode=(
+                                      response.get(
+                                          "certified_relocalization_guidance_mode")),
+                                  episodic_path_field_requested=response.get(
+                                      "episodic_path_field_requested"),
+                                  episodic_path_field_status=response.get(
+                                      "episodic_path_field_status"),
+                                  episodic_path_field_error_type=response.get(
+                                      "episodic_path_field_error_type"),
+                                  episodic_path_field_error=response.get(
+                                      "episodic_path_field_error"),
+                                  episodic_path_field_schema_version=response.get(
+                                      "episodic_path_field_schema_version"),
+                                  episodic_path_field_goal_start_frame=response.get(
+                                      "episodic_path_field_goal_start_frame"),
+                                  episodic_path_field_target_anchor=response.get(
+                                      "episodic_path_field_target_anchor"),
+                                  episodic_path_field_metric_scale_m_per_raw=(
+                                      response.get(
+                                          "episodic_path_field_metric_scale_m_per_raw")),
+                                  episodic_path_field_scale_receipt_sha256=(
+                                      response.get(
+                                          "episodic_path_field_scale_receipt_sha256")),
+                                  episodic_path_field_runtime_geometry=response.get(
+                                      "episodic_path_field_runtime_geometry"),
+                                  episodic_path_field_evaluator_pose_consumed=(
+                                      response.get(
+                                          "episodic_path_field_evaluator_pose_consumed")),
+                                  episodic_path_field_habitat_path_consumed=(
+                                      response.get(
+                                          "episodic_path_field_habitat_path_consumed")),
+                                  path_progress_m=response.get(
+                                      "path_progress_m"),
+                                  path_remaining_m=response.get(
+                                      "path_remaining_m"),
+                                  path_cross_track_m=response.get(
+                                      "path_cross_track_m"),
+                                  path_projection_segment=response.get(
+                                      "path_projection_segment"),
+                                  path_reference_arc_m=response.get(
+                                      "path_reference_arc_m"),
+                                  path_reference_raw_xz=response.get(
+                                      "path_reference_raw_xz"),
+                                  path_terminal_within_horizon=response.get(
+                                      "path_terminal_within_horizon"),
+                                  path_complete=response.get("path_complete"),
+                                  path_unit_bearing=response.get(
+                                      "path_unit_bearing"),
+                                  path_controller_pointgoal=response.get(
+                                      "path_controller_pointgoal"),
+                                  route_coordinate_state_updated=response.get(
+                                      "route_coordinate_state_updated"),
+                                  route_coordinate_reason=response.get(
+                                      "route_coordinate_reason"),
+                                  route_coordinate_local_witness=response.get(
+                                      "route_coordinate_local_witness"),
+                                  route_coordinate_endpoint_fallback_available=(
+                                      response.get(
+                                          "route_coordinate_endpoint_fallback_available")),
+                                  route_coordinate_native_fallback_available=(
+                                      response.get(
+                                          "route_coordinate_native_fallback_available")),
+                                  route_coordinate_distance_gate_present=(
+                                      response.get(
+                                          "route_coordinate_distance_gate_present")),
+                                  **{
+                                      key: value
+                                      for key, value in response.items()
+                                      if key.startswith("action_coordinate_")
+                                  },
+                                  **{
+                                      key: value
+                                      for key, value in response.items()
+                                      if key.startswith("local_tangent_")
+                                  },
+                                  **{
+                                      key: value
+                                      for key, value in response.items()
+                                      if key.startswith("se2_route_")
+                                  },
                                   certified_relocalization_selected_proposal_source=(
                                       response.get(
                                           "certified_relocalization_selected_proposal_source")),
@@ -3545,6 +4298,8 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                                       "certified_graph_reason"),
                                   current_goal_cos=response.get("current_goal_cos"),
                                   frame_idx=response.get("frame_idx"),
+                                  executor_motion_receipt=response.get(
+                                      "executor_motion_receipt"),
                                   **alignment_diag,
                                   **shadow_diag,
                                   **selector_info))
@@ -3564,7 +4319,15 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                         )
             memory_frame_idx = response.get("memory_frame_idx")
         else:
-            memory_response = srv_memory(frame)
+            memory_response = srv_memory(
+                frame,
+                executed_translation_m=frame_executor_translation_m,
+                executed_yaw_rad=frame_executor_yaw_rad,
+                executed_forward_m=frame_executor_forward_m,
+                executed_left_m=frame_executor_left_m,
+                executor_local_se2_source=(
+                    frame_executor_local_se2_source),
+            )
             memory_frame_idx = memory_response.get("frame_idx")
         if memory_frame_idx is not None:
             memory_trace.append(dict(
@@ -3580,11 +4343,20 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
             # current observation was already consumed by that plan request;
             # execute one bounded turn now and acquire a fresh observation on
             # the next loop iteration.
-            execute_bounded_alignment_action(
+            executed_turn_delta = execute_bounded_alignment_action(
                 step=step,
                 frame_sha256=bytes_sha256(frame),
                 memory_frame_idx=memory_frame_idx,
             )
+            if (args.cec_initial_bearing_alignment
+                    == "first_route_tangent_rear_bounded"):
+                bind_next_route_alignment_receipt(
+                    turn_delta_rad=executed_turn_delta,
+                    packet_sha256=cec_bounded_alignment_packet_sha256,
+                )
+            else:
+                bind_next_executor_receipt(
+                    frame_pose_position, frame_pose_yaw, 0.0)
             way_world = None
             continue
         if arrival_shadow_probe_pending:
@@ -3598,11 +4370,12 @@ def run_policy_leg(sim, pf, pos, psi, goal_jpg, goal_xz, geo_dist, writer=None,
                 step + 1, termination_reason="success_post_reach_probe")
         if way_world is not None:
             pos, psi, dl = pursuit_step(pos, psi, way_world, pf)
+            bind_next_executor_receipt(frame_pose_position, frame_pose_yaw, dl)
             path_len += dl
             if dl <= 1e-12:
                 blocked_step_count += 1
         history.append(np.array([pos[0], pos[2]]))
-        if np.linalg.norm(np.array([pos[0], pos[2]]) - goal_xz) < success_dist:
+        if benchmark_goal_distance(pos) < success_dist:
             if not reached_position:
                 reached_position = True
                 path_len_at_reach = path_len
@@ -3816,11 +4589,29 @@ def main():
             and args.router_verify_top_k != 8):
         raise ValueError(
             "learned_rank_geometry requires --router_verify_top_k 8")
-    if (args.hybrid_route in SCALE_FREE_RELOCALIZATION_ROUTES
+    if (args.hybrid_route in CERTIFIED_RELOCALIZATION_ROUTES
+            and args.revisit_adapter not in (
+                "verified_bearing_v1",
+                "verified_navdp_support_projection_v1",
+                "verified_bounded_metric_v1",
+                "verified_metric_v1")):
+        raise ValueError(
+            "LingBot scale-free relocalization routes require "
+            "--revisit_adapter verified_bearing_v1 or the explicit "
+            "verified_navdp_support_projection_v1, "
+            "verified_bounded_metric_v1 or verified_metric_v1 challenger")
+    if (args.hybrid_route in LEARNED_PI3X_RELOCALIZATION_ROUTES
             and args.revisit_adapter != "verified_bearing_v1"):
         raise ValueError(
-            "scale-free relocalization routes require --revisit_adapter "
+            "learned Pi3X relocalization requires --revisit_adapter "
             "verified_bearing_v1")
+    if args.revisit_adapter in SCALED_METRIC_MODES:
+        if (args.hybrid_route != "certified_relocalization"
+                or args.navdp_depth_source != "monocular_sidecar"):
+            raise ValueError(
+                f"{args.revisit_adapter} is restricted to full-mono "
+                "certified_relocalization with --navdp_depth_source "
+                "monocular_sidecar")
     if args.hybrid_route in LEARNED_PI3X_RELOCALIZATION_ROUTES:
         if not re.fullmatch(
                 r"[0-9a-f]{64}", args.expected_pi3x_model_sha256):
@@ -3856,6 +4647,31 @@ def main():
             raise ValueError(
                 "certified stagnation intervention requires hybrid_pose with "
                 "certified_relocalization")
+    if args.certified_guidance_mode in (
+            "episodic_path_field", "action_coordinate_compass",
+            "se2_route_compass", "monocular_route_tangent"):
+        adapter_ok = bool(
+            args.revisit_adapter == "verified_bearing_v1"
+            or (
+                args.certified_guidance_mode == "monocular_route_tangent"
+                and args.revisit_adapter
+                == "verified_navdp_support_projection_v1"
+            )
+        )
+        if (args.server_backend != "hybrid_pose"
+                or args.hybrid_route != "certified_relocalization"
+                or not adapter_ok
+                or args.navdp_depth_source != "monocular_sidecar"):
+            raise ValueError(
+                "long-range guidance requires full-mono hybrid_pose "
+                "certified_relocalization with verified_bearing_v1; only "
+                "monocular_route_tangent may use the explicit frozen-NavDP "
+                "support-projection attribution adapter")
+        if args.certified_stagnation_graph != "off":
+            raise ValueError(
+                "long-range guidance is incompatible with the old graph rescue")
+    elif args.certified_guidance_mode != "endpoint_bearing":
+        raise ValueError("unknown certified guidance mode")
     if args.router_min_matches < 8:
         raise ValueError("--router_min_matches must be >= 8")
     if args.router_min_inliers < 0:
@@ -3972,12 +4788,37 @@ def main():
         leg1_trace_sha256 = None
         if args.leg1_mode == "replay":
             memory_trace = []
+            previous_replay_position = None
+            previous_replay_yaw = None
             for i in range(switch):
+                frame_pos, frame_yaw = parquet_pose_hab(
+                    rows.iloc[i]["action"])
+                if previous_replay_position is None:
+                    replay_translation = 0.0
+                    replay_yaw = 0.0
+                    replay_forward = 0.0
+                    replay_left = 0.0
+                else:
+                    replay_translation = float(np.linalg.norm(
+                        frame_pos[[0, 2]]
+                        - previous_replay_position[[0, 2]]))
+                    replay_forward, replay_left, replay_yaw = local_se2_delta(
+                        previous_replay_position,
+                        previous_replay_yaw,
+                        frame_pos,
+                        frame_yaw,
+                    )
                 memory_response = srv_memory(
-                    open(os.path.join(rgb_dir, f"{i}.jpg"), "rb").read())
+                    open(os.path.join(rgb_dir, f"{i}.jpg"), "rb").read(),
+                    executed_translation_m=replay_translation,
+                    executed_yaw_rad=replay_yaw,
+                    executed_forward_m=replay_forward,
+                    executed_left_m=replay_left,
+                )
+                previous_replay_position = frame_pos
+                previous_replay_yaw = frame_yaw
                 frame_idx = memory_response.get("frame_idx")
                 if frame_idx is not None:
-                    frame_pos, frame_yaw = parquet_pose_hab(rows.iloc[i]["action"])
                     memory_trace.append(dict(
                         frame_idx=int(frame_idx), step=int(i),
                         x=float(frame_pos[0]), z=float(frame_pos[2]),
@@ -4074,6 +4915,10 @@ def main():
                     if args.server_backend == "hybrid_pose"
                     else None),
                 episode_seed=episode_seed, leg_index=1,
+                initial_executor_translation_m=float(legA.get(
+                    "executor_receipt_pending_translation_m", 0.0)),
+                initial_executor_yaw_rad=float(legA.get(
+                    "executor_receipt_pending_yaw_rad", 0.0)),
             )
 
         if writer is not None:
@@ -4201,7 +5046,12 @@ def main():
                 args.expected_pi3x_proof_manifest_sha256 or None),
             revisit_adapter_fixed_radius_m=(
                 VERIFIED_BEARING_RADIUS_M
-                if args.revisit_adapter == "verified_bearing_v1" else None),
+                if args.revisit_adapter in FIXED_BEARING_MODES else None),
+            revisit_adapter_radius_cap_m=(
+                (VERIFIED_BEARING_RADIUS_M
+                 if args.revisit_adapter == "verified_bounded_metric_v1"
+                 else NAVDP_POINTGOAL_RADIUS_MAX_M)
+                if args.revisit_adapter in SCALED_METRIC_MODES else None),
             revisit_adapter_plan_count=sum(
                 plan.get("revisit_adapter_mode") is not None
                 for plan in legB.get("plans", [])),
@@ -4581,7 +5431,12 @@ def main():
         cdec_server_status=cdec_server_status,
         revisit_adapter_fixed_radius_m=(
             VERIFIED_BEARING_RADIUS_M
-            if args.revisit_adapter == "verified_bearing_v1" else None),
+            if args.revisit_adapter in FIXED_BEARING_MODES else None),
+        revisit_adapter_radius_cap_m=(
+            (VERIFIED_BEARING_RADIUS_M
+             if args.revisit_adapter == "verified_bounded_metric_v1"
+             else NAVDP_POINTGOAL_RADIUS_MAX_M)
+            if args.revisit_adapter in SCALED_METRIC_MODES else None),
         revisit_adapter_plan_count=sum(
             m.get("revisit_adapter_plan_count", 0) for m in metrics),
         revisit_adapter_takeover_plan_count=sum(

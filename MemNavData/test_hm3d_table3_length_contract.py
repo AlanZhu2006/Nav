@@ -194,6 +194,8 @@ def test_independent_audit_executes_the_causal_survey_branch(tmp_path):
         "online_a_receipt_sha256": digest(online / "receipt.json"),
         "online_a_trace_sha256": digest(online / "online_a_trace.json"),
         "online_a_steps": 40,
+        "longrange_route_tangent_fresh": True,
+        "revisit_vertical_error_m": 0.0,
     })
     for role, query_payload in zip(
         ("novel", "revisit"), episode["pairs"][0]["queries"]
@@ -227,3 +229,10 @@ def test_independent_audit_executes_the_causal_survey_branch(tmp_path):
     assert result["online_history"] == (
         "controlled_causal_rgb_geodesic_survey"
     )
+    selected = audit(
+        role_root,
+        exact_bin_population={"20_to_30_m": (1, 1)},
+        require_route_tangent_fresh=True,
+    )
+    assert selected["audit_scope"] == "exact_selected_population"
+    assert selected["route_tangent_fresh_required"] is True

@@ -1,0 +1,50 @@
+{
+  "schema_version": "hm3d_longrange_route_tangent_failure_audit_freeze_v1_20260903",
+  "frozen_at": "2026-09-03T15:34:04+08:00",
+  "scope": "result-blind diagnostic decomposition after the independently verified 23-history fresh result",
+  "formal_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_751efdcbb436c99b",
+  "formal_source_receipt_sha256": "751efdcbb436c99b5cc92d69633e812e9d1edc381dcf224af9042113ee8e874e",
+  "formal_protocol_sha256": "435fe26646a8c42229230213ff70d9fc07c3d7b746b44641251d4eb4ce84227e",
+  "diagnostic_contract_inherited_from": {
+    "path": "MemNavData/hm3d_longrange_route_tangent_failure_audit_freeze_v2_20260903.json",
+    "sha256": "f62043d174f2f415f65aab8dc47bed99bc1d964252bce74ba0362f51f30b8c09",
+    "unchanged_fields": [
+      "population",
+      "arms",
+      "fixed_panels",
+      "fixed_failure_partition_order",
+      "paired_decomposition",
+      "visualization_policy",
+      "guards"
+    ]
+  },
+  "supersedes_infrastructure_binding": {
+    "freeze_sha256": "f62043d174f2f415f65aab8dc47bed99bc1d964252bce74ba0362f51f30b8c09",
+    "failed_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_c472a57c07f261f5",
+    "reason": "all three evaluators completed, but the runner rejected a preregistered atomic geometry-stop packet because it incorrectly required the successful-route pre-metric-bridge receipt before classifying the stop; no completion or aggregate result was produced"
+  },
+  "result_visibility_at_freeze": {
+    "new_formal_run_created": false,
+    "new_formal_query_outcomes_exist": false,
+    "completed_query_outcomes_read": false,
+    "aggregate_success_rates_read": false,
+    "failed_run_per_arm_metrics_or_summaries_read": false,
+    "failed_run_structural_stop_packet_read": true,
+    "failed_run_structural_observation": "75 accepted route plans used anchor 111; 74 active packets carried the valid boundary receipt and the final atomic geometry-stop packet omitted the inapplicable successful-route receipt"
+  },
+  "population": {
+    "primary_histories": 23,
+    "scene_clusters": 8,
+    "balanced_max_two_per_scene_histories": 15
+  },
+  "arms": [
+    "mono_native",
+    "mono_cec_endpoint",
+    "mono_cec_route_tangent"
+  ],
+  "fixed_panels_inherited_without_change": true,
+  "fixed_failure_partition_inherited_without_change": true,
+  "paired_decomposition_inherited_without_change": true,
+  "visualization_policy_inherited_without_change": true,
+  "guards_inherited_without_change": true
+}

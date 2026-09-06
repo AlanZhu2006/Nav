@@ -1,0 +1,49 @@
+{
+  "schema_version": "hm3d_longrange_rear_alignment_protocol_v1_20260904",
+  "date": "2026-09-04",
+  "status": "consumed_result_dependent_mechanism_diagnostic",
+  "question": "Conditional on an accepted initial monocular route tangent that lies in frozen NavDP's clipped rear half-plane, does one proof-bound bounded yaw alignment recover controller support without destroying previously successful route-tangent rollouts?",
+  "formal_parent": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_751efdcbb436c99b",
+    "benchmark_manifest_sha256": "0491632af1925fb14fe0bf69d9aaf8d769590552f343df38e2e30a0380655a47",
+    "summary_sha256": "b3f55c8bf90f1897556931f05795dd94787864a0682ec4b6ba59995b7bea421a",
+    "independent_verification_sha256": "3cb3d3c77d9de2a013fe223183750ca3588c595b83dbf33f3b67f18c26e2c2d5",
+    "failure_audit_sha256": "56fb3eda192902f5573f7ef645cc181617af6c3af19a00fa2132627a81bedcef"
+  },
+  "selected_history_indices": [3, 4, 5, 8, 10, 11, 13, 15, 21],
+  "selection_rule": "all nine formal mono_cec_route_tangent histories whose terminal partition was not geometry_stream_failure: five stuck failures and four successes",
+  "parent_stuck_indices": [3, 4, 8, 10, 21],
+  "parent_success_indices": [5, 11, 13, 15],
+  "arms": [
+    "route_tangent_unaligned",
+    "route_tangent_rear_aligned"
+  ],
+  "sole_intervention": "after the first accepted rear route tangent, discard the pre-turn horizon, execute zero-translation yaw atoms of at most 30 degrees with one fresh RGB observation per atom, update the existing route compass from issued-action receipts, and replan",
+  "alignment_authority": "accepted CEC certificate plus proof-bound monocular route-tangent packet",
+  "forbidden_alignment_inputs": [
+    "Habitat pose difference",
+    "ground-truth goal bearing",
+    "Novel/Revisit role label",
+    "metric depth sensor"
+  ],
+  "baseline": "identical certified monocular route tangent with alignment disabled",
+  "success_contract": "three-dimensional Euclidean distance strictly below 1.0 m",
+  "pairing_contract": "both arms run in one process and share the exact frozen causal RGB history, query, goal, initial proof, initial route packet, seeds, budget, policy and GPU",
+  "control_edge_contract": {
+    "maximum_yaw_atom_deg": 30.0,
+    "translation_per_atom_m": 0.0,
+    "fresh_observation_after_every_atom": true,
+    "visual_pnp_edges_during_alignment": 0,
+    "issued_yaw_receipt_not_simulator_pose": true
+  },
+  "decision_rule": {
+    "advance_to_fresh_confirmation": "all execution audits pass, paired aligned-versus-unaligned gains are at least 2, paired losses are at most 1, and net gain is positive",
+    "otherwise": "do not promote rear alignment into the long-range method",
+    "threshold_search_allowed": false
+  },
+  "outcomes_read_before_design": true,
+  "navigation_claim_allowed": false,
+  "significance_claim_allowed": false,
+  "fresh_confirmation_required": true,
+  "scope_boundary": "This test isolates the controller-support layer only. It cannot establish a long-range navigation result and cannot repair the fourteen parent geometry-stream failures by construction."
+}

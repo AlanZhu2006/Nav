@@ -1,0 +1,48 @@
+{
+  "schema_version": "hm3d_longrange_dense_query_gate_protocol_v1_20260903",
+  "frozen_at": "2026-09-03T22:04:00+08:00",
+  "question": "Does aligning route-state updates to every causally observed executor frame remove the observed turn-heavy live-motion chain breaks without changing CEC target proof or NavDP control?",
+  "claim_scope": "consumed implementation mechanism gate only; no navigation or generalization claim",
+  "formal_parent": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_751efdcbb436c99b",
+    "benchmark_manifest_sha256": "0491632af1925fb14fe0bf69d9aaf8d769590552f343df38e2e30a0380655a47",
+    "summary_sha256": "b3f55c8bf90f1897556931f05795dd94787864a0682ec4b6ba59995b7bea421a",
+    "independent_verification_sha256": "3cb3d3c77d9de2a013fe223183750ca3588c595b83dbf33f3b67f18c26e2c2d5"
+  },
+  "selection_rule": "first three formal route-tangent geometry-stream failures in benchmark-manifest order",
+  "selected_history_indices": [0, 1, 2],
+  "observed_parent_failures": {
+    "history_0": "coarse interval 8 frames, 33.64 deg yaw, direct PnP had 7 matches",
+    "history_1": "coarse interval 6 frames, 26.31 deg yaw, direct PnP had 13 matches",
+    "history_2": "coarse interval 8 frames, 4.42 deg yaw; Fundamental-prefiltered PnP failed RMSE while direct PnP was valid"
+  },
+  "candidate": {
+    "initial_target_certificate": "unchanged CEC",
+    "historical_route_sampling": "unchanged fixed-stride-8 causal tape",
+    "live_query_motion": "direct depth PnP on every causal RGB transition within each eight-action controller interval",
+    "depth": "same frozen LingBot relative-depth head and first-40 camera-height scale receipt",
+    "controller_payload": "unchanged canonical unit bearing at fixed 2.5 m radius",
+    "motion_model": "direct_pnp_dense_query",
+    "runtime_role_visible": false,
+    "evaluator_pose_visible_to_method": false,
+    "metric_depth_sensor_consumed": false,
+    "wheel_or_executor_odometry_consumed": false,
+    "distance_gate_present": false,
+    "stuck_trigger_present": false,
+    "endpoint_or_native_fallback_after_accept": false
+  },
+  "pass_rule": {
+    "geometry_stream_failures": "0 of 3",
+    "initial_cec_anchor_and_discrete_certificate": "unchanged from sealed formal parent",
+    "query_sampling": "every available frame transition after route initialization",
+    "controller_called_only_after_valid_route_readout": true
+  },
+  "decision": {
+    "pass": "authorize a consumed full-population interface attribution with dense-query direct PnP and the already-frozen support projection; any navigation claim still requires a newly frozen fresh population",
+    "fail": "do not relax PnP thresholds or add a controller fallback; inspect the failed atomic RGB transition"
+  },
+  "threshold_search_allowed": false,
+  "radius_search_allowed": false,
+  "navigation_claim_allowed": false,
+  "fresh_confirmation_required": true
+}

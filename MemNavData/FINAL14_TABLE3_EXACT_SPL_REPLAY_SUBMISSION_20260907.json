@@ -1,0 +1,31 @@
+{
+  "schema_version": "final14_table3_exact_spl_submission_20260907",
+  "submitted_at_local": "2026-09-07T01:27:00+08:00",
+  "account": "yz11502",
+  "ssh_alias": "alantorch",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_table3_exact_spl_20260907",
+  "replay_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_spl_replay_50eb1204020a4d7c",
+  "source_receipt_sha256": "50eb1204020a4d7c38e34269cfb024989a1fee0fac6e9848792619c2472e36d5",
+  "frozen_runtime": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_5690569a4373f2d2",
+  "manifest_sha256": "7468703a9efbb10e801ffdd226911f696a30fa9432ef9ab486d3134f6e40fe6a",
+  "scope": "consumed_final14_measurement_replay_not_fresh_confirmation",
+  "histories": 21,
+  "scenes": 10,
+  "queries": 42,
+  "rollouts": 210,
+  "arms": ["mono_native", "zero_native", "mono_cec", "metric_native", "metric_cec"],
+  "jobs": {
+    "preflight": {"id": "17057430", "partition": "cpu_short"},
+    "gate": {"id": "17057431", "array": "17", "dependency": "afterok:17057430"},
+    "remaining": {"id": "17057432", "array": "0-16,18-20%4", "dependency": "afterok:17057431"},
+    "summary": {"id": "17057433", "partition": "cpu_short", "dependency": "afterany:17057431:17057432", "requires_all_210_records": true}
+  },
+  "gpu_partitions": "h100_tandon,a100_tandon",
+  "gpu_time_limit": "01:00:00",
+  "gpus_per_history": 1,
+  "cpus_per_history": 10,
+  "memory_per_history": "72G",
+  "local_tests": {"passed": 8, "shell_syntax": "passed", "diff_check": "passed"},
+  "result_status_at_submission": "no_new_SR_or_SPL",
+  "paper_replacement_rule": "keep_bounds_until_verified_then_replace_SR_and_SPL_together"
+}

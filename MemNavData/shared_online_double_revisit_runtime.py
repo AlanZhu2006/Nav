@@ -140,7 +140,7 @@ def load_frozen_episode(
 def replay_online_a(
     frozen: dict[str, Any],
     *,
-    memory_step: Callable[[bytes], dict[str, Any]],
+    memory_step: Callable[..., dict[str, Any]],
     navdp_replay_step: Callable[[bytes], dict[str, Any]],
 ) -> dict[str, Any]:
     """Restore one online-A prefix without executing or sampling a policy.
@@ -169,6 +169,8 @@ def replay_online_a(
     replayed_steps = []
     final_queue_lengths = None
     final_memory_size = None
+    previous_pose = None
+    executor_receipts = []
     for pose in poses:
         step = int(pose["step"])
         image = source / "rgb" / f"{step:06d}.jpg"
@@ -177,7 +179,39 @@ def replay_online_a(
             f"online-A RGB hash changed at step {step}",
         )
         encoded = image.read_bytes()
-        memory_receipt = memory_step(encoded)
+        if previous_pose is None:
+            executed_translation_m = 0.0
+            executed_yaw_rad = 0.0
+            executed_forward_m = 0.0
+            executed_left_m = 0.0
+        else:
+            dx = float(pose["x"]) - float(previous_pose["x"])
+            dz = float(pose["z"]) - float(previous_pose["z"])
+            executed_translation_m = math.hypot(dx, dz)
+            previous_yaw = float(previous_pose["yaw"])
+            executed_forward_m = (
+                -dx * math.sin(previous_yaw) - dz * math.cos(previous_yaw))
+            executed_left_m = (
+                -dx * math.cos(previous_yaw) + dz * math.sin(previous_yaw))
+            executed_yaw_rad = (
+                float(pose["yaw"]) - float(previous_pose["yaw"])
+                + math.pi) % (2.0 * math.pi) - math.pi
+        memory_receipt = memory_step(
+            encoded,
+            executed_translation_m=executed_translation_m,
+            executed_yaw_rad=executed_yaw_rad,
+            executed_forward_m=executed_forward_m,
+            executed_left_m=executed_left_m,
+        )
+        executor_receipts.append({
+            "step": step,
+            "executed_translation_m": executed_translation_m,
+            "executed_yaw_rad": executed_yaw_rad,
+            "executed_forward_m": executed_forward_m,
+            "executed_left_m": executed_left_m,
+            "local_se2_contract": "frame_bound_local_se2_v1",
+        })
+        previous_pose = pose
         frame_idx = memory_receipt.get("frame_idx")
         if frame_idx is not None:
             require(
@@ -223,6 +257,10 @@ def replay_online_a(
         "navdp_memory_size": final_memory_size,
         "navdp_queue_lengths": final_queue_lengths,
         "memory_trace": memory_trace,
+        "executor_motion_receipts": executor_receipts,
+        "executor_motion_receipt_contract": (
+            "frame_bound_realized_executor_motion_v1"),
+        "executor_local_se2_receipt_contract": "frame_bound_local_se2_v1",
         "all_rgb_hashes_verified": True,
         "diffusion_samples_during_replay": 0,
     }

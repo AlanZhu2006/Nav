@@ -1,0 +1,34 @@
+{
+  "schema_version": "hm3d_longrange_route_tangent_failure_audit_source_receipt_v2_20260903",
+  "frozen_at": "2026-09-03T15:54:35+08:00",
+  "scope": "implementation-complete realization of the already-frozen V2/V3 diagnostic panels",
+  "query_outcomes_read_before_freeze": false,
+  "aggregate_success_rates_read_before_freeze": false,
+  "formal_run_submitted_before_freeze": true,
+  "formal_technical_gate_running_at_freeze": true,
+  "diagnostic_fields_changed_after_outcome_read": false,
+  "formal_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_751efdcbb436c99b",
+  "formal_source_receipt_sha256": "751efdcbb436c99b5cc92d69633e812e9d1edc381dcf224af9042113ee8e874e",
+  "diagnostic_contract": {
+    "freeze_v2_sha256": "f62043d174f2f415f65aab8dc47bed99bc1d964252bce74ba0362f51f30b8c09",
+    "freeze_v3_sha256": "938f5060d837c375ea49181f1512a9b2cf1c791f836923282dfe01de46fe13d3",
+    "previous_source_receipt_sha256": "593e58dd14c697b8439457e370764518c3a138b8fe955249671de5ede8d81fed",
+    "fixed_panels_changed": false,
+    "implementation_completion": [
+      "report selected-anchor distribution and reject count",
+      "report per-episode final and maximum route-progress distributions",
+      "report initial-proof equality count"
+    ]
+  },
+  "files": {
+    "MemNavData/analyze_hm3d_longrange_route_tangent_failures.py": "e933cb45d95e7711d86d9924fada491ab0b83e6fe85786add82640563ab2f2f8",
+    "MemNavData/hm3d_longrange_route_tangent_failure_audit_freeze_v2_20260903.json": "f62043d174f2f415f65aab8dc47bed99bc1d964252bce74ba0362f51f30b8c09",
+    "MemNavData/hm3d_longrange_route_tangent_failure_audit_freeze_v3_20260903.json": "938f5060d837c375ea49181f1512a9b2cf1c791f836923282dfe01de46fe13d3",
+    "MemNavData/hm3d_longrange_route_tangent_failure_audit_source_receipt_v3_20260903.json": "593e58dd14c697b8439457e370764518c3a138b8fe955249671de5ede8d81fed",
+    "MemNavData/test_analyze_hm3d_longrange_route_tangent_failures.py": "b2fdfdddc8afef70f1651fe53ee3574addc0a2b87d0e98c7ebdb673474e8e424"
+  },
+  "tests": {
+    "command": "/home/asus/miniconda3/envs/memnav/bin/python -m pytest -q MemNavData/test_analyze_hm3d_longrange_route_tangent_failures.py",
+    "result": "1 passed"
+  }
+}

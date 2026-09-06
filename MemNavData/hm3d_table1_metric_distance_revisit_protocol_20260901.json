@@ -1,0 +1,63 @@
+{
+  "schema_version": "hm3d_table1_metric_distance_revisit_protocol_v1_20260901",
+  "frozen_at": "2026-09-01T00:00:00+08:00",
+  "scientific_question": "Does first-40-calibrated metric distance add closed-loop Revisit utility beyond CEC's verified bearing when all other runtime components are fixed?",
+  "claim_boundary": "consumed-population promotion gate; not fresh confirmation or certified metric safety",
+  "population": {
+    "benchmark_manifest_sha256": "f82dbcbc6255219aae94b6d77bffdfa454f36835cf803a70df5cf8616193ad01",
+    "histories": 28,
+    "scene_clusters": 21,
+    "query_role": "revisit",
+    "runtime_role_visibility": "none",
+    "history": "actual causal full-monocular NavDP Goal-A replay"
+  },
+  "arms": {
+    "fixed_2p5m": {
+      "adapter": "verified_bearing_v1",
+      "controller_payload": "2.5 * unit_bearing"
+    },
+    "full_metric": {
+      "adapter": "verified_metric_v1",
+      "distance": "first40_scale_m_per_raw * raw_translation_norm",
+      "controller_payload": "min(metric_distance, 10m) * unit_bearing",
+      "support_cap_source": "frozen NavDP native PointGoal preprocessing envelope"
+    }
+  },
+  "runtime": {
+    "same_server_pair": true,
+    "arm_order": "alternating by frozen history-index parity",
+    "maximum_steps": 600,
+    "success_distance_m": 1.0,
+    "execution_horizon": 8,
+    "deterministic_plan_seeds": true,
+    "navdp_depth_source": "monocular_sidecar",
+    "certificate_changed": false,
+    "metric_depth_sensor_reads_allowed": false
+  },
+  "analysis": {
+    "primary": "paired success rate",
+    "test": "two-sided exact McNemar",
+    "uncertainty": "scene-cluster bootstrap 95% interval with 100000 resamples",
+    "secondary": [
+      "SPL",
+      "both-success path length",
+      "both-success steps",
+      "treatment exposure",
+      "metric support cap hits"
+    ]
+  },
+  "decision": {
+    "promote": "paired net gain >= 2 and losses <= 1 and zero 10m support-cap hits",
+    "support_saturation": "any 10m support-cap hit stops the branch and retains fixed 2.5m",
+    "reject": "paired net gain <= -2",
+    "otherwise": "keep fixed 2.5m; efficiency-only retention requires >=10% paired both-success path or step improvement with zero losses and zero support-cap hits"
+  },
+  "forbidden": [
+    "radius sweep",
+    "certificate retuning",
+    "partial-outcome protocol changes",
+    "Novel or Revisit label as runtime input",
+    "fresh-confirmation claim",
+    "formal safety claim"
+  ]
+}

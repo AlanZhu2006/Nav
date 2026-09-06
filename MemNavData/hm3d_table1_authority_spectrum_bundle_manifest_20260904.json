@@ -1,0 +1,18 @@
+{
+  "arms": [
+    "mono_native",
+    "mono_raw_fixed",
+    "mono_unthresholded_witness",
+    "mono_cec"
+  ],
+  "histories": 28,
+  "native_and_strict_cec_outcomes_known_before_design": true,
+  "population_originally_selected_outcome_blind": true,
+  "queries_per_arm": 56,
+  "raw_and_finite_witness_outcomes_known_before_submission": false,
+  "runtime_role_visibility": "none",
+  "same_process_four_arm_pairing": true,
+  "scene_clusters": 21,
+  "schema_version": "hm3d_table1_authority_spectrum_bundle_v1_20260904",
+  "scope": "sealed_hm3d_table1_retrospective_authority_spectrum"
+}

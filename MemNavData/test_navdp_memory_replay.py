@@ -90,6 +90,33 @@ class NavDPMemoryReplayTest(unittest.TestCase):
         for actual, expected in zip(agent.memory_queue[0], before):
             np.testing.assert_array_equal(actual, expected)
 
+    def test_pointgoal_resample_does_not_mutate_fifo(self):
+        agent = self.agent(memory_size=2)
+        original = np.ones((2, 2, 3), dtype=float)
+        agent.memory_queue = [[original.copy()]]
+        agent.stop_threshold = -1e9
+        agent.process_depth = lambda depths: np.asarray(depths, dtype=float)
+        agent.process_pointgoal = lambda goals: np.asarray(goals, dtype=float)
+        agent.project_trajectory = lambda images, trajectories, values: None
+
+        class Former:
+            @staticmethod
+            def predict_pointgoal_action(pointgoal, images, depths):
+                trajectories = np.zeros((1, 2, 3, 3), dtype=float)
+                values = np.asarray([[1.0, 0.0]], dtype=float)
+                return trajectories, values, trajectories.copy(), trajectories.copy()
+
+        agent.navi_former = Former()
+        before = [value.copy() for value in agent.memory_queue[0]]
+        agent.resample_pointgoal(
+            np.zeros((1, 3), dtype=float),
+            np.zeros((1, 2, 2, 3), dtype=float),
+            np.zeros((1, 2, 2, 1), dtype=float),
+        )
+        self.assertEqual(len(agent.memory_queue[0]), len(before))
+        for actual, expected in zip(agent.memory_queue[0], before):
+            np.testing.assert_array_equal(actual, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

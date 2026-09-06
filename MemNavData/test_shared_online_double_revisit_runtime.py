@@ -39,10 +39,16 @@ class ReplayOnlineATest(unittest.TestCase):
                 },
             }
             memory_calls = []
+            motion_calls = []
             navdp_calls = []
 
-            def memory_step(image):
+            def memory_step(
+                    image, *, executed_translation_m, executed_yaw_rad,
+                    executed_forward_m, executed_left_m):
                 memory_calls.append(image)
+                motion_calls.append((
+                    executed_translation_m, executed_yaw_rad,
+                    executed_forward_m, executed_left_m))
                 return {"frame_idx": len(memory_calls) - 1}
 
             def navdp_step(image):
@@ -59,10 +65,23 @@ class ReplayOnlineATest(unittest.TestCase):
                 navdp_replay_step=navdp_step,
             )
             self.assertEqual(memory_calls, [b"a", b"b", b"c", b"d"])
+            self.assertEqual(
+                motion_calls,
+                [
+                    (0.0, 0.0, 0.0, 0.0),
+                    (1.0, 0.0, 0.0, -1.0),
+                    (1.0, 0.0, 0.0, -1.0),
+                    (1.0, 0.0, 0.0, -1.0),
+                ],
+            )
             self.assertEqual(navdp_calls, [b"a", b"c"])
             self.assertEqual(result["online_frames"], 4)
             self.assertEqual(result["decision_steps"], [0, 2])
             self.assertEqual(result["diffusion_samples_during_replay"], 0)
+            self.assertEqual(
+                result["executor_local_se2_receipt_contract"],
+                "frame_bound_local_se2_v1",
+            )
 
     def test_fails_on_server_index_drift(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -89,7 +108,7 @@ class ReplayOnlineATest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "index differs"):
                 replay_online_a(
                     frozen,
-                    memory_step=lambda _image: {"frame_idx": 7},
+                    memory_step=lambda _image, **_motion: {"frame_idx": 7},
                     navdp_replay_step=lambda _image: {
                         "diffusion_sampled": False,
                         "queue_lengths": [1],

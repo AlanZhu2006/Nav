@@ -1,0 +1,18 @@
+{
+  "benchmark_manifest_sha256": "f82dbcbc6255219aae94b6d77bffdfa454f36835cf803a70df5cf8616193ad01",
+  "fresh_confirmation": false,
+  "histories": 28,
+  "jobs": {
+    "analysis": 16923259,
+    "formal_array": 16923258,
+    "smoke": 16923257
+  },
+  "native_and_strict_cec_outcomes_known_before_design": true,
+  "queries_per_arm": 56,
+  "raw_and_finite_witness_outcomes_known_before_submission": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_ee8f978f78f66769",
+  "scene_clusters": 21,
+  "schema_version": "hm3d_table1_authority_spectrum_submission_v1_20260904",
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_authority_spectrum_ee8f978f78f66769",
+  "task_receipt_sha256": "ee8f978f78f66769f0a0f12953295201243e65660ff9d16c58797a1b7ab346b7"
+}

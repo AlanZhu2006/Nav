@@ -1,0 +1,24 @@
+{
+  "schema_version": "hm3d_longrange_route_tangent_visualization_source_receipt_v1_20260903",
+  "frozen_at": "2026-09-03T17:26:08+08:00",
+  "scope": "render every primary endpoint-versus-route-tangent discordance from sealed traces after formal verification",
+  "query_outcomes_read_before_freeze": false,
+  "aggregate_success_rates_read_before_freeze": false,
+  "formal_evaluation_still_running_at_freeze": true,
+  "selection_rule": "all rows in failure_audit.primary_discordant_pairs in manifest order",
+  "post_hoc_video_is_illustrative_only": true,
+  "video_changes_no_formal_decision": true,
+  "inputs": {
+    "formal_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_751efdcbb436c99b",
+    "failure_audit_source_receipt_sha256": "3fbcd4b62fda14af2a42130d523390217d509eda698bf089e69ef366f892376b",
+    "failure_audit_freeze_sha256": "938f5060d837c375ea49181f1512a9b2cf1c791f836923282dfe01de46fe13d3"
+  },
+  "files": {
+    "MemNavData/render_hm3d_longrange_route_tangent_discordants.py": "d37d38cc66d757b1fbb57f698e29a0f5b59a651f594200b62dd6f65593a45f43",
+    "MemNavData/test_render_hm3d_longrange_route_tangent_discordants.py": "11cd74d1c0bb476fdd5074964995583422d39691fe0c4fba8145001f62c8e49b"
+  },
+  "tests": {
+    "command": "/home/asus/miniconda3/envs/memnav/bin/python -m pytest -q MemNavData/test_render_hm3d_longrange_route_tangent_discordants.py",
+    "result": "1 passed"
+  }
+}

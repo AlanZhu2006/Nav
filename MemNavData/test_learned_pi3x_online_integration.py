@@ -1,6 +1,8 @@
 import ast
+import hashlib
 import json
 from pathlib import Path
+import re
 from types import SimpleNamespace
 import unittest
 
@@ -36,13 +38,18 @@ class _Requests:
         return response
 
 
-def _load_route(requests):
+def _load_route(requests, *, depth_source="sensor"):
     path = Path(__file__).with_name("eval_2leg_habitat.py")
     tree = ast.parse(path.read_text(), filename=str(path))
     function = next(
         node for node in tree.body
         if isinstance(node, ast.FunctionDef)
         and node.name == "srv_plan_learned_pi3x_relocalization"
+    )
+    binder = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "bind_navdp_monocular_transaction"
     )
 
     def attach(nav, memnav, controller, error=None):
@@ -56,16 +63,21 @@ def _load_route(requests):
     namespace = {
         "np": np,
         "json": json,
+        "re": re,
+        "bytes_sha256": lambda data: hashlib.sha256(data).hexdigest(),
         "requests": requests,
         "BASE": "http://memnav",
         "NOVEL_BASE": "http://navdp",
-        "args": SimpleNamespace(revisit_adapter="verified_bearing_v1"),
+        "args": SimpleNamespace(
+            revisit_adapter="verified_bearing_v1",
+            navdp_depth_source=depth_source,
+        ),
         "depth_png_bytes": lambda _depth: b"depth",
         "attach_memnav_diagnostics": attach,
         "adapt_revisit_pointgoal": adapt_revisit_pointgoal,
         "pointgoal_payload": pointgoal_payload,
     }
-    exec(compile(ast.Module(body=[function], type_ignores=[]),
+    exec(compile(ast.Module(body=[binder, function], type_ignores=[]),
                  str(path), "exec"), namespace)
     return namespace[function.name]
 
@@ -150,6 +162,35 @@ class LearnedPi3XEvaluatorRouteTest(unittest.TestCase):
         self.assertEqual(result["learned_pi3x_relocalization_reason"],
                          "learned_pi3x_endpoint_failure")
         self.assertIn("RuntimeError", result["memnav_error"])
+
+    def test_monocular_transaction_reaches_native_request(self):
+        token = "a" * 64
+        probe = dict(self.probe.payload, image_sha256=hashlib.sha256(b"image").hexdigest(),
+                     monocular_depth_transaction_token=token,
+                     monocular_depth_frame_index=50)
+        requests = _Requests([
+            _Response(probe),
+            _Response({"ok": True, "accepted": False, "aux_pose": None}),
+            _Response({"trajectory": [[0.0, 0.0, 0.0]]}),
+        ])
+        navdp_data = {"seed": "17"}
+        _load_route(requests, depth_source="monocular_sidecar")(
+            b"image", b"goal", np.ones((2, 2)), navdp_data, {})
+        self.assertEqual(requests.calls[-1][1]["data"], {
+            "seed": "17", "monocular_depth_transaction_token": token,
+            "monocular_depth_frame_index": "50",
+        })
+        self.assertEqual(navdp_data, {"seed": "17"})
+
+    def test_mismatched_monocular_frame_stops_before_relocalization(self):
+        requests = _Requests([_Response(dict(
+            self.probe.payload, image_sha256=hashlib.sha256(b"image").hexdigest(),
+            monocular_depth_transaction_token="a" * 64,
+            monocular_depth_frame_index=49))])
+        with self.assertRaisesRegex(RuntimeError, "invalid depth transaction"):
+            _load_route(requests, depth_source="monocular_sidecar")(
+                b"image", b"goal", np.ones((2, 2)), {}, {})
+        self.assertEqual(len(requests.calls), 1)
 
 
 if __name__ == "__main__":

@@ -79,7 +79,8 @@ def test_merged_query_chain_binds_v2_population_without_fallback():
     assert "candidate_plan=${manifest}" in submitter
     assert "--array='${gate_index}'" in submitter
     assert "--array='${remaining_array}'" in submitter
-    assert "--dependency='afterok:${population_verify_job}'" in submitter
+    assert "--dependency='afterok:${population_verify_job}'" not in submitter
+    assert "EXPECTED_POPULATION_VERIFICATION_SHA" in submitter
     assert "--dependency='afterok:${gate_job}'" in submitter
     assert "'formal_gate_retained_in_final_population':True" in submitter
     assert "'powered_histories':48" in submitter
@@ -91,6 +92,15 @@ def test_merged_query_chain_binds_v2_population_without_fallback():
     assert "test ! -e '${run_root}/evaluation'" in submitter
     assert "EXPECTED_RUNTIME_CLOSURE_RECEIPT_SHA" in submitter
     assert "runtime_provenance_verified=true" in submitter
+    assert "MemNavData/eval_2leg_habitat.py" in submitter
+    assert "MemNavData/generate_twoleg.py" in submitter
+    assert "grep -q -- 'table3_length'" in submitter
+    assert "grep -q -- '--pinned_navmesh'" in submitter
+    assert "table3_evaluator_api_closure_verified=true" in submitter
+    assert "'recompute_navmesh' in inspect.signature" in submitter
+    assert "hm3d_table1_navdp_authority_transaction_718661db1733d5de" in submitter
+    assert "authority_policy = request.form.get" in submitter
+    assert "table3_server_authority_namespace_verified=true" in submitter
     assert "merged_query_population" in pair
     assert "merged_query_population" in analysis
     assert "hm3d_table3_causal_survey_result_v2_20260831" in aggregate

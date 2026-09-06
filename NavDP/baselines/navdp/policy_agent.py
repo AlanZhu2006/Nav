@@ -380,6 +380,27 @@ class NavDP_Agent:
             images, all_trajectory, all_values)
         return good_trajectory[:, 0], all_trajectory, all_values, trajectory_mask
 
+    def resample_pointgoal(self, pointgoal, images, depths):
+        """Sample pure-PointGoal candidates without advancing the RGB FIFO.
+
+        A normal policy step for the current observation must run first.  This
+        attribution-only path then reuses the byte-identical observation and
+        FIFO state while changing only the goal-conditioning interface.
+        """
+        input_images, input_depth = self._read_only_policy_inputs(
+            images, depths)
+        input_pointgoal = self.process_pointgoal(pointgoal)
+        all_trajectory, all_values, good_trajectory, bad_trajectory = (
+            self.navi_former.predict_pointgoal_action(
+                input_pointgoal, input_images, input_depth))
+        if all_values.max() < self.stop_threshold:
+            good_trajectory[:, :, :, 0] = 0.0
+            good_trajectory[:, :, :, 1] = np.sign(
+                good_trajectory[:, :, :, 1].mean())
+        trajectory_mask = self.project_trajectory(
+            images, all_trajectory, all_values)
+        return good_trajectory[:, 0], all_trajectory, all_values, trajectory_mask
+
     def score_imagegoal_trajectories(self, imagegoal, images, depths,
                                      trajectories, *, control_imagegoal=None,
                                      timesteps=None, noise_samples=1, seed=0):

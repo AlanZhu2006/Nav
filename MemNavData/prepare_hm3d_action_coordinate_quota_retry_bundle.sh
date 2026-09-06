@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 0022
+
+ROOT=${ROOT:-$(git rev-parse --show-toplevel)}
+PY=${LOCAL_MEMNAV_PY:-/home/asus/miniconda3/envs/memnav/bin/python}
+PARENT=${LOCAL_BUNDLE_PARENT:-${ROOT}/.diagnostics/source_bundles}
+fail() { echo "ABORT: $*" >&2; exit 2; }
+
+files=(
+  MemNavData/hm3d_action_coordinate_quota_retry_protocol_20260902.json
+  MemNavData/slurm_hm3d_action_coordinate_compass_quota_retry.sbatch
+  MemNavData/submit_hm3d_action_coordinate_compass_quota_retry_remote.sh
+  MemNavData/test_hm3d_action_coordinate_quota_retry_contract.py
+  MemNavData/slurm_safe_submit.sh
+)
+for path in "${files[@]}"; do
+  [[ -f "${ROOT}/${path}" && ! -L "${ROOT}/${path}" ]] ||
+    fail "missing physical source ${path}"
+done
+[[ -x "${PY}" ]] || fail "missing MemNav interpreter"
+
+cd "${ROOT}"
+"${PY}" -m json.tool \
+  MemNavData/hm3d_action_coordinate_quota_retry_protocol_20260902.json >/dev/null
+"${PY}" -m pytest -q -p no:cacheprovider \
+  MemNavData/test_hm3d_action_coordinate_quota_retry_contract.py
+bash -n \
+  MemNavData/slurm_hm3d_action_coordinate_compass_quota_retry.sbatch \
+  MemNavData/submit_hm3d_action_coordinate_compass_quota_retry_remote.sh \
+  MemNavData/prepare_hm3d_action_coordinate_quota_retry_bundle.sh \
+  MemNavData/slurm_safe_submit.sh
+
+mkdir -p "${PARENT}"
+stage=$(mktemp -d "${PARENT}/hm3d_action_coordinate_quota_retry.partial.XXXXXX")
+for path in "${files[@]}"; do
+  mkdir -p "${stage}/$(dirname "${path}")"
+  cp --preserve=mode,timestamps "${ROOT}/${path}" "${stage}/${path}"
+done
+head=$(git -C "${ROOT}" rev-parse HEAD)
+"${PY}" - "${stage}" "${head}" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+root=Path(sys.argv[1]); files={}
+for path in sorted(root.rglob('*')):
+    if path.is_symlink(): raise SystemExit('bundle symlink: '+str(path))
+    if path.is_file() and path.name not in {'SOURCE_BUNDLE.sha256','source_bundle_manifest.json'}:
+        files[path.relative_to(root).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
+payload={
+ 'schema_version':'hm3d_action_coordinate_quota_retry_bundle_v1_20260902',
+ 'local_git_head_context':sys.argv[2],
+ 'scientific_source_receipt_sha256':'b7de41263049e415755f3595338f9e064373966e44992d234ebe453e55bb802a',
+ 'scientific_method_or_population_changed':False,
+ 'retained_completion_count':18, 'exact_retry_indices':'18-47',
+ 'successful_task_buffer_policy':'delete only after sealed completion sidecar verification',
+ 'files':files,
+}
+(root/'source_bundle_manifest.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+PY
+(
+  cd "${stage}"
+  find . -type f ! -name SOURCE_BUNDLE.sha256 -print0 | sort -z |
+    xargs -0 sha256sum >SOURCE_BUNDLE.sha256
+  sha256sum -c --quiet SOURCE_BUNDLE.sha256
+)
+receipt_sha=$(sha256sum "${stage}/SOURCE_BUNDLE.sha256" | awk '{print $1}')
+target=${PARENT}/hm3d_action_coordinate_quota_retry_${receipt_sha:0:16}
+[[ ! -e "${target}" ]] || fail "bundle already exists: ${target}"
+chmod -R a-w "${stage}"
+mv "${stage}" "${target}"
+printf 'BUNDLE=%s\nRECEIPT_SHA256=%s\n' "${target}" "${receipt_sha}"

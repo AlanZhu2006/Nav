@@ -45,3 +45,21 @@ def test_first40_local_pose_scale_fails_closed_on_corrupt_receipt():
 
     assert result["available"] is False
     assert result["reason"] == "mdtec_first40_scale_invalid"
+
+
+def test_monocular_status_exposes_the_same_validated_longrange_scale():
+    agent = object.__new__(MemNavAgent)
+    agent.n = 90
+    agent._first40_scale_receipt = _valid_receipt()
+    agent._first40_scale_freeze_ms = 123.0
+
+    status = agent.monocular_depth_status()
+
+    assert status["first40_scale_frozen"] is True
+    assert status["first40_scale_valid"] is True
+    assert status["longrange_metric_scale"]["available"] is True
+    assert (
+        status["longrange_metric_scale"]["metric_scale_m_per_raw"]
+        == 3.22
+    )
+    assert status["metric_depth_sensor_consumed"] is False

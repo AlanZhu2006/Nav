@@ -7,6 +7,7 @@ MODE=${MODE:?set collect, mp3d_collect, smoke, eval, lifelong_b, or table3_a}
 TASK_ROOT=${TASK_ROOT:?set immutable task root}
 WRAPPER_ROOT=${WRAPPER_ROOT:-${TASK_ROOT}}
 QUERY_SOURCE_ROOT=${QUERY_SOURCE_ROOT:-${TASK_ROOT}}
+QUERY_RUNNER=${QUERY_RUNNER:-${QUERY_SOURCE_ROOT}/MemNavData/run_hm3d_fullmono_query_history.py}
 RUNTIME_CLOSURE_ROOT=${RUNTIME_CLOSURE_ROOT:-}
 SERVER_SOURCE_ROOT=${SERVER_SOURCE_ROOT:-${TASK_ROOT}}
 BASE_SOURCE_ROOT=${BASE_SOURCE_ROOT:?set verified Final14 mono source root}
@@ -25,6 +26,9 @@ RESUME_INCOMPLETE=${RESUME_INCOMPLETE:-0}
 FORMAL_INDICES_OVERRIDE=${FORMAL_INDICES_OVERRIDE:-}
 HISTORY_CONTRACT=${HISTORY_CONTRACT:-goal_a}
 SCENE_RANK_FIELD=${SCENE_RANK_FIELD:-final14_scene_rank}
+CERTIFIED_ROUTE_DEPTH_CACHE_STRIDE=${CERTIFIED_ROUTE_DEPTH_CACHE_STRIDE:-0}
+CERTIFIED_ROUTE_MOTION_MODEL=${CERTIFIED_ROUTE_MOTION_MODEL:-fundamental_then_pnp}
+CERTIFIED_ROUTE_MOTION_UNFILTERED_SHADOW=${CERTIFIED_ROUTE_MOTION_UNFILTERED_SHADOW:-0}
 
 [[ "${MODE}" == collect || "${MODE}" == mp3d_collect \
    || "${MODE}" == smoke || "${MODE}" == eval \
@@ -33,6 +37,19 @@ SCENE_RANK_FIELD=${SCENE_RANK_FIELD:-final14_scene_rank}
 [[ "${SCENE_INDEX}" =~ ^[0-9]+$ ]] || { echo "bad scene index" >&2; exit 2; }
 [[ "${RESUME_INCOMPLETE}" =~ ^[01]$ ]] || {
   echo "RESUME_INCOMPLETE must be 0 or 1" >&2; exit 2; }
+[[ "${CERTIFIED_ROUTE_DEPTH_CACHE_STRIDE}" =~ ^[0-9]+$ ]] || {
+  echo "CERTIFIED_ROUTE_DEPTH_CACHE_STRIDE must be non-negative" >&2; exit 2; }
+[[ "${CERTIFIED_ROUTE_MOTION_MODEL}" == fundamental_then_pnp \
+   || "${CERTIFIED_ROUTE_MOTION_MODEL}" == direct_pnp \
+   || "${CERTIFIED_ROUTE_MOTION_MODEL}" == direct_pnp_dense_query ]] || {
+  echo "invalid CERTIFIED_ROUTE_MOTION_MODEL" >&2; exit 2; }
+[[ "${CERTIFIED_ROUTE_MOTION_UNFILTERED_SHADOW}" =~ ^[01]$ ]] || {
+  echo "CERTIFIED_ROUTE_MOTION_UNFILTERED_SHADOW must be 0 or 1" >&2; exit 2; }
+if [[ "${CERTIFIED_ROUTE_MOTION_UNFILTERED_SHADOW}" == 1 \
+      && "${CERTIFIED_ROUTE_MOTION_MODEL}" != fundamental_then_pnp ]]; then
+  echo "unfiltered route-motion shadow requires fundamental primary" >&2
+  exit 2
+fi
 [[ "${HISTORY_CONTRACT}" == goal_a || "${HISTORY_CONTRACT}" == actual_ab \
    || "${HISTORY_CONTRACT}" == causal_survey ]] || {
   echo "HISTORY_CONTRACT must be goal_a, actual_ab, or causal_survey" >&2; exit 2; }
@@ -113,7 +130,7 @@ if [[ -n "${RUNTIME_ATTEMPT}" ]]; then
 fi
 task_run=${RUN_ROOT}/runtime/${task_label}
 [[ ! -e "${task_run}" ]] || { echo "runtime output exists ${task_run}" >&2; exit 2; }
-mkdir -p "${task_run}/logs" "${task_run}/buffer"
+mkdir -p "${task_run}/logs"
 exec > >(tee "${task_run}/run.log") 2>&1
 
 # The selected prefix is sealed only after all pre-query construction tasks.
@@ -217,6 +234,32 @@ unset MEMNAV_PORT NAVDP_PORT
 claim_slurm_tcp_port_pair h3fullmono 12000 6000 || exit $?
 runtime_tmp=${SLURM_TMPDIR:-/tmp}/h3fullmono_${SLURM_JOB_ID:-local}_${task_label}
 mkdir -p "${runtime_tmp}/memnav" "${runtime_tmp}/navdp"
+# Runtime JPEGs are a reconstructible cache, not a scientific artifact.  Keep
+# them on node-local storage by default so long jobs cannot consume the user's
+# persistent scratch quota.  A caller may still bind an explicit durable path
+# for a dedicated diagnostic.
+MEMNAV_BUFFER_ROOT=${MEMNAV_BUFFER_ROOT:-${runtime_tmp}/cec_rgb_buffer}
+mkdir -p "${MEMNAV_BUFFER_ROOT}"
+route_cache_args=()
+route_motion_args=()
+memnav_server_entrypoint=${SERVER_SOURCE_ROOT}/NavDP/baselines/memnav/memnav_server.py
+if grep -q -- '--certified_route_motion_model' "${memnav_server_entrypoint}"; then
+  if (( CERTIFIED_ROUTE_DEPTH_CACHE_STRIDE > 0 )); then
+    route_cache_args+=(
+      --certified_route_depth_cache_stride
+      "${CERTIFIED_ROUTE_DEPTH_CACHE_STRIDE}")
+  fi
+  route_motion_args+=(
+    --certified_route_motion_model "${CERTIFIED_ROUTE_MOTION_MODEL}")
+  if [[ "${CERTIFIED_ROUTE_MOTION_UNFILTERED_SHADOW}" == 1 ]]; then
+    route_motion_args+=(--certified_route_motion_unfiltered_shadow)
+  fi
+elif (( CERTIFIED_ROUTE_DEPTH_CACHE_STRIDE > 0 )) \
+     || [[ "${CERTIFIED_ROUTE_MOTION_MODEL}" != fundamental_then_pnp ]] \
+     || [[ "${CERTIFIED_ROUTE_MOTION_UNFILTERED_SHADOW}" == 1 ]]; then
+  echo "selected MemNav server lacks requested route-motion CLI" >&2
+  exit 2
+fi
 MEMNAV_PID= NAVDP_PID=
 cleanup() {
   for pid in "${NAVDP_PID}" "${MEMNAV_PID}"; do
@@ -245,7 +288,8 @@ trap cleanup EXIT INT TERM
       --retrieval_candidate_min_gap 16 --graph_subgoal_spacing_m 0.0 \
       --graph_subgoal_arrival_m 0.60 --flow_gate auto \
       --certified_relocalization --lightglue_repo "${LIGHTGLUE_REPO}" \
-      --buffer_root "${task_run}/buffer"
+      --buffer_root "${MEMNAV_BUFFER_ROOT}" "${route_cache_args[@]}" \
+      "${route_motion_args[@]}"
 ) >"${task_run}/logs/server_memnav.log" 2>&1 &
 MEMNAV_PID=$!
 (
@@ -350,7 +394,9 @@ else
     MAX_STEPS=${MAX_STEPS:-80}
   else
     MAX_STEPS=${MAX_STEPS:-600}
-    if [[ "${ROLE_PAIR_SCOPE:-}" == table3_length ]]; then
+    if [[ "${ROLE_PAIR_SCOPE:-}" == table3_length \
+       || "${ROLE_PAIR_SCOPE:-}" == table3_longrange_oracle \
+       || "${ROLE_PAIR_SCOPE:-}" == table3_longrange_route_tangent ]]; then
       [[ "${MAX_STEPS}" =~ ^[0-9]+$ \
          && "${MAX_STEPS}" -ge 600 && "${MAX_STEPS}" -le 3400 ]] || {
         echo "Table-III max steps outside frozen 600..3400 contract" >&2
@@ -368,7 +414,9 @@ else
       "${SCENE_INDEX}" >"${task_run}/empty_scene_receipt.json"
   else
     for history_index in ${indices}; do
-      runner=("${QUERY_SOURCE_ROOT}/MemNavData/run_hm3d_fullmono_query_history.py"
+      [[ -r "${QUERY_RUNNER}" ]] || {
+        echo "missing query runner ${QUERY_RUNNER}" >&2; exit 2; }
+      runner=("${QUERY_RUNNER}"
         --source-root "${BASE_SOURCE_ROOT}" --run-root "${RUN_ROOT}"
         --evaluator-source-root "${QUERY_SOURCE_ROOT}"
         --bench-root "${BENCH_ROOT}"

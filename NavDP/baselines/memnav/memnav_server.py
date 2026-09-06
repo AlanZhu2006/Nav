@@ -58,8 +58,10 @@ Usage:
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
+import time
 
 # must precede any torch import (policy_agent): reduces fragmentation OOMs from
 # the large KV-cache alloc/free cycle each plan() runs.
@@ -136,6 +138,35 @@ parser.add_argument(
           "to remove selected-anchor replay latency; default keeps lazy replay"),
 )
 parser.add_argument(
+    "--certified_route_depth_cache_stride",
+    type=int,
+    default=0,
+    help=("cache the existing causal short-range LingBot depth on every Nth "
+          "history frame for route-coordinate tracking; zero disables"),
+)
+parser.add_argument(
+    "--certified_route_motion_model",
+    choices=[
+        "fundamental_then_pnp",
+        "direct_pnp",
+        "direct_pnp_dense_query",
+    ],
+    default="fundamental_then_pnp",
+    help=("local motion model for an already-authorized causal route. The "
+          "default preserves Fundamental-MAGSAC followed by depth PnP; "
+          "direct_pnp uses robust depth PnP directly for temporally adjacent "
+          "views; direct_pnp_dense_query additionally retains the causal "
+          "per-action depths within each live controller interval. Neither "
+          "mode alters the initial open-set CEC certificate"),
+)
+parser.add_argument(
+    "--certified_route_motion_unfiltered_shadow",
+    action="store_true",
+    help=("diagnostic only: solve direct depth PnP on the same adjacent-frame "
+          "correspondences after the unchanged fundamental primary; the "
+          "shadow result has no control authority"),
+)
+parser.add_argument(
     "--lightglue_repo", type=str, default="",
     help="pinned official LightGlue checkout (required when enabled)",
 )
@@ -192,6 +223,13 @@ parser.add_argument(
           "response to a client that may immediately use another CUDA/EGL "
           "context on the same GPU; scheduling only, never a model input"),
 )
+parser.add_argument(
+    "--depth_observation_only",
+    action="store_true",
+    help=("retain the exact causal LingBot stream and monocular-depth "
+          "endpoint while omitting write-only MemNav planning-cache copies; "
+          "all planning calls fail closed"),
+)
 args = parser.parse_args()
 
 # The server changes directory below because LingBot historically resolves a
@@ -246,6 +284,38 @@ if args.certified_counterfactual_audit and not args.certified_relocalization:
 if args.certified_eager_depth_cache and not args.certified_relocalization:
     parser.error(
         "--certified_eager_depth_cache requires --certified_relocalization")
+if args.certified_route_depth_cache_stride < 0:
+    parser.error("--certified_route_depth_cache_stride must be non-negative")
+if (args.certified_route_depth_cache_stride > 0
+        and not args.certified_relocalization):
+    parser.error(
+        "--certified_route_depth_cache_stride requires "
+        "--certified_relocalization")
+if (args.certified_route_motion_model != "fundamental_then_pnp"
+        and not args.certified_relocalization):
+    parser.error(
+        "--certified_route_motion_model requires "
+        "--certified_relocalization")
+if args.certified_route_motion_unfiltered_shadow:
+    if not args.certified_relocalization:
+        parser.error(
+            "--certified_route_motion_unfiltered_shadow requires "
+            "--certified_relocalization")
+    if args.certified_route_motion_model != "fundamental_then_pnp":
+        parser.error(
+            "unfiltered route-motion shadow requires the fundamental primary")
+if args.depth_observation_only and any((
+        args.phase_b_checkpoint,
+        args.certified_relocalization,
+        args.certified_counterfactual_audit,
+        args.certified_eager_depth_cache,
+        args.certified_route_depth_cache_stride > 0,
+        args.cdec_pairwise_artifact,
+        args.pi3x_learned_relocalizer,
+)):
+    parser.error(
+        "--depth_observation_only cannot enable proposal, certificate, "
+        "learned-relocalization, or planning caches")
 if args.cdec_pairwise_allow_unapproved and not args.cdec_pairwise_artifact:
     parser.error(
         "--cdec_pairwise_allow_unapproved requires --cdec_pairwise_artifact")
@@ -329,7 +399,13 @@ agent = MemNavAgent(
     certified_relocalization_matcher=certified_relocalization_matcher,
     certified_counterfactual_audit=args.certified_counterfactual_audit,
     certified_eager_depth_cache=args.certified_eager_depth_cache,
+    certified_route_depth_cache_stride=(
+        args.certified_route_depth_cache_stride),
+    certified_route_motion_model=args.certified_route_motion_model,
+    certified_route_motion_unfiltered_shadow=(
+        args.certified_route_motion_unfiltered_shadow),
     cdec_pairwise_ranker=cdec_pairwise_ranker,
+    depth_observation_only=args.depth_observation_only,
 )
 
 if args.pi3x_learned_relocalizer:
@@ -382,6 +458,7 @@ def navigator_reset():
         "retrieval_candidate_min_gap": agent.retrieval_candidate_min_gap,
         "graph_subgoal_spacing_m": agent.graph_subgoal_spacing_m,
         "graph_subgoal_arrival_m": agent.graph_subgoal_arrival_m,
+        "depth_observation_only": bool(agent.depth_observation_only),
         "synchronize_cuda_http_handoff": bool(
             args.synchronize_cuda_http_handoff),
         "phase_b_ranker": agent.phase_b_status(),
@@ -407,17 +484,76 @@ def navigator_reset_env():
 def append_request_frame():
     """Append the uploaded RGB and optionally bind its current depth."""
 
+    started = time.perf_counter()
     global monocular_depth_transactions
     materialize = request.form.get("materialize_monocular_depth", "0")
     if materialize not in {"0", "1"}:
         raise ValueError("materialize_monocular_depth must be 0 or 1")
     image_bytes = request.files["image"].read()
     image_digest = hashlib.sha256(image_bytes).hexdigest()
-    idx = agent.add_frame(image_bytes)
+    raw_translation = request.form.get("executed_translation_m")
+    raw_yaw = request.form.get("executed_yaw_rad")
+    raw_forward = request.form.get("executed_forward_m")
+    raw_left = request.form.get("executed_left_m")
+    raw_se2_contract = request.form.get("executor_local_se2_contract")
+    raw_se2_source = request.form.get("executor_local_se2_source")
+    if raw_translation is None and raw_yaw is None:
+        translation = yaw = None
+    elif raw_translation is None or raw_yaw is None:
+        raise ValueError(
+            "executed_translation_m and executed_yaw_rad must be supplied "
+            "together")
+    else:
+        translation = float(raw_translation)
+        yaw = float(raw_yaw)
+        if (not math.isfinite(translation) or translation < 0.0
+                or not math.isfinite(yaw)):
+            raise ValueError("invalid executor motion receipt")
+    if (raw_forward is None and raw_left is None
+            and raw_se2_contract is None and raw_se2_source is None):
+        forward = left = se2_source = None
+    elif (raw_forward is None or raw_left is None
+          or raw_se2_contract != "frame_bound_local_se2_v1"
+          or not isinstance(raw_se2_source, str)
+          or not raw_se2_source.strip()
+          or translation is None):
+        raise ValueError("invalid frame-bound local SE(2) receipt contract")
+    else:
+        forward = float(raw_forward)
+        left = float(raw_left)
+        se2_source = raw_se2_source.strip()
+        if not math.isfinite(forward) or not math.isfinite(left):
+            raise ValueError("invalid executor local SE(2) receipt")
+    idx = agent.add_frame(
+        image_bytes,
+        executed_translation_m=translation,
+        executed_yaw_rad=yaw,
+        executed_forward_m=forward,
+        executed_left_m=left,
+        executor_local_se2_source=se2_source,
+    )
+    add_frame_runtime_ms = 1000.0 * (time.perf_counter() - started)
     response = {
         "frame_idx": idx,
         "image_sha256": image_digest,
         "monocular_depth": agent.monocular_depth_status(),
+        "executor_motion_receipt": (
+            None if translation is None else {
+                "contract": "frame_bound_realized_executor_motion_v1",
+                "frame_index": int(idx),
+                "executed_translation_m": float(translation),
+                "executed_yaw_rad": float(yaw),
+                "local_se2": (
+                    None if forward is None else {
+                        "contract": "frame_bound_local_se2_v1",
+                        "executed_forward_m": float(forward),
+                        "executed_left_m": float(left),
+                        "executed_yaw_rad": float(yaw),
+                        "source": str(se2_source),
+                    }
+                ),
+            }
+        ),
     }
     # Every append invalidates an older token.  A planning append may
     # materialize the exact current depth in the same HTTP transaction; the
@@ -447,7 +583,20 @@ def append_request_frame():
             "monocular_depth_transaction_token": token,
             "monocular_depth_frame_index": int(payload["frame_index"]),
             "monocular_depth_png_sha256": payload["depth_png_sha256"],
+            "monocular_depth_cache_hit": payload.get(
+                "depth_prediction_cache_hit"
+            ),
+            "monocular_depth_prediction_runtime_ms": payload.get(
+                "depth_prediction_runtime_ms"
+            ),
+            "monocular_depth_materialization_runtime_ms": payload.get(
+                "depth_materialization_runtime_ms"
+            ),
         })
+    response["add_frame_runtime_ms"] = float(add_frame_runtime_ms)
+    response["append_request_runtime_ms"] = 1000.0 * (
+        time.perf_counter() - started
+    )
     return response
 
 
@@ -461,6 +610,34 @@ def memory_step():
             "metric_depth_sensor_consumed": False,
         }), 400
     return jsonify(response)
+
+
+@app.route("/causal_pose_trace_query", methods=["POST"])
+def causal_pose_trace_query():
+    """Read the frozen model-internal pose trace without advancing state."""
+
+    return jsonify(agent.causal_pose_trace_receipt())
+
+
+@app.route("/causal_metric_scale_query", methods=["POST"])
+def causal_metric_scale_query():
+    """Read first-40 and first-64 causal scale receipts without planning."""
+
+    return jsonify(agent.causal_metric_scale_receipt())
+
+
+@app.route("/causal_visual_similarity_query", methods=["POST"])
+def causal_visual_similarity_query():
+    """Read query-to-history DINO similarities without advancing state."""
+
+    history_count = request.form.get("history_count")
+    if history_count is None:
+        return jsonify({"error": "history_count is required"}), 400
+    try:
+        return jsonify(agent.causal_visual_similarity_receipt(
+            int(history_count)))
+    except (TypeError, ValueError) as error:
+        return jsonify({"error": str(error)}), 400
 
 
 @app.route("/monocular_depth_query", methods=["POST"])
@@ -647,7 +824,9 @@ def posegoal_query():
 @app.route("/retrieval_probe_step", methods=["POST"])
 def retrieval_probe_step():
     """Append a frame and return scores without allocating a goal-pose cache."""
+    started = time.perf_counter()
     append_receipt = append_request_frame()
+    append_finished = time.perf_counter()
     forced_anchor = request.form.get("forced_anchor")
     forced_gate = request.form.get("forced_gate")
     out = agent.plan(
@@ -657,8 +836,17 @@ def retrieval_probe_step():
         retrieval_only=True,
         candidate_ceiling_override=candidate_ceiling_override(),
     )
+    plan_finished = time.perf_counter()
     out = with_goal_session_receipt(out)
     out.update(append_receipt)
+    out["retrieval_probe_timing"] = {
+        "append_ms": 1000.0 * (append_finished - started),
+        "retrieval_ms": 1000.0 * (plan_finished - append_finished),
+        "total_ms": 1000.0 * (plan_finished - started),
+        "monocular_depth_cache_hit": append_receipt.get(
+            "monocular_depth_cache_hit"
+        ),
+    }
     return jsonify(out)
 
 
@@ -780,6 +968,24 @@ def certified_relocalize():
             "ok": False, "accepted": False,
             "reason": "invalid_authority_policy",
         }), 400
+    guidance_mode = request.form.get(
+        "guidance_mode", "endpoint_bearing")
+    if guidance_mode not in (
+            "endpoint_bearing", "episodic_path_field",
+            "action_coordinate_compass", "se2_route_compass",
+            "monocular_route_tangent"):
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "invalid_guidance_mode",
+        }), 400
+    if (guidance_mode in (
+            "episodic_path_field", "action_coordinate_compass",
+            "se2_route_compass", "monocular_route_tangent")
+            and (raw_graph_rescue == "1" or route_start_anchor is not None)):
+        return jsonify({
+            "ok": False, "accepted": False,
+            "reason": "path_field_incompatible_with_graph_rescue",
+        }), 400
     raw_goal_intrinsic = request.form.get("goal_camera_intrinsic")
     goal_camera_intrinsic = None
     if raw_goal_intrinsic not in (None, ""):
@@ -802,7 +1008,23 @@ def certified_relocalize():
         proposal_order=proposal_order,
         goal_camera_intrinsic=goal_camera_intrinsic,
         authority_policy=authority_policy,
+        guidance_mode=guidance_mode,
     ))
+
+
+@app.route("/episodic_path_field_step", methods=["POST"])
+def episodic_path_field_step():
+    """Track one already-authorized historical route without appending RGB."""
+    goal = request.files.get("goal")
+    if goal is None:
+        return jsonify({
+            "ok": False,
+            "status": "geometry_failure",
+            "reason": "target_goal_required",
+            "endpoint_fallback_available": False,
+            "native_fallback_available": False,
+        }), 400
+    return jsonify(agent.certified_path_field_reanchor(goal.read()))
 
 
 @app.route("/certified_anchor_image", methods=["POST"])
@@ -883,6 +1105,7 @@ if __name__ == "__main__":
           f"{agent.certified_relocalization_status().get('enabled')}, "
           f"learned_pi3x_relocalization="
           f"{agent.learned_pi3x_relocalization_status().get('enabled')}, "
+          f"depth_observation_only={agent.depth_observation_only}, "
           f"cuda_http_handoff_sync="
           f"{args.synchronize_cuda_http_handoff}, "
           f"checkpoint={os.path.basename(args.checkpoint)})")

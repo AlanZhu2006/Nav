@@ -1,0 +1,36 @@
+{
+  "schema_version": "hm3d_longrange_route_tangent_failure_audit_source_receipt_v3_20260903",
+  "frozen_at": "2026-09-03T17:09:21+08:00",
+  "scope": "result-blind completion of the already-frozen failure panel with actionwise closest-approach recomputation",
+  "query_outcomes_read_before_freeze": false,
+  "aggregate_success_rates_read_before_freeze": false,
+  "formal_run_submitted_before_freeze": true,
+  "formal_evaluation_still_running_at_freeze": true,
+  "diagnostic_fields_changed_after_outcome_read": false,
+  "formal_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_751efdcbb436c99b",
+  "formal_source_receipt_sha256": "751efdcbb436c99b5cc92d69633e812e9d1edc381dcf224af9042113ee8e874e",
+  "diagnostic_contract": {
+    "freeze_v2_sha256": "f62043d174f2f415f65aab8dc47bed99bc1d964252bce74ba0362f51f30b8c09",
+    "freeze_v3_sha256": "938f5060d837c375ea49181f1512a9b2cf1c791f836923282dfe01de46fe13d3",
+    "previous_source_receipt_sha256": "00294ff9b817fb1c601721f97f9689cae2864f71048549df23ab7d46a8d807a4",
+    "fixed_panels_changed": false,
+    "implementation_completion": [
+      "recompute minimum 3-D and planar goal distance from every recorded physical query pose plus the terminal pose",
+      "retain plan-time distance samples as a separately named diagnostic",
+      "verify the actionwise terminal 3-D distance against the formal reported terminal distance"
+    ],
+    "formal_success_rule_changed": false,
+    "formal_decision_rule_changed": false
+  },
+  "files": {
+    "MemNavData/analyze_hm3d_longrange_route_tangent_failures.py": "a2b7a99a8be83c95c1d11d13014fb09a5b6e1187f1a6f51ddfd6c0246a08fb0b",
+    "MemNavData/hm3d_longrange_route_tangent_failure_audit_freeze_v2_20260903.json": "f62043d174f2f415f65aab8dc47bed99bc1d964252bce74ba0362f51f30b8c09",
+    "MemNavData/hm3d_longrange_route_tangent_failure_audit_freeze_v3_20260903.json": "938f5060d837c375ea49181f1512a9b2cf1c791f836923282dfe01de46fe13d3",
+    "MemNavData/hm3d_longrange_route_tangent_failure_audit_source_receipt_v4_20260903.json": "00294ff9b817fb1c601721f97f9689cae2864f71048549df23ab7d46a8d807a4",
+    "MemNavData/test_analyze_hm3d_longrange_route_tangent_failures.py": "37378be90d6d498b814357982585ad4de898f90546a6c01e297929d957b23ddd"
+  },
+  "tests": {
+    "command": "/home/asus/miniconda3/envs/memnav/bin/python -m pytest -q MemNavData/test_analyze_hm3d_longrange_route_tangent_failures.py",
+    "result": "1 passed"
+  }
+}

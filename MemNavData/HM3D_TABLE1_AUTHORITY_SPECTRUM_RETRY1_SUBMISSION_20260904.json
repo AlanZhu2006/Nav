@@ -1,0 +1,24 @@
+{
+  "benchmark_manifest_sha256": "f82dbcbc6255219aae94b6d77bffdfa454f36835cf803a70df5cf8616193ad01",
+  "fresh_confirmation": false,
+  "histories": 28,
+  "jobs": {
+    "analysis": 16924421,
+    "formal_array": 16924419,
+    "smoke": 16924414
+  },
+  "native_and_strict_cec_outcomes_known_before_design": true,
+  "queries_per_arm": 56,
+  "raw_and_finite_witness_outcomes_known_before_submission": false,
+  "retry_reason": "The shared launcher now omits unused default route-motion CLI arguments when the selected frozen server predates that interface.",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_805cfb9813046489",
+  "scene_clusters": 21,
+  "schema_version": "hm3d_table1_authority_spectrum_submission_v1_20260904",
+  "supersedes_failed_jobs": {
+    "analysis": 16923259,
+    "formal_array": 16923258,
+    "smoke": 16923257
+  },
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_authority_spectrum_805cfb9813046489",
+  "task_receipt_sha256": "805cfb9813046489eb524025b4259bb5a02b5402f68fd6ab69b2a4fbab5cacd9"
+}

@@ -1,0 +1,75 @@
+{
+  "schema_version": "hm3d_longrange_route_tangent_freeze_protocol_v1_20260903",
+  "frozen_at": "2026-09-03T12:00:00+08:00",
+  "scope": "result-blind fresh-history confirmation of a causal monocular local-route-tangent readout",
+  "sources": {
+    "base": {
+      "candidate_plan": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_actual_mono_20260830/plan_20260830T061943Z_3b848b5c/candidate_plan.json",
+      "candidate_plan_sha256": "1b1d16dd2132adb32565604bcf99f4852fa36df66a22bec2121e8338ce40020d",
+      "construction_protocol": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_causal_survey_3d811e0f63298480/MemNavData/hm3d_table3_causal_survey_protocol_20260830.json",
+      "construction_protocol_sha256": "0f2f3b02e2e2bb3253bdcb386f501ec293533e4bf0014f6d853146d8e29723ea",
+      "construction_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_20260830/formal_20260830T150042Z_3d811e0f"
+    },
+    "expansion": {
+      "candidate_plan": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e/expansion_plan/candidate_plan.json",
+      "candidate_plan_sha256": "fa5b2daa3bc05aaef5ed334ebcf36d0810caa1eaaf1af09f906595c246518e11",
+      "construction_protocol": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e/expansion_plan/construction_protocol.json",
+      "construction_protocol_sha256": "d3500279f354f2f50a69c3b63f87c595fdfe73faab7c614b89334696011f91b7",
+      "construction_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e",
+      "independent_plan_verification": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e/expansion_plan/independent_verification.json",
+      "independent_plan_verification_sha256": "716d7e0cfb4bcdde3d2bc3b44dbcd0c28bc769c3d618e5a56082c231e9477227"
+    },
+    "consumed_population": {
+      "root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e/merged_query_population",
+      "manifest": "role_pairs/manifest.json",
+      "manifest_sha256": "cbc518cea991fd252893f97fd5e730c277e4d899369932536a745351d47e7451",
+      "population_receipt": "population_receipt.json",
+      "population_receipt_schema": "hm3d_table3_causal_survey_merged_population_v1_20260831"
+    }
+  },
+  "selection": {
+    "distance_bin": "20_to_30_m",
+    "revisit_vertical_error_max_m": 0.5,
+    "maximum_histories_per_scene": 2,
+    "ordering": "candidate_identity_sha256_within_lexicographic_scene_round_robin",
+    "expected_eligible_histories_before_scene_cap": 64,
+    "expected_eligible_scene_clusters": 14,
+    "expected_selected_histories": 28,
+    "expected_selected_scene_clusters": 14,
+    "exclude_every_candidate_identity_in_consumed_manifest": true,
+    "read_query_policy_outcomes": false,
+    "read_navigation_policy_outcomes": false
+  },
+  "evaluation": {
+    "query_role": "revisit",
+    "runtime_role_visibility": "none",
+    "arms": [
+      "mono_native",
+      "mono_cec_endpoint",
+      "mono_cec_route_tangent"
+    ],
+    "primary_contrast": [
+      "mono_cec_route_tangent",
+      "mono_cec_endpoint"
+    ],
+    "success": "three_dimensional_euclidean_distance_strictly_below_1m",
+    "same_prefix_seed_fifo_depth_and_step_budget": true,
+    "initial_certificate_reject": "exact_native",
+    "post_accept_geometry_failure": "stop_without_native_or_endpoint_fallback",
+    "route_depth_stride_frames": 8,
+    "first_feasible_tangent_baseline_m": 0.3,
+    "navdp_pointgoal_radius_m": 2.5,
+    "distance_gate": false,
+    "stuck_trigger": false,
+    "post_accept_native_fallback": false,
+    "post_accept_endpoint_fallback": false
+  },
+  "guards": {
+    "population_freezes_before_any_new_query_rollout": true,
+    "technical_gate_outcome_must_not_be_read_before_remaining_submission": true,
+    "all_arms_same_array_element_and_gpu_process_pair": true,
+    "failed_outputs_are_never_deleted_or_overwritten": true,
+    "no_threshold_or_radius_sweep_after_unseal": true,
+    "fresh_result_required_before_paper_claim": true
+  }
+}

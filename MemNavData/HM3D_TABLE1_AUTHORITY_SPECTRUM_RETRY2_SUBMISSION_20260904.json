@@ -1,0 +1,30 @@
+{
+  "fresh_confirmation": false,
+  "histories": 28,
+  "jobs": {
+    "analysis": 16929036,
+    "formal_array": 16929030,
+    "smoke": 16929024
+  },
+  "native_and_strict_cec_outcomes_known_before_design": true,
+  "queries_per_arm": 56,
+  "raw_and_finite_witness_outcomes_known_before_submission": false,
+  "retry_reason": "bundle-local fullmono runner pinned after legacy namespace fallback lacked the SCHEMAS contract",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b",
+  "scene_clusters": 21,
+  "schema_version": "hm3d_table1_authority_spectrum_submission_v1_20260904",
+  "supersedes_failed_jobs": {
+    "attempt0": {
+      "analysis": 16923259,
+      "formal_array": 16923258,
+      "smoke": 16923257
+    },
+    "attempt1": {
+      "analysis": 16924421,
+      "formal_array": 16924419,
+      "smoke": 16924414
+    }
+  },
+  "task_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_authority_spectrum_9bb6fc2fcc16303b",
+  "task_receipt_sha256": "9bb6fc2fcc16303b7025c708ea4f786e6b0fcf7536ed66b2f2b8860ba62bcb8e"
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": "hm3d_table3_length_cache_exact_retry_v1_20260902",
+  "frozen_population": {
+    "histories": 48,
+    "benchmark_manifest_sha256": "cbc518cea991fd252893f97fd5e730c277e4d899369932536a745351d47e7451",
+    "population_independent_verification_sha256": "8398456ec71503698b3cef60f3b49be6917111d7c76b5e038279dff44b0b4ace"
+  },
+  "retained_completion_count": 45,
+  "exact_retry_indices": [35, 41, 44],
+  "failure_class": "identical_jpeg_new_valid_transaction_cache_collision",
+  "failed_array_job": 16697907,
+  "cancelled_downstream_jobs": [16697908, 16697909],
+  "source_composition": {
+    "query_wrapper_receipt_sha256": "e226a4b4568462831e726a4f486f485233dc4c90bfef72012898cc34ba4744e6",
+    "task_receipt_sha256": "1f4979a7fd37d46700011558063be34a8fba0a0b8746668469dba7e7955f4282",
+    "replacement_server_receipt_sha256": "eb7cdf82477f6aa192b5becf42c85e93d490de7bfe7564132bbff285910a32c4",
+    "base_receipt_sha256": "5690569a4373f2d2768671418f0c604c4a03aa4b0ffe01baf70b288af03ba216",
+    "runtime_closure_receipt_sha256": "82e71f19ee7f4e5233fae499633ce5a233c9c036bb41b9e2bf7d4f0f18effd7d"
+  },
+  "guards": {
+    "method_changed": false,
+    "population_changed": false,
+    "threshold_changed": false,
+    "seed_changed": false,
+    "episode_budget_changed": false,
+    "completed_indices_rerun": false,
+    "partial_navigation_outcome_read": false,
+    "fallback_completion_allowed": false,
+    "reduced_denominator_allowed": false
+  }
+}

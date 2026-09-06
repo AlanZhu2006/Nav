@@ -1,0 +1,16 @@
+{
+  "schema_version": "hm3d_longrange_route_tangent_failure_audit_source_receipt_v1_20260903",
+  "frozen_at": "2026-09-03T15:04:00+08:00",
+  "query_outcomes_read_before_freeze": false,
+  "formal_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_c472a57c07f261f5",
+  "formal_source_receipt_sha256": "c472a57c07f261f5384c839e5eefae9adc24b15f77b7685f410f92dd226d96fd",
+  "files": {
+    "MemNavData/analyze_hm3d_longrange_route_tangent_failures.py": "36620c1f7663f7844b39a54923d919714c56a22014436844da37da8d34d5b6c7",
+    "MemNavData/hm3d_longrange_route_tangent_failure_audit_freeze_v2_20260903.json": "f62043d174f2f415f65aab8dc47bed99bc1d964252bce74ba0362f51f30b8c09",
+    "MemNavData/test_analyze_hm3d_longrange_route_tangent_failures.py": "5e483ea6feaa5f7e5583fdfd6a613880121a06215b0fd0dcb155b7916b96e389"
+  },
+  "tests": {
+    "command": "/home/asus/miniconda3/envs/memnav/bin/python -m pytest -q MemNavData/test_analyze_hm3d_longrange_route_tangent_failures.py",
+    "result": "1 passed"
+  }
+}

@@ -8,6 +8,9 @@ import re
 from typing import Any, Mapping
 
 from MemNavData.cec_handoff_contract import verify_handoff_packet_envelope
+from MemNavData.route_alignment_contract import (
+    verify_route_alignment_packet,
+)
 
 
 @dataclass(frozen=True)
@@ -161,9 +164,41 @@ def certified_alignment_turn(
     )
 
 
+def certified_route_alignment_turn(
+    response: Mapping[str, Any],
+) -> CertifiedAlignmentTurn | None:
+    """Read one proof-bound route tangent for rear-support alignment.
+
+    This is deliberately distinct from the generic CEC portability handoff:
+    the authorized direction comes from the continuous historical route, not
+    from the initial endpoint pose.  Only a rear-half-plane bearing is
+    eligible because that is the exact part clipped by frozen NavDP.
+    """
+
+    if not isinstance(response, Mapping):
+        raise ValueError("controller response must be a mapping")
+    if (response.get("certified_relocalization_accepted") is not True
+            or response.get("certified_relocalization_guidance_mode")
+            != "monocular_route_tangent"):
+        return None
+    packet = verify_route_alignment_packet(
+        response.get("local_tangent_alignment_packet"))
+    direction = packet["unit_bearing"]
+    forward, left = float(direction[0]), float(direction[1])
+    if forward >= 0.0:
+        return None
+    return CertifiedAlignmentTurn(
+        forward=forward,
+        left=left,
+        turn_rad=float(packet["required_turn_rad"]),
+        packet_sha256=str(packet["packet_sha256"]),
+    )
+
+
 __all__ = [
     "CertifiedAlignmentTurn",
     "bounded_turn_delta",
     "certified_alignment_turn",
+    "certified_route_alignment_turn",
     "validate_bounded_turn_trace",
 ]

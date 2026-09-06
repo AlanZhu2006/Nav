@@ -1,0 +1,36 @@
+{
+  "schema_version": "hm3d_longrange_route_tangent_failure_audit_source_receipt_v5_20260903",
+  "frozen_at": "2026-09-03T17:32:19+08:00",
+  "scope": "result-blind final diagnostic closure for the preregistered long-range secondary metrics",
+  "query_outcomes_read_before_freeze": false,
+  "aggregate_success_rates_read_before_freeze": false,
+  "formal_evaluation_still_running_at_freeze": true,
+  "diagnostic_fields_changed_after_outcome_read": false,
+  "formal_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_longrange_route_tangent_20260903/fresh_751efdcbb436c99b",
+  "formal_source_receipt_sha256": "751efdcbb436c99b5cc92d69633e812e9d1edc381dcf224af9042113ee8e874e",
+  "diagnostic_contract": {
+    "freeze_v2_sha256": "f62043d174f2f415f65aab8dc47bed99bc1d964252bce74ba0362f51f30b8c09",
+    "freeze_v3_sha256": "938f5060d837c375ea49181f1512a9b2cf1c791f836923282dfe01de46fe13d3",
+    "previous_source_receipt_sha256": "3fbcd4b62fda14af2a42130d523390217d509eda698bf089e69ef366f892376b",
+    "fixed_failure_panels_changed": false,
+    "secondary_metric_completion": [
+      "SPL from the frozen initial geodesic, realized path, and success outcome",
+      "trace-recomputed three-dimensional path length",
+      "total absolute executed yaw"
+    ],
+    "formal_success_rule_changed": false,
+    "formal_decision_rule_changed": false,
+    "no_additional_result_dependent_fields_after_this_receipt": true
+  },
+  "files": {
+    "MemNavData/analyze_hm3d_longrange_route_tangent_failures.py": "05df12c02c9add929c8ffd5d297cd0e55a07c1f0348433154045548d99bcbf0e",
+    "MemNavData/hm3d_longrange_route_tangent_failure_audit_freeze_v2_20260903.json": "f62043d174f2f415f65aab8dc47bed99bc1d964252bce74ba0362f51f30b8c09",
+    "MemNavData/hm3d_longrange_route_tangent_failure_audit_freeze_v3_20260903.json": "938f5060d837c375ea49181f1512a9b2cf1c791f836923282dfe01de46fe13d3",
+    "MemNavData/hm3d_longrange_route_tangent_failure_audit_source_receipt_v6_20260903.json": "3fbcd4b62fda14af2a42130d523390217d509eda698bf089e69ef366f892376b",
+    "MemNavData/test_analyze_hm3d_longrange_route_tangent_failures.py": "ca411c7e8aeb29caa4fd8664427ee2c5247a46035a33723d3386e3b837154a47"
+  },
+  "tests": {
+    "command": "/home/asus/miniconda3/envs/memnav/bin/python -m pytest -q MemNavData/test_analyze_hm3d_longrange_route_tangent_failures.py",
+    "result": "1 passed"
+  }
+}

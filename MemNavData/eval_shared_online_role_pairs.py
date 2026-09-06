@@ -35,13 +35,22 @@ CEC_LATENCY_FIELDS = (
 
 
 def audit_benchmark(root: Path) -> dict:
-    if args.role_pair_scope == "table3_length":
+    if args.role_pair_scope == "table3_longrange_route_tangent":
+        return audit_table3_benchmark(
+            root,
+            exact_bin_population={"20_to_30_m": (23, 8)},
+            require_route_tangent_fresh=True,
+        )
+    if args.role_pair_scope in (
+            "table3_length", "table3_longrange_oracle"):
         return audit_table3_benchmark(root)
     return audit_shared_benchmark(root)
 
 
 def runtime_query(query: dict) -> dict:
-    if args.role_pair_scope == "table3_length":
+    if args.role_pair_scope in (
+            "table3_length", "table3_longrange_oracle",
+            "table3_longrange_route_tangent"):
         return table3_runtime_query(query)
     return shared_runtime_query(query)
 
@@ -91,11 +100,34 @@ def resolve_arm() -> tuple[str, str | None]:
         )
         return "geometry_fixed", "navdp_auto"
     if args.hybrid_route == "certified_relocalization":
-        require(
-            args.revisit_adapter == "verified_bearing_v1",
-            "certified arm requires the frozen bearing adapter",
+        if args.revisit_adapter == "verified_bearing_v1":
+            return "certified", "navdp_auto"
+        if args.revisit_adapter == "verified_navdp_support_projection_v1":
+            require(
+                args.certified_guidance_mode == "monocular_route_tangent",
+                "NavDP support projection is restricted to the route-tangent "
+                "interface attribution",
+            )
+            return "certified_support_projected", "navdp_auto"
+        if args.revisit_adapter == "verified_bounded_metric_v1":
+            require(
+                args.navdp_depth_source == "monocular_sidecar",
+                "bounded-metric certificate requires the shared full-mono "
+                "first-40 scale receipt",
+            )
+            return "certified_bounded_metric", "navdp_auto"
+        if args.revisit_adapter == "verified_metric_v1":
+            require(
+                args.navdp_depth_source == "monocular_sidecar",
+                "full-metric certificate requires the shared full-mono "
+                "first-40 scale receipt",
+            )
+            return "certified_metric_distance", "navdp_auto"
+        raise RuntimeError(
+            "certified arm requires verified_bearing_v1 or the explicit "
+            "verified_navdp_support_projection_v1/"
+            "verified_bounded_metric_v1/verified_metric_v1 challenger"
         )
-        return "certified", "navdp_auto"
     if args.hybrid_route == "certified_unthresholded_witness":
         require(
             args.revisit_adapter == "verified_bearing_v1",
@@ -120,7 +152,7 @@ def resolve_arm() -> tuple[str, str | None]:
         return "learned_pi3x_spatial", "navdp_auto"
     raise RuntimeError(
         "role-pair evaluator supports only "
-        "native/native-sidecar/raw/geometry/certified/"
+        "native/native-sidecar/raw/geometry/certified/bounded/full-metric/"
         "unthresholded-witness/semantic-first/"
         "learned-pi3x"
     )
@@ -153,7 +185,22 @@ def validate_cli() -> tuple[str, str | None]:
     require(args.exec_horizon == 8, "formal NavDP execution horizon is eight")
     require(args.certified_cdec_rescue == "off", "CDEC rescue is out of scope")
     require(args.certified_stagnation_graph == "off", "graph rescue is out of scope")
-    if args.cec_initial_bearing_alignment != "off":
+    if (args.cec_initial_bearing_alignment
+            == "first_route_tangent_rear_bounded"):
+        require(
+            arm == "certified"
+            and args.hybrid_route == "certified_relocalization"
+            and args.certified_guidance_mode == "monocular_route_tangent"
+            and args.revisit_adapter == "verified_bearing_v1",
+            "route alignment requires the certified monocular route tangent",
+        )
+        require(
+            args.role_pair_scope == "table3_longrange_route_tangent"
+            and args.role_pair_query_role == "revisit",
+            "route alignment is restricted to the consumed long-range "
+            "mechanism population",
+        )
+    elif args.cec_initial_bearing_alignment != "off":
         require(
             arm == "cec_portability",
             "CEC bearing alignment requires the proof-carrying portability hub",
@@ -208,8 +255,31 @@ def validate_cli() -> tuple[str, str | None]:
         )
     if args.role_pair_query_role != "all":
         require(
-            args.role_pair_scope == "consumed_integration",
-            "role filtering is permitted only for consumed development",
+            args.role_pair_scope in (
+                "consumed_integration", "table3_longrange_oracle",
+                "table3_longrange_route_tangent"),
+            "role filtering is permitted only for consumed development or "
+            "the explicit long-range oracle attribution fork",
+        )
+    if args.role_pair_scope == "table3_longrange_oracle":
+        require(
+            args.role_pair_query_role == "revisit",
+            "long-range oracle attribution is Revisit-only",
+        )
+        require(
+            args.role_pair_query_manifest == "",
+            "long-range oracle attribution uses the sealed length cohort",
+        )
+    if args.role_pair_scope == "table3_longrange_route_tangent":
+        require(
+            args.role_pair_query_role == "revisit",
+            "route-tangent confirmation is the frozen same-floor Revisit "
+            "stratum",
+        )
+        require(
+            args.role_pair_query_manifest == "",
+            "route-tangent confirmation evaluates its complete frozen "
+            "population",
         )
     if args.role_pair_query_manifest:
         require(
@@ -378,6 +448,9 @@ def router_counts(plans: list[dict]) -> dict:
             or (plan.get("learned_pi3x_relocalization_ok") is False)
             or (plan.get("cec_reason") == "certificate_endpoint_failure")
             for plan in plans
+        ),
+        "geometry_stream_stop_plans": sum(
+            plan.get("geometry_stream_stop") is True for plan in plans
         ),
     }
 
@@ -597,6 +670,12 @@ def main() -> None:
                         policy_backend=policy_backend,
                         episode_seed=episode_seed,
                         leg_index=1,
+                        success_goal_position=(
+                            goal_floor
+                            if args.role_pair_scope
+                            == "table3_longrange_route_tangent"
+                            else None
+                        ),
                     )
                     counts = router_counts(leg["plans"])
                     depth = depth_counts(leg["plans"])
@@ -628,6 +707,18 @@ def main() -> None:
                         "path_len_m": float(leg["path_len"]),
                         "steps": int(leg["steps"]),
                         "final_goal_dist_m": float(leg["final_goal_dist_m"]),
+                        "final_goal_planar_dist_m": float(
+                            leg["final_goal_planar_dist_m"]),
+                        "final_goal_vertical_error_m": (
+                            None
+                            if leg["final_goal_vertical_error_m"] is None
+                            else float(leg["final_goal_vertical_error_m"])
+                        ),
+                        "final_goal_3d_dist_m": (
+                            None
+                            if leg["final_goal_3d_dist_m"] is None
+                            else float(leg["final_goal_3d_dist_m"])
+                        ),
                         "end_x_m": float(leg["end_pos"][0]),
                         "end_y_m": float(leg["end_pos"][1]),
                         "end_z_m": float(leg["end_pos"][2]),
@@ -693,6 +784,23 @@ def main() -> None:
                                     "final_goal_dist_m": float(
                                         leg["final_goal_dist_m"]
                                     ),
+                                    "final_goal_planar_dist_m": float(
+                                        leg["final_goal_planar_dist_m"]
+                                    ),
+                                    "final_goal_vertical_error_m": (
+                                        None
+                                        if leg[
+                                            "final_goal_vertical_error_m"]
+                                        is None
+                                        else float(leg[
+                                            "final_goal_vertical_error_m"])
+                                    ),
+                                    "final_goal_3d_dist_m": (
+                                        None
+                                        if leg["final_goal_3d_dist_m"] is None
+                                        else float(leg[
+                                            "final_goal_3d_dist_m"])
+                                    ),
                                     "end_position": [
                                         float(value) for value in leg["end_pos"]
                                     ],
@@ -745,6 +853,12 @@ def main() -> None:
             "table3_length": (
                 "HM3D causal-RGB Novel/Revisit evaluation by geodesic length"
             ),
+            "table3_longrange_oracle": (
+                "consumed HM3D long-range evaluator-pose attribution only"
+            ),
+            "table3_longrange_route_tangent": (
+                "fresh HM3D same-floor 20--30 m route-tangent confirmation"
+            ),
         }
         summary = {
             "schema_version": RESULT_SCHEMA,
@@ -790,6 +904,9 @@ def main() -> None:
             },
             "runtime_failure_plans": sum(
                 row["runtime_failure_plans"] for row in metrics
+            ),
+            "geometry_stream_stop_episodes": sum(
+                row["geometry_stream_stop_plans"] > 0 for row in metrics
             ),
             "navdp_depth_source": args.navdp_depth_source,
             "metric_depth_sensor_consumed_episodes": sum(

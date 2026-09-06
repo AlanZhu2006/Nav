@@ -1,0 +1,46 @@
+{
+  "schema_version": "hm3d_action_coordinate_quota_retry_protocol_v1_20260902",
+  "failure": {
+    "class": "scratch_file_count_quota_exhaustion",
+    "errno": 122,
+    "original_evaluation_job": 16781348,
+    "original_summary_job": 16781349,
+    "original_verification_job": 16781350,
+    "failed_indices": [18, 19, 20],
+    "unstarted_indices": [21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]
+  },
+  "frozen_evaluation": {
+    "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_action_coordinate_compass_20260902/pair_b7de41263049e415",
+    "source_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_action_coordinate_compass_b7de41263049e415",
+    "source_receipt_sha256": "b7de41263049e415755f3595338f9e064373966e44992d234ebe453e55bb802a",
+    "manifest_sha256": "cbc518cea991fd252893f97fd5e730c277e4d899369932536a745351d47e7451",
+    "population_size": 48,
+    "retained_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+    "exact_retry_indices": "18-47",
+    "array_concurrency": 3,
+    "arms": ["mono_cec_endpoint", "mono_cec_action_coordinate"]
+  },
+  "retention_repair": {
+    "delete_only_after_sealed_completion": true,
+    "deleted_payload": "runtime RGB buffer only",
+    "preserved_payloads": [
+      "completion and SHA-256 sidecar",
+      "per-arm metrics and plans",
+      "episode and server logs",
+      "failed partial evaluations and runtime buffers"
+    ],
+    "successful_retry_buffer_cleanup": "automatic after completion sidecar verification",
+    "recoverability": "deleted buffers are reproducible by exact replay from the immutable source and manifest"
+  },
+  "guards": {
+    "method_changed": false,
+    "population_changed": false,
+    "arm_changed": false,
+    "seed_changed": false,
+    "episode_budget_changed": false,
+    "completed_indices_rerun": false,
+    "partial_outcomes_read": false,
+    "partial_sr_computed": false,
+    "fallback_completion_allowed": false
+  }
+}

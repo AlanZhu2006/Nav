@@ -179,7 +179,11 @@ def audit_raw_outcome(
         accepts == int(row["certificate_accept_plans"])
         and failures == int(row["runtime_failure_plans"])
         and failures == 0
-        and all(plan.get("role_label_visible") is False for plan in plans),
+        # The runtime query projection is audited separately below and excludes
+        # the analysis-only role.  Endpoint plans serialize the optional
+        # visibility diagnostic as null when the field is not exposed; only an
+        # explicit true value would contradict the hidden-role contract.
+        and all(plan.get("role_label_visible") is not True for plan in plans),
         f"{label}: intervention/runtime recount changed",
     )
     return accepts, failures

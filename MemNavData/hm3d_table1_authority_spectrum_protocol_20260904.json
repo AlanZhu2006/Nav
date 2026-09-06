@@ -1,0 +1,40 @@
+{
+  "arms": [
+    "mono_native",
+    "mono_raw_fixed",
+    "mono_unthresholded_witness",
+    "mono_cec"
+  ],
+  "benchmark": {
+    "histories": 28,
+    "manifest_sha256": "f82dbcbc6255219aae94b6d77bffdfa454f36835cf803a70df5cf8616193ad01",
+    "queries_per_arm": 56,
+    "scene_clusters": 21
+  },
+  "controller": {
+    "checkpoint_changed": false,
+    "depth_source": "monocular_sidecar",
+    "exec_horizon": 8,
+    "max_steps": 600,
+    "revisit_residual_m": 2.5,
+    "success_distance_m": 1.0
+  },
+  "disclosure": {
+    "fresh_confirmation": false,
+    "native_and_strict_cec_outcomes_known_before_design": true,
+    "population_originally_selected_outcome_blind": true,
+    "raw_and_finite_witness_outcomes_known_before_submission": false
+  },
+  "primary_contrasts": [
+    ["mono_cec", "mono_native"],
+    ["mono_raw_fixed", "mono_native"],
+    ["mono_unthresholded_witness", "mono_native"],
+    ["mono_cec", "mono_raw_fixed"],
+    ["mono_cec", "mono_unthresholded_witness"]
+  ],
+  "runtime_role_visibility": "none",
+  "same_process_four_arm_pairing": true,
+  "schema_version": "hm3d_table1_authority_spectrum_protocol_v1_20260904",
+  "scope": "sealed_hm3d_table1_retrospective_authority_spectrum",
+  "strict_vs_witness_sole_intervention": "operational_authority_policy"
+}

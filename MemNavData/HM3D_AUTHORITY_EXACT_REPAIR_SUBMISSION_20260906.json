@@ -1,0 +1,149 @@
+{
+  "retry_indices": [
+    2,
+    3,
+    6,
+    7,
+    10,
+    13,
+    18,
+    21
+  ],
+  "reused_histories": [
+    {
+      "index": 0,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/000_X7gTkoDHViv_episode_0002",
+      "completion_sha256": "4372ae58ebc57cf96a9725fb9507ab2236c30e035a6d7bc7d4cea9a2fcc8da23"
+    },
+    {
+      "index": 1,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/001_AWUFxHEyV3T_episode_0002",
+      "completion_sha256": "81249378c95bf4abe3954d5ddc9fa1eddaf667aa573bc0ae987b2f35b13e8588"
+    },
+    {
+      "index": 4,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/004_z9YwN9M8FpG_episode_0001",
+      "completion_sha256": "da849028c2a21965240d4556c1617d9c5ffed32a44f2ec2e5f6a3eef4255eb48"
+    },
+    {
+      "index": 5,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/005_hkr2MGpHD6B_episode_0000",
+      "completion_sha256": "7da83ca2e62e69323dff6c25ea54f94f2ce6fd10d64a0edd9fa50e705f2d32d1"
+    },
+    {
+      "index": 8,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/008_LNg5mXe1BDj_episode_0002",
+      "completion_sha256": "b8adfd6896d4dbcf3a7a722771d0f602f5a286a2b51183ec3c01f2cbe4e4964e"
+    },
+    {
+      "index": 9,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/009_W7k2QWzBrFY_episode_0001",
+      "completion_sha256": "eae84b2a25f75a65fdeac59c1d2f99bffe49b46c5954fd8f9e9c75f5cc1e3d2a"
+    },
+    {
+      "index": 11,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/011_YRUkbU5xsYj_episode_0002",
+      "completion_sha256": "439a7a44fc44416914f747243b8f55f80915fe443a539d6d4f60e2eb8baf5df6"
+    },
+    {
+      "index": 12,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/012_SiKqEZx7Ejt_episode_0002",
+      "completion_sha256": "3e40455b32893104231685c94730a845804381ce6afc88f1951db5d9d456fe23"
+    },
+    {
+      "index": 14,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/014_FnSn2KSrALj_episode_0002",
+      "completion_sha256": "71863d5e5a558df03eb99f75fb364b17f90baf8449b0c4ea2f15baf1b5450e6c"
+    },
+    {
+      "index": 15,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/015_L53DsRRk4Ch_episode_0002",
+      "completion_sha256": "cf0db7688b26dab94166c5ee883c0e9a098bafabde94b6805bb2d979ef3307b4"
+    },
+    {
+      "index": 16,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/016_RJaJt8UjXav_episode_0003",
+      "completion_sha256": "657cc057eefbdcd8f9966c93aa7880d480be079d769e722c00997d5663c04174"
+    },
+    {
+      "index": 17,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/017_b28CWbpQvor_episode_0000",
+      "completion_sha256": "9f14e261d1c8f7d16effc14d76fa9152d4f5adb0d23d6f31c6d36f73d873dbe1"
+    },
+    {
+      "index": 19,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/019_QHhQZWdMpGJ_episode_0001",
+      "completion_sha256": "577b17d54970dd8ff57b08573566e1ec6bd9274c513b90b65aaaa0d703da9252"
+    },
+    {
+      "index": 20,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/020_fsQtJ8t3nTf_episode_0000",
+      "completion_sha256": "fbd8ecf2c09ec9a649f79098597b6972a859dc8e315812eeceaab21ad0548c4b"
+    },
+    {
+      "index": 22,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/022_vd3HHTEpmyA_episode_0000",
+      "completion_sha256": "e7b5483b675d15a64bd57d7c98a6aebdee37aac5c9901a5413d8a55efd965fac"
+    },
+    {
+      "index": 23,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/023_uSKXQ5fFg6u_episode_0000",
+      "completion_sha256": "524b101d1726d8189579c368e370fa205e2e3dca4f71808a7ef0416ef97d6ad4"
+    },
+    {
+      "index": 24,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/024_66seV3BWPoX_episode_0003",
+      "completion_sha256": "a1ec2285924ddd829990283db7f358cc028da47673e1a7b8bd397c0edc17f968"
+    },
+    {
+      "index": 25,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/025_u1bkiGRVyu9_episode_0002",
+      "completion_sha256": "c049734fefd85bea302c16fb2e1dcac8ec0da84d983c8b0abbdbdd0d6460a877"
+    },
+    {
+      "index": 26,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/026_rXXL6twQiWc_episode_0003",
+      "completion_sha256": "c54db5e08008870e8a22e5b4af792712151b59597cc1a23957af57d35d8a37d1"
+    },
+    {
+      "index": 27,
+      "source": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b/formal/evaluation/natural_direction/027_XMHNu9rRQ1y_episode_0003",
+      "completion_sha256": "875c25296044c90f37144796beb68129047a471b836e50836f3f237aa8788b5e"
+    }
+  ],
+  "old_run": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_20260904/formal_9bb6fc2fcc16303b",
+  "new_run": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_repair_20260906",
+  "configuration": {
+    "TASK_ROOT": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_authority_exact_repair_c7098eeafd55ea95",
+    "TASK_RECEIPT": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_authority_exact_repair_c7098eeafd55ea95/SOURCE_BUNDLE.sha256",
+    "EXPECTED_TASK_RECEIPT_SHA": "c7098eeafd55ea951710e6ccb32b538e1bdd3de2ef34cab0db5797a18f3c197b",
+    "BASE_SOURCE_ROOT": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_5690569a4373f2d2",
+    "BASE_RECEIPT": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_mono_factorial_5690569a4373f2d2/source_inputs.sha256",
+    "EXPECTED_BASE_RECEIPT_SHA": "5690569a4373f2d2768671418f0c604c4a03aa4b0ffe01baf70b288af03ba216",
+    "SERVER_SOURCE_ROOT": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_authority_stationary_cache_repair_77985a53be98bb27",
+    "SERVER_SOURCE_RECEIPT": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_authority_stationary_cache_repair_77985a53be98bb27/SOURCE_BUNDLE.sha256",
+    "EXPECTED_SERVER_SOURCE_RECEIPT_SHA": "77985a53be98bb279dd7b724adaa78aa67083f9b2bf7b4e02ffa0e4165044bdf",
+    "RUNTIME_CLOSURE_ROOT": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_navdp_authority_transaction_repair_51ee9a4ca063c7f1",
+    "RUNTIME_CLOSURE_RECEIPT": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table1_navdp_authority_transaction_repair_51ee9a4ca063c7f1/SOURCE_BUNDLE.sha256",
+    "EXPECTED_RUNTIME_CLOSURE_RECEIPT_SHA": "51ee9a4ca063c7f1125a69dd226918ea9a8bd6404c379df58b28e2b296e68eec",
+    "BENCH_ROOT": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_fresh_query_reserve_20260829/construction_20260828T212552Z_bb757914/population/natural_direction",
+    "PARENT_MANIFEST": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_fresh_fullmono_mixed_role_20260820/formal_20260820T143609Z_e6dd44c6/sealed_inputs/parent_manifest.json",
+    "FORMAL_RUN_ROOT": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_authority_spectrum_repair_20260906",
+    "CONSTRUCTION_VERIFICATION": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table1_fresh_query_reserve_20260829/construction_20260828T212552Z_bb757914/hm3d_table1_fresh_query_verification.json",
+    "EXPECTED_CONSTRUCTION_VERIFICATION_SHA": "2a7b8f86f61a6f55762640dcbaef4b975539ec3d93cfb06649bddd6fa4c96dc8",
+    "EXPECTED_MANIFEST_SHA": "f82dbcbc6255219aae94b6d77bffdfa454f36835cf803a70df5cf8616193ad01"
+  },
+  "jobs_submitted": true,
+  "selection_uses_policy_outcomes": false,
+  "submitted_at_utc": "2026-09-05T22:15:56.183145+00:00",
+  "preflight": {
+    "remote_cache_and_namespace_tests_passed": 7,
+    "frozen_four_route_cli_checks_passed": 4,
+    "slurm_test_only_passed": true
+  },
+  "jobs": {
+    "cache_repair_full_history_gate": "17010301",
+    "remaining_seven_histories": "17010302",
+    "complete_population_analysis": "17010303"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "archive_manifest_sha256": "2d39271266864e0b0c4269c118566e18ee6a7906ade6f126ffee74b0e21ea6a3",
+  "archive_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e/failed_attempts/table3_length_cache_exact_retry_20260902",
+  "completed_indices_rerun": false,
+  "exact_retry_indices": [
+    35,
+    41,
+    44
+  ],
+  "exception_text_inspected": true,
+  "failure_class": "identical_jpeg_new_valid_transaction_cache_collision",
+  "fallback_completion_allowed": false,
+  "jobs": {
+    "exact_retry": 16730348,
+    "independent_verifier": 16730350,
+    "summary": 16730349
+  },
+  "method_or_population_changed": false,
+  "navigation_success_or_distance_read": false,
+  "partial_aggregate_or_sr_computed": false,
+  "replacement_server_receipt_sha256": "eb7cdf82477f6aa192b5becf42c85e93d490de7bfe7564132bbff285910a32c4",
+  "replacement_server_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/mp3d_table1_controller_portability_eb7cdf82477f6aa1",
+  "retained_completion_count": 45,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_table3_causal_survey_expansion_20260831/expansion_20260830T165729Z_a8dd232e",
+  "schema_version": "hm3d_table3_length_cache_exact_retry_submission_v1_20260902",
+  "wrapper_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/hm3d_table3_length_cache_exact_retry_016e3ee6432118a4",
+  "wrapper_receipt_sha256": "016e3ee6432118a4772c46107d85f67ecf84e1a27ceb5cf4a5dde68c70375f1e"
+}

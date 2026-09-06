@@ -22,6 +22,8 @@ server adds it).
 """
 
 import hashlib
+import json
+import math
 import os
 import shutil
 import time
@@ -55,6 +57,40 @@ except ImportError:  # pragma: no cover - exercised by the live script entrypoin
 
 FLOW_TIERS = [(702, 20.0), (877, 25.0), (1075, 30.0), (1506, 40.0), (2048, 50.0)]
 FLOW_GAP = 30
+CERTIFIED_GUIDANCE_MODES = (
+    "endpoint_bearing",
+    "episodic_path_field",
+    "action_coordinate_compass",
+    "se2_route_compass",
+    "monocular_route_tangent",
+)
+CERTIFIED_ROUTE_MOTION_MODELS = (
+    "fundamental_then_pnp",
+    "direct_pnp",
+    "direct_pnp_dense_query",
+)
+
+
+def certified_route_edge_motion_model(route_motion_model, edge_kind):
+    """Resolve the frozen estimator used by one route edge.
+
+    ``direct_pnp_dense_query`` is deliberately stage-specific. The sparse
+    historical tape keeps the already-validated Fundamental-MAGSAC -> PnP
+    estimator; only consecutive live-query observations use direct PnP. This
+    prevents a query-cadence attribution from silently changing how the
+    historical route itself is constructed.
+    """
+
+    model = str(route_motion_model)
+    kind = str(edge_kind)
+    if model not in CERTIFIED_ROUTE_MOTION_MODELS:
+        raise ValueError(f"unknown certified route motion model: {model}")
+    if model == "direct_pnp":
+        return "direct_pnp"
+    if (model == "direct_pnp_dense_query"
+            and kind == "live_query_adjacent_sample"):
+        return "direct_pnp"
+    return "fundamental_then_pnp"
 
 
 def flow_threshold_for_length(n_frames):
@@ -100,8 +136,12 @@ class MemNavAgent:
                  certified_relocalization_matcher=None,
                  certified_counterfactual_audit=False,
                  certified_eager_depth_cache=False,
+                 certified_route_depth_cache_stride=0,
+                 certified_route_motion_model="fundamental_then_pnp",
+                 certified_route_motion_unfiltered_shadow=False,
                  cdec_pairwise_ranker=None,
-                 pi3x_online_relocalizer=None):
+                 pi3x_online_relocalizer=None,
+                 depth_observation_only=False):
         # auto: training's per-episode tier; off: legacy dense capture; otherwise
         # parse a fixed pixel-flow threshold.
         self.flow_gate = flow_gate
@@ -123,6 +163,12 @@ class MemNavAgent:
         self.amargin = self.S + self.W - 1              # 39
         self.exclude_recent = int(exclude_recent)       # dataset default 83
         self.num_samples = int(num_samples)
+        # Long-stream mechanism audits need the exact causal LingBot depth
+        # state, but never call MemNav's later goal-insertion/planning path.
+        # In this mode we retain the model's live KV state while omitting only
+        # the duplicate, write-only planning-cache snapshots below.  Planning
+        # fails closed so an incomplete cache can never reach a controller.
+        self.depth_observation_only = bool(depth_observation_only)
         self.gate_skip_below = float(gate_skip_below)
         # "raw": match by RAW dino-cls cosine (frozen features; measured corr +0.29 with
         # GT covis, top-5 all in the GT neighborhood) instead of the trained projection
@@ -171,6 +217,26 @@ class MemNavAgent:
         # lookup at a new goal.
         self.certified_eager_depth_cache = bool(
             certified_eager_depth_cache)
+        self.certified_route_depth_cache_stride = int(
+            certified_route_depth_cache_stride)
+        if self.certified_route_depth_cache_stride < 0:
+            raise ValueError(
+                "certified route depth cache stride must be non-negative")
+        self.certified_route_motion_model = str(
+            certified_route_motion_model)
+        if self.certified_route_motion_model not in (
+                CERTIFIED_ROUTE_MOTION_MODELS):
+            raise ValueError(
+                "certified route motion model must be fundamental_then_pnp "
+                "direct_pnp, or direct_pnp_dense_query")
+        self.certified_route_motion_unfiltered_shadow = bool(
+            certified_route_motion_unfiltered_shadow)
+        if (self.certified_route_motion_unfiltered_shadow
+                and self.certified_route_motion_model !=
+                "fundamental_then_pnp"):
+            raise ValueError(
+                "unfiltered route-motion shadow requires the fundamental "
+                "primary model")
         # Optional factorized CDEC proposal.  It has no activation authority:
         # the geometry proposal is always tried first, accepted geometry can
         # never be overridden, and the learned proposal reaches PnP only after
@@ -247,6 +313,10 @@ class MemNavAgent:
         self.cam_k = []                  # per-frame [NI,TD,H,d] bf16 gpu (stacked lazily)
         self.cam_v = []
         self.cam_pose = []               # per-frame [9] fp32
+        # Optional frame-bound executor receipts. Entry i describes realized
+        # motion from causal RGB i-1 to i. They are internal action/odometry
+        # receipts, not evaluator poses or an additional exteroceptive stream.
+        self.executor_motion_receipts = []
         self.scale_k = None              # [L,H,S,P,d] bf16 gpu
         self.scale_v = None
         self._metric_scale = None        # lazy ground-anchored scale
@@ -287,6 +357,16 @@ class MemNavAgent:
         # retrieve the same place, so retain exact final depth/confidence while
         # keeping the first request identical to the confirmed full replay.
         self._certified_reference_depth_cache = {}
+        # Sparse CPU-only local-observation cache.  It is intentionally
+        # separate from the exact canonical certificate depth cache above, so
+        # enabling route tracking cannot alter initial CEC authorization.
+        self._certified_route_reference_depth_cache = {}
+        self._certified_route_depth_cached_anchors = set()
+        # The dense-query motion model retains at most one controller interval
+        # of write-time depth.  These frame-bound values let the visual route
+        # consume the same observation cadence as the executor without turning
+        # every query frame into a permanent long-term-memory node.
+        self._certified_route_live_depth_cache = {}
         self._certified_dense_replay_last_stats = None
         self._certified_dense_stream_snapshot = None
         self._certified_eager_depth_error = None
@@ -300,6 +380,24 @@ class MemNavAgent:
         # always-on reverse graph.  A route is created only after an external
         # progress monitor declares the direct certified bearing stuck.
         self._certified_graph_routes = {}
+        # Development-only long-range readout.  Each accepted goal owns one
+        # continuous tail-to-anchor path and monotone progress scalar.  It is
+        # separate from the dormant discrete stuck-rescue graph above and is
+        # never consulted by canonical endpoint-bearing CEC.
+        self._certified_path_field_routes = {}
+        # Scale-free long-return challenger. CEC authorizes the historical
+        # route once; subsequent route state is advanced only by frame-bound
+        # executor translation/yaw receipts.
+        self._certified_action_coordinate_routes = {}
+        # Development successor to the scalar action coordinate.  It rebuilds
+        # a local 2-D executor route from the same receipts and advances route
+        # state by monotone geometric projection, never by travelled distance.
+        self._certified_se2_route_compasses = {}
+        # Deployable long-range route readout.  Both the historical route and
+        # live state are reconstructed from causal RGB, height-scaled LingBot
+        # depth, and adjacent LightGlue/PnP motion.  It never consumes the
+        # optional executor/simulator receipts above.
+        self._certified_monocular_route_tangents = {}
         # The candidate set is fixed at the first causal query for a goal.
         # An empty set is a real, cacheable abstention (for example after a
         # very short Novel leg), not permission to admit later goal-session
@@ -316,6 +414,11 @@ class MemNavAgent:
         self._first40_scale_receipt = None
         self._first40_scale_freeze_ms = None
         self._last_frame_jpg_sha256 = None
+        # The flow gate already predicts depth for every post-warmup frame.
+        # Retain only that newest immutable tensor so the MDTEC transaction
+        # can serialize it without running the same depth head a second time.
+        self._last_stream_depth_frame_index = None
+        self._last_stream_relative_depth = None
         # tower-1 live capture: the current frame's post-GCT tokens + agg list from the
         # CONTINUOUS stream. Training used window_forward's cold-cache recompute only
         # because samples load from disk; at eval the live stream supersedes it.
@@ -350,7 +453,11 @@ class MemNavAgent:
             "_retrieval_verification_cache", "_phase_b_rank_cache",
             "_phase_b_scale_cache", "_phase_b_geometry_cache",
             "_certified_relocalization_cache", "_pi3x_relocalization_cache",
-            "_certified_graph_routes", "_certified_candidate_cache",
+            "_certified_graph_routes", "_certified_path_field_routes",
+            "_certified_action_coordinate_routes",
+            "_certified_se2_route_compasses",
+            "_certified_monocular_route_tangents",
+            "_certified_candidate_cache",
         )
         for name in cache_names:
             mapping = getattr(self, name, None)
@@ -362,6 +469,9 @@ class MemNavAgent:
             ]
             for key in stale:
                 del mapping[key]
+        # Dense query depths are transient evidence for the active goal.  The
+        # fixed-stride causal tape remains in the persistent route cache.
+        self._certified_route_live_depth_cache.clear()
 
     def _begin_goal_session(self, goal_key):
         """Open a contiguous goal session while preserving lifelong memory."""
@@ -930,9 +1040,73 @@ class MemNavAgent:
         v = torch.stack(vs, 0).permute(3, 0, 1, 2, 4).to(torch.bfloat16)
         return [k[i] for i in range(n_new)], [v[i] for i in range(n_new)]
 
-    def add_frame(self, jpg_bytes):
+    def add_frame(
+            self, jpg_bytes, *, executed_translation_m=None,
+            executed_yaw_rad=None, executed_forward_m=None,
+            executed_left_m=None, executor_local_se2_source=None):
         """Ingest one RGB frame (jpg bytes). Returns the frame index."""
         idx = self.n
+        # A failed or partial append must never expose the preceding frame's
+        # depth under the new RGB SHA/frame binding.
+        self._last_stream_depth_frame_index = None
+        self._last_stream_relative_depth = None
+        if executed_translation_m is None and executed_yaw_rad is None:
+            if (executed_forward_m is not None
+                    or executed_left_m is not None
+                    or executor_local_se2_source is not None):
+                raise ValueError(
+                    "local SE(2) receipt requires the legacy motion binding")
+            executor_receipt = None
+        elif executed_translation_m is None or executed_yaw_rad is None:
+            raise ValueError(
+                "executor translation and yaw receipts must be supplied "
+                "together")
+        else:
+            translation = float(executed_translation_m)
+            yaw = float(executed_yaw_rad)
+            if (not np.isfinite(translation) or translation < 0.0
+                    or not np.isfinite(yaw)):
+                raise ValueError(
+                    "executor receipt must contain finite non-negative "
+                    "translation and finite yaw")
+            if idx == 0 and (translation > 1e-9 or abs(yaw) > 1e-9):
+                raise ValueError("the first causal frame must have zero motion")
+            executor_receipt = {
+                "frame_index": int(idx),
+                "executed_translation_m": translation,
+                "executed_yaw_rad": yaw,
+                "contract": "frame_bound_realized_executor_motion_v1",
+            }
+            local_absent = (
+                executed_forward_m is None
+                and executed_left_m is None
+                and executor_local_se2_source is None)
+            if not local_absent:
+                if (executed_forward_m is None
+                        or executed_left_m is None
+                        or executor_local_se2_source is None):
+                    raise ValueError(
+                        "executor forward and left receipts must be supplied "
+                        "together")
+                forward = float(executed_forward_m)
+                left = float(executed_left_m)
+                if (not isinstance(executor_local_se2_source, str)
+                        or not executor_local_se2_source.strip()):
+                    raise ValueError(
+                        "executor local SE(2) source must be explicit")
+                if not np.isfinite(forward) or not np.isfinite(left):
+                    raise ValueError(
+                        "executor local SE(2) receipt must be finite")
+                if idx == 0 and (abs(forward) > 1e-9 or abs(left) > 1e-9):
+                    raise ValueError(
+                        "the first causal frame must have zero local motion")
+                executor_receipt["local_se2"] = {
+                    "contract": "frame_bound_local_se2_v1",
+                    "executed_forward_m": forward,
+                    "executed_left_m": left,
+                    "executed_yaw_rad": yaw,
+                    "source": executor_local_se2_source.strip(),
+                }
         # Fail closed at the LingBot RoPE position cap.  Past max_frame_num
         # the streaming 3D-RoPE table slices silently truncate: the temporal
         # frequency components come back EMPTY (verified 2026-08-22), so
@@ -952,6 +1126,7 @@ class MemNavAgent:
                 "and positions past the cap are silently malformed. Raise "
                 "MEMNAV_MAX_FRAME_NUM, or check that flow gating is enabled "
                 "with the episode's true total length.")
+        self.executor_motion_receipts.append(executor_receipt)
         self._last_frame_jpg_sha256 = hashlib.sha256(jpg_bytes).hexdigest()
         path = os.path.join(self.rgb_dir, f"{idx}.jpg")
         with open(path, "wb") as f:
@@ -979,15 +1154,21 @@ class MemNavAgent:
             self._last_tokens = agg[-1][:, -1]
             self._last_agg = [layer[:, -1:] for layer in agg]
             self.dino_cls.extend(self._pop_cls(self.S))
-            kv = self.lb.agg.kv_cache
-            self.scale_k = torch.stack([kv[f"k_{i}"][0, :, :self.S].to(torch.bfloat16)
-                                        for i in range(self.L_depth)]).contiguous()
-            self.scale_v = torch.stack([kv[f"v_{i}"][0, :, :self.S].to(torch.bfloat16)
-                                        for i in range(self.L_depth)]).contiguous()
+            if not getattr(self, "depth_observation_only", False):
+                kv = self.lb.agg.kv_cache
+                self.scale_k = torch.stack([
+                    kv[f"k_{i}"][0, :, :self.S].to(torch.bfloat16)
+                    for i in range(self.L_depth)
+                ]).contiguous()
+                self.scale_v = torch.stack([
+                    kv[f"v_{i}"][0, :, :self.S].to(torch.bfloat16)
+                    for i in range(self.L_depth)
+                ]).contiguous()
             pose = pl[-1][0].float()                    # [S,9]
             self.cam_pose.extend([pose[i].cpu() for i in range(self.S)])
-            ck, cv = self._read_cam_newest(self.S)
-            self.cam_k.extend(ck); self.cam_v.extend(cv)
+            if not getattr(self, "depth_observation_only", False):
+                ck, cv = self._read_cam_newest(self.S)
+                self.cam_k.extend(ck); self.cam_v.extend(cv)
             self._last_kf_pose = pl[-1][:, -1:].float()
             self._last_kf_idx = self.S - 1
             self.cam_frame_indices = list(range(self.S))
@@ -1007,6 +1188,7 @@ class MemNavAgent:
                 saved_kv = dict(agg_mod.kv_cache)
                 saved_cam = [dict(layer) for layer in ch.kv_cache]
                 saved_total = int(agg_mod.total_frames_processed)
+            prediction = None
             with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
                 agg, _ = self.lb.model._aggregate_features(
                     img[None, None].to(self.device),
@@ -1025,9 +1207,9 @@ class MemNavAgent:
                 else:
                     from lingbot_map.models.gct_stream_window import _compute_flow_magnitude
                     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                        depth = self.lb.model._predict_depth(
-                            agg, img[None, None].to(self.device), self._psi
-                        )["depth"].float()
+                        prediction = self.lb.model._predict_depth(
+                            agg, img[None, None].to(self.device), self._psi)
+                        depth = prediction["depth"].float()
                     flow = _compute_flow_magnitude(
                         cur_pose, self._last_kf_pose, depth, tuple(depth.shape[2:4])
                     )
@@ -1042,17 +1224,56 @@ class MemNavAgent:
                 if gate_on:
                     self._last_kf_pose = cur_pose
                     self._last_kf_idx = idx
-                ak, av = self._read_anchor_newest()
-                self.anchor_k.append(ak); self.anchor_v.append(av)
-                self.anchor_frame_indices.append(idx)
-                ck, cv = self._read_cam_newest(1)
-                self.cam_k.extend(ck); self.cam_v.extend(cv)
-                self.cam_frame_indices.append(idx)
+                if not getattr(self, "depth_observation_only", False):
+                    ak, av = self._read_anchor_newest()
+                    self.anchor_k.append(ak); self.anchor_v.append(av)
+                    self.anchor_frame_indices.append(idx)
+                    ck, cv = self._read_cam_newest(1)
+                    self.cam_k.extend(ck); self.cam_v.extend(cv)
+                    self.cam_frame_indices.append(idx)
             else:
                 agg_mod.kv_cache.clear()
                 agg_mod.kv_cache.update(saved_kv)
                 ch.kv_cache = saved_cam
                 agg_mod.total_frames_processed = saved_total
+            dense_query_due = (
+                self.certified_route_motion_model ==
+                "direct_pnp_dense_query"
+                and bool(self._certified_monocular_route_tangents)
+            )
+            route_cache_due = (
+                self.certified_route_depth_cache_stride > 0
+                and idx % self.certified_route_depth_cache_stride == 0
+            )
+            if route_cache_due or dense_query_due:
+                if prediction is None:
+                    with torch.no_grad(), torch.autocast(
+                            "cuda", dtype=torch.bfloat16):
+                        prediction = self.lb.model._predict_depth(
+                            agg, img[None, None].to(self.device), self._psi)
+                route_depth = prediction[
+                    "depth"][0, -1, ..., 0].float().cpu().numpy()
+                route_confidence = prediction[
+                    "depth_conf"][0, -1].float().cpu().numpy()
+                if route_cache_due:
+                    self._certified_route_reference_depth_cache[idx] = (
+                        route_depth.copy(), route_confidence.copy())
+                    self._certified_route_depth_cached_anchors.add(idx)
+                if dense_query_due and not route_cache_due:
+                    self._certified_route_live_depth_cache[idx] = (
+                        route_depth.copy(), route_confidence.copy())
+                    # Formal execution replans every eight actions.  Keep two
+                    # intervals defensively; older dense values have already
+                    # been consumed and are not long-term memory.
+                    oldest = idx - 16
+                    for stale in tuple(
+                            self._certified_route_live_depth_cache):
+                        if stale < oldest:
+                            del self._certified_route_live_depth_cache[stale]
+            if prediction is not None:
+                self._last_stream_relative_depth = prediction[
+                    "depth"][0, -1, ..., 0].float().detach()
+                self._last_stream_depth_frame_index = int(idx)
             if (self.certified_eager_depth_cache
                     and self._certified_dense_stream_snapshot is not None):
                 self._update_certified_eager_depth(idx, img)
@@ -1108,6 +1329,7 @@ class MemNavAgent:
     def monocular_depth_observation(self):
         """Return current raw LingBot depth under the frozen MDTEC contract."""
 
+        started = time.perf_counter()
         if self.n < 1 or self._last_frame_jpg_sha256 is None:
             raise RuntimeError("monocular depth requires one streamed RGB frame")
         from PIL import Image
@@ -1123,6 +1345,8 @@ class MemNavAgent:
 
         relative_depth = None
         depth_shape = (source_height, source_width)
+        cache_hit = False
+        prediction_runtime_ms = 0.0
         if frame_index >= ACTIVE_FROM_FRAME_INDEX:
             if self._first40_scale_receipt is None:
                 raise RuntimeError(
@@ -1131,13 +1355,26 @@ class MemNavAgent:
             if self._first40_scale_receipt["scale_valid"] is True:
                 if self._last_agg is None or self._psi is None:
                     raise RuntimeError("LingBot current-frame depth state is absent")
-                prediction = self.lb.model._predict_depth(
-                    self._last_agg,
-                    self._window_imgs[-1][None, None].to(self.device),
-                    self._psi,
+                cache_hit = (
+                    self._last_stream_depth_frame_index == frame_index
+                    and self._last_stream_relative_depth is not None
                 )
-                relative_depth = prediction[
-                    "depth"][0, -1, ..., 0].float().cpu().numpy()
+                if cache_hit:
+                    relative_depth = (
+                        self._last_stream_relative_depth.cpu().numpy()
+                    )
+                else:
+                    prediction_started = time.perf_counter()
+                    prediction = self.lb.model._predict_depth(
+                        self._last_agg,
+                        self._window_imgs[-1][None, None].to(self.device),
+                        self._psi,
+                    )
+                    relative_depth = prediction[
+                        "depth"][0, -1, ..., 0].float().cpu().numpy()
+                    prediction_runtime_ms = 1000.0 * (
+                        time.perf_counter() - prediction_started
+                    )
                 depth_shape = tuple(int(value) for value in relative_depth.shape)
 
         payload = build_monocular_depth_payload(
@@ -1149,6 +1386,13 @@ class MemNavAgent:
         )
         payload["first40_scale_freeze_ms"] = self._first40_scale_freeze_ms
         payload["stream_observation_count"] = int(self.n)
+        payload["depth_prediction_cache_hit"] = bool(cache_hit)
+        payload["depth_prediction_runtime_ms"] = float(
+            prediction_runtime_ms
+        )
+        payload["depth_materialization_runtime_ms"] = 1000.0 * (
+            time.perf_counter() - started
+        )
         return payload
 
     def monocular_depth_status(self):
@@ -1174,6 +1418,77 @@ class MemNavAgent:
                 else bool(self._first40_scale_receipt["scale_valid"])
             ),
             "first40_scale_freeze_ms": self._first40_scale_freeze_ms,
+            # This is the same immutable causal receipt already consumed by
+            # the dense-depth sidecar.  Exposing its validated compact form
+            # lets an experimental long-range adapter reuse one gauge instead
+            # of estimating a second scale or reading simulator depth.
+            "longrange_metric_scale": (
+                self._first40_local_pose_metric_scale()),
+            "metric_depth_sensor_consumed": False,
+        }
+
+    def causal_pose_trace_receipt(self):
+        """Expose the model-internal causal pose stream for mechanism audits.
+
+        The values are LingBot predictions already held by the runtime; no
+        simulator state, wheel odometry, goal role, or future observation is
+        consumed.  Navigation never calls this read-only endpoint.
+        """
+
+        poses = [
+            pose.float().cpu().numpy().astype(np.float64).tolist()
+            for pose in self.cam_pose
+        ]
+        return {
+            "schema_version": "lingbot_causal_pose_trace_v1_20260902",
+            "pose9": poses,
+            "pose_count": len(poses),
+            "stream_observation_count": int(self.n),
+            "runtime_evaluator_pose_visible": False,
+            "metric_depth_sensor_consumed": False,
+            "longrange_metric_scale": (
+                self._first40_local_pose_metric_scale()),
+        }
+
+    def causal_metric_scale_receipt(self):
+        """Expose the two causal scale receipts without advancing the stream.
+
+        This read-only mechanism endpoint is deliberately separate from the
+        navigation path.  It lets a scale audit compare the immutable MDTEC
+        first-40 receipt with the independently specified first-64
+        ground-plane receipt while preserving the live LingBot KV state.
+        Neither value is selected here and neither authorizes control.
+        """
+
+        return {
+            "schema_version": "lingbot_causal_metric_scale_v1_20260902",
+            "stream_observation_count": int(self.n),
+            "first40": self._first40_local_pose_metric_scale(),
+            "first64": self._strict_arrival_metric_scale_preserving_stream(),
+            "runtime_evaluator_pose_visible": False,
+            "metric_depth_sensor_consumed": False,
+        }
+
+    @torch.no_grad()
+    def causal_visual_similarity_receipt(self, history_count):
+        """Return query-to-history DINO cosine for a sequence audit."""
+
+        boundary = int(history_count)
+        if not 1 <= boundary < len(self.dino_cls):
+            raise ValueError("history_count must split the causal DINO stream")
+        descriptors = torch.stack(self.dino_cls, dim=0).float().to(self.device)
+        history = torch.nn.functional.normalize(
+            descriptors[:boundary], dim=-1)
+        query = torch.nn.functional.normalize(
+            descriptors[boundary:], dim=-1)
+        similarity = query @ history.T
+        return {
+            "schema_version": "causal_dino_similarity_v1_20260902",
+            "history_count": boundary,
+            "query_count": int(query.shape[0]),
+            "descriptor_dimension": int(query.shape[1]),
+            "similarity": similarity.cpu().tolist(),
+            "runtime_evaluator_pose_visible": False,
             "metric_depth_sensor_consumed": False,
         }
 
@@ -1260,6 +1575,10 @@ class MemNavAgent:
     # ------------------------------------------------------------------ #
     def _live_cache(self):
         """The in-memory equivalent of MemNavNet._load_cache's dict."""
+        if getattr(self, "depth_observation_only", False):
+            raise RuntimeError(
+                "depth-observation-only mode does not materialize planning "
+                "caches")
         n_anchor = len(self.anchor_k)
         if n_anchor > 0:
             ak = torch.stack(self.anchor_k, 2)          # [L,H,N,6,d]
@@ -1328,6 +1647,27 @@ class MemNavAgent:
                 self, "_certified_eager_depth_error", None),
             "eager_depth_cached_frames": len(getattr(
                 self, "_certified_eager_depth_cached_anchors", ())),
+            "route_depth_cache_stride": int(getattr(
+                self, "certified_route_depth_cache_stride", 0)),
+            "route_depth_cached_frames": len(getattr(
+                self, "_certified_route_depth_cached_anchors", ())),
+            "route_live_depth_cached_frames": len(getattr(
+                self, "_certified_route_live_depth_cache", {})),
+            "route_motion_model": getattr(
+                self, "certified_route_motion_model",
+                "fundamental_then_pnp"),
+            "route_motion_unfiltered_shadow": bool(getattr(
+                self, "certified_route_motion_unfiltered_shadow", False)),
+            "route_localization_horizon": (
+                "all_remaining_authorized_route"),
+            "route_control_horizon_m": 2.5,
+            "route_tangent_baseline_m": 0.30,
+            "supported_guidance_modes": list(CERTIFIED_GUIDANCE_MODES),
+            "action_coordinate_receipt_contract": (
+                "frame_bound_realized_executor_motion_v1"),
+            "se2_route_receipt_contract": "frame_bound_local_se2_v1",
+            "monocular_route_tangent_contract": (
+                "causal_rgb_height_scaled_adjacent_pnp_v1"),
             "learned_rescue_proposal": (
                 learned.status() if learned is not None else {"enabled": False}),
         }
@@ -1849,6 +2189,240 @@ class MemNavAgent:
         return depth, confidence
 
     @torch.no_grad()
+    def _certified_route_reference_depth(self, anchor):
+        """Return one write-once sparse depth observation without replay.
+
+        This cache is generated by the same causal short-range LingBot stream
+        that already supplies NavDP depth.  It never enters the initial target
+        certificate and never launches a second dense KV stream.
+        """
+
+        anchor = int(anchor)
+        cached = self._certified_route_reference_depth_cache.get(anchor)
+        if cached is None:
+            raise RuntimeError(
+                f"route depth is unavailable for historical frame {anchor}")
+        depth, confidence = cached
+        self._certified_dense_replay_last_stats = {
+            "enabled": True,
+            "anchor": anchor,
+            "cache_hit": True,
+            "cache_source": "sparse_causal_route_writer",
+            "replayed_frames": 0,
+            "cached_anchors": len(
+                self._certified_route_reference_depth_cache),
+            "cache_bytes": int(sum(
+                array.nbytes for pair in
+                self._certified_route_reference_depth_cache.values()
+                for array in pair)),
+        }
+        return depth.copy(), confidence.copy()
+
+    @torch.no_grad()
+    def _materialize_current_route_depth(self):
+        """Write the current LingBot relative depth into the sparse route cache.
+
+        Route tracking plans less frequently than the RGB stream is written.
+        The fixed-stride writer covers intermediate frames; this method binds
+        the exact current planning frame so the next interval always begins
+        from a depth-bearing reference.  It runs the already-loaded frozen
+        depth head and does not mutate the LingBot causal stream.
+        """
+
+        frame = int(self.n - 1)
+        cached = self._certified_route_reference_depth_cache.get(frame)
+        if cached is not None:
+            depth, confidence = cached
+            return depth.copy(), confidence.copy(), "sparse_causal_route_writer"
+        live_cached = self._certified_route_live_depth_cache.pop(frame, None)
+        if live_cached is not None:
+            depth, confidence = live_cached
+            self._certified_route_reference_depth_cache[frame] = (
+                depth.copy(), confidence.copy())
+            self._certified_route_depth_cached_anchors.add(frame)
+            return depth.copy(), confidence.copy(), "dense_query_writer"
+        if frame < 40:
+            raise RuntimeError(
+                "current route depth predates the first-40 metric receipt")
+        if self._last_agg is None or self._psi is None or not self._window_imgs:
+            raise RuntimeError("current LingBot depth state is unavailable")
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            prediction = self.lb.model._predict_depth(
+                self._last_agg,
+                self._window_imgs[-1][None, None].to(self.device),
+                self._psi,
+            )
+        depth = prediction[
+            "depth"][0, -1, ..., 0].float().cpu().numpy()
+        confidence = prediction[
+            "depth_conf"][0, -1].float().cpu().numpy()
+        if (depth.ndim != 2 or confidence.shape != depth.shape
+                or not np.isfinite(depth).all()
+                or not np.isfinite(confidence).all()
+                or np.any(depth < 0.0)):
+            raise RuntimeError("current LingBot route depth is malformed")
+        self._certified_route_reference_depth_cache[frame] = (
+            depth.copy(), confidence.copy())
+        self._certified_route_depth_cached_anchors.add(frame)
+        return depth.copy(), confidence.copy(), "current_plan_frame_writer"
+
+    @torch.no_grad()
+    def _certified_metric_route_depth(self, frame, *, target_anchor):
+        """Return frame-bound route depth in the immutable first-40 gauge."""
+
+        frame = int(frame)
+        target = int(target_anchor)
+        scale_receipt = self._first40_local_pose_metric_scale()
+        if scale_receipt.get("available") is not True:
+            raise RuntimeError(str(scale_receipt.get(
+                "reason", "first40 metric scale unavailable")))
+        scale = float(scale_receipt["metric_scale_m_per_raw"])
+        if not np.isfinite(scale) or scale <= 0.0:
+            raise RuntimeError("first-40 route scale is invalid")
+
+        cached = self._certified_route_reference_depth_cache.get(frame)
+        if cached is not None:
+            raw_depth, _confidence = cached
+            source = "sparse_causal_route_writer"
+        elif frame in self._certified_route_live_depth_cache:
+            raw_depth, _confidence = self._certified_route_live_depth_cache[
+                frame]
+            source = "dense_query_writer"
+        elif frame == target:
+            raw_depth, _confidence = self._certified_reference_depth(frame)
+            source = "cec_selected_anchor_depth"
+        elif frame == int(self.n - 1):
+            raw_depth, _confidence, source = (
+                self._materialize_current_route_depth())
+        else:
+            raise RuntimeError(
+                f"no causal route depth receipt for frame {frame}")
+        metric = scale * np.asarray(raw_depth, dtype=np.float64)
+        if (metric.ndim != 2 or not np.isfinite(metric).all()
+                or np.any(metric < 0.0)):
+            raise RuntimeError("metricized route depth is malformed")
+        return metric, {
+            "frame_index": frame,
+            "source": source,
+            "metric_scale_m_per_raw": scale,
+            "scale_receipt_sha256": scale_receipt.get(
+                "scale_receipt_sha256"),
+        }
+
+    @torch.no_grad()
+    def _certified_visual_route_edge(
+            self, *, reference_frame, query_frame, target_anchor,
+            invert_estimate=False, edge_kind="adjacent_sample"):
+        """Estimate and bind one causal RGB/depth local-motion edge."""
+
+        from pathlib import Path
+        from PIL import Image
+
+        from MemNavData.monocular_adjacent_motion import (
+            estimate_adjacent_motion,
+            invert_planar_motion,
+        )
+        from MemNavData.certified_relocalization_contract import (
+            CERTIFIED_EPIPOLAR_THRESHOLD_PX,
+        )
+        from MemNavData.monocular_route_tangent_runtime import (
+            accepted_planar_motion,
+        )
+
+        reference = int(reference_frame)
+        query = int(query_frame)
+        reference_path = Path(self.rgb_dir) / f"{reference}.jpg"
+        query_path = Path(self.rgb_dir) / f"{query}.jpg"
+        if not reference_path.is_file() or not query_path.is_file():
+            raise FileNotFoundError(
+                reference_path if not reference_path.is_file() else query_path)
+        if self.camera_intrinsic is None:
+            raise RuntimeError("route motion requires camera intrinsics")
+        with Image.open(reference_path) as image:
+            raw_width, raw_height = image.size
+        with Image.open(query_path) as image:
+            query_size = image.size
+        if query_size != (raw_width, raw_height):
+            raise RuntimeError("route RGB resolution changed within an episode")
+        metric_depth, depth_receipt = self._certified_metric_route_depth(
+            reference, target_anchor=int(target_anchor))
+        resolved_motion_model = certified_route_edge_motion_model(
+            self.certified_route_motion_model, edge_kind)
+        estimate = estimate_adjacent_motion(
+            reference_path=reference_path,
+            query_path=query_path,
+            reference_metric_depth=metric_depth,
+            raw_camera_intrinsic=self.camera_intrinsic,
+            matcher=self.certified_relocalization_matcher,
+            raw_height=int(raw_height),
+            raw_width=int(raw_width),
+            patch_size=int(self.lb.patch_size),
+            epipolar_threshold_px=(
+                CERTIFIED_EPIPOLAR_THRESHOLD_PX
+                if resolved_motion_model == "fundamental_then_pnp"
+                else None),
+            run_unfiltered_pnp_shadow=(
+                self.certified_route_motion_unfiltered_shadow),
+        )
+        pnp = estimate.get("pnp", {})
+        reference_sha = hashlib.sha256(reference_path.read_bytes()).hexdigest()
+        query_sha = hashlib.sha256(query_path.read_bytes()).hexdigest()
+        edge_diagnostic = {
+            "edge_kind": str(edge_kind),
+            "match_reference_frame": reference,
+            "match_query_frame": query,
+            "match_reference_sha256": reference_sha,
+            "match_query_sha256": query_sha,
+            "depth_receipt": depth_receipt,
+            "requested_route_motion_model": (
+                self.certified_route_motion_model),
+            "resolved_edge_motion_model": resolved_motion_model,
+            "primary_motion_model": estimate.get("primary_motion_model"),
+            "epipolar_threshold_px": estimate.get(
+                "epipolar_threshold_px"),
+            "primary_local_motion_validity": estimate.get(
+                "local_motion_validity"),
+            "primary_pnp": pnp,
+            "unfiltered_pnp_shadow": estimate.get(
+                "unfiltered_pnp_shadow"),
+        }
+        try:
+            motion = accepted_planar_motion(estimate)
+        except RuntimeError as error:
+            # The shadow is diagnostic-only.  Bind it to the exception so the
+            # typed geometry-stop packet can expose the same-edge comparison
+            # without changing primary control or falling back to it.
+            error.route_motion_diagnostic = edge_diagnostic
+            raise
+        if invert_estimate:
+            motion = invert_planar_motion(motion)
+        return motion, {
+            "edge_kind": str(edge_kind),
+            "from_frame": int(query if invert_estimate else reference),
+            "to_frame": int(reference if invert_estimate else query),
+            "match_reference_frame": reference,
+            "match_query_frame": query,
+            "match_reference_sha256": reference_sha,
+            "match_query_sha256": query_sha,
+            "estimate_inverted": bool(invert_estimate),
+            "depth_receipt": depth_receipt,
+            "requested_route_motion_model": (
+                self.certified_route_motion_model),
+            "resolved_edge_motion_model": resolved_motion_model,
+            "matches": int(estimate.get("matches", 0)),
+            "pnp_status": pnp.get("status"),
+            "pnp_inliers": int(pnp.get("inliers", 0)),
+            "pnp_reprojection_rmse_px": pnp.get(
+                "reprojection_rmse_px"),
+            "primary_motion_model": estimate.get("primary_motion_model"),
+            "epipolar_threshold_px": estimate.get(
+                "epipolar_threshold_px"),
+            "unfiltered_pnp_shadow": estimate.get(
+                "unfiltered_pnp_shadow"),
+            "motion": motion.audit_dict(),
+        }
+
+    @torch.no_grad()
     def _certified_reference_depth_impl(self, anchor):
         """Original exact replay from the frozen scale block through anchor."""
         anchor = int(anchor)
@@ -1941,6 +2515,1159 @@ class MemNavAgent:
             "terminal_alignment_source": (
                 "certified_lingbot_current_to_pnp_goal_rotation"),
             "terminal_alignment_stop_authority": False,
+        }
+
+    @torch.no_grad()
+    def _certified_path_field_direction(
+            self, *, goal_key, target_anchor, goal_start_frame,
+            goal_pose9, current_pose9_override=None,
+            route_progress_hint_m=None):
+        """Read one local bearing from an ordered causal LingBot path.
+
+        This is the deployment-stage counterpart of the evaluator-route
+        information audit.  It consumes only the live LingBot pose stream,
+        the immutable first-40 scale receipt, the certificate-selected anchor,
+        and the PnP terminal witness.  It never sees Habitat position, a
+        shortest path, or a Novel/Revisit role.  Any malformed geometry is
+        returned as an explicit receipt with no direction; the experimental
+        evaluator treats that state as an arm failure rather than silently
+        executing the endpoint chord.
+        """
+        from MemNavData.episodic_path_field import FrozenEpisodicPath
+
+        diagnostics = {
+            "episodic_path_field_requested": True,
+            "episodic_path_field_status": "geometry_failure",
+            "episodic_path_field_error_type": None,
+            "episodic_path_field_error": None,
+            "episodic_path_field_goal_start_frame": int(goal_start_frame),
+            "episodic_path_field_target_anchor": int(target_anchor),
+            "episodic_path_field_runtime_geometry": (
+                "causal_lingbot_cam_pose_only"),
+            "episodic_path_field_evaluator_pose_consumed": False,
+            "episodic_path_field_habitat_path_consumed": False,
+        }
+        try:
+            goal_start = int(goal_start_frame)
+            target = int(target_anchor)
+            if not self.cam_pose:
+                raise RuntimeError("live LingBot pose stream is empty")
+            if goal_start < 2 or goal_start > len(self.cam_pose):
+                raise ValueError("goal start is outside the live pose stream")
+            if target < 0 or target >= goal_start:
+                raise ValueError("target anchor violates the causal prefix")
+
+            terminal = np.asarray(goal_pose9, dtype=np.float64)
+            if terminal.shape != (9,) or not np.isfinite(terminal).all():
+                raise ValueError("PnP terminal witness must be finite pose9")
+            receipt = self._first40_local_pose_metric_scale()
+            if receipt.get("available") is not True:
+                raise RuntimeError(str(receipt.get(
+                    "reason", "first40 metric scale unavailable")))
+            metric_scale = float(receipt["metric_scale_m_per_raw"])
+            if not np.isfinite(metric_scale) or metric_scale <= 0.0:
+                raise ValueError("first40 metric scale must be positive")
+
+            route = self._certified_path_field_routes.get(goal_key)
+            if route is None:
+                translations = np.stack([
+                    pose.float().cpu().numpy()[:3]
+                    for pose in self.cam_pose[:goal_start]
+                ], axis=0)
+                path = FrozenEpisodicPath.from_history(
+                    translations,
+                    start_index=goal_start - 1,
+                    anchor_index=target,
+                    metric_scale_m_per_raw=metric_scale,
+                    terminal_translation=terminal,
+                )
+                route = {
+                    "path": path,
+                    "goal_start_frame": goal_start,
+                    "target_anchor": target,
+                    "metric_scale_m_per_raw": metric_scale,
+                    "scale_receipt_sha256": receipt.get(
+                        "scale_receipt_sha256"),
+                    "progress_m": 0.0,
+                }
+                self._certified_path_field_routes[goal_key] = route
+            elif (int(route["goal_start_frame"]) != goal_start
+                  or int(route["target_anchor"]) != target):
+                raise RuntimeError("frozen episodic path contract changed")
+
+            current = (
+                self.cam_pose[-1].float().cpu().numpy()
+                if current_pose9_override is None
+                else np.asarray(current_pose9_override, dtype=np.float64)
+            )
+            if current.shape != (9,) or not np.isfinite(current).all():
+                raise ValueError(
+                    "path-field current pose must be a finite pose9")
+            minimum_progress = float(route["progress_m"])
+            if route_progress_hint_m is not None:
+                hint = float(route_progress_hint_m)
+                if not np.isfinite(hint):
+                    raise ValueError("route progress hint must be finite")
+                # A local visual witness observes route state; it grants no
+                # new control authority. It may advance the monotone address
+                # beyond one controller horizon because appearance addressing
+                # and 2.5 m local control are distinct contracts.
+                minimum_progress = max(minimum_progress, hint)
+            guidance = route["path"].guidance(
+                current,
+                minimum_progress_m=minimum_progress,
+            )
+            if guidance.progress_m + 1e-9 < float(route["progress_m"]):
+                raise RuntimeError("episodic path progress regressed")
+            route["progress_m"] = float(guidance.progress_m)
+            diagnostics.update(
+                guidance.audit_dict(),
+                episodic_path_field_status=(
+                    "complete" if guidance.complete else "active"),
+                episodic_path_field_metric_scale_m_per_raw=metric_scale,
+                episodic_path_field_scale_receipt_sha256=route.get(
+                    "scale_receipt_sha256"),
+            )
+            return (
+                None if guidance.unit_bearing is None
+                else [float(value) for value in guidance.unit_bearing],
+                diagnostics,
+            )
+        except Exception as error:
+            diagnostics.update(
+                episodic_path_field_error_type=type(error).__name__,
+                episodic_path_field_error=str(error),
+            )
+            return None, diagnostics
+
+    @torch.no_grad()
+    def _certified_action_coordinate_direction(
+            self, *, goal_key, target_anchor, goal_start_frame):
+        """Read a route bearing in the executor's continuous coordinate.
+
+        Initial CEC proof fixes the historical anchor. The causal LingBot
+        positions provide only route *shape*; their translation magnitude is
+        never metricized. Realized executor translation parameterizes progress
+        along the same historical route, while realized yaw rotates its tangent
+        into the current body frame. Every valid receipt has one total output:
+        there is no distance regime, visual update gate, endpoint controller,
+        or native fallback after authorization.
+        """
+
+        from MemNavData.episodic_route_filter import (
+            ActionCoordinateRouteCompass,
+        )
+
+        diagnostics = {
+            "action_coordinate_compass_requested": True,
+            "action_coordinate_compass_status": "geometry_failure",
+            "action_coordinate_compass_error_type": None,
+            "action_coordinate_compass_error": None,
+            "action_coordinate_goal_start_frame": int(goal_start_frame),
+            "action_coordinate_target_anchor": int(target_anchor),
+            "action_coordinate_runtime_geometry": (
+                "scale_free_causal_lingbot_route_plus_executor_receipts"),
+            "action_coordinate_evaluator_pose_consumed": False,
+            "action_coordinate_habitat_path_consumed": False,
+            "action_coordinate_metric_scale_consumed": False,
+            "action_coordinate_visual_gate_present_after_initialization": (
+                False),
+            "action_coordinate_distance_regime_present": False,
+            "action_coordinate_endpoint_fallback_available": False,
+            "action_coordinate_native_fallback_available": False,
+        }
+        try:
+            goal_start = int(goal_start_frame)
+            target = int(target_anchor)
+            current_frame = int(self.n - 1)
+            if (goal_start < 2 or goal_start > current_frame
+                    or goal_start >= len(self.cam_pose)):
+                raise ValueError(
+                    "action-coordinate goal start is outside the pose stream")
+            if target < 0 or target >= goal_start:
+                raise ValueError(
+                    "action-coordinate anchor violates the causal prefix")
+            if len(self.executor_motion_receipts) != self.n:
+                raise RuntimeError(
+                    "executor receipts are not aligned with causal RGB")
+
+            route = self._certified_action_coordinate_routes.get(goal_key)
+            if route is None:
+                route_indices = np.arange(
+                    goal_start, target - 1, -1, dtype=np.int64)
+                model_route = np.stack([
+                    self.cam_pose[int(index)].float().cpu().numpy()[[0, 2]]
+                    for index in route_indices
+                ], axis=0)
+                historical = []
+                action_edges = []
+                # Receipt i is motion from RGB i-1 to RGB i. Traversing the
+                # observed route backwards therefore uses receipt i on edge
+                # i -> i-1, without exposing either endpoint's global pose.
+                for index in range(goal_start, target, -1):
+                    receipt = self.executor_motion_receipts[index]
+                    if receipt is None:
+                        raise RuntimeError(
+                            "authorized history has an unbound executor "
+                            f"receipt at frame {index}")
+                    if int(receipt["frame_index"]) != index:
+                        raise RuntimeError(
+                            "executor receipt frame binding changed")
+                    historical.append(dict(receipt))
+                    action_edges.append(float(
+                        receipt["executed_translation_m"]))
+                action_arc = np.concatenate([
+                    np.zeros(1, dtype=np.float64),
+                    np.cumsum(np.asarray(action_edges, dtype=np.float64)),
+                ])
+                compass = ActionCoordinateRouteCompass(
+                    model_route,
+                    action_arc,
+                    self.cam_pose[goal_start].float().cpu().numpy(),
+                    lookahead_m=2.5,
+                    controller_radius_m=2.5,
+                )
+                receipt_bytes = json.dumps(
+                    historical, sort_keys=True,
+                    separators=(",", ":")).encode("utf-8")
+                route = {
+                    "compass": compass,
+                    "goal_start_frame": goal_start,
+                    "target_anchor": target,
+                    "last_consumed_frame": goal_start,
+                    "history_receipt_sha256": hashlib.sha256(
+                        receipt_bytes).hexdigest(),
+                    "history_receipt_count": len(historical),
+                }
+                self._certified_action_coordinate_routes[goal_key] = route
+            elif (int(route["goal_start_frame"]) != goal_start
+                  or int(route["target_anchor"]) != target):
+                raise RuntimeError(
+                    "frozen action-coordinate route contract changed")
+
+            last_frame = int(route["last_consumed_frame"])
+            if current_frame < last_frame:
+                raise RuntimeError("action-coordinate frame index regressed")
+            pending = self.executor_motion_receipts[
+                last_frame + 1:current_frame + 1]
+            if any(receipt is None for receipt in pending):
+                missing = last_frame + 1 + next(
+                    index for index, receipt in enumerate(pending)
+                    if receipt is None)
+                raise RuntimeError(
+                    "query has an unbound executor receipt at frame "
+                    f"{missing}")
+            translation = float(sum(
+                float(receipt["executed_translation_m"])
+                for receipt in pending))
+            yaw = float(sum(
+                float(receipt["executed_yaw_rad"])
+                for receipt in pending))
+            readout = route["compass"].advance(
+                executed_translation_m=translation,
+                executed_yaw_rad=yaw,
+            )
+            route["last_consumed_frame"] = current_frame
+            diagnostics.update(
+                # Retain the readout's compact internal receipt for direct
+                # unit tests/debugging.  The explicitly prefixed duplicates
+                # below are the stable HTTP/episode serialization contract.
+                readout.audit_dict(),
+                action_coordinate_compass_status=(
+                    "terminal_tangent"
+                    if readout.terminal_tangent_held else "active"),
+                action_coordinate_schema_version=readout.schema_version,
+                action_coordinate_progress_m=float(
+                    readout.action_progress_m),
+                action_coordinate_route_progress_fraction=float(
+                    readout.route_progress_fraction),
+                action_coordinate_route_state_index=int(
+                    readout.route_state_index),
+                action_coordinate_reference_action_arc_m=float(
+                    readout.reference_action_arc_m),
+                action_coordinate_terminal_tangent_held=bool(
+                    readout.terminal_tangent_held),
+                action_coordinate_cumulative_executor_yaw_rad=float(
+                    readout.cumulative_executor_yaw_rad),
+                action_coordinate_unit_bearing=[
+                    float(value) for value in readout.unit_bearing],
+                action_coordinate_controller_pointgoal=[
+                    float(value) for value in readout.controller_pointgoal],
+                action_coordinate_history_receipt_sha256=route[
+                    "history_receipt_sha256"],
+                action_coordinate_history_receipt_count=int(route[
+                    "history_receipt_count"]),
+                action_coordinate_last_consumed_frame=current_frame,
+                action_coordinate_update_translation_m=translation,
+                action_coordinate_update_yaw_rad=yaw,
+                action_coordinate_route_extent_m=float(
+                    route["compass"].route_action_extent_m),
+            )
+            return [float(value) for value in readout.unit_bearing], diagnostics
+        except Exception as error:
+            diagnostics.update(
+                action_coordinate_compass_error_type=type(error).__name__,
+                action_coordinate_compass_error=str(error),
+            )
+            return None, diagnostics
+
+    @torch.no_grad()
+    def _certified_se2_route_direction(
+            self, *, goal_key, target_anchor, goal_start_frame):
+        """Read a cross-track-correcting bearing in a local SE(2) route.
+
+        CEC still supplies the one initial geometric proof and historical
+        anchor.  After authorization, the historical route and live query pose
+        are both reconstructed from the same frame-bound executor translation
+        and yaw receipts.  Progress is the monotone orthogonal projection of
+        the estimated live 2-D position onto that route; travelled distance is
+        never equated with route progress.
+
+        The motion contract is frame-bound local executor odometry.  The
+        policy never reads a world-frame pose or target-relative displacement;
+        the Habitat development arm currently forms this odometry proxy by
+        differencing consecutive simulator poses, which is recorded explicitly
+        in every receipt.  No LingBot translation scale, visual update gate,
+        distance regime, endpoint controller, or native fallback is available
+        after authorization.
+        """
+
+        from MemNavData.se2_projected_route_compass import (
+            SE2_LOCAL_ODOMETRY_MODEL,
+            SE2ProjectedRouteCompass,
+        )
+
+        diagnostics = {
+            "se2_route_compass_requested": True,
+            "se2_route_compass_status": "geometry_failure",
+            "se2_route_compass_error_type": None,
+            "se2_route_compass_error": None,
+            "se2_route_goal_start_frame": int(goal_start_frame),
+            "se2_route_target_anchor": int(target_anchor),
+            "se2_route_runtime_geometry": (
+                "local_executor_se2_route_plus_monotone_projection"),
+            "se2_route_executor_motion_model": SE2_LOCAL_ODOMETRY_MODEL,
+            "se2_route_evaluator_pose_consumed_as_odometry_proxy": True,
+            "se2_route_world_pose_consumed_by_policy": False,
+            "se2_route_executor_odometry_required": True,
+            "se2_route_executor_odometry_source": None,
+            "se2_route_habitat_path_consumed": False,
+            "se2_route_lingbot_translation_consumed": False,
+            "se2_route_metric_scale_consumed": False,
+            "se2_route_visual_gate_present_after_initialization": False,
+            "se2_route_distance_regime_present": False,
+            "se2_route_endpoint_fallback_available": False,
+            "se2_route_native_fallback_available": False,
+        }
+        try:
+            goal_start = int(goal_start_frame)
+            target = int(target_anchor)
+            current_frame = int(self.n - 1)
+            if goal_start < 2 or goal_start > current_frame:
+                raise ValueError(
+                    "SE(2) route goal start is outside the causal stream")
+            if target < 0 or target >= goal_start:
+                raise ValueError(
+                    "SE(2) route anchor violates the causal prefix")
+            if len(self.executor_motion_receipts) != self.n:
+                raise RuntimeError(
+                    "executor receipts are not aligned with causal RGB")
+
+            routes = getattr(self, "_certified_se2_route_compasses", None)
+            if routes is None:
+                # Backward-compatible construction for tests and restored
+                # agents created before this development mode existed.
+                routes = {}
+                self._certified_se2_route_compasses = routes
+            route = routes.get(goal_key)
+            if route is None:
+                historical = []
+                forwards = []
+                lefts = []
+                yaws = []
+                odometry_sources = set()
+                # Receipt i describes frame i-1 -> i.  Iterating from the
+                # current query boundary towards the certified anchor supplies
+                # newest-to-oldest edges to the exact inverse integrator.
+                for index in range(goal_start, target, -1):
+                    receipt = self.executor_motion_receipts[index]
+                    if receipt is None:
+                        raise RuntimeError(
+                            "authorized history has an unbound executor "
+                            f"receipt at frame {index}")
+                    if int(receipt["frame_index"]) != index:
+                        raise RuntimeError(
+                            "executor receipt frame binding changed")
+                    local = receipt.get("local_se2")
+                    if (not isinstance(local, dict)
+                            or local.get("contract")
+                            != "frame_bound_local_se2_v1"):
+                        raise RuntimeError(
+                            "authorized history lacks a local SE(2) receipt at "
+                            f"frame {index}")
+                    forward = float(local["executed_forward_m"])
+                    left = float(local["executed_left_m"])
+                    yaw = float(local["executed_yaw_rad"])
+                    source = local.get("source")
+                    if not isinstance(source, str) or not source:
+                        raise RuntimeError(
+                            "authorized history lacks an explicit local "
+                            f"SE(2) source at frame {index}")
+                    odometry_sources.add(source)
+                    historical.append(dict(receipt))
+                    forwards.append(forward)
+                    lefts.append(left)
+                    yaws.append(yaw)
+                compass = (
+                    SE2ProjectedRouteCompass.from_reverse_local_se2_receipts(
+                    forwards,
+                    lefts,
+                    yaws,
+                    lookahead_m=2.5,
+                    controller_radius_m=2.5,
+                ))
+                receipt_bytes = json.dumps(
+                    historical, sort_keys=True,
+                    separators=(",", ":")).encode("utf-8")
+                route = {
+                    "compass": compass,
+                    "goal_start_frame": goal_start,
+                    "target_anchor": target,
+                    "last_consumed_frame": goal_start,
+                    "history_receipt_sha256": hashlib.sha256(
+                        receipt_bytes).hexdigest(),
+                    "history_receipt_count": len(historical),
+                    "query_receipt_count": 0,
+                    "odometry_source": None,
+                }
+                if len(odometry_sources) != 1:
+                    raise RuntimeError(
+                        "authorized history mixes local SE(2) sources")
+                route["odometry_source"] = next(iter(odometry_sources))
+                routes[goal_key] = route
+            elif (int(route["goal_start_frame"]) != goal_start
+                  or int(route["target_anchor"]) != target):
+                raise RuntimeError("frozen SE(2) route contract changed")
+
+            last_frame = int(route["last_consumed_frame"])
+            if current_frame < last_frame:
+                raise RuntimeError("SE(2) route frame index regressed")
+            pending = self.executor_motion_receipts[
+                last_frame + 1:current_frame + 1]
+            if any(receipt is None for receipt in pending):
+                missing = last_frame + 1 + next(
+                    index for index, receipt in enumerate(pending)
+                    if receipt is None)
+                raise RuntimeError(
+                    "query has an unbound executor receipt at frame "
+                    f"{missing}")
+
+            # SE(2) increments do not commute.  Consume every bound frame in
+            # order rather than summing a planning interval into one scalar.
+            readout = None
+            update_translation = 0.0
+            update_forward = 0.0
+            update_left = 0.0
+            update_yaw = 0.0
+            for offset, receipt in enumerate(pending, start=last_frame + 1):
+                if int(receipt["frame_index"]) != offset:
+                    raise RuntimeError(
+                        "query executor receipt frame binding changed")
+                local = receipt.get("local_se2")
+                if (not isinstance(local, dict)
+                        or local.get("contract")
+                        != "frame_bound_local_se2_v1"):
+                    raise RuntimeError(
+                        "query lacks a local SE(2) receipt at frame "
+                        f"{offset}")
+                translation = float(receipt["executed_translation_m"])
+                forward = float(local["executed_forward_m"])
+                left = float(local["executed_left_m"])
+                yaw = float(local["executed_yaw_rad"])
+                if local.get("source") != route["odometry_source"]:
+                    raise RuntimeError(
+                        "query local SE(2) source differs from history")
+                readout = route["compass"].advance_local_se2(
+                    executed_forward_m=forward,
+                    executed_left_m=left,
+                    executed_yaw_rad=yaw,
+                )
+                update_translation += translation
+                update_forward += forward
+                update_left += left
+                update_yaw += yaw
+            if readout is None:
+                readout = route["compass"].advance_local_se2(
+                    executed_forward_m=0.0,
+                    executed_left_m=0.0,
+                    executed_yaw_rad=0.0,
+                )
+
+            route["last_consumed_frame"] = current_frame
+            route["query_receipt_count"] += len(pending)
+            diagnostics.update(
+                readout.audit_dict(),
+                se2_route_compass_status=(
+                    "terminal_tangent"
+                    if readout.terminal_tangent_held else "active"),
+                se2_route_schema_version=readout.schema_version,
+                se2_route_projected_progress_m=float(
+                    readout.projected_progress_m),
+                se2_route_progress_fraction=float(
+                    readout.route_progress_fraction),
+                se2_route_state_index=int(readout.route_state_index),
+                se2_route_reference_arc_m=float(readout.reference_arc_m),
+                se2_route_query_path_length_m=float(
+                    readout.query_path_length_m),
+                se2_route_cross_track_error_m=float(
+                    readout.cross_track_error_m),
+                se2_route_estimated_position=[
+                    float(value) for value in readout.estimated_position],
+                se2_route_estimated_yaw_rad=float(
+                    readout.estimated_yaw_rad),
+                se2_route_projected_position=[
+                    float(value) for value in readout.projected_position],
+                se2_route_reference_position=[
+                    float(value) for value in readout.reference_position],
+                se2_route_terminal_tangent_held=bool(
+                    readout.terminal_tangent_held),
+                se2_route_unit_bearing=[
+                    float(value) for value in readout.unit_bearing],
+                se2_route_controller_pointgoal=[
+                    float(value) for value in readout.controller_pointgoal],
+                se2_route_history_receipt_sha256=route[
+                    "history_receipt_sha256"],
+                se2_route_history_receipt_count=int(route[
+                    "history_receipt_count"]),
+                se2_route_query_receipt_count=int(route[
+                    "query_receipt_count"]),
+                se2_route_last_consumed_frame=current_frame,
+                se2_route_update_translation_m=float(update_translation),
+                se2_route_update_forward_sum_m=float(update_forward),
+                se2_route_update_left_sum_m=float(update_left),
+                se2_route_update_yaw_rad=float(update_yaw),
+                se2_route_extent_m=float(route["compass"].route_extent_m),
+                se2_route_executor_odometry_source=str(
+                    route["odometry_source"]),
+            )
+            return [float(value) for value in readout.unit_bearing], diagnostics
+        except Exception as error:
+            diagnostics.update(
+                se2_route_compass_error_type=type(error).__name__,
+                se2_route_compass_error=str(error),
+            )
+            return None, diagnostics
+
+    @torch.no_grad()
+    def _certified_terminal_route_motion(self, target_anchor, goal_pose9):
+        """Return the CEC-proven goal->anchor edge in the route gauge."""
+
+        from MemNavData.lingbot_colored_registration import (
+            quaternion_xyzw_to_matrix,
+        )
+        from MemNavData.monocular_adjacent_motion import (
+            invert_planar_motion,
+            PlanarMotionReceipt,
+        )
+
+        target = int(target_anchor)
+        if target < 0 or target >= len(self.cam_pose):
+            raise ValueError("terminal route anchor is outside the pose stream")
+        anchor = self.cam_pose[target].float().cpu().numpy().astype(
+            np.float64)
+        goal = np.asarray(goal_pose9, dtype=np.float64)
+        if (anchor.shape != (9,) or goal.shape != (9,)
+                or not np.isfinite(anchor).all()
+                or not np.isfinite(goal).all()):
+            raise ValueError("terminal route witness must contain finite pose9")
+        scale_receipt = self._first40_local_pose_metric_scale()
+        if scale_receipt.get("available") is not True:
+            raise RuntimeError(str(scale_receipt.get(
+                "reason", "first40 metric scale unavailable")))
+        scale = float(scale_receipt["metric_scale_m_per_raw"])
+        anchor_rotation = quaternion_xyzw_to_matrix(anchor[3:7])
+        goal_rotation = quaternion_xyzw_to_matrix(goal[3:7])
+        relative = anchor_rotation.T @ (goal[:3] - anchor[:3])
+        anchor_to_goal = PlanarMotionReceipt(
+            forward_m=float(scale * relative[2]),
+            left_m=float(-scale * relative[0]),
+            yaw_rad=float(lingbot_relative_yaw(
+                anchor_rotation.T @ goal_rotation)),
+            vertical_m=float(scale * relative[1]),
+        )
+        goal_to_anchor = invert_planar_motion(anchor_to_goal)
+        return goal_to_anchor, {
+            "edge_kind": "cec_terminal_geometric_witness",
+            "from_frame": "goal_image",
+            "to_frame": target,
+            "metric_scale_m_per_raw": scale,
+            "scale_receipt_sha256": scale_receipt.get(
+                "scale_receipt_sha256"),
+            "motion": goal_to_anchor.audit_dict(),
+        }
+
+    @torch.no_grad()
+    def _certified_monocular_route_tangent_direction(
+            self, *, goal_key, target_anchor, goal_start_frame,
+            goal_pose9, authority_proof=None,
+            goal_image_sha256=None):
+        """Read one continuous local tangent from a causal monocular route.
+
+        CEC supplies the sole open-set authorization and target anchor.  The
+        intervening history and every later query update are reconstructed
+        from adjacent RGB correspondences and height-scaled LingBot depth.
+        The route state advances by monotone projection under a cumulative
+        visual-motion budget.  Its total readout is always the first feasible
+        forward route tangent, normalized to the fixed NavDP controller radius.
+
+        There is no distance classifier, update gate, endpoint controller,
+        stuck trigger, or native fallback after CEC acceptance.  A broken
+        visual-geometry chain is an explicit geometry-stream failure.
+        """
+
+        from MemNavData.monocular_adjacent_motion import (
+            PlanarMotionReceipt,
+        )
+        from MemNavData.certified_relocalization_runtime import (
+            CERTIFIED_MINIMUM_ANCHOR,
+        )
+        from MemNavData.monocular_route_tangent_runtime import (
+            build_route_compass,
+            edge_receipt_sha256,
+            historical_route_schedule,
+            query_update_schedule,
+        )
+        from MemNavData.route_alignment_contract import (
+            build_route_alignment_packet,
+            route_alignment_executor_source,
+            verify_route_alignment_packet,
+        )
+
+        diagnostics = {
+            "local_tangent_requested": True,
+            "local_tangent_status": "geometry_failure",
+            "local_tangent_error_type": None,
+            "local_tangent_error": None,
+            "local_tangent_goal_start_frame": int(goal_start_frame),
+            "local_tangent_target_anchor": int(target_anchor),
+            "local_tangent_runtime_geometry": (
+                "causal_rgb_height_scaled_adjacent_pnp_route"),
+            "local_tangent_route_motion_model": (
+                self.certified_route_motion_model),
+            "local_tangent_historical_motion_model": (
+                certified_route_edge_motion_model(
+                    self.certified_route_motion_model,
+                    "historical_adjacent_sample")),
+            "local_tangent_live_query_motion_model": (
+                certified_route_edge_motion_model(
+                    self.certified_route_motion_model,
+                    "live_query_adjacent_sample")),
+            "local_tangent_query_motion_sampling": (
+                "per_action_dense"
+                if self.certified_route_motion_model ==
+                "direct_pnp_dense_query"
+                else "fixed_stride_sparse"
+            ),
+            "local_tangent_route_depth_cache_stride": int(
+                self.certified_route_depth_cache_stride),
+            "local_tangent_unfiltered_pnp_shadow_enabled": bool(
+                self.certified_route_motion_unfiltered_shadow),
+            "local_tangent_evaluator_pose_consumed": False,
+            "local_tangent_habitat_path_consumed": False,
+            "local_tangent_executor_odometry_consumed": False,
+            "local_tangent_metric_depth_sensor_consumed": False,
+            "local_tangent_camera_height_scale_consumed": True,
+            "local_tangent_distance_regime_present": False,
+            "local_tangent_visual_authority_gate_after_initialization": False,
+            "local_tangent_stuck_trigger_present": False,
+            "local_tangent_endpoint_fallback_available": False,
+            "local_tangent_native_fallback_available": False,
+            "local_tangent_tangent_baseline_m": 0.30,
+            "local_tangent_controller_radius_m": 2.5,
+            "local_tangent_alignment_packet": None,
+            "local_tangent_alignment_packet_sha256": None,
+            "local_tangent_alignment_control_edge_count": 0,
+            "local_tangent_alignment_executor_receipt_consumed": False,
+        }
+        try:
+            goal_start = int(goal_start_frame)
+            target = int(target_anchor)
+            current_frame = int(self.n - 1)
+            if goal_start < 40 or goal_start > current_frame:
+                raise ValueError(
+                    "monocular route goal start is outside the metric stream")
+            if target < CERTIFIED_MINIMUM_ANCHOR or target >= goal_start:
+                raise ValueError(
+                    "monocular route anchor violates the CEC causal boundary")
+            if self.certified_relocalization_matcher is None:
+                raise RuntimeError("monocular route matcher is unavailable")
+            if self.certified_route_depth_cache_stride != 8:
+                raise RuntimeError(
+                    "monocular route tangent requires frozen depth stride 8")
+
+            routes = getattr(
+                self, "_certified_monocular_route_tangents", None)
+            if routes is None:
+                routes = {}
+                self._certified_monocular_route_tangents = routes
+            route = routes.get(goal_key)
+            if route is None:
+                schedule = historical_route_schedule(
+                    target_anchor=target,
+                    goal_start_frame=goal_start,
+                    cached_depth_frames=(
+                        self._certified_route_depth_cached_anchors),
+                )
+                terminal_motion, terminal_receipt = (
+                    self._certified_terminal_route_motion(
+                        target, goal_pose9))
+                motions: list[PlanarMotionReceipt] = [terminal_motion]
+                edge_receipts = [terminal_receipt]
+                for specification in schedule["edges_chronological"]:
+                    motion, receipt = self._certified_visual_route_edge(
+                        reference_frame=specification[
+                            "depth_reference_frame"],
+                        query_frame=specification["match_query_frame"],
+                        target_anchor=target,
+                        invert_estimate=bool(
+                            specification["invert_estimate"]),
+                        edge_kind=specification["edge_kind"],
+                    )
+                    motions.append(motion)
+                    edge_receipts.append(receipt)
+                compass = build_route_compass(
+                    motions,
+                    tangent_baseline_m=0.30,
+                    controller_radius_m=2.5,
+                )
+                # Bind the exact first query observation as the reference for
+                # the next visual-motion interval, even when it is not a
+                # fixed-stride history cache frame.
+                _depth, _confidence, current_depth_source = (
+                    self._materialize_current_route_depth())
+                route = {
+                    "compass": compass,
+                    "goal_start_frame": goal_start,
+                    "target_anchor": target,
+                    "last_consumed_frame": current_frame,
+                    "history_schedule": schedule,
+                    "history_edge_receipt_sha256": edge_receipt_sha256(
+                        edge_receipts),
+                    "history_edge_count": len(edge_receipts),
+                    "history_node_count": len(
+                        schedule["nodes_chronological"]) + 1,
+                    "query_edge_count": 0,
+                    "alignment_control_edge_count": 0,
+                    "alignment_executor_receipt_consumed": False,
+                    "alignment_packet": None,
+                    "initial_current_depth_source": current_depth_source,
+                }
+                readout = compass.advance_local_se2(
+                    executed_forward_m=0.0,
+                    executed_left_m=0.0,
+                    executed_yaw_rad=0.0,
+                )
+                if authority_proof is not None:
+                    if goal_image_sha256 is None:
+                        raise RuntimeError(
+                            "route alignment lacks the goal-image binding")
+                    anchor_record = self._certified_anchor_image_record(target)
+                    route["alignment_packet"] = build_route_alignment_packet(
+                        authority_proof=authority_proof,
+                        current_frame=current_frame,
+                        goal_start_frame=goal_start,
+                        target_anchor=target,
+                        current_rgb_sha256=self._last_frame_jpg_sha256,
+                        goal_image_sha256=goal_image_sha256,
+                        anchor_image_sha256=anchor_record["sha256"],
+                        history_edge_receipt_sha256=route[
+                            "history_edge_receipt_sha256"],
+                        unit_bearing=readout.unit_bearing,
+                        tangent_baseline_m=0.30,
+                        controller_radius_m=2.5,
+                    )
+                routes[goal_key] = route
+                update_receipts = []
+            else:
+                if (int(route["goal_start_frame"]) != goal_start
+                        or int(route["target_anchor"]) != target):
+                    raise RuntimeError(
+                        "frozen monocular route contract changed")
+                previous_frame = int(route["last_consumed_frame"])
+                update_receipts = []
+                readout = None
+                executor_receipts = getattr(
+                    self, "executor_motion_receipts", [])
+                if executor_receipts and len(executor_receipts) != self.n:
+                    raise RuntimeError(
+                        "route executor receipt/frame binding changed")
+                pending_executor = (
+                    executor_receipts[previous_frame + 1:current_frame + 1]
+                    if executor_receipts else [])
+                source_prefix = route_alignment_executor_source(
+                    "0" * 64)[:-64]
+                control_flags = [
+                    isinstance(receipt, dict)
+                    and isinstance(receipt.get("local_se2"), dict)
+                    and str(receipt["local_se2"].get("source", "")).startswith(
+                        source_prefix)
+                    for receipt in pending_executor
+                ]
+                if any(control_flags):
+                    if (not pending_executor or not all(control_flags)
+                            or route.get("alignment_packet") is None):
+                        raise RuntimeError(
+                            "atomic route alignment was mixed with visual motion")
+                    packet = verify_route_alignment_packet(
+                        route["alignment_packet"])
+                    expected_source = route_alignment_executor_source(
+                        packet["packet_sha256"])
+                    total_yaw = 0.0
+                    for frame_index, receipt in enumerate(
+                            pending_executor, start=previous_frame + 1):
+                        local = receipt["local_se2"]
+                        translation = float(receipt[
+                            "executed_translation_m"])
+                        forward = float(local["executed_forward_m"])
+                        left = float(local["executed_left_m"])
+                        yaw = float(local["executed_yaw_rad"])
+                        if (int(receipt["frame_index"]) != frame_index
+                                or local.get("source") != expected_source
+                                or abs(translation) > 1e-12
+                                or abs(forward) > 1e-12
+                                or abs(left) > 1e-12
+                                or not math.isfinite(yaw)
+                                or abs(yaw) > math.radians(30.0) + 1e-9):
+                            raise RuntimeError(
+                                "route alignment control edge is invalid")
+                        readout = route["compass"].advance_local_se2(
+                            executed_forward_m=0.0,
+                            executed_left_m=0.0,
+                            executed_yaw_rad=yaw,
+                        )
+                        total_yaw += yaw
+                        update_receipts.append({
+                            "edge_kind": "proof_bound_atomic_yaw_control",
+                            "frame_index": frame_index,
+                            "packet_sha256": packet["packet_sha256"],
+                            "executed_yaw_rad": yaw,
+                            "translation_m": 0.0,
+                        })
+                    turn_error = math.atan2(
+                        math.sin(total_yaw - float(
+                            packet["required_turn_rad"])),
+                        math.cos(total_yaw - float(
+                            packet["required_turn_rad"])),
+                    )
+                    if abs(turn_error) > 1e-8:
+                        raise RuntimeError(
+                            "atomic route alignment ended before its proof-"
+                            "bound turn was complete")
+                    route["alignment_control_edge_count"] += len(
+                        pending_executor)
+                    route["alignment_executor_receipt_consumed"] = True
+                else:
+                    if any(receipt is not None for receipt in pending_executor):
+                        raise RuntimeError(
+                            "monocular route received unauthorized executor "
+                            "odometry")
+                    endpoints = query_update_schedule(
+                        previous_frame=previous_frame,
+                        current_frame=current_frame,
+                        cached_depth_frames=(set(
+                            self._certified_route_depth_cached_anchors).union(
+                                self._certified_route_live_depth_cache)),
+                    )
+                    reference = previous_frame
+                    for endpoint in endpoints:
+                        motion, receipt = self._certified_visual_route_edge(
+                            reference_frame=reference,
+                            query_frame=int(endpoint),
+                            target_anchor=target,
+                            edge_kind="live_query_adjacent_sample",
+                        )
+                        readout = route["compass"].advance_local_se2(
+                            executed_forward_m=motion.forward_m,
+                            executed_left_m=motion.left_m,
+                            executed_yaw_rad=motion.yaw_rad,
+                        )
+                        update_receipts.append(receipt)
+                        reference = int(endpoint)
+                if readout is None:
+                    readout = route["compass"].advance_local_se2(
+                        executed_forward_m=0.0,
+                        executed_left_m=0.0,
+                        executed_yaw_rad=0.0,
+                    )
+                _depth, _confidence, _source = (
+                    self._materialize_current_route_depth())
+                self._certified_route_live_depth_cache.clear()
+                route["last_consumed_frame"] = current_frame
+                route["query_edge_count"] += sum(
+                    receipt.get("edge_kind") != (
+                        "proof_bound_atomic_yaw_control")
+                    for receipt in update_receipts)
+
+            diagnostics.update(
+                readout.audit_dict(),
+                local_tangent_status=(
+                    "terminal_tangent"
+                    if readout.terminal_tangent_held else "active"),
+                local_tangent_schema_version=readout.schema_version,
+                local_tangent_projected_progress_m=float(
+                    readout.projected_progress_m),
+                local_tangent_progress_fraction=float(
+                    readout.route_progress_fraction),
+                local_tangent_route_state_index=int(
+                    readout.route_state_index),
+                local_tangent_reference_arc_m=float(
+                    readout.reference_arc_m),
+                local_tangent_query_path_length_m=float(
+                    readout.query_path_length_m),
+                local_tangent_cross_track_error_m=float(
+                    readout.cross_track_error_m),
+                local_tangent_estimated_position=[
+                    float(value) for value in readout.estimated_position],
+                local_tangent_estimated_yaw_rad=float(
+                    readout.estimated_yaw_rad),
+                local_tangent_terminal_tangent_held=bool(
+                    readout.terminal_tangent_held),
+                local_tangent_unit_bearing=[
+                    float(value) for value in readout.unit_bearing],
+                local_tangent_controller_pointgoal=[
+                    float(value) for value in readout.controller_pointgoal],
+                local_tangent_route_extent_m=float(
+                    route["compass"].route_extent_m),
+                local_tangent_history_edge_receipt_sha256=route[
+                    "history_edge_receipt_sha256"],
+                local_tangent_history_edge_count=int(
+                    route["history_edge_count"]),
+                local_tangent_history_node_count=int(
+                    route["history_node_count"]),
+                local_tangent_history_nodes=list(route[
+                    "history_schedule"]["nodes_chronological"]),
+                local_tangent_pre_metric_anchor_bridge=bool(route[
+                    "history_schedule"]["pre_metric_anchor_bridge"]),
+                local_tangent_query_edge_count=int(
+                    route["query_edge_count"]),
+                local_tangent_alignment_packet=route.get(
+                    "alignment_packet"),
+                local_tangent_alignment_packet_sha256=(
+                    None if route.get("alignment_packet") is None
+                    else route["alignment_packet"]["packet_sha256"]),
+                local_tangent_alignment_control_edge_count=int(route[
+                    "alignment_control_edge_count"]),
+                local_tangent_alignment_executor_receipt_consumed=bool(
+                    route["alignment_executor_receipt_consumed"]),
+                local_tangent_last_consumed_frame=int(
+                    route["last_consumed_frame"]),
+                local_tangent_update_edge_count=len(update_receipts),
+                local_tangent_update_edge_receipts=update_receipts,
+            )
+            return [float(value) for value in readout.unit_bearing], diagnostics
+        except Exception as error:
+            diagnostics.update(
+                local_tangent_error_type=type(error).__name__,
+                local_tangent_error=str(error),
+                local_tangent_failure_edge_diagnostic=getattr(
+                    error, "route_motion_diagnostic", None),
+            )
+            return None, diagnostics
+
+    @torch.no_grad()
+    def certified_path_field_reanchor(self, target_goal_jpg_bytes):
+        """Update one authorized route from a local visual pose witness.
+
+        CEC proves the target once and freezes one tail-to-anchor route.  Every
+        later call retrieves only among the not-yet-visited addresses of that
+        same temporal route, recovers the current camera pose with the existing
+        LightGlue/LingBot-depth PnP stack, and advances one monotone route
+        coordinate. The output remains a 2.5 m arc-ahead bearing. PnP is a
+        state observation here, not a second control-authority gate. A missing
+        pose is a geometry-stream failure; this method never returns endpoint
+        guidance or native fallback.
+        """
+
+        from MemNavData.certified_relocalization_runtime import (
+            CERTIFIED_CANDIDATE_MIN_GAP,
+            CERTIFIED_CANDIDATE_TOP_K,
+            CERTIFIED_MINIMUM_ANCHOR,
+            UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
+        )
+
+        started = time.perf_counter()
+        target_key = hashlib.md5(target_goal_jpg_bytes).hexdigest()
+        base = {
+            "schema_version": "certified_route_coordinate_v2_20260902",
+            "ok": True,
+            "target_goal_key": target_key,
+            "runtime_role_visible": False,
+            "runtime_habitat_pose_visible": False,
+            "endpoint_fallback_available": False,
+            "native_fallback_available": False,
+            "distance_gate_present": False,
+            "local_observation_authority": False,
+            "state_updated": False,
+            "direction_vector": None,
+            "aux_pose": None,
+        }
+        route = self._certified_path_field_routes.get(target_key)
+        target_cache = self._certified_relocalization_cache.get(target_key)
+        if route is None or target_cache is None:
+            return {
+                **base,
+                "status": "geometry_failure",
+                "reason": "authorized_target_route_missing",
+                "runtime_ms": 1000.0 * (time.perf_counter() - started),
+            }
+        target_result = target_cache.get("result", {})
+        if target_result.get("accepted") is not True:
+            return {
+                **base,
+                "status": "geometry_failure",
+                "reason": "target_route_not_certificate_authorized",
+                "runtime_ms": 1000.0 * (time.perf_counter() - started),
+            }
+        path = route["path"]
+        progress = float(route["progress_m"])
+        source_indices = path.source_indices_at_or_after_progress(
+            minimum_progress_m=progress)
+        goal_start = int(route["goal_start_frame"])
+        eligible_indices = tuple(
+            index for index in source_indices
+            if (CERTIFIED_MINIMUM_ANCHOR <= index < goal_start
+                and index < len(self.dino_cls)
+                and index in self._certified_route_depth_cached_anchors)
+        )
+        if not eligible_indices:
+            return {
+                **base,
+                "status": "geometry_failure",
+                "reason": "route_control_window_has_no_visual_anchor",
+                "path_progress_m": progress,
+                "runtime_ms": 1000.0 * (time.perf_counter() - started),
+            }
+
+        current_frame = int(self.n - 1)
+        current_path = os.path.join(self.rgb_dir, f"{current_frame}.jpg")
+        if not os.path.isfile(current_path):
+            return {
+                **base,
+                "status": "geometry_failure",
+                "reason": "current_rgb_missing",
+                "runtime_ms": 1000.0 * (time.perf_counter() - started),
+            }
+        with open(current_path, "rb") as stream:
+            current_bytes = stream.read()
+        if not current_bytes or len(self.dino_cls) != self.n:
+            return {
+                **base,
+                "status": "geometry_failure",
+                "reason": "current_visual_state_incomplete",
+                "runtime_ms": 1000.0 * (time.perf_counter() - started),
+            }
+
+        current_cls = self.dino_cls[-1].to(self.device)
+        memory_cls = torch.stack([
+            self.dino_cls[index] for index in eligible_indices
+        ], dim=0).to(self.device)
+        cosine = torch.nn.functional.cosine_similarity(
+            current_cls.expand(memory_cls.shape[0], -1),
+            memory_cls,
+            dim=-1,
+        ).detach().float().cpu().tolist()
+        score_by_index = dict(zip(eligible_indices, cosine))
+        all_scores = [float("-inf")] * self.n
+        eligible_mask = [False] * self.n
+        for index, score in score_by_index.items():
+            all_scores[index] = float(score)
+            eligible_mask[index] = True
+        candidates = temporal_nms_candidates(
+            all_scores,
+            eligible_mask,
+            top_k=CERTIFIED_CANDIDATE_TOP_K,
+            min_frame_gap=CERTIFIED_CANDIDATE_MIN_GAP,
+        )
+        if not candidates:
+            return {
+                **base,
+                "status": "geometry_failure",
+                "reason": "route_visual_proposal_empty",
+                "path_progress_m": progress,
+                "runtime_ms": 1000.0 * (time.perf_counter() - started),
+            }
+
+        local_key = hashlib.sha256(
+            b"route-coordinate\0"
+            + target_key.encode("ascii") + b"\0"
+            + str(current_frame).encode("ascii") + b"\0"
+            + current_bytes
+        ).hexdigest()
+        self._goal_start_frame[local_key] = goal_start
+        try:
+            witness = self.certified_relocalize(
+                current_bytes,
+                candidates,
+                proposal_order="geometry_first",
+                authority_policy=UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
+                guidance_mode="endpoint_bearing",
+                goal_key_override=local_key,
+                reference_depth_source="route_sparse",
+            )
+        finally:
+            # Local observations are frame-bound.  Keep immutable anchor-depth
+            # arrays, but discard query-conditioned caches after each update.
+            self._clear_goal_conditioned_state(local_key)
+        pose9 = witness.get("pnp", {}).get("pose9")
+        if witness.get("accepted") is not True or pose9 is None:
+            return {
+                **base,
+                "status": "geometry_failure",
+                "reason": "local_pnp_pose_unavailable",
+                "local_witness": {
+                    "reason": witness.get("reason"),
+                    "selected_anchor": witness.get("selected_anchor"),
+                    "candidate_count": len(candidates),
+                    "current_frame": current_frame,
+                    "eligible_route_anchor_count": len(eligible_indices),
+                    "path_progress_m": progress,
+                    "candidates": [dict(item) for item in candidates],
+                    "proposal_attempts": witness.get("proposal_attempts"),
+                },
+                "path_progress_m": progress,
+                "runtime_ms": 1000.0 * (time.perf_counter() - started),
+            }
+
+        direction, diagnostics = self._certified_path_field_direction(
+            goal_key=target_key,
+            target_anchor=int(route["target_anchor"]),
+            goal_start_frame=goal_start,
+            goal_pose9=target_cache["goal_pose9"],
+            current_pose9_override=pose9,
+            route_progress_hint_m=path.progress_for_source_index(
+                int(witness["selected_anchor"])),
+        )
+        status = diagnostics.get("episodic_path_field_status")
+        state_updated = status in ("active", "complete")
+        return {
+            **base,
+            **diagnostics,
+            "status": status,
+            "reason": (
+                "route_coordinate_updated"
+                if state_updated else "path_field_geometry_failure"),
+            "state_updated": state_updated,
+            "direction_vector": direction,
+            "aux_pose": direction,
+            "pointgoal_units": "lingbot_raw_direction_only",
+            "local_witness": {
+                "selected_anchor": witness.get("selected_anchor"),
+                "candidate_count": len(candidates),
+                "pnp_status": witness.get("pnp", {}).get("status"),
+                "strict_certificate": witness.get("certificate"),
+                "state_observation_only": True,
+            },
+            "runtime_ms": 1000.0 * (time.perf_counter() - started),
         }
 
     @torch.no_grad()
@@ -2136,7 +3863,9 @@ class MemNavAgent:
             self, goal_jpg_bytes, candidates, *, route_start_anchor=None,
             graph_rescue=False, allow_learned_rescue=False,
             proposal_order="geometry_first", goal_camera_intrinsic=None,
-            authority_policy="strict_certificate"):
+            authority_policy="strict_certificate",
+            guidance_mode="endpoint_bearing", goal_key_override=None,
+            reference_depth_source="canonical"):
         """Rank/localize/certify once; update only scale-free bearing later."""
         import hashlib
         import time
@@ -2166,6 +3895,8 @@ class MemNavAgent:
         frame_idx = self.n - 1
         proposal_order = str(proposal_order)
         authority_policy = str(authority_policy)
+        guidance_mode = str(guidance_mode)
+        reference_depth_source = str(reference_depth_source)
         if goal_camera_intrinsic is None:
             raw_goal_intrinsic = None
         else:
@@ -2196,6 +3927,8 @@ class MemNavAgent:
                 getattr(self, "cdec_pairwise_ranker", None) is not None),
             "proposal_order": proposal_order,
             "authority_policy": authority_policy,
+            "guidance_mode": guidance_mode,
+            "reference_depth_source": reference_depth_source,
             "goal_camera_calibration": (
                 "explicit_distinct_intrinsic"
                 if raw_goal_intrinsic is not None
@@ -2207,6 +3940,31 @@ class MemNavAgent:
             return {
                 **base, "ok": False, "accepted": False,
                 "reason": "invalid_proposal_order", "cached": False,
+                "relocalization_ms": 1000.0 * (
+                    time.perf_counter() - started),
+            }
+        if guidance_mode not in CERTIFIED_GUIDANCE_MODES:
+            return {
+                **base, "ok": False, "accepted": False,
+                "reason": "invalid_guidance_mode", "cached": False,
+                "relocalization_ms": 1000.0 * (
+                    time.perf_counter() - started),
+            }
+        if reference_depth_source not in ("canonical", "route_sparse"):
+            return {
+                **base, "ok": False, "accepted": False,
+                "reason": "invalid_reference_depth_source", "cached": False,
+                "relocalization_ms": 1000.0 * (
+                    time.perf_counter() - started),
+            }
+        if (guidance_mode in (
+                "episodic_path_field", "action_coordinate_compass",
+                "se2_route_compass", "monocular_route_tangent")
+                and (graph_rescue or route_start_anchor is not None)):
+            return {
+                **base, "ok": False, "accepted": False,
+                "reason": "path_field_incompatible_with_graph_rescue",
+                "cached": False,
                 "relocalization_ms": 1000.0 * (
                     time.perf_counter() - started),
             }
@@ -2244,7 +4002,18 @@ class MemNavAgent:
                 "relocalization_ms": 1000.0 * (
                     time.perf_counter() - started),
             }
-        goal_key = hashlib.md5(goal_jpg_bytes).hexdigest()
+        goal_key = (
+            hashlib.md5(goal_jpg_bytes).hexdigest()
+            if goal_key_override is None else str(goal_key_override)
+        )
+        if (len(goal_key) != 64 and goal_key_override is not None) or any(
+                character not in "0123456789abcdef" for character in goal_key):
+            return {
+                **base, "ok": False, "accepted": False,
+                "reason": "invalid_internal_goal_key", "cached": False,
+                "relocalization_ms": 1000.0 * (
+                    time.perf_counter() - started),
+            }
         goal_start = self._goal_start_frame.get(goal_key)
         if goal_start is None:
             return {
@@ -2288,6 +4057,7 @@ class MemNavAgent:
             ("learned_rescue_requested", bool(allow_learned_rescue)),
             ("proposal_order", proposal_order),
             ("authority_policy", authority_policy),
+            ("reference_depth_source", reference_depth_source),
             ("goal_camera_intrinsic", (
                 None if raw_goal_intrinsic is None
                 else tuple(float(value) for value in raw_goal_intrinsic.flat)
@@ -2314,22 +4084,89 @@ class MemNavAgent:
                     cached["goal_pose9"])
                 view_alignment = self._certified_view_alignment(
                     cached["goal_pose9"])
-                bearing_vector, graph_diagnostics = (
-                    self._certified_graph_direction(
-                        goal_key=goal_key,
-                        direct_bearing=direct_bearing,
-                        target_anchor=int(result["selected_anchor"]),
-                        goal_start_frame=int(goal_start),
-                        route_start_anchor=route_start_anchor,
-                        graph_rescue=graph_rescue,
-                    ))
+                if guidance_mode == "episodic_path_field":
+                    tracked = self.certified_path_field_reanchor(
+                        goal_jpg_bytes)
+                    bearing_vector = tracked.get("direction_vector")
+                    guidance_diagnostics = {
+                        key: value for key, value in tracked.items()
+                        if (key.startswith("episodic_path_field_")
+                            or key.startswith("path_"))
+                    }
+                    guidance_diagnostics.update(
+                        route_coordinate_state_updated=bool(
+                            tracked.get("state_updated")),
+                        route_coordinate_reason=tracked.get("reason"),
+                        route_coordinate_local_witness=tracked.get(
+                            "local_witness"),
+                        route_coordinate_endpoint_fallback_available=(
+                            tracked.get("endpoint_fallback_available")),
+                        route_coordinate_native_fallback_available=(
+                            tracked.get("native_fallback_available")),
+                        route_coordinate_distance_gate_present=tracked.get(
+                            "distance_gate_present"),
+                    )
+                    if tracked.get("state_updated") is not True:
+                        guidance_diagnostics.update(
+                            episodic_path_field_status="geometry_failure",
+                            episodic_path_field_error_type=(
+                                "RouteCoordinateObservationError"),
+                            episodic_path_field_error=tracked.get("reason"),
+                        )
+                elif guidance_mode == "action_coordinate_compass":
+                    bearing_vector, guidance_diagnostics = (
+                        self._certified_action_coordinate_direction(
+                            goal_key=goal_key,
+                            target_anchor=int(result["selected_anchor"]),
+                            goal_start_frame=int(goal_start),
+                        ))
+                elif guidance_mode == "se2_route_compass":
+                    bearing_vector, guidance_diagnostics = (
+                        self._certified_se2_route_direction(
+                            goal_key=goal_key,
+                            target_anchor=int(result["selected_anchor"]),
+                            goal_start_frame=int(goal_start),
+                        ))
+                elif guidance_mode == "monocular_route_tangent":
+                    bearing_vector, guidance_diagnostics = (
+                        self._certified_monocular_route_tangent_direction(
+                            goal_key=goal_key,
+                            target_anchor=int(result["selected_anchor"]),
+                            goal_start_frame=int(goal_start),
+                            goal_pose9=np.asarray(
+                                cached["goal_pose9"], dtype=np.float64),
+                            authority_proof={
+                                "ok": result.get("ok"),
+                                "accepted": result.get("accepted"),
+                                "reason": result.get("reason"),
+                                "selected_anchor": result.get(
+                                    "selected_anchor"),
+                                "selected_anchor_image_sha256": result.get(
+                                    "selected_anchor_image_sha256"),
+                                "certificate": result.get("certificate"),
+                                "authority": result.get("authority"),
+                                "pnp": result.get("pnp"),
+                            },
+                            goal_image_sha256=hashlib.sha256(
+                                goal_jpg_bytes).hexdigest(),
+                        ))
+                else:
+                    bearing_vector, guidance_diagnostics = (
+                        self._certified_graph_direction(
+                            goal_key=goal_key,
+                            direct_bearing=direct_bearing,
+                            target_anchor=int(result["selected_anchor"]),
+                            goal_start_frame=int(goal_start),
+                            route_start_anchor=route_start_anchor,
+                            graph_rescue=graph_rescue,
+                        ))
                 result.update(
                     aux_pose=bearing_vector,
                     direction_vector=bearing_vector,
                     pointgoal_units="lingbot_raw_direction_only",
                     metric_scale=None,
                     **view_alignment,
-                    **graph_diagnostics,
+                    **guidance_diagnostics,
                 )
             result["relocalization_ms"] = 1000.0 * (
                 time.perf_counter() - started)
@@ -2427,8 +4264,13 @@ class MemNavAgent:
             reference_depth_cache = None
             if possible and selected_anchor in matched_by_anchor:
                 try:
-                    depth, confidence = self._certified_reference_depth(
-                        selected_anchor)
+                    if reference_depth_source == "route_sparse":
+                        depth, confidence = (
+                            self._certified_route_reference_depth(
+                                selected_anchor))
+                    else:
+                        depth, confidence = self._certified_reference_depth(
+                            selected_anchor)
                     stats = getattr(
                         self, "_certified_dense_replay_last_stats", None)
                     reference_depth_cache = (
@@ -2642,19 +4484,65 @@ class MemNavAgent:
         accepted = final_attempt["accepted"]
         goal_pose9 = final_attempt["goal_pose9"]
         bearing_vector = None
-        graph_diagnostics = {}
+        guidance_diagnostics = {}
         if accepted:
             direct_bearing = self._certified_bearing_vector(goal_pose9)
             view_alignment = self._certified_view_alignment(goal_pose9)
-            bearing_vector, graph_diagnostics = (
-                self._certified_graph_direction(
-                    goal_key=goal_key,
-                    direct_bearing=direct_bearing,
-                    target_anchor=selected_anchor,
-                    goal_start_frame=int(goal_start),
-                    route_start_anchor=route_start_anchor,
-                    graph_rescue=graph_rescue,
-                ))
+            if guidance_mode == "episodic_path_field":
+                bearing_vector, guidance_diagnostics = (
+                    self._certified_path_field_direction(
+                        goal_key=goal_key,
+                        target_anchor=selected_anchor,
+                        goal_start_frame=int(goal_start),
+                        goal_pose9=goal_pose9,
+                    ))
+            elif guidance_mode == "action_coordinate_compass":
+                bearing_vector, guidance_diagnostics = (
+                    self._certified_action_coordinate_direction(
+                        goal_key=goal_key,
+                        target_anchor=selected_anchor,
+                        goal_start_frame=int(goal_start),
+                    ))
+            elif guidance_mode == "se2_route_compass":
+                bearing_vector, guidance_diagnostics = (
+                    self._certified_se2_route_direction(
+                        goal_key=goal_key,
+                        target_anchor=selected_anchor,
+                        goal_start_frame=int(goal_start),
+                    ))
+            elif guidance_mode == "monocular_route_tangent":
+                route_anchor_record = self._certified_anchor_image_record(
+                    selected_anchor)
+                bearing_vector, guidance_diagnostics = (
+                    self._certified_monocular_route_tangent_direction(
+                        goal_key=goal_key,
+                        target_anchor=selected_anchor,
+                        goal_start_frame=int(goal_start),
+                        goal_pose9=goal_pose9,
+                        authority_proof={
+                            "ok": True,
+                            "accepted": True,
+                            "reason": final_attempt["reason"],
+                            "selected_anchor": selected_anchor,
+                            "selected_anchor_image_sha256": (
+                                route_anchor_record["sha256"]),
+                            "certificate": certificate,
+                            "authority": final_attempt["authority"],
+                            "pnp": pnp,
+                        },
+                        goal_image_sha256=hashlib.sha256(
+                            goal_jpg_bytes).hexdigest(),
+                    ))
+            else:
+                bearing_vector, guidance_diagnostics = (
+                    self._certified_graph_direction(
+                        goal_key=goal_key,
+                        direct_bearing=direct_bearing,
+                        target_anchor=selected_anchor,
+                        goal_start_frame=int(goal_start),
+                        route_start_anchor=route_start_anchor,
+                        graph_rescue=graph_rescue,
+                    ))
         uncached_ms = 1000.0 * (time.perf_counter() - started)
         result = {
             **base,
@@ -2690,10 +4578,16 @@ class MemNavAgent:
                 metric_scale=None,
                 selected_anchor_image_sha256=anchor_record["sha256"],
                 **view_alignment,
-                **graph_diagnostics,
+                **guidance_diagnostics,
             )
         cache_result = dict(result)
         cache_result.pop("frame_idx", None)
+        for key in tuple(cache_result):
+            if (key.startswith("episodic_path_field_")
+                    or key.startswith("action_coordinate_")
+                    or key.startswith("se2_route_")
+                    or key.startswith("local_tangent_")):
+                cache_result.pop(key)
         # Bearing is current-relative and must be recomputed after motion.
         cache_result["aux_pose"] = None
         self._certified_relocalization_cache[goal_key] = {
@@ -3071,6 +4965,9 @@ class MemNavAgent:
         default boundary and is used by the strict double-Revisit diagnostic
         to prevent C from relocalizing against its intervening B rollout.
         """
+        if getattr(self, "depth_observation_only", False):
+            raise RuntimeError(
+                "planning is disabled in depth-observation-only mode")
         k = self.n - 1
         lo = self.amargin
         import hashlib

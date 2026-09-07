@@ -138,6 +138,14 @@ parser.add_argument(
           "to remove selected-anchor replay latency; default keeps lazy replay"),
 )
 parser.add_argument(
+    "--certified_reference_depth_source",
+    choices=["canonical", "online_history"],
+    default="canonical",
+    help=("historical CEC depth: canonical preserves archived replay runs; "
+          "online_history saves each eligible causal depth once and reuses it "
+          "for PnP, without a second geometry stream"),
+)
+parser.add_argument(
     "--certified_route_depth_cache_stride",
     type=int,
     default=0,
@@ -284,6 +292,12 @@ if args.certified_counterfactual_audit and not args.certified_relocalization:
 if args.certified_eager_depth_cache and not args.certified_relocalization:
     parser.error(
         "--certified_eager_depth_cache requires --certified_relocalization")
+if args.certified_reference_depth_source == "online_history":
+    if not args.certified_relocalization or args.certified_eager_depth_cache:
+        parser.error("online_history requires CEC with eager replay disabled")
+    if args.certified_route_depth_cache_stride not in (0, 1):
+        parser.error("online_history requires all eligible historical frames")
+    args.certified_route_depth_cache_stride = 1
 if args.certified_route_depth_cache_stride < 0:
     parser.error("--certified_route_depth_cache_stride must be non-negative")
 if (args.certified_route_depth_cache_stride > 0
@@ -401,6 +415,7 @@ agent = MemNavAgent(
     certified_eager_depth_cache=args.certified_eager_depth_cache,
     certified_route_depth_cache_stride=(
         args.certified_route_depth_cache_stride),
+    certified_reference_depth_source=args.certified_reference_depth_source,
     certified_route_motion_model=args.certified_route_motion_model,
     certified_route_motion_unfiltered_shadow=(
         args.certified_route_motion_unfiltered_shadow),

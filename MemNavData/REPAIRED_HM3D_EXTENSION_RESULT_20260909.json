@@ -1,0 +1,31 @@
+{
+  "schema": "repaired_hm3d_four_source_extension_result_v1",
+  "scope": "runtime integration extension; no query SR available",
+  "source_receipt_sha256": "c8cf8c60e7efd55f1b360bb5a2d5fd92850dc87d6a310b05e77f0a9239cdfc08",
+  "authoritative_tasks": [
+    {"job_id": "17196996_0", "node": "gh003", "state": "COMPLETED", "elapsed": "00:06:45", "root": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_hm3d_extension_20260908/extension_c8cf8c60e7efd55f/shard_0/integration"},
+    {"job_id": "17201733_1", "node": "ga015", "state": "COMPLETED", "elapsed": "00:04:59", "root": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_hm3d_extension_20260908/a100_retry1_20260909/shard_1/integration"}
+  ],
+  "preserved_incomplete_attempt": {"job_id": "17196996_1", "state": "FAILED", "signal": "SIGABRT", "complete_actions": 56, "counted_as_navigation_failure": false},
+  "all_four_source_tasks_complete": true,
+  "a_count": 4,
+  "a_success_count": 4,
+  "retained_query_histories": 0,
+  "query_arm_count": 0,
+  "both_independent_verifiers_passed": true,
+  "completed_a_videos": 4,
+  "full_mixed_role_query_gate_passed": false,
+  "paper_confirmation": false,
+  "automatic_expansion": false,
+  "construction_audit": {
+    "all_four_source_frame_selections_reproduced_on_cpu": true,
+    "jgP_5000_geometry_rejection_counts_reproduced": true,
+    "visual_support_recomputed": false,
+    "short_history_max_eligible_source_geodesic_m": {"nrA1tAA17Yp": 1.103824496269226, "BFRyYbPCCPE": 0.9761998653411865, "X7gTkoDHViv": 1.3477212190628052},
+    "jgP_spatially_valid_novel_direction_counts": {"front": 1, "side": 0, "rear": 558}
+  },
+  "original_evidence_archive_sha256": "f3eeac141922d4821b5930fa89da2d87c058d98c268e76f62bf1dd44c802dd1c",
+  "retry_evidence_archive_sha256": "0953c5745adce6eb8264403266ed66176439b28ef9e836acabadb967dcb2b7d4",
+  "navigation_model_parameters_changed": false,
+  "tests": {"new_cpu_audit_unittest_passed": 3, "existing_integration_pytest_passed": 21}
+}

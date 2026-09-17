@@ -108,6 +108,7 @@ def main():
         'geometry_sha256':{key:sha256(path) for key,path in lookup.items()},
         'train_indices':train,'validation_indices':validation,
         'seeds':seeds,'steps':args.steps,'pairs':pairs,
+        'prediction_csv_encoding':'python_float_roundtrip',
         'input_ablation':'both arms share masks and anchor depth-based output normalization; only one receives XYZ',
         'target':'same audited anchor-base [forward,left] metres',
         'model_output':'dimensionless planar offset multiplied by causal anchor normalization_m'}
@@ -122,7 +123,7 @@ def main():
             predictions.append({'pair_id':pair['pair_id'],'scene':pair['scene'],
                 'split':pair['split'],'arm':arm,'seed':seed,
                 'target_forward_m':raw['target'][i,0],'target_lateral_m':raw['target'][i,1],
-                'predicted_forward_m':pred[i,0],'predicted_lateral_m':pred[i,1]})
+                'predicted_forward_m':float(pred[i,0]),'predicted_lateral_m':float(pred[i,1])})
     for seed in seeds:
         torch.manual_seed(seed)
         common=AnchorRelationDecoder().state_dict()

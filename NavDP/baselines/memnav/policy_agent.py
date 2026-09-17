@@ -21,17 +21,20 @@ Run inside the `memnav` conda env. Requires InternNav on sys.path (the
 server adds it).
 """
 
+from functools import cached_property
+
 import hashlib
 import json
 import math
 import os
-import shutil
 import time
 
 import numpy as np
 import torch
 
 try:  # package import in tests; script-local import in memnav_server.py
+    from .gem import GeometricEpisodicMemory, MemoryField
+    from .gem.writer import FLOW_TIERS, FLOW_GAP, flow_threshold_for_length
     from .pose_alignment import lingbot_relative_yaw
     from .reverse_memory_graph import (
         ReverseRouteProgress,
@@ -43,6 +46,8 @@ try:  # package import in tests; script-local import in memnav_server.py
         temporal_nms_candidates,
     )
 except ImportError:  # pragma: no cover - exercised by the live script entrypoint
+    from gem import GeometricEpisodicMemory, MemoryField
+    from gem.writer import FLOW_TIERS, FLOW_GAP, flow_threshold_for_length
     from pose_alignment import lingbot_relative_yaw
     from reverse_memory_graph import (
         ReverseRouteProgress,
@@ -55,8 +60,6 @@ except ImportError:  # pragma: no cover - exercised by the live script entrypoin
     )
 
 
-FLOW_TIERS = [(702, 20.0), (877, 25.0), (1075, 30.0), (1506, 40.0), (2048, 50.0)]
-FLOW_GAP = 30
 CERTIFIED_GUIDANCE_MODES = (
     "endpoint_bearing",
     "episodic_path_field",
@@ -93,14 +96,6 @@ def certified_route_edge_motion_model(route_motion_model, edge_kind):
     return "fundamental_then_pnp"
 
 
-def flow_threshold_for_length(n_frames):
-    """Match the length-tiered sparse-keyframe policy used by precompute."""
-    for upper, threshold in FLOW_TIERS:
-        if n_frames <= upper:
-            return threshold
-    return 60.0
-
-
 def effective_candidate_ceiling(
         goal_start_frame, candidate_ceiling_override=None):
     """Return a fail-closed causal retrieval ceiling.
@@ -125,6 +120,100 @@ def effective_candidate_ceiling(
 # helpers
 # ----------------------------------------------------------------------------- #
 class MemNavAgent:
+
+    # Backward-compatible names share GEM storage; they do not duplicate it.
+    n = MemoryField("frame_count")
+    rgb_dir = MemoryField("rgb_dir")
+    _pending = MemoryField("pending_images")
+    _window_imgs = MemoryField("window_images")
+    dino_cls = MemoryField("descriptors")
+    cam_pose = MemoryField("poses")
+    anchor_frame_indices = MemoryField("anchor_frames")
+    cam_frame_indices = MemoryField("camera_frames")
+    anchor_k = MemoryField("anchor_k")
+    anchor_v = MemoryField("anchor_v")
+    cam_k = MemoryField("camera_k")
+    cam_v = MemoryField("camera_v")
+    scale_k = MemoryField("scale_k")
+    scale_v = MemoryField("scale_v")
+    _last_kf_pose = MemoryField("last_keyframe_pose")
+    _last_kf_idx = MemoryField("last_keyframe_index")
+    _last_tokens = MemoryField("current_tokens")
+    _last_agg = MemoryField("current_aggregation")
+    _psi = MemoryField("patch_start_index")
+    _goal_cache = MemoryField("goal_embeddings_and_poses")
+    _goal_start_frame = MemoryField("goal_start_frames")
+    _certified_candidate_cache = MemoryField("shortlists")
+    _certified_relocalization_cache = MemoryField("certificates")
+    _active_goal_key = MemoryField("active_goal_key")
+    _goal_session_index = MemoryField("goal_session_index")
+    _last_goal_session_started = MemoryField("goal_session_started")
+    _certified_reference_depth_cache = MemoryField("replay_depths")
+    _certified_route_reference_depth_cache = MemoryField("online_depths")
+    _certified_route_depth_cached_anchors = MemoryField("online_depth_frames")
+    _certified_dense_replay_last_stats = MemoryField("last_reference_read")
+    _first40_scale_receipt = MemoryField("metric_scale_receipt")
+    _first40_scale_freeze_ms = MemoryField("metric_scale_freeze_ms")
+    _last_frame_jpg_sha256 = MemoryField("current_rgb_sha256")
+    _last_stream_depth_frame_index = MemoryField("current_depth_frame")
+    _last_stream_relative_depth = MemoryField("current_relative_depth")
+
+    @cached_property
+    def memory(self):
+        """The episode's GEM; lazy binding also supports model-free API tests."""
+        mechanism = getattr(self, "memory_mechanism", "legacy")
+        if mechanism != "legacy":
+            if mechanism not in ("connected_reciprocal", "native_interval7"):
+                raise ValueError("unknown memory mechanism")
+            if __package__:
+                from .gem.episodic import EpisodicGEM
+            else:
+                from gem.episodic import EpisodicGEM
+            return EpisodicGEM(self, bounded=mechanism == "connected_reciprocal",
+                geometry_storage=getattr(self, "memory_geometry_storage", "dense"),
+                kv_storage=getattr(self, "memory_kv_storage", "native"))
+        return GeometricEpisodicMemory(self)
+
+    @classmethod
+    def _memory_field_names(cls):
+        return {
+            name for owner in cls.__mro__ for name, field in vars(owner).items()
+            if isinstance(field, MemoryField)
+        }
+
+    def export_episode_state(self, *, resident_fields):
+        """Export the existing flat episode schema without runtime bindings.
+
+        The checkpoint owner supplies its resident-resource exclusions and
+        serializes the returned tensors. GEM's weak model reference and the
+        episode RGB directory must not become checkpoint-owned objects.
+        """
+        if getattr(self, "memory_mechanism", "legacy") != "legacy":
+            raise NotImplementedError(
+                "Episodic memory cannot use the legacy survey checkpoint format; "
+                "start a new episode and replay its observed RGB history")
+        excluded = set(resident_fields) | {"memory", "rgb_dir"}
+        names = (set(vars(self)) | self._memory_field_names()) - excluded
+        return {name: getattr(self, name) for name in names}
+
+    def restore_episode_state(self, state, *, resident_fields):
+        """Restore flat state into this episode's GEM and model binding."""
+        if (getattr(self, "memory_mechanism", "legacy") != "legacy"
+                or state.get("memory_mechanism", "legacy") != "legacy"):
+            raise NotImplementedError(
+                "Episodic memory cannot restore the legacy survey checkpoint format")
+        excluded = set(resident_fields) | {"memory", "rgb_dir"}
+        if set(state) & excluded:
+            raise ValueError("episode state contains resident resources")
+        required = self._memory_field_names() - excluded
+        if not required.issubset(state):
+            raise ValueError("episode state is missing GEM fields")
+        # Assignment must honor MemoryField; __dict__.update would bypass it.
+        for name in set(vars(self)) - excluded - set(state):
+            delattr(self, name)
+        for name, value in state.items():
+            setattr(self, name, value)
+
     def __init__(self, checkpoint, internnav_root, device="cuda:0",
                  exclude_recent=83, num_samples=16, buffer_root=None,
                  gate_skip_below=0.0, retrieval_mode="raw", anchor_switch_margin=0.01,
@@ -141,7 +230,37 @@ class MemNavAgent:
                  certified_route_motion_unfiltered_shadow=False,
                  cdec_pairwise_ranker=None,
                  pi3x_online_relocalizer=None,
-                 depth_observation_only=False):
+                 depth_observation_only=False,
+                 certified_reference_depth_source="canonical",
+                 memory_mechanism="legacy", memory_geometry_storage="dense",
+                 memory_kv_storage="native"):
+        if memory_mechanism not in ("legacy", "connected_reciprocal", "native_interval7"):
+            raise ValueError("unknown memory mechanism")
+        if memory_geometry_storage not in ("dense", "detector_support"):
+            raise ValueError("unknown memory geometry storage")
+        if memory_geometry_storage != "dense" and memory_mechanism == "legacy":
+            raise ValueError("detector support requires the episodic online-history writer")
+        self.memory_geometry_storage = memory_geometry_storage
+        if memory_kv_storage not in ("native", "reader_precision", "paged_bf16", "int8_storage", "lossless_bf16"):
+            raise ValueError("unknown memory KV storage")
+        if memory_kv_storage != "native" and memory_mechanism != "native_interval7":
+            raise ValueError("optimized KV storage requires native interval7 memory")
+        self.memory_kv_storage = memory_kv_storage
+        if memory_mechanism != "legacy" and (
+                certified_reference_depth_source != "online_history"
+                or certified_relocalization_matcher is None):
+            raise ValueError("episodic memory requires the original matcher and online-history depth")
+        self.memory_mechanism = memory_mechanism
+        if certified_reference_depth_source not in ("canonical", "online_history"):
+            raise ValueError("unknown CEC historical depth source")
+        if certified_reference_depth_source == "online_history":
+            if certified_eager_depth_cache or depth_observation_only:
+                raise ValueError(
+                    "online-history CEC cannot use eager replay or depth-only mode")
+            if certified_route_depth_cache_stride not in (0, 1):
+                raise ValueError("online-history CEC requires every eligible frame")
+            certified_route_depth_cache_stride = 1
+        self.certified_reference_depth_source = certified_reference_depth_source
         # auto: training's per-episode tier; off: legacy dense capture; otherwise
         # parse a fixed pixel-flow threshold.
         self.flow_gate = flow_gate
@@ -271,162 +390,8 @@ class MemNavAgent:
         # Reset diffusion randomness per episode so terminal-mode A/B runs have
         # an identical navigation prefix.  This does not force deterministic
         # CUDA kernels; it controls the explicit torch.randn DDPM start noise.
-        if seed is not None:
-            seed = int(seed)
-            np.random.seed(seed)
-            torch.manual_seed(seed)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed_all(seed)
-        self._episode_counter += 1
-        self.rgb_dir = os.path.join(self.buffer_root, f"ep_{self._episode_counter:04d}")
-        shutil.rmtree(self.rgb_dir, ignore_errors=True)
-        os.makedirs(self.rgb_dir, exist_ok=True)
-        self.camera_height = float(camera_height)
-        self.camera_intrinsic = None
-        if camera_intrinsic is not None:
-            intrinsic = np.asarray(camera_intrinsic, dtype=np.float64)
-            if intrinsic.shape != (3, 3) or not np.isfinite(intrinsic).all():
-                raise ValueError("camera_intrinsic must be a finite 3x3 matrix")
-            self.camera_intrinsic = intrinsic
-        if self.flow_gate == "off":
-            self.flow_threshold = 0.0
-        elif self.flow_gate == "auto":
-            self.flow_threshold = (
-                flow_threshold_for_length(int(episode_len))
-                if episode_len else FLOW_TIERS[0][1]
-            )
-        else:
-            self.flow_threshold = float(self.flow_gate)
-        self.flow_gap = FLOW_GAP
-        self._last_episode_len = episode_len
-        self._last_seed = seed
-        self._last_kf_pose = None
-        self._last_kf_idx = self.S - 1
-        self.anchor_frame_indices = []
-        self.cam_frame_indices = []
-        self.n = 0                       # frames streamed so far
-        self._pending = []               # preprocessed frames waiting for the scale block
-        self._window_imgs = []           # last W preprocessed frames (cpu), for window_forward
-        self.dino_cls = []               # per-frame [1024] fp32 cpu
-        self.anchor_k = []               # per phase-2 frame [L,H,6,d] bf16 gpu
-        self.anchor_v = []
-        self.cam_k = []                  # per-frame [NI,TD,H,d] bf16 gpu (stacked lazily)
-        self.cam_v = []
-        self.cam_pose = []               # per-frame [9] fp32
-        # Optional frame-bound executor receipts. Entry i describes realized
-        # motion from causal RGB i-1 to i. They are internal action/odometry
-        # receipts, not evaluator poses or an additional exteroceptive stream.
-        self.executor_motion_receipts = []
-        self.scale_k = None              # [L,H,S,P,d] bf16 gpu
-        self.scale_v = None
-        self._metric_scale = None        # lazy ground-anchored scale
-        self._goal_cache = {}            # (goal_md5, anchor) -> goal_pose; goal_md5 -> goal_cls
-        self._anchor_state = {}          # goal_md5 -> dict(m, score): sticky-anchor ratchet
-        self._goal_start_frame = {}      # goal_md5 -> first frame queried for this goal
-        self._graph_routes = {}          # goal_md5 -> frozen reverse-memory route + cursor
-        # A goal image may reappear after intervening goals in a lifelong
-        # episode.  Long-term RGB/map state survives that switch, whereas every
-        # goal-conditioned proposal/proof cache belongs to one contiguous goal
-        # session.  Otherwise an A->B->A sequence would reuse A's original
-        # candidate ceiling and could never consume observations acquired while
-        # first pursuing A.
-        self._active_goal_key = None
-        self._goal_session_index = 0
-        self._last_goal_session_started = False
-        # SIFT/essential verification is a deterministic function of the goal,
-        # immutable history image, and per-episode intrinsic.  Cache both
-        # positive and negative results so temporal confirmation checks anchor
-        # stability instead of recomputing the identical image pair.
-        self._retrieval_verification_cache = {}
-        # Read-only learned-ranking results are frozen per goal and exact
-        # shortlist.  DINO scores can vary by a few floating-point bits across
-        # otherwise identical GPU queries, so the expensive deterministic
-        # geometry is cached separately by its actual immutable inputs.  The
-        # cheap model rank is still recomputed from each request's exact DINO
-        # scores whenever the exact-result cache misses.
-        self._phase_b_rank_cache = {}
-        self._phase_b_scale_cache = {}
-        self._phase_b_geometry_cache = {}
-        # One immutable absolute goal pose (or one immutable abstention) per
-        # goal.  Accepted poses are converted to a fresh current-relative
-        # PointGoal on each request, so localization is paid once rather than
-        # once per navigation replan.
-        self._certified_relocalization_cache = {}
-        # Dense reference depth depends only on the immutable history and the
-        # selected anchor, not on the goal.  Different lifelong goals often
-        # retrieve the same place, so retain exact final depth/confidence while
-        # keeping the first request identical to the confirmed full replay.
-        self._certified_reference_depth_cache = {}
-        # Sparse CPU-only local-observation cache.  It is intentionally
-        # separate from the exact canonical certificate depth cache above, so
-        # enabling route tracking cannot alter initial CEC authorization.
-        self._certified_route_reference_depth_cache = {}
-        self._certified_route_depth_cached_anchors = set()
-        # The dense-query motion model retains at most one controller interval
-        # of write-time depth.  These frame-bound values let the visual route
-        # consume the same observation cadence as the executor without turning
-        # every query frame into a permanent long-term-memory node.
-        self._certified_route_live_depth_cache = {}
-        self._certified_dense_replay_last_stats = None
-        self._certified_dense_stream_snapshot = None
-        self._certified_eager_depth_error = None
-        self._certified_eager_depth_runtime_ms = []
-        self._certified_eager_depth_cached_anchors = set()
-        # One frozen initial Pi3X proposal decision per goal.  An initial
-        # reject is sticky; an accepted anchor is fixed while its current-to-
-        # goal bearing is recomputed from causal RGB at each later replan.
-        self._pi3x_relocalization_cache = {}
-        # Optional, default-off rescue routes are separate from the historical
-        # always-on reverse graph.  A route is created only after an external
-        # progress monitor declares the direct certified bearing stuck.
-        self._certified_graph_routes = {}
-        # Development-only long-range readout.  Each accepted goal owns one
-        # continuous tail-to-anchor path and monotone progress scalar.  It is
-        # separate from the dormant discrete stuck-rescue graph above and is
-        # never consulted by canonical endpoint-bearing CEC.
-        self._certified_path_field_routes = {}
-        # Scale-free long-return challenger. CEC authorizes the historical
-        # route once; subsequent route state is advanced only by frame-bound
-        # executor translation/yaw receipts.
-        self._certified_action_coordinate_routes = {}
-        # Development successor to the scalar action coordinate.  It rebuilds
-        # a local 2-D executor route from the same receipts and advances route
-        # state by monotone geometric projection, never by travelled distance.
-        self._certified_se2_route_compasses = {}
-        # Deployable long-range route readout.  Both the historical route and
-        # live state are reconstructed from causal RGB, height-scaled LingBot
-        # depth, and adjacent LightGlue/PnP motion.  It never consumes the
-        # optional executor/simulator receipts above.
-        self._certified_monocular_route_tangents = {}
-        # The candidate set is fixed at the first causal query for a goal.
-        # An empty set is a real, cacheable abstention (for example after a
-        # very short Novel leg), not permission to admit later goal-session
-        # frames or repeatedly pay localization cost.
-        self._certified_candidate_cache = {}
-        # GOAT semantic arrival is intentionally independent of the Revisit
-        # controller's pooled-scale fallback.  This cache holds the one strict
-        # first-64-frame estimate (or its fail-closed unavailability receipt).
-        self._arrival_metric_scale_result = None
-        # MDTEC short-horizon readout.  This is deliberately separate from
-        # ``_metric_scale``: the latter is a legacy lazy helper whose evidence
-        # grows with the whole stream, whereas the monocular NavDP interface
-        # must freeze exactly RGB observations 0..39 and never update again.
-        self._first40_scale_receipt = None
-        self._first40_scale_freeze_ms = None
-        self._last_frame_jpg_sha256 = None
-        # The flow gate already predicts depth for every post-warmup frame.
-        # Retain only that newest immutable tensor so the MDTEC transaction
-        # can serialize it without running the same depth head a second time.
-        self._last_stream_depth_frame_index = None
-        self._last_stream_relative_depth = None
-        # tower-1 live capture: the current frame's post-GCT tokens + agg list from the
-        # CONTINUOUS stream. Training used window_forward's cold-cache recompute only
-        # because samples load from disk; at eval the live stream supersedes it.
-        self._last_tokens = None         # [1, P, 2C] current frame post-GCT tokens
-        self._last_agg = None            # list of [1,1,P,2C] (selected layers, current frame)
-        self._psi = None                 # patch_start_idx from the scale block
-        self.lb.model.clean_kv_cache()
-        self.lb.model.camera_head.clean_kv_cache()
+        """Delegate to GEM.reset; preserve the existing agent interface."""
+        return self.memory.reset(camera_height, seed, episode_len, camera_intrinsic)
 
     @staticmethod
     def _cache_key_contains_goal(cache_key, goal_key):
@@ -438,98 +403,20 @@ class MemNavAgent:
         )
 
     def _clear_goal_conditioned_state(self, goal_key):
-        """Forget one goal session without touching causal visual history.
-
-        Anchor depth is intentionally retained because it is a property of an
-        immutable history frame, not of a query.  Every cache listed below is
-        query-bound through a goal hash, candidate ceiling, or sticky action
-        decision and must be recomputed if the same image becomes a later goal.
-        """
-        goal_starts = getattr(self, "_goal_start_frame", None)
-        if goal_starts is not None:
-            goal_starts.pop(goal_key, None)
-        cache_names = (
-            "_goal_cache", "_anchor_state", "_graph_routes",
-            "_retrieval_verification_cache", "_phase_b_rank_cache",
-            "_phase_b_scale_cache", "_phase_b_geometry_cache",
-            "_certified_relocalization_cache", "_pi3x_relocalization_cache",
-            "_certified_graph_routes", "_certified_path_field_routes",
-            "_certified_action_coordinate_routes",
-            "_certified_se2_route_compasses",
-            "_certified_monocular_route_tangents",
-            "_certified_candidate_cache",
-        )
-        for name in cache_names:
-            mapping = getattr(self, name, None)
-            if mapping is None:
-                continue
-            stale = [
-                key for key in mapping
-                if self._cache_key_contains_goal(key, goal_key)
-            ]
-            for key in stale:
-                del mapping[key]
-        # Dense query depths are transient evidence for the active goal.  The
-        # fixed-stride causal tape remains in the persistent route cache.
-        self._certified_route_live_depth_cache.clear()
+        """Delegate to GEM.clear_goal; preserve the existing agent interface."""
+        return self.memory.clear_goal(goal_key)
 
     def _begin_goal_session(self, goal_key):
-        """Open a contiguous goal session while preserving lifelong memory."""
-        goal_key = str(goal_key)
-        active_goal_key = getattr(self, "_active_goal_key", None)
-        switched = goal_key != active_goal_key
-        if switched:
-            if active_goal_key is not None:
-                self._clear_goal_conditioned_state(active_goal_key)
-            # Defensive cleanup makes a repeated A->B->A query independent of
-            # any legacy A cache that predates this lifecycle contract.
-            self._clear_goal_conditioned_state(goal_key)
-            self._active_goal_key = goal_key
-            self._goal_session_index = int(
-                getattr(self, "_goal_session_index", 0)) + 1
-        self._last_goal_session_started = bool(switched)
-        return switched
+        """Delegate to GEM.begin_goal; preserve the existing agent interface."""
+        return self.memory.begin_goal(goal_key)
 
     def goal_session_status(self):
-        return {
-            "goal_session_index": int(getattr(
-                self, "_goal_session_index", 0)),
-            "goal_session_started": bool(getattr(
-                self, "_last_goal_session_started", False)),
-            "long_term_memory_preserved": True,
-        }
+        """Delegate to GEM.goal_status; preserve the existing agent interface."""
+        return self.memory.goal_status()
 
     def replay_goal_session(self, goal_jpg_bytes, expected_start_frame):
-        """Restore a frozen query boundary without appending or planning.
-
-        Paired lifelong evaluations replay an already executed C trajectory
-        before branching at B2.  Replaying RGB frames alone is insufficient:
-        the original C query also opened a goal session at the first C frame.
-        This method restores only that lifecycle boundary.  It deliberately
-        performs no retrieval, certificate inference, or controller action.
-        """
-        import hashlib
-
-        expected_start_frame = int(expected_start_frame)
-        if expected_start_frame != int(self.n):
-            raise ValueError(
-                "replayed goal session does not start at the current frame")
-        goal_key = hashlib.md5(goal_jpg_bytes).hexdigest()
-        switched = self._begin_goal_session(goal_key)
-        if not switched:
-            raise ValueError("replayed goal session did not switch goals")
-        goal_start_frame = self._goal_start_frame.setdefault(
-            goal_key, expected_start_frame)
-        if int(goal_start_frame) != expected_start_frame:
-            raise ValueError("replayed goal-session boundary changed")
-        return {
-            **self.goal_session_status(),
-            "goal_start_frame": int(goal_start_frame),
-            "candidate_ceiling": int(goal_start_frame) - 1,
-            "frame_count": int(self.n),
-            "diffusion_sampled": False,
-            "memory_appended": False,
-        }
+        """Delegate to GEM.replay_goal_session; preserve the existing agent interface."""
+        return self.memory.replay_goal_session(goal_jpg_bytes, expected_start_frame)
 
     @torch.no_grad()
     def image_goal_similarity(self, image_jpg_bytes, goal_jpg_bytes):
@@ -1015,385 +902,31 @@ class MemNavAgent:
     # capture-stream internals (mirrors precompute extract_trajectory)
     # ------------------------------------------------------------------ #
     def _pop_cls(self, n_frames):
-        out = self._dino_out[0]
-        cls = out["x_norm_clstoken"].reshape(n_frames, -1).float().cpu()
-        return [cls[i] for i in range(n_frames)]
+        """Delegate to GEM.pop_descriptors; preserve the existing agent interface."""
+        return self.memory.pop_descriptors(n_frames)
 
     def _read_anchor_newest(self):
-        kv = self.lb.agg.kv_cache
-        ak = torch.stack([kv[f"k_{i}"][0, :, -1, :self.psi].to(torch.bfloat16)
-                          for i in range(self.L_depth)])
-        av = torch.stack([kv[f"v_{i}"][0, :, -1, :self.psi].to(torch.bfloat16)
-                          for i in range(self.L_depth)])
-        return ak, av                                   # [L,H,6,d]
+        """Delegate to GEM.capture_anchor; preserve the existing agent interface."""
+        return self.memory.capture_anchor()
 
     def _read_cam_newest(self, n_new):
-        ch = self.lb.model.camera_head
-        NI, TD = ch.num_iterations, ch.trunk_depth
-        ks, vs = [], []
-        for it in range(NI):
-            d = ch.kv_cache[it]
-            ks.append(torch.stack([d[f"k_{bl}"][0, :, -n_new:, 0] for bl in range(TD)], 0))
-            vs.append(torch.stack([d[f"v_{bl}"][0, :, -n_new:, 0] for bl in range(TD)], 0))
-        # ks: list[NI] of [TD, H, n_new, d] -> [n_new, NI, TD, H, d]
-        k = torch.stack(ks, 0).permute(3, 0, 1, 2, 4).to(torch.bfloat16)
-        v = torch.stack(vs, 0).permute(3, 0, 1, 2, 4).to(torch.bfloat16)
-        return [k[i] for i in range(n_new)], [v[i] for i in range(n_new)]
+        """Delegate to GEM.capture_camera; preserve the existing agent interface."""
+        return self.memory.capture_camera(n_new)
 
     def add_frame(
             self, jpg_bytes, *, executed_translation_m=None,
             executed_yaw_rad=None, executed_forward_m=None,
             executed_left_m=None, executor_local_se2_source=None):
-        """Ingest one RGB frame (jpg bytes). Returns the frame index."""
-        idx = self.n
-        # A failed or partial append must never expose the preceding frame's
-        # depth under the new RGB SHA/frame binding.
-        self._last_stream_depth_frame_index = None
-        self._last_stream_relative_depth = None
-        if executed_translation_m is None and executed_yaw_rad is None:
-            if (executed_forward_m is not None
-                    or executed_left_m is not None
-                    or executor_local_se2_source is not None):
-                raise ValueError(
-                    "local SE(2) receipt requires the legacy motion binding")
-            executor_receipt = None
-        elif executed_translation_m is None or executed_yaw_rad is None:
-            raise ValueError(
-                "executor translation and yaw receipts must be supplied "
-                "together")
-        else:
-            translation = float(executed_translation_m)
-            yaw = float(executed_yaw_rad)
-            if (not np.isfinite(translation) or translation < 0.0
-                    or not np.isfinite(yaw)):
-                raise ValueError(
-                    "executor receipt must contain finite non-negative "
-                    "translation and finite yaw")
-            if idx == 0 and (translation > 1e-9 or abs(yaw) > 1e-9):
-                raise ValueError("the first causal frame must have zero motion")
-            executor_receipt = {
-                "frame_index": int(idx),
-                "executed_translation_m": translation,
-                "executed_yaw_rad": yaw,
-                "contract": "frame_bound_realized_executor_motion_v1",
-            }
-            local_absent = (
-                executed_forward_m is None
-                and executed_left_m is None
-                and executor_local_se2_source is None)
-            if not local_absent:
-                if (executed_forward_m is None
-                        or executed_left_m is None
-                        or executor_local_se2_source is None):
-                    raise ValueError(
-                        "executor forward and left receipts must be supplied "
-                        "together")
-                forward = float(executed_forward_m)
-                left = float(executed_left_m)
-                if (not isinstance(executor_local_se2_source, str)
-                        or not executor_local_se2_source.strip()):
-                    raise ValueError(
-                        "executor local SE(2) source must be explicit")
-                if not np.isfinite(forward) or not np.isfinite(left):
-                    raise ValueError(
-                        "executor local SE(2) receipt must be finite")
-                if idx == 0 and (abs(forward) > 1e-9 or abs(left) > 1e-9):
-                    raise ValueError(
-                        "the first causal frame must have zero local motion")
-                executor_receipt["local_se2"] = {
-                    "contract": "frame_bound_local_se2_v1",
-                    "executed_forward_m": forward,
-                    "executed_left_m": left,
-                    "executed_yaw_rad": yaw,
-                    "source": executor_local_se2_source.strip(),
-                }
-        # Fail closed at the LingBot RoPE position cap.  Past max_frame_num
-        # the streaming 3D-RoPE table slices silently truncate: the temporal
-        # frequency components come back EMPTY (verified 2026-08-22), so
-        # positions past the cap are malformed with no error at this layer.
-        # The flow gate rolls back total_frames_processed for dropped frames
-        # (the gatecurr-era interval fix), so the binding counter is the
-        # aggregator's committed-position count, NOT the raw frame index --
-        # a gated 2500-step episode consumes only a few hundred positions.
-        agg_mod_cap = getattr(self.lb, "agg", None)
-        cap = getattr(agg_mod_cap, "max_frame_num", None)
-        if cap is not None and int(
-                getattr(agg_mod_cap, "total_frames_processed", 0)
-        ) >= int(cap):
-            raise RuntimeError(
-                "memory stream RoPE position cap reached: "
-                f"total_frames_processed would exceed max_frame_num={int(cap)} "
-                "and positions past the cap are silently malformed. Raise "
-                "MEMNAV_MAX_FRAME_NUM, or check that flow gating is enabled "
-                "with the episode's true total length.")
-        self.executor_motion_receipts.append(executor_receipt)
-        self._last_frame_jpg_sha256 = hashlib.sha256(jpg_bytes).hexdigest()
-        path = os.path.join(self.rgb_dir, f"{idx}.jpg")
-        with open(path, "wb") as f:
-            f.write(jpg_bytes)
-        img = self.lb.load_images([path])[0]            # [3,518,518] pad-518 (cpu)
-        self._window_imgs.append(img)
-        if len(self._window_imgs) > self.W:
-            self._window_imgs.pop(0)
+        """Delegate to GEM.write; preserve the existing agent interface."""
+        return self.memory.write(jpg_bytes, executed_translation_m=executed_translation_m, executed_yaw_rad=executed_yaw_rad, executed_forward_m=executed_forward_m, executed_left_m=executed_left_m, executor_local_se2_source=executor_local_se2_source)
 
-        ch = self.lb.model.camera_head
-        if idx < self.S - 1:
-            self._pending.append(img)
-            self.n += 1
-            return idx
-        if idx == self.S - 1:
-            # scale block: first S frames as ONE bidirectional block
-            self._pending.append(img)
-            blk = torch.stack(self._pending, 0)[None].to(self.device)
-            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                agg, psi = self.lb.model._aggregate_features(
-                    blk, num_frame_for_scale=self.S, num_frame_per_block=self.S)
-                pl = ch(agg, causal_inference=True,
-                        num_frame_per_block=self.S, num_frame_for_scale=self.S)
-            self._psi = psi
-            self._last_tokens = agg[-1][:, -1]
-            self._last_agg = [layer[:, -1:] for layer in agg]
-            self.dino_cls.extend(self._pop_cls(self.S))
-            if not getattr(self, "depth_observation_only", False):
-                kv = self.lb.agg.kv_cache
-                self.scale_k = torch.stack([
-                    kv[f"k_{i}"][0, :, :self.S].to(torch.bfloat16)
-                    for i in range(self.L_depth)
-                ]).contiguous()
-                self.scale_v = torch.stack([
-                    kv[f"v_{i}"][0, :, :self.S].to(torch.bfloat16)
-                    for i in range(self.L_depth)
-                ]).contiguous()
-            pose = pl[-1][0].float()                    # [S,9]
-            self.cam_pose.extend([pose[i].cpu() for i in range(self.S)])
-            if not getattr(self, "depth_observation_only", False):
-                ck, cv = self._read_cam_newest(self.S)
-                self.cam_k.extend(ck); self.cam_v.extend(cv)
-            self._last_kf_pose = pl[-1][:, -1:].float()
-            self._last_kf_idx = self.S - 1
-            self.cam_frame_indices = list(range(self.S))
-            self._pending = []
-            if self.certified_eager_depth_cache:
-                # Scale inference is common to sparse navigation and dense
-                # certificate streams.  Hold its immutable reference snapshot
-                # as the exact starting point for the first post-scale frame.
-                self._certified_dense_stream_snapshot = self._snapshot()
-        else:
-            # The live stream always evaluates the newest frame. When the flow
-            # policy rejects it, roll back only the stored KV append; dense cls,
-            # pose, and current-state tokens remain aligned to raw frame indices.
-            agg_mod = self.lb.agg
-            gate_on = self.flow_threshold > 0
-            if gate_on:
-                saved_kv = dict(agg_mod.kv_cache)
-                saved_cam = [dict(layer) for layer in ch.kv_cache]
-                saved_total = int(agg_mod.total_frames_processed)
-            prediction = None
-            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                agg, _ = self.lb.model._aggregate_features(
-                    img[None, None].to(self.device),
-                    num_frame_for_scale=self.S, num_frame_per_block=1)
-                pl = ch(agg, causal_inference=True,
-                        num_frame_per_block=1, num_frame_for_scale=self.S)
-            self._last_tokens = agg[-1][:, -1]
-            self._last_agg = [layer for layer in agg]
-            self.dino_cls.extend(self._pop_cls(1))
-            self.cam_pose.append(pl[-1][0].float()[-1].cpu())
-
-            if gate_on:
-                cur_pose = pl[-1][:, -1:].float()
-                if idx == self.S:
-                    is_keyframe = True
-                else:
-                    from lingbot_map.models.gct_stream_window import _compute_flow_magnitude
-                    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                        prediction = self.lb.model._predict_depth(
-                            agg, img[None, None].to(self.device), self._psi)
-                        depth = prediction["depth"].float()
-                    flow = _compute_flow_magnitude(
-                        cur_pose, self._last_kf_pose, depth, tuple(depth.shape[2:4])
-                    )
-                    is_keyframe = (
-                        flow > self.flow_threshold
-                        or (idx - self._last_kf_idx) >= self.flow_gap
-                    )
-            else:
-                is_keyframe = True
-
-            if is_keyframe:
-                if gate_on:
-                    self._last_kf_pose = cur_pose
-                    self._last_kf_idx = idx
-                if not getattr(self, "depth_observation_only", False):
-                    ak, av = self._read_anchor_newest()
-                    self.anchor_k.append(ak); self.anchor_v.append(av)
-                    self.anchor_frame_indices.append(idx)
-                    ck, cv = self._read_cam_newest(1)
-                    self.cam_k.extend(ck); self.cam_v.extend(cv)
-                    self.cam_frame_indices.append(idx)
-            else:
-                agg_mod.kv_cache.clear()
-                agg_mod.kv_cache.update(saved_kv)
-                ch.kv_cache = saved_cam
-                agg_mod.total_frames_processed = saved_total
-            dense_query_due = (
-                self.certified_route_motion_model ==
-                "direct_pnp_dense_query"
-                and bool(self._certified_monocular_route_tangents)
-            )
-            route_cache_due = (
-                self.certified_route_depth_cache_stride > 0
-                and idx % self.certified_route_depth_cache_stride == 0
-            )
-            if route_cache_due or dense_query_due:
-                if prediction is None:
-                    with torch.no_grad(), torch.autocast(
-                            "cuda", dtype=torch.bfloat16):
-                        prediction = self.lb.model._predict_depth(
-                            agg, img[None, None].to(self.device), self._psi)
-                route_depth = prediction[
-                    "depth"][0, -1, ..., 0].float().cpu().numpy()
-                route_confidence = prediction[
-                    "depth_conf"][0, -1].float().cpu().numpy()
-                if route_cache_due:
-                    self._certified_route_reference_depth_cache[idx] = (
-                        route_depth.copy(), route_confidence.copy())
-                    self._certified_route_depth_cached_anchors.add(idx)
-                if dense_query_due and not route_cache_due:
-                    self._certified_route_live_depth_cache[idx] = (
-                        route_depth.copy(), route_confidence.copy())
-                    # Formal execution replans every eight actions.  Keep two
-                    # intervals defensively; older dense values have already
-                    # been consumed and are not long-term memory.
-                    oldest = idx - 16
-                    for stale in tuple(
-                            self._certified_route_live_depth_cache):
-                        if stale < oldest:
-                            del self._certified_route_live_depth_cache[stale]
-            if prediction is not None:
-                self._last_stream_relative_depth = prediction[
-                    "depth"][0, -1, ..., 0].float().detach()
-                self._last_stream_depth_frame_index = int(idx)
-            if (self.certified_eager_depth_cache
-                    and self._certified_dense_stream_snapshot is not None):
-                self._update_certified_eager_depth(idx, img)
-        self.n += 1
-        if self.n == 40:
-            self._freeze_first40_scale()
-        return idx
-
-    @torch.no_grad()
     def _freeze_first40_scale(self):
-        """Freeze the sole causal RGB-only scale receipt for this episode.
+        """Delegate to GEM.freeze_metric_scale; preserve the existing agent interface."""
+        return self.memory.freeze_metric_scale()
 
-        LingBot's scale routine replays the prefix and clears its KV caches, so
-        the live map stream is restored exactly afterwards.  Any failure is a
-        frozen invalid receipt; it can only yield zero depth, never a pooled or
-        oracle fallback.
-        """
-
-        if self._first40_scale_receipt is not None:
-            raise RuntimeError("first-40 metric scale was already frozen")
-        if self.n != 40 or len(self.cam_pose) != 40:
-            raise RuntimeError(
-                "first-40 scale freeze requires exactly 40 live observations"
-            )
-        from MemNavData.monocular_depth_runtime import (
-            compute_first40_scale_receipt,
-            failed_first40_scale_receipt,
-        )
-
-        snapshot = self._snapshot()
-        saved_dino_output = self._dino_out[0]
-        started = time.perf_counter()
-        try:
-            self._first40_scale_receipt = compute_first40_scale_receipt(
-                self.lb,
-                self.rgb_dir,
-                torch.stack(self.cam_pose, 0).float().cpu().numpy(),
-                self.camera_height,
-            )
-        except Exception as error:
-            self._first40_scale_receipt = failed_first40_scale_receipt(
-                self.camera_height,
-                f"{type(error).__name__}: {error}",
-            )
-        finally:
-            self._restore(snapshot, empty_cuda_cache=False)
-            self._dino_out[0] = saved_dino_output
-            self._first40_scale_freeze_ms = (
-                1000.0 * (time.perf_counter() - started)
-            )
-
-    @torch.no_grad()
     def monocular_depth_observation(self):
-        """Return current raw LingBot depth under the frozen MDTEC contract."""
-
-        started = time.perf_counter()
-        if self.n < 1 or self._last_frame_jpg_sha256 is None:
-            raise RuntimeError("monocular depth requires one streamed RGB frame")
-        from PIL import Image
-        from MemNavData.monocular_depth_runtime import (
-            ACTIVE_FROM_FRAME_INDEX,
-            build_monocular_depth_payload,
-        )
-
-        frame_index = self.n - 1
-        current_path = os.path.join(self.rgb_dir, f"{frame_index}.jpg")
-        with Image.open(current_path) as current_image:
-            source_width, source_height = current_image.size
-
-        relative_depth = None
-        depth_shape = (source_height, source_width)
-        cache_hit = False
-        prediction_runtime_ms = 0.0
-        if frame_index >= ACTIVE_FROM_FRAME_INDEX:
-            if self._first40_scale_receipt is None:
-                raise RuntimeError(
-                    "first-40 scale receipt missing after activation frame"
-                )
-            if self._first40_scale_receipt["scale_valid"] is True:
-                if self._last_agg is None or self._psi is None:
-                    raise RuntimeError("LingBot current-frame depth state is absent")
-                cache_hit = (
-                    self._last_stream_depth_frame_index == frame_index
-                    and self._last_stream_relative_depth is not None
-                )
-                if cache_hit:
-                    relative_depth = (
-                        self._last_stream_relative_depth.cpu().numpy()
-                    )
-                else:
-                    prediction_started = time.perf_counter()
-                    prediction = self.lb.model._predict_depth(
-                        self._last_agg,
-                        self._window_imgs[-1][None, None].to(self.device),
-                        self._psi,
-                    )
-                    relative_depth = prediction[
-                        "depth"][0, -1, ..., 0].float().cpu().numpy()
-                    prediction_runtime_ms = 1000.0 * (
-                        time.perf_counter() - prediction_started
-                    )
-                depth_shape = tuple(int(value) for value in relative_depth.shape)
-
-        payload = build_monocular_depth_payload(
-            relative_depth=relative_depth,
-            depth_shape=depth_shape,
-            image_sha256_value=self._last_frame_jpg_sha256,
-            frame_index=frame_index,
-            scale_receipt=self._first40_scale_receipt,
-        )
-        payload["first40_scale_freeze_ms"] = self._first40_scale_freeze_ms
-        payload["stream_observation_count"] = int(self.n)
-        payload["depth_prediction_cache_hit"] = bool(cache_hit)
-        payload["depth_prediction_runtime_ms"] = float(
-            prediction_runtime_ms
-        )
-        payload["depth_materialization_runtime_ms"] = 1000.0 * (
-            time.perf_counter() - started
-        )
-        return payload
+        """Delegate to GEM.read_dense; preserve the existing agent interface."""
+        return self.memory.read_dense()
 
     def monocular_depth_status(self):
         """Small JSON status without materializing the current depth map."""
@@ -1550,58 +1083,19 @@ class MemNavAgent:
         # which REPLACE dict entries — they never mutate the existing KV tensors
         # in place. Holding references keeps the old tensors alive at zero copy
         # cost (a full clone of the 32-frame window KV is ~5.5 GB and OOMs).
-        agg = self.lb.agg
-        ch = self.lb.model.camera_head
-        return dict(
-            kv=dict(agg.kv_cache),
-            total=int(agg.total_frames_processed),
-            cam=list(ch.kv_cache) if ch.kv_cache is not None else None,
-            cam_idx=int(getattr(ch, "frame_idx", 0)),
-        )
+        """Delegate to GEM.snapshot_stream; preserve the existing agent interface."""
+        return self.memory.snapshot_stream()
 
     def _restore(self, snap, *, empty_cuda_cache=True):
-        agg = self.lb.agg
-        ch = self.lb.model.camera_head
-        self.lb.model.clean_kv_cache()
-        agg.kv_cache.update(snap["kv"])
-        agg.total_frames_processed = snap["total"]
-        ch.kv_cache = snap["cam"]
-        ch.frame_idx = snap["cam_idx"]
-        if empty_cuda_cache:
-            torch.cuda.empty_cache()
+        """Delegate to GEM.restore_stream; preserve the existing agent interface."""
+        return self.memory.restore_stream(snap, empty_cuda_cache=empty_cuda_cache)
 
     # ------------------------------------------------------------------ #
     # planning
     # ------------------------------------------------------------------ #
     def _live_cache(self):
-        """The in-memory equivalent of MemNavNet._load_cache's dict."""
-        if getattr(self, "depth_observation_only", False):
-            raise RuntimeError(
-                "depth-observation-only mode does not materialize planning "
-                "caches")
-        n_anchor = len(self.anchor_k)
-        if n_anchor > 0:
-            ak = torch.stack(self.anchor_k, 2)          # [L,H,N,6,d]
-            av = torch.stack(self.anchor_v, 2)
-        else:
-            L, H, d = self.scale_k.shape[0], self.scale_k.shape[1], self.scale_k.shape[-1]
-            ak = self.scale_k.new_zeros((L, H, 0, self.psi, d))
-            av = self.scale_k.new_zeros((L, H, 0, self.psi, d))
-        cache = dict(
-            scale_k=self.scale_k, scale_v=self.scale_v,
-            anchor_k=ak, anchor_v=av,
-            cam_k=torch.stack(self.cam_k, 0), cam_v=torch.stack(self.cam_v, 0),
-            cam_pose_enc=torch.stack(self.cam_pose, 0).to(self.device),
-            ground_h_est=None,
-        )
-        if self.flow_threshold > 0:
-            cache["anchor_frame_indices"] = torch.as_tensor(
-                self.anchor_frame_indices, dtype=torch.long
-            )
-            cache["cam_frame_indices"] = torch.as_tensor(
-                self.cam_frame_indices, dtype=torch.long
-            )
-        return cache
+        """Delegate to GEM.planning_cache; preserve the existing agent interface."""
+        return self.memory.planning_cache()
 
     def _get_metric_scale(self):
         if self._metric_scale is None and self.n >= self.S:
@@ -1637,12 +1131,16 @@ class MemNavAgent:
 
         learned = getattr(self, "cdec_pairwise_ranker", None)
         return {
+            "gem_memory": self.memory.status(),
             "enabled": self.certified_relocalization_matcher is not None,
             "runtime_contract": runtime_contract(),
             "counterfactual_dino_top1_audit": bool(getattr(
                 self, "certified_counterfactual_audit", False)),
             "eager_depth_cache": bool(getattr(
                 self, "certified_eager_depth_cache", False)),
+            "default_reference_depth_source": getattr(
+                self, "certified_reference_depth_source", "canonical"),
+            "supported_reference_depth_sources": ["canonical", "online_history"],
             "eager_depth_cache_error": getattr(
                 self, "_certified_eager_depth_error", None),
             "eager_depth_cached_frames": len(getattr(
@@ -1680,63 +1178,13 @@ class MemNavAgent:
         return runtime.status()
 
     def _certified_anchor_image_record(self, anchor):
-        """Read one immutable causal RGB anchor and bind it to a digest."""
-        if isinstance(anchor, bool) or not isinstance(anchor, (int, np.integer)):
-            raise ValueError("certified anchor must be an integer")
-        anchor = int(anchor)
-        if anchor < int(self.S) or anchor >= int(self.n):
-            raise ValueError(
-                f"certified anchor {anchor} outside [{self.S}, {self.n - 1}]")
-        path = os.path.join(self.rgb_dir, f"{anchor}.jpg")
-        if not os.path.isfile(path):
-            raise FileNotFoundError(path)
-        with open(path, "rb") as stream:
-            image = stream.read()
-        if not image:
-            raise ValueError("certified anchor image is empty")
-        return {
-            "anchor": anchor,
-            "image": image,
-            "sha256": hashlib.sha256(image).hexdigest(),
-        }
+        """Delegate to GEM.anchor_record; preserve the existing agent interface."""
+        return self.memory.anchor_record(anchor)
 
     def certified_anchor_image(
             self, goal_jpg_bytes, selected_anchor, *, expected_sha256):
-        """Return only the history JPEG authorized by a cached CEC proof.
-
-        Goal bytes select the immutable certificate cache entry. A rejected,
-        absent, or mismatched proof cannot become a generic memory-image read.
-        """
-        if (not isinstance(expected_sha256, str)
-                or len(expected_sha256) != 64
-                or expected_sha256 != expected_sha256.lower()):
-            raise ValueError("expected anchor SHA-256 is invalid")
-        try:
-            int(expected_sha256, 16)
-        except ValueError as exc:
-            raise ValueError("expected anchor SHA-256 is invalid") from exc
-        if isinstance(selected_anchor, bool) or not isinstance(
-                selected_anchor, (int, np.integer)):
-            raise ValueError("selected anchor must be an integer")
-        selected_anchor = int(selected_anchor)
-        goal_key = hashlib.md5(goal_jpg_bytes).hexdigest()
-        cached = self._certified_relocalization_cache.get(goal_key)
-        if not isinstance(cached, dict):
-            raise ValueError("no cached CEC proof for this goal")
-        result = cached.get("result")
-        if not isinstance(result, dict) or result.get("accepted") is not True:
-            raise ValueError("CEC proof did not authorize a history anchor")
-        if result.get("selected_anchor") != selected_anchor:
-            raise ValueError("requested anchor differs from the certified anchor")
-        goal_start = self._goal_start_frame.get(goal_key)
-        if goal_start is None or not int(self.S) <= selected_anchor < int(goal_start):
-            raise ValueError("certified anchor violates the causal goal boundary")
-        record = self._certified_anchor_image_record(selected_anchor)
-        if record["sha256"] != expected_sha256:
-            raise ValueError("certified anchor image digest changed")
-        if result.get("selected_anchor_image_sha256") != expected_sha256:
-            raise ValueError("anchor digest is not bound to the cached CEC proof")
-        return record
+        """Delegate to GEM.read_anchor_image; preserve the existing agent interface."""
+        return self.memory.read_anchor_image(goal_jpg_bytes, selected_anchor, expected_sha256=expected_sha256)
 
     def _has_frozen_visual_relocalizer(self):
         """Whether any endpoint consumes the shared frozen DINO top-8."""
@@ -2141,82 +1589,13 @@ class MemNavAgent:
         """Original full replay, retained as the equivalence oracle."""
         return self._certified_reference_depth_impl(anchor)
 
-    @torch.no_grad()
     def _certified_reference_depth(self, anchor):
-        """Return exact causal LingBot depth with an anchor-result cache.
+        """Delegate to GEM.read_replayed_depth; preserve the existing agent interface."""
+        return self.memory.read_replayed_depth(anchor)
 
-        Candidate ranking is image-only, so this expensive full replay happens
-        for at most one history frame per goal.  The first request for an anchor
-        remains the independently confirmed full replay.  Later goals selecting
-        that same immutable frame reuse its final arrays exactly; no intermediate
-        transformer state is approximated.
-        """
-        anchor = int(anchor)
-        cached = self._certified_reference_depth_cache.get(anchor)
-        if cached is not None:
-            depth, confidence = cached
-            self._certified_dense_replay_last_stats = {
-                "enabled": True,
-                "anchor": anchor,
-                "cache_hit": True,
-                "cache_source": (
-                    "eager_dense_writer"
-                    if anchor in self._certified_eager_depth_cached_anchors
-                    else "prior_selected_anchor"),
-                "replayed_frames": 0,
-                "cached_anchors": len(
-                    self._certified_reference_depth_cache),
-                "cache_bytes": int(sum(
-                    array.nbytes for pair in
-                    self._certified_reference_depth_cache.values()
-                    for array in pair)),
-            }
-            return depth.copy(), confidence.copy()
-        depth, confidence = self._certified_reference_depth_impl(anchor)
-        self._certified_reference_depth_cache[anchor] = (
-            depth.copy(), confidence.copy())
-        self._certified_dense_replay_last_stats = {
-            "enabled": True,
-            "anchor": anchor,
-            "cache_hit": False,
-            "replayed_frames": anchor - self.S + 1,
-            "cached_anchors": len(self._certified_reference_depth_cache),
-            "cache_bytes": int(sum(
-                array.nbytes for pair in
-                self._certified_reference_depth_cache.values()
-                for array in pair)),
-        }
-        return depth, confidence
-
-    @torch.no_grad()
     def _certified_route_reference_depth(self, anchor):
-        """Return one write-once sparse depth observation without replay.
-
-        This cache is generated by the same causal short-range LingBot stream
-        that already supplies NavDP depth.  It never enters the initial target
-        certificate and never launches a second dense KV stream.
-        """
-
-        anchor = int(anchor)
-        cached = self._certified_route_reference_depth_cache.get(anchor)
-        if cached is None:
-            raise RuntimeError(
-                f"route depth is unavailable for historical frame {anchor}")
-        depth, confidence = cached
-        self._certified_dense_replay_last_stats = {
-            "enabled": True,
-            "anchor": anchor,
-            "cache_hit": True,
-            "cache_source": "sparse_causal_route_writer",
-            "replayed_frames": 0,
-            "cached_anchors": len(
-                self._certified_route_reference_depth_cache),
-            "cache_bytes": int(sum(
-                array.nbytes for pair in
-                self._certified_route_reference_depth_cache.values()
-                for array in pair)),
-        }
-        return depth.copy(), confidence.copy()
+        """Delegate to GEM.read_online_depth; preserve the existing agent interface."""
+        return self.memory.read_online_depth(anchor)
 
     @torch.no_grad()
     def _materialize_current_route_depth(self):
@@ -2422,100 +1801,17 @@ class MemNavAgent:
             "motion": motion.audit_dict(),
         }
 
-    @torch.no_grad()
     def _certified_reference_depth_impl(self, anchor):
-        """Original exact replay from the frozen scale block through anchor."""
-        anchor = int(anchor)
-        if anchor < self.S or anchor >= self.n:
-            raise ValueError(
-                f"certified anchor {anchor} outside [{self.S}, {self.n - 1}]")
-        snap = self._snapshot()
-        try:
-            cache = self._live_cache()
-            indices = cache.get("anchor_frame_indices")
-            if indices is None:
-                self.lb._inject(
-                    cache["scale_k"], cache["scale_v"],
-                    cache["anchor_k"], cache["anchor_v"],
-                    n_hist=0, total_frames=self.S)
-            else:
-                self.lb._inject(
-                    cache["scale_k"], cache["scale_v"],
-                    cache["anchor_k"], cache["anchor_v"],
-                    anchor_frame_indices=indices, raw_start=self.S)
-            final_agg = final_psi = final_image = None
-            # Bound host memory while retaining exact sequential inference.
-            for chunk_start in range(self.S, anchor + 1, 16):
-                chunk_end = min(anchor + 1, chunk_start + 16)
-                paths = [
-                    os.path.join(self.rgb_dir, f"{index}.jpg")
-                    for index in range(chunk_start, chunk_end)
-                ]
-                if not all(os.path.isfile(path) for path in paths):
-                    missing = next(path for path in paths
-                                   if not os.path.isfile(path))
-                    raise FileNotFoundError(missing)
-                images = self.lb.load_images(paths)
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    for offset in range(len(images)):
-                        final_image = images[offset:offset + 1][None].to(
-                            self.device)
-                        final_agg, final_psi = (
-                            self.lb.model._aggregate_features(
-                                final_image,
-                                num_frame_for_scale=self.S,
-                                num_frame_per_block=1))
-            if final_agg is None or final_image is None:
-                raise RuntimeError("certified anchor replay produced no frame")
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                prediction = self.lb.model._predict_depth(
-                    final_agg, final_image, final_psi)
-            depth = prediction["depth"][0, -1, ..., 0].float().cpu().numpy()
-            confidence = prediction["depth_conf"][0, -1].float().cpu().numpy()
-            return depth, confidence
-        finally:
-            self._restore(snap)
+        """Delegate to GEM.replay_depth; preserve the existing agent interface."""
+        return self.memory.replay_depth(anchor)
 
-    @torch.no_grad()
     def _certified_bearing_vector(self, goal_pose9):
-        """Convert a certified pose to scale-free ``[forward, left]``.
+        """Delegate to GEM.bearing; preserve the existing agent interface."""
+        return self.memory.bearing(goal_pose9)
 
-        LingBot translation scale is monocular and is not certified by the v2
-        image-geometry checks.  The relative direction is scale invariant, so
-        the runtime boundary deliberately does not call ``_get_metric_scale``.
-        ``verified_bearing_v1`` performs the only metric operation later: a
-        frozen projection to its already validated 2.5 m controller radius.
-        """
-        from MemNavData.certified_relocalization_runtime import (
-            scale_free_relative_xy,
-        )
-
-        pose = np.asarray(goal_pose9, dtype=np.float64)
-        if pose.shape != (9,) or not np.isfinite(pose).all():
-            raise ValueError("certified goal pose must be finite pose9")
-        current_pose = self.cam_pose[-1].float().cpu().numpy()
-        return scale_free_relative_xy(current_pose, pose)
-
-    @torch.no_grad()
     def _certified_view_alignment(self, goal_pose9):
-        """Return PnP-derived terminal view residuals, never a STOP decision."""
-        from MemNavData.goat_terminal_alignment import (
-            relative_optical_yaw_pitch_deg,
-        )
-
-        pose = np.asarray(goal_pose9, dtype=np.float64)
-        if pose.shape != (9,) or not np.isfinite(pose).all():
-            raise ValueError("certified goal pose must be finite pose9")
-        current_pose = self.cam_pose[-1].float().cpu().numpy()
-        yaw_right, pitch_up = relative_optical_yaw_pitch_deg(
-            current_pose, pose)
-        return {
-            "terminal_yaw_right_deg": float(yaw_right),
-            "terminal_pitch_up_deg": float(pitch_up),
-            "terminal_alignment_source": (
-                "certified_lingbot_current_to_pnp_goal_rotation"),
-            "terminal_alignment_stop_authority": False,
-        }
+        """Delegate to GEM.view_alignment; preserve the existing agent interface."""
+        return self.memory.view_alignment(goal_pose9)
 
     @torch.no_grad()
     def _certified_path_field_direction(
@@ -3865,737 +3161,9 @@ class MemNavAgent:
             proposal_order="geometry_first", goal_camera_intrinsic=None,
             authority_policy="strict_certificate",
             guidance_mode="endpoint_bearing", goal_key_override=None,
-            reference_depth_source="canonical"):
-        """Rank/localize/certify once; update only scale-free bearing later."""
-        import hashlib
-        import time
-        from pathlib import Path
-
-        from MemNavData.certified_relocalization_runtime import (
-            CERTIFIED_CANDIDATE_TOP_K,
-            CERTIFIED_EPIPOLAR_THRESHOLD_PX,
-            CERTIFIED_MINIMUM_ANCHOR,
-            STRICT_AUTHORITY_POLICY,
-            SUPPORTED_AUTHORITY_POLICIES,
-            UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
-            fundamental_can_reach_certificate,
-            fundamental_support,
-            operational_authority_decision,
-            rank_candidates,
-            runtime_contract,
-        )
-        from MemNavData.lingbot_pnp_localization import (
-            SiftPnPConfig,
-            correspondence_pnp_localize,
-            jsonable_pnp,
-            map_raw_intrinsic_to_lingbot_pad,
-        )
-
-        started = time.perf_counter()
-        frame_idx = self.n - 1
-        proposal_order = str(proposal_order)
-        authority_policy = str(authority_policy)
-        guidance_mode = str(guidance_mode)
-        reference_depth_source = str(reference_depth_source)
-        if goal_camera_intrinsic is None:
-            raw_goal_intrinsic = None
-        else:
-            try:
-                raw_goal_intrinsic = np.asarray(
-                    goal_camera_intrinsic, dtype=np.float64)
-            except (TypeError, ValueError, OverflowError):
-                raw_goal_intrinsic = np.empty((0, 0), dtype=np.float64)
-            if (raw_goal_intrinsic.shape != (3, 3)
-                    or not np.isfinite(raw_goal_intrinsic).all()
-                    or raw_goal_intrinsic[0, 0] <= 0.0
-                    or raw_goal_intrinsic[1, 1] <= 0.0):
-                return {
-                    "ok": False, "accepted": False,
-                    "reason": "invalid_goal_camera_intrinsic",
-                    "cached": False,
-                    "relocalization_ms": 1000.0 * (
-                        time.perf_counter() - started),
-                }
-        base = {
-            "certified_relocalization_schema_version": (
-                runtime_contract()["schema_version"]),
-            "certified_relocalization_contract": runtime_contract(),
-            "frame_idx": frame_idx,
-            "aux_pose": None,
-            "learned_rescue_requested": bool(allow_learned_rescue),
-            "learned_rescue_available": (
-                getattr(self, "cdec_pairwise_ranker", None) is not None),
-            "proposal_order": proposal_order,
-            "authority_policy": authority_policy,
-            "guidance_mode": guidance_mode,
-            "reference_depth_source": reference_depth_source,
-            "goal_camera_calibration": (
-                "explicit_distinct_intrinsic"
-                if raw_goal_intrinsic is not None
-                else "legacy_shared_history_intrinsic"
-            ),
-        }
-        if proposal_order not in (
-                "geometry_first", "dino_first_certified"):
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "invalid_proposal_order", "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        if guidance_mode not in CERTIFIED_GUIDANCE_MODES:
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "invalid_guidance_mode", "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        if reference_depth_source not in ("canonical", "route_sparse"):
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "invalid_reference_depth_source", "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        if (guidance_mode in (
-                "episodic_path_field", "action_coordinate_compass",
-                "se2_route_compass", "monocular_route_tangent")
-                and (graph_rescue or route_start_anchor is not None)):
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "path_field_incompatible_with_graph_rescue",
-                "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        if authority_policy not in SUPPORTED_AUTHORITY_POLICIES:
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "invalid_authority_policy", "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        if (authority_policy == UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY
-                and (proposal_order != "geometry_first"
-                     or allow_learned_rescue)):
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "invalid_authority_ablation_configuration",
-                "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        if (proposal_order == "dino_first_certified"
-                and allow_learned_rescue):
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "learned_rescue_incompatible_with_proposal_order",
-                "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        if self.certified_relocalization_matcher is None:
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "certified_relocalizer_disabled",
-                "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        goal_key = (
-            hashlib.md5(goal_jpg_bytes).hexdigest()
-            if goal_key_override is None else str(goal_key_override)
-        )
-        if (len(goal_key) != 64 and goal_key_override is not None) or any(
-                character not in "0123456789abcdef" for character in goal_key):
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "invalid_internal_goal_key", "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        goal_start = self._goal_start_frame.get(goal_key)
-        if goal_start is None:
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "goal_not_probed_causally", "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        try:
-            if not isinstance(candidates, list):
-                raise ValueError("candidates must be a list")
-            if not 0 <= len(candidates) <= CERTIFIED_CANDIDATE_TOP_K:
-                raise ValueError("candidate count outside frozen top-k contract")
-            canonical = []
-            seen = set()
-            for dino_rank, item in enumerate(candidates, start=1):
-                if not isinstance(item, dict):
-                    raise ValueError("candidate is not an object")
-                anchor = int(item["anchor"])
-                score = float(item["score"])
-                if (anchor in seen or anchor < CERTIFIED_MINIMUM_ANCHOR
-                        or anchor >= int(goal_start)
-                        or not np.isfinite(score)):
-                    raise ValueError("candidate violates causal shortlist")
-                seen.add(anchor)
-                canonical.append({
-                    "anchor": anchor,
-                    "score": score,
-                    "dino_rank": dino_rank,
-                })
-        except (KeyError, TypeError, ValueError, OverflowError) as error:
-            return {
-                **base, "ok": False, "accepted": False,
-                "reason": "invalid_candidate_contract",
-                "error": f"{type(error).__name__}: {error}",
-                "cached": False,
-                "relocalization_ms": 1000.0 * (
-                    time.perf_counter() - started),
-            }
-        fingerprint = (
-            ("learned_rescue_requested", bool(allow_learned_rescue)),
-            ("proposal_order", proposal_order),
-            ("authority_policy", authority_policy),
-            ("reference_depth_source", reference_depth_source),
-            ("goal_camera_intrinsic", (
-                None if raw_goal_intrinsic is None
-                else tuple(float(value) for value in raw_goal_intrinsic.flat)
-            )),
-            *tuple(
-                (item["anchor"], float(item["score"]))
-                for item in canonical
-            ),
-        )
-        cached = self._certified_relocalization_cache.get(goal_key)
-        if cached is not None:
-            if cached["candidate_fingerprint"] != fingerprint:
-                return {
-                    **base, "ok": False, "accepted": False,
-                    "reason": "candidate_contract_changed",
-                    "cached": True,
-                    "relocalization_ms": 1000.0 * (
-                        time.perf_counter() - started),
-                }
-            result = dict(cached["result"])
-            result.update(base, cached=True)
-            if result.get("accepted"):
-                direct_bearing = self._certified_bearing_vector(
-                    cached["goal_pose9"])
-                view_alignment = self._certified_view_alignment(
-                    cached["goal_pose9"])
-                if guidance_mode == "episodic_path_field":
-                    tracked = self.certified_path_field_reanchor(
-                        goal_jpg_bytes)
-                    bearing_vector = tracked.get("direction_vector")
-                    guidance_diagnostics = {
-                        key: value for key, value in tracked.items()
-                        if (key.startswith("episodic_path_field_")
-                            or key.startswith("path_"))
-                    }
-                    guidance_diagnostics.update(
-                        route_coordinate_state_updated=bool(
-                            tracked.get("state_updated")),
-                        route_coordinate_reason=tracked.get("reason"),
-                        route_coordinate_local_witness=tracked.get(
-                            "local_witness"),
-                        route_coordinate_endpoint_fallback_available=(
-                            tracked.get("endpoint_fallback_available")),
-                        route_coordinate_native_fallback_available=(
-                            tracked.get("native_fallback_available")),
-                        route_coordinate_distance_gate_present=tracked.get(
-                            "distance_gate_present"),
-                    )
-                    if tracked.get("state_updated") is not True:
-                        guidance_diagnostics.update(
-                            episodic_path_field_status="geometry_failure",
-                            episodic_path_field_error_type=(
-                                "RouteCoordinateObservationError"),
-                            episodic_path_field_error=tracked.get("reason"),
-                        )
-                elif guidance_mode == "action_coordinate_compass":
-                    bearing_vector, guidance_diagnostics = (
-                        self._certified_action_coordinate_direction(
-                            goal_key=goal_key,
-                            target_anchor=int(result["selected_anchor"]),
-                            goal_start_frame=int(goal_start),
-                        ))
-                elif guidance_mode == "se2_route_compass":
-                    bearing_vector, guidance_diagnostics = (
-                        self._certified_se2_route_direction(
-                            goal_key=goal_key,
-                            target_anchor=int(result["selected_anchor"]),
-                            goal_start_frame=int(goal_start),
-                        ))
-                elif guidance_mode == "monocular_route_tangent":
-                    bearing_vector, guidance_diagnostics = (
-                        self._certified_monocular_route_tangent_direction(
-                            goal_key=goal_key,
-                            target_anchor=int(result["selected_anchor"]),
-                            goal_start_frame=int(goal_start),
-                            goal_pose9=np.asarray(
-                                cached["goal_pose9"], dtype=np.float64),
-                            authority_proof={
-                                "ok": result.get("ok"),
-                                "accepted": result.get("accepted"),
-                                "reason": result.get("reason"),
-                                "selected_anchor": result.get(
-                                    "selected_anchor"),
-                                "selected_anchor_image_sha256": result.get(
-                                    "selected_anchor_image_sha256"),
-                                "certificate": result.get("certificate"),
-                                "authority": result.get("authority"),
-                                "pnp": result.get("pnp"),
-                            },
-                            goal_image_sha256=hashlib.sha256(
-                                goal_jpg_bytes).hexdigest(),
-                        ))
-                else:
-                    bearing_vector, guidance_diagnostics = (
-                        self._certified_graph_direction(
-                            goal_key=goal_key,
-                            direct_bearing=direct_bearing,
-                            target_anchor=int(result["selected_anchor"]),
-                            goal_start_frame=int(goal_start),
-                            route_start_anchor=route_start_anchor,
-                            graph_rescue=graph_rescue,
-                        ))
-                result.update(
-                    aux_pose=bearing_vector,
-                    direction_vector=bearing_vector,
-                    pointgoal_units="lingbot_raw_direction_only",
-                    metric_scale=None,
-                    **view_alignment,
-                    **guidance_diagnostics,
-                )
-            result["relocalization_ms"] = 1000.0 * (
-                time.perf_counter() - started)
-            return result
-
-        if not canonical:
-            uncached_ms = 1000.0 * (time.perf_counter() - started)
-            result = {
-                **base,
-                "ok": True,
-                "accepted": False,
-                "reason": "no_causal_candidate",
-                "authority": None,
-                "certificate": None,
-                "selected_anchor": None,
-                "selected_dino_rank": None,
-                "candidate_count": 0,
-                "ranked_candidates": [],
-                "pnp": {"status": "no_causal_candidate"},
-                "cached": False,
-                "uncached_relocalization_ms": uncached_ms,
-                "relocalization_ms": uncached_ms,
-            }
-            cache_result = dict(result)
-            cache_result.pop("frame_idx", None)
-            self._certified_relocalization_cache[goal_key] = {
-                "candidate_fingerprint": fingerprint,
-                "goal_pose9": None,
-                "result": cache_result,
-            }
-            return result
-
-        goal_path = Path(self.rgb_dir) / f"_cert_goal_{goal_key}.jpg"
-        goal_path.write_bytes(goal_jpg_bytes)
-        evidence = []
-        matched_by_anchor = {}
-        for item in canonical:
-            anchor = item["anchor"]
-            try:
-                matched = self.certified_relocalization_matcher.match_paths(
-                    Path(self.rgb_dir) / f"{anchor}.jpg", goal_path,
-                    target_height=518, target_width=518,
-                    patch_size=int(self.lb.patch_size))
-                support = fundamental_support(
-                    matched["reference_raw_points"],
-                    matched["query_raw_points"], matched["scores"],
-                    tuple(matched["reference_raw_hw"]),
-                    tuple(matched["query_raw_hw"]),
-                    threshold_px=CERTIFIED_EPIPOLAR_THRESHOLD_PX)
-                matched_by_anchor[anchor] = matched
-                error = None
-            except Exception as exception:  # one bad image must fail closed
-                support = {
-                    "lightglue_matches": 0,
-                    "lightglue_score_median": 0.0,
-                    "fundamental_inliers": 0,
-                    "fundamental_inlier_ratio": 0.0,
-                    "fundamental_query_grid_coverage": 0.0,
-                    "fundamental_query_hull_coverage": 0.0,
-                    "fundamental_reference_grid_coverage": 0.0,
-                    "fundamental_reference_hull_coverage": 0.0,
-                }
-                error = f"{type(exception).__name__}: {exception}"
-            evidence.append({
-                **support,
-                "anchor": anchor,
-                "dino_cosine": item["score"],
-                "dino_rank": item["dino_rank"],
-                "error": error,
-            })
-        ranked = rank_candidates(evidence)
-        evidence_by_anchor = {
-            int(candidate["anchor"]): candidate for candidate in evidence}
-
-        def attempt_proposal(selected, source):
-            selected_anchor = int(selected["anchor"])
-            if authority_policy == STRICT_AUTHORITY_POLICY:
-                possible, precheck_reason = (
-                    fundamental_can_reach_certificate(selected))
-            else:
-                # This is an algorithmic minimum for PnP, not an operational
-                # certificate threshold.  The diagnostic arm still requires
-                # local correspondences and a finite geometric pose witness.
-                possible = bool(
-                    int(selected.get("lightglue_matches", 0))
-                    >= int(SiftPnPConfig().min_correspondences)
-                    and selected_anchor in matched_by_anchor
-                )
-                precheck_reason = (
-                    "pnp_attemptable"
-                    if possible else "precheck_lightglue_matches"
-                )
-            pnp = {"status": precheck_reason}
-            goal_pose9 = None
-            reference_depth_cache = None
-            if possible and selected_anchor in matched_by_anchor:
-                try:
-                    if reference_depth_source == "route_sparse":
-                        depth, confidence = (
-                            self._certified_route_reference_depth(
-                                selected_anchor))
-                    else:
-                        depth, confidence = self._certified_reference_depth(
-                            selected_anchor)
-                    stats = getattr(
-                        self, "_certified_dense_replay_last_stats", None)
-                    reference_depth_cache = (
-                        dict(stats) if stats is not None else {
-                            "enabled": False,
-                            "anchor": selected_anchor,
-                            "cache_hit": False,
-                            "cache_source": "legacy_full_replay",
-                        })
-                    matched = matched_by_anchor[selected_anchor]
-                    reference_pose = (
-                        self.cam_pose[selected_anchor].float().numpy())
-                    query_intrinsic = None
-                    if raw_goal_intrinsic is not None:
-                        query_height, query_width = (
-                            int(value) for value in matched["query_raw_hw"])
-                        query_intrinsic = map_raw_intrinsic_to_lingbot_pad(
-                            raw_goal_intrinsic,
-                            raw_height=query_height,
-                            raw_width=query_width,
-                            target_height=int(depth.shape[-2]),
-                            target_width=int(depth.shape[-1]),
-                            patch_size=int(self.lb.patch_size),
-                        )
-                    pnp = correspondence_pnp_localize(
-                        matched["reference_points"], matched["query_points"],
-                        depth, confidence, reference_pose,
-                        config=SiftPnPConfig(),
-                        match_scores=matched["scores"],
-                        epipolar_threshold_px=CERTIFIED_EPIPOLAR_THRESHOLD_PX,
-                        query_intrinsic=query_intrinsic)
-                    pnp = jsonable_pnp(pnp)
-                    if "pose9" in pnp:
-                        candidate_pose9 = np.asarray(
-                            pnp["pose9"], dtype=np.float64)
-                        if (candidate_pose9.shape == (9,)
-                                and np.isfinite(candidate_pose9).all()):
-                            goal_pose9 = candidate_pose9
-                except Exception as exception:
-                    pnp = {
-                        "status": "runtime_exception",
-                        "error": f"{type(exception).__name__}: {exception}",
-                    }
-            authority = operational_authority_decision(
-                pnp, policy=authority_policy)
-            certificate = authority["strict_certificate"]
-            accepted = bool(authority["accepted"])
-            reason = (
-                precheck_reason if not possible else authority["reason"])
-            return {
-                "source": source,
-                "selected": selected,
-                "selected_anchor": selected_anchor,
-                "possible": possible,
-                "precheck_reason": precheck_reason,
-                "pnp": pnp,
-                "certificate": certificate,
-                "authority": authority,
-                "accepted": accepted,
-                "reason": reason,
-                "goal_pose9": goal_pose9,
-                "reference_depth_cache": reference_depth_cache,
-            }
-
-        def public_attempt(attempt):
-            return {
-                "source": attempt["source"],
-                "selected_anchor": attempt["selected_anchor"],
-                "selected_dino_rank": attempt["selected"].get("dino_rank"),
-                "accepted": attempt["accepted"],
-                "reason": attempt["reason"],
-                "precheck_passed": attempt["possible"],
-                "pnp_status": attempt["pnp"].get("status"),
-                "certificate": attempt["certificate"],
-                "authority": attempt["authority"],
-                "reference_depth_cache": attempt[
-                    "reference_depth_cache"],
-            }
-
-        geometry_attempt = None
-        if proposal_order == "geometry_first":
-            geometry_attempt = attempt_proposal(ranked[0], "geometry")
-            final_attempt = geometry_attempt
-            proposal_attempts = [public_attempt(geometry_attempt)]
-        else:
-            semantic_attempts = []
-            accepted_semantic_attempt = None
-            for canonical_item in canonical:
-                semantic_attempt = attempt_proposal(
-                    evidence_by_anchor[int(canonical_item["anchor"])],
-                    "dino_first_certified",
-                )
-                semantic_attempts.append(semantic_attempt)
-                if semantic_attempt["accepted"]:
-                    accepted_semantic_attempt = semantic_attempt
-                    break
-            final_attempt = (
-                accepted_semantic_attempt
-                if accepted_semantic_attempt is not None
-                else semantic_attempts[0]
-            )
-            proposal_attempts = [
-                public_attempt(attempt) for attempt in semantic_attempts]
-        counterfactual_audit = None
-        counterfactual_dino_order_audit = None
-        if (proposal_order == "geometry_first"
-                and getattr(self, "certified_counterfactual_audit", False)):
-            dino_order_attempts = []
-            accepted_dino_order_attempt = None
-            for canonical_item in canonical:
-                dino_selected = evidence_by_anchor[
-                    int(canonical_item["anchor"])]
-                if (int(dino_selected["anchor"])
-                        == int(geometry_attempt["selected_anchor"])):
-                    public = {
-                        **public_attempt(geometry_attempt),
-                        "source": "dino_order_geometry_attempt_reuse",
-                        "action_authority": False,
-                    }
-                else:
-                    dino_attempt = attempt_proposal(
-                        dino_selected, "dino_order_counterfactual")
-                    public = {
-                        **public_attempt(dino_attempt),
-                        "action_authority": False,
-                    }
-                dino_order_attempts.append(public)
-                if len(dino_order_attempts) == 1:
-                    counterfactual_audit = {
-                        **public,
-                        "source": (
-                            "dino_top1_same_anchor_reuse"
-                            if public["source"]
-                            == "dino_order_geometry_attempt_reuse"
-                            else "dino_top1_counterfactual"),
-                    }
-                if public["accepted"]:
-                    accepted_dino_order_attempt = public
-                    break
-            counterfactual_dino_order_audit = {
-                "accepted": accepted_dino_order_attempt is not None,
-                "selected_anchor": (
-                    accepted_dino_order_attempt["selected_anchor"]
-                    if accepted_dino_order_attempt is not None else None),
-                "selected_dino_rank": (
-                    accepted_dino_order_attempt["selected_dino_rank"]
-                    if accepted_dino_order_attempt is not None else None),
-                "attempt_count": len(dino_order_attempts),
-                "attempts": dino_order_attempts,
-                "action_authority": False,
-            }
-        learned_proposal = None
-        ranker = getattr(self, "cdec_pairwise_ranker", None)
-        if proposal_order != "geometry_first":
-            learned_proposal = {
-                "status": "not_applicable_semantic_first",
-                "activation_authorized": False,
-            }
-        elif ranker is not None and not allow_learned_rescue:
-            learned_proposal = {
-                "status": "not_requested",
-                "activation_authorized": False,
-            }
-        elif ranker is not None:
-            if geometry_attempt["accepted"]:
-                learned_proposal = {
-                    "status": "not_evaluated_geometry_accepted",
-                    "activation_authorized": False,
-                }
-            else:
-                try:
-                    learned_proposal = self._cdec_pairwise_proposal(
-                        goal_path, canonical)
-                    learned_anchor = int(
-                        learned_proposal["selected_anchor"])
-                    if learned_anchor == geometry_attempt["selected_anchor"]:
-                        learned_proposal["status"] = (
-                            "same_anchor_certificate_reused")
-                        proposal_attempts.append({
-                            **public_attempt(geometry_attempt),
-                            "source": "learned_same_anchor_reuse",
-                        })
-                    else:
-                        learned_selected = evidence_by_anchor.get(
-                            learned_anchor)
-                        if learned_selected is None:
-                            raise RuntimeError(
-                                "learned anchor escaped the frozen shortlist")
-                        learned_attempt = attempt_proposal(
-                            learned_selected, "learned_on_geometry_reject")
-                        proposal_attempts.append(public_attempt(learned_attempt))
-                        if learned_attempt["accepted"]:
-                            final_attempt = learned_attempt
-                        learned_proposal["status"] = (
-                            "certificate_accepted"
-                            if learned_attempt["accepted"]
-                            else "certificate_rejected")
-                except Exception as exception:
-                    learned_proposal = {
-                        "status": "runtime_exception_fail_closed",
-                        "error": f"{type(exception).__name__}: {exception}",
-                        "activation_authorized": False,
-                    }
-
-        selected = final_attempt["selected"]
-        selected_anchor = final_attempt["selected_anchor"]
-        possible = final_attempt["possible"]
-        precheck_reason = final_attempt["precheck_reason"]
-        pnp = final_attempt["pnp"]
-        certificate = final_attempt["certificate"]
-        accepted = final_attempt["accepted"]
-        goal_pose9 = final_attempt["goal_pose9"]
-        bearing_vector = None
-        guidance_diagnostics = {}
-        if accepted:
-            direct_bearing = self._certified_bearing_vector(goal_pose9)
-            view_alignment = self._certified_view_alignment(goal_pose9)
-            if guidance_mode == "episodic_path_field":
-                bearing_vector, guidance_diagnostics = (
-                    self._certified_path_field_direction(
-                        goal_key=goal_key,
-                        target_anchor=selected_anchor,
-                        goal_start_frame=int(goal_start),
-                        goal_pose9=goal_pose9,
-                    ))
-            elif guidance_mode == "action_coordinate_compass":
-                bearing_vector, guidance_diagnostics = (
-                    self._certified_action_coordinate_direction(
-                        goal_key=goal_key,
-                        target_anchor=selected_anchor,
-                        goal_start_frame=int(goal_start),
-                    ))
-            elif guidance_mode == "se2_route_compass":
-                bearing_vector, guidance_diagnostics = (
-                    self._certified_se2_route_direction(
-                        goal_key=goal_key,
-                        target_anchor=selected_anchor,
-                        goal_start_frame=int(goal_start),
-                    ))
-            elif guidance_mode == "monocular_route_tangent":
-                route_anchor_record = self._certified_anchor_image_record(
-                    selected_anchor)
-                bearing_vector, guidance_diagnostics = (
-                    self._certified_monocular_route_tangent_direction(
-                        goal_key=goal_key,
-                        target_anchor=selected_anchor,
-                        goal_start_frame=int(goal_start),
-                        goal_pose9=goal_pose9,
-                        authority_proof={
-                            "ok": True,
-                            "accepted": True,
-                            "reason": final_attempt["reason"],
-                            "selected_anchor": selected_anchor,
-                            "selected_anchor_image_sha256": (
-                                route_anchor_record["sha256"]),
-                            "certificate": certificate,
-                            "authority": final_attempt["authority"],
-                            "pnp": pnp,
-                        },
-                        goal_image_sha256=hashlib.sha256(
-                            goal_jpg_bytes).hexdigest(),
-                    ))
-            else:
-                bearing_vector, guidance_diagnostics = (
-                    self._certified_graph_direction(
-                        goal_key=goal_key,
-                        direct_bearing=direct_bearing,
-                        target_anchor=selected_anchor,
-                        goal_start_frame=int(goal_start),
-                        route_start_anchor=route_start_anchor,
-                        graph_rescue=graph_rescue,
-                    ))
-        uncached_ms = 1000.0 * (time.perf_counter() - started)
-        result = {
-            **base,
-            "ok": True,
-            "accepted": accepted,
-            "reason": final_attempt["reason"],
-            "certificate": certificate,
-            "authority": final_attempt["authority"],
-            "selected_anchor": selected_anchor,
-            "selected_dino_rank": selected.get("dino_rank"),
-            "selected_proposal_source": final_attempt["source"],
-            "proposal_attempts": proposal_attempts,
-            "counterfactual_dino_top1_audit": counterfactual_audit,
-            "counterfactual_dino_order_audit": (
-                counterfactual_dino_order_audit),
-            "learned_proposal": learned_proposal,
-            "candidate_count": len(canonical),
-            "ranked_candidates": ranked,
-            "pnp": pnp,
-            "reference_depth_cache": final_attempt[
-                "reference_depth_cache"],
-            "cached": False,
-            "uncached_relocalization_ms": uncached_ms,
-            "relocalization_ms": uncached_ms,
-        }
-        if accepted:
-            anchor_record = self._certified_anchor_image_record(
-                selected_anchor)
-            result.update(
-                aux_pose=bearing_vector,
-                direction_vector=bearing_vector,
-                pointgoal_units="lingbot_raw_direction_only",
-                metric_scale=None,
-                selected_anchor_image_sha256=anchor_record["sha256"],
-                **view_alignment,
-                **guidance_diagnostics,
-            )
-        cache_result = dict(result)
-        cache_result.pop("frame_idx", None)
-        for key in tuple(cache_result):
-            if (key.startswith("episodic_path_field_")
-                    or key.startswith("action_coordinate_")
-                    or key.startswith("se2_route_")
-                    or key.startswith("local_tangent_")):
-                cache_result.pop(key)
-        # Bearing is current-relative and must be recomputed after motion.
-        cache_result["aux_pose"] = None
-        self._certified_relocalization_cache[goal_key] = {
-            "candidate_fingerprint": fingerprint,
-            "goal_pose9": (goal_pose9.tolist() if accepted else None),
-            "result": cache_result,
-        }
-        return result
+            reference_depth_source=None):
+        """Delegate to GEM.read_sparse; preserve the existing agent interface."""
+        return self.memory.read_sparse(goal_jpg_bytes, candidates, route_start_anchor=route_start_anchor, graph_rescue=graph_rescue, allow_learned_rescue=allow_learned_rescue, proposal_order=proposal_order, goal_camera_intrinsic=goal_camera_intrinsic, authority_policy=authority_policy, guidance_mode=guidance_mode, goal_key_override=goal_key_override, reference_depth_source=reference_depth_source)
 
     def learned_pi3x_relocalize(self, goal_jpg_bytes, candidates):
         """Run the frozen Pi3X proposal/proof and fail closed to native.
@@ -4871,71 +3439,11 @@ class MemNavAgent:
         )
         return selected, diagnostics
 
-    @torch.no_grad()
     def _certified_shortlist_before_decoder_warmup(
             self, goal_jpg_bytes, goal_key, frame_index,
             candidate_ceiling):
-        """Build a certificate shortlist before the learned decoder is warm.
-
-        The learned MemNav decoder requires ``S + W`` streamed frames, but
-        Certified Episodic Compass does not consume that decoder. Its DINO
-        shortlist and anchor-depth replay are valid once the eight-frame
-        LingBot scale block has produced dense CLS features and camera poses.
-        Keeping the decoder warm-up on this path silently rejects short GOAT
-        revisits even when they have a valid causal history.
-        """
-        from MemNavData.certified_relocalization_runtime import (
-            CERTIFIED_CANDIDATE_MIN_GAP,
-            CERTIFIED_CANDIDATE_TOP_K,
-            CERTIFIED_MINIMUM_ANCHOR,
-        )
-
-        frame_index = int(frame_index)
-        candidate_ceiling = int(candidate_ceiling)
-        if not self._has_frozen_visual_relocalizer():
-            return [], None
-        cache_key = (goal_key, candidate_ceiling)
-        dense_cls = getattr(self, "dino_cls", ())
-        if (frame_index < self.S - 1
-                or len(dense_cls) != self.n
-                or frame_index >= len(dense_cls)):
-            frozen = self._certified_candidate_cache.setdefault(cache_key, [])
-            return [dict(item) for item in frozen], None
-
-        goal_path = os.path.join(
-            self.rgb_dir, "_cert_shortlist_goal_{}.jpg".format(goal_key))
-        if not os.path.isfile(goal_path):
-            with open(goal_path, "wb") as handle:
-                handle.write(goal_jpg_bytes)
-        goal_cls = self._goal_cache.get(("cls", goal_key))
-        if goal_cls is None:
-            goal_image = self.lb.load_images([goal_path])[0][None].to(
-                self.device)
-            goal_cls = self.lb.dino(goal_image)["cls"]
-            self._goal_cache[("cls", goal_key)] = goal_cls
-
-        memory_cls = torch.stack(dense_cls, 0)[None].to(self.device)
-        visual_cosine = torch.nn.functional.cosine_similarity(
-            goal_cls.unsqueeze(1), memory_cls, dim=-1)[0]
-        current_goal_cosine = float(visual_cosine[frame_index].item())
-        cached = self._certified_candidate_cache.get(cache_key)
-        if cached is not None:
-            return [dict(item) for item in cached], current_goal_cosine
-
-        eligible = torch.zeros(
-            frame_index + 1, dtype=torch.bool, device=self.device)
-        high = min(frame_index - 1, candidate_ceiling)
-        if high >= CERTIFIED_MINIMUM_ANCHOR:
-            eligible[CERTIFIED_MINIMUM_ANCHOR:high + 1] = True
-        candidates = temporal_nms_candidates(
-            visual_cosine.detach().float().cpu().tolist(),
-            eligible.detach().cpu().tolist(),
-            top_k=CERTIFIED_CANDIDATE_TOP_K,
-            min_frame_gap=CERTIFIED_CANDIDATE_MIN_GAP,
-        )
-        self._certified_candidate_cache[cache_key] = [
-            dict(item) for item in candidates]
-        return [dict(item) for item in candidates], current_goal_cosine
+        """Delegate to GEM.retrieve; preserve the existing agent interface."""
+        return self.memory.retrieve(goal_jpg_bytes, goal_key, frame_index, candidate_ceiling)
 
     @torch.no_grad()
     def plan(self, goal_jpg_bytes, forced_anchor=None, forced_gate=None,
@@ -4976,6 +3484,17 @@ class MemNavAgent:
         goal_start_frame = self._goal_start_frame.setdefault(gkey, k)
         candidate_ceiling = effective_candidate_ceiling(
             goal_start_frame, candidate_ceiling_override)
+        if getattr(self, "memory_mechanism", "legacy") != "legacy":
+            if not retrieval_only or forced_anchor is not None or forced_gate is not None:
+                raise ValueError("episodic memory uses retrieval followed by the certified readout")
+            candidates, current_cosine = self.memory.retrieve(
+                goal_jpg_bytes, gkey, k, candidate_ceiling)
+            return dict(frame_idx=k, goal_start_frame=goal_start_frame,
+                candidate_ceiling=candidate_ceiling, candidate_count=len(candidates),
+                certified_visual_candidates=candidates,
+                visual_relocalization_candidates=candidates,
+                current_goal_cos=current_cosine, aux_pose=None,
+                memory_status=self.memory.status())
         if k < self.S + self.W:
             out = dict(
                 error=f"need >= {self.S + self.W + 1} frames, have {self.n}")
@@ -5020,34 +3539,8 @@ class MemNavAgent:
             current_goal_cos = float(visual_cos_all[k].item())
             certified_visual_candidates = []
             if self._has_frozen_visual_relocalizer():
-                from MemNavData.certified_relocalization_runtime import (
-                    CERTIFIED_CANDIDATE_MIN_GAP,
-                    CERTIFIED_CANDIDATE_TOP_K,
-                    CERTIFIED_MINIMUM_ANCHOR,
-                )
-                certified_cache_key = (gkey, candidate_ceiling)
-                if certified_cache_key in self._certified_candidate_cache:
-                    certified_visual_candidates = [
-                        dict(item)
-                        for item in self._certified_candidate_cache[
-                            certified_cache_key]
-                    ]
-                else:
-                    certified_eligible = torch.zeros(
-                        k + 1, dtype=torch.bool, device=dev)
-                    certified_hi = min(k - 1, candidate_ceiling)
-                    if certified_hi >= CERTIFIED_MINIMUM_ANCHOR:
-                        certified_eligible[
-                            CERTIFIED_MINIMUM_ANCHOR:certified_hi + 1] = True
-                    certified_visual_candidates = temporal_nms_candidates(
-                        visual_cos_all.detach().float().cpu().tolist(),
-                        certified_eligible.detach().cpu().tolist(),
-                        top_k=CERTIFIED_CANDIDATE_TOP_K,
-                        min_frame_gap=CERTIFIED_CANDIDATE_MIN_GAP,
-                    )
-                    self._certified_candidate_cache[certified_cache_key] = [
-                        dict(item) for item in certified_visual_candidates
-                    ]
+                certified_visual_candidates = self.memory.shortlist_from_scores(
+                    gkey, candidate_ceiling, k, visual_cos_all)
             cand = torch.zeros(1, k + 1, dtype=torch.bool, device=dev)
             # Let frames near the goal-session boundary become eligible after
             # exclude_recent time has elapsed, but never admit observations

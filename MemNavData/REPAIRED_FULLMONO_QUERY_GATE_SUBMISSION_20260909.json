@@ -1,0 +1,59 @@
+{
+  "stage": "sealed_actual_mono_A_population_first_paired_query_submitted",
+  "submitted_at_beijing": "2026-09-09T17:19:56+08:00",
+  "ssh_alias": "alantorch",
+  "remote_user": "yz11502",
+  "job": 17262832,
+  "array_indices": [0],
+  "fixed_task": {
+    "source_index": 61,
+    "scene": "W7k2QWzBrFY",
+    "episode": "episode_0001",
+    "query_id": "revisit",
+    "arm_order": ["native", "raw_fixed", "cec"],
+    "selection": "index 0 of the population sealed before any query navigation"
+  },
+  "partition_verified_after_submission": "a100_tandon",
+  "account": "torch_pr_769_tandon_advanced",
+  "qos": "gpu48",
+  "resources": "1 GPU, 10 CPUs, 96 GiB, 01:00:00",
+  "population": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_fullmono_actual_a_20260909/prefix_series_after_scene0_20260909/prefix_30_seal/population.json",
+  "population_sha256": "13d6827a05361c85b96f0196c76913bcff69439baa7999ab51bb9f035bfa9a1b",
+  "source_waterfall": {
+    "completed_A": 112,
+    "successful_A": 88,
+    "source_scenes": 28,
+    "constructible_role_pairs": 45,
+    "pair_scene_clusters": 23,
+    "query_count": 90,
+    "query_arm_count": 270
+  },
+  "selected_source_prefix": 30,
+  "all_legal_pairs_in_prefix_retained": true,
+  "query_navigation_rollouts_at_seal": 0,
+  "query_addon": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/repaired_role_queries_cb812054dc470e53",
+  "query_addon_receipt_sha256": "cb812054dc470e536ba9e23aa8189e5a98a9fbcd37ded89bc6ec5fce8a900bc2",
+  "base_runtime_receipt_sha256": "c8cf8c60e7efd55f1b360bb5a2d5fd92850dc87d6a310b05e77f0a9239cdfc08",
+  "source_plan_sha256": "ba1a12273bf9eeef5024166c4bfa28037ee6076c695d2543959a7e169adafba7",
+  "evaluation_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_fullmono_actual_a_20260909/prefix_series_after_scene0_20260909/evaluation_cb812054dc470e53",
+  "sealed_target_preflight": {
+    "verified_targets": 90,
+    "exit_code": 0,
+    "log": "/scratch/yz11502/Research/Nav-axis-uturn-results/fullmono_sealed_preflight_20260909_aGNIny/preflight.log",
+    "log_sha256": "b22df2d708135d8494b73ffadda23a0d7a6ece41e5dd11b21c2c981858384ce4",
+    "navigation_run": false
+  },
+  "local_independent_population_receipt_check": {
+    "scene_receipt_sets": 28,
+    "construction_json_hashes": 86,
+    "retained_source_indices_equal_sealed_population": true,
+    "all_six_arm_orders_each_occur": 15,
+    "independent_geometry_rerender": false
+  },
+  "expansion_gate": "complete three-arm execution, independent verifier and raw archive readback; no navigation-success threshold",
+  "after_gate": "retain task 0 and submit tasks 1 through 89 against the same sealed population and evaluation root",
+  "remaining_query_array_submitted_at_this_receipt": false,
+  "query_summary_submitted_at_this_receipt": false,
+  "independent_fresh_scene_confirmation": false,
+  "paper_tex_or_result_numbers_modified": false
+}

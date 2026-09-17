@@ -31,6 +31,7 @@ from MemNavData.certified_relocalization_contract import (
     CERTIFIED_GEOMETRY_CERTIFICATE_VERSION,
     CERTIFIED_MINIMUM_ANCHOR,
     CERTIFIED_RELOCALIZATION_SCHEMA_VERSION,
+    COVERAGE_ABLATION_AUTHORITY_POLICY,
     STRICT_AUTHORITY_POLICY,
     SUPPORTED_AUTHORITY_POLICIES,
     UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
@@ -266,7 +267,10 @@ def operational_authority_decision(
     certificate thresholds: retrieval, local matching, geometric ranking,
     LingBot-depth lifting, and PnP remain unchanged.  It therefore measures
     the causal value of the certificate boundary without becoming a
-    retrieval-only or geometry-free baseline.
+    retrieval-only or geometry-free baseline. ``certificate_without_coverage``
+    drops only the two image-area requirements; status, inliers, reprojection
+    error, and a finite pose remain necessary. Neither diagnostic is a new
+    deployment default.
     """
 
     policy = str(policy)
@@ -283,6 +287,18 @@ def operational_authority_decision(
         else:
             reason = str(certificate["reason"])
         thresholds_enforced = True
+    elif policy == COVERAGE_ABLATION_AUTHORITY_POLICY:
+        enforced_checks = {
+            name: passed for name, passed in certificate["checks"].items()
+            if name not in (
+                "minimum_query_coverage", "minimum_reference_coverage")
+        }
+        failed = [name for name, passed in enforced_checks.items() if not passed]
+        accepted = bool(not failed and pose_available)
+        reason = (failed[0] if failed else (
+            "certificate_without_coverage_accepted"
+            if pose_available else "pnp_pose_unavailable"))
+        thresholds_enforced = True
     else:
         accepted = pose_available
         reason = (
@@ -290,7 +306,7 @@ def operational_authority_decision(
             if accepted else "pnp_pose_unavailable"
         )
         thresholds_enforced = False
-    return {
+    result = {
         "policy": policy,
         "accepted": accepted,
         "reason": reason,
@@ -299,25 +315,34 @@ def operational_authority_decision(
         # Always retain the strict decision for paired diagnostics.
         "strict_certificate": certificate,
     }
+    if policy == COVERAGE_ABLATION_AUTHORITY_POLICY:
+        result.update(
+            coverage_thresholds_enforced=False,
+            enforced_certificate_checks=list(enforced_checks),
+            ignored_certificate_checks=[
+                "minimum_query_coverage", "minimum_reference_coverage"],
+        )
+    return result
 
 
 def fundamental_can_reach_certificate(
-        evidence: Mapping[str, Any]) -> tuple[bool, str]:
-    """Safe early abstention before the expensive LingBot-depth replay.
+    evidence: Mapping[str, Any], *, require_coverage: bool = True,
+) -> tuple[bool, str]:
+    """Apply the existing F-side proxy before LingBot-depth replay.
 
-    PnP consumes the Fundamental-MAGSAC inlier subset.  Its inlier count and
-    spatial support therefore cannot exceed these values.  Failing any of
-    the three monotone lower bounds makes the v2 certificate impossible and
-    can be rejected without estimating depth.
+    This is not a mathematical bound on the downstream PnP support: that
+    stage reruns epipolar filtering in mapped coordinates. The coverage
+    ablation omits both area checks here as well as in final authorization.
     """
 
-    requirements = (
-        ("fundamental_inliers", CERTIFICATE_MIN_INLIERS),
-        ("fundamental_query_hull_coverage",
-         CERTIFICATE_MIN_QUERY_COVERAGE),
-        ("fundamental_reference_hull_coverage",
-         CERTIFICATE_MIN_REFERENCE_COVERAGE),
-    )
+    requirements = [("fundamental_inliers", CERTIFICATE_MIN_INLIERS)]
+    if require_coverage:
+        requirements.extend((
+            ("fundamental_query_hull_coverage",
+             CERTIFICATE_MIN_QUERY_COVERAGE),
+            ("fundamental_reference_hull_coverage",
+             CERTIFICATE_MIN_REFERENCE_COVERAGE),
+        ))
     for field, threshold in requirements:
         value = evidence.get(field)
         if not _finite(value) or float(value) < threshold:
@@ -350,6 +375,7 @@ def runtime_contract() -> dict[str, Any]:
         "default_authority_policy": STRICT_AUTHORITY_POLICY,
         "diagnostic_authority_policies": [
             UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
+            COVERAGE_ABLATION_AUTHORITY_POLICY,
         ],
         "output": "scale_free_relative_bearing",
         "pointgoal_units": "lingbot_raw_direction_only",
@@ -371,6 +397,7 @@ __all__ = [
     "CERTIFIED_MINIMUM_ANCHOR",
     "CERTIFIED_RELOCALIZATION_SCHEMA_VERSION",
     "CERTIFIED_GEOMETRY_CERTIFICATE_VERSION",
+    "COVERAGE_ABLATION_AUTHORITY_POLICY",
     "STRICT_AUTHORITY_POLICY",
     "SUPPORTED_AUTHORITY_POLICIES",
     "UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY",

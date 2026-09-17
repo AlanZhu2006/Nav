@@ -1,0 +1,30 @@
+{
+  "stage": "CPU_source_prefix_check_submitted_after_A_and_construction",
+  "date_beijing": "2026-09-09",
+  "job": 17253701,
+  "dependency": "afterany:17253441:17253442; both complete source arrays; kill-on-invalid-dep=yes",
+  "partition_verified_after_submission": "cpu_short",
+  "qos": "cpu48",
+  "account": "torch_pr_769_tandon_advanced",
+  "resources": "2 CPUs, 8 GiB, 00:20:00; no GPU",
+  "requested_source_prefix": 30,
+  "source_tasks": 112,
+  "retains_completed_rank0_scene": true,
+  "source_plan_sha256": "ba1a12273bf9eeef5024166c4bfa28037ee6076c695d2543959a7e169adafba7",
+  "script": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_fullmono_actual_a_20260909/prefix_series_after_scene0_20260909/slurm_repaired_fullmono_population.sbatch",
+  "script_sha256": "6f07c3e98866146f74668dd4be3ea65c8f6e69ebb5853fe4d42954495d80beda",
+  "calls_unchanged_sealer_bundle": "repaired_role_queries_cb812054dc470e53",
+  "output": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_fullmono_actual_a_20260909/prefix_series_after_scene0_20260909/prefix_30_seal",
+  "behavior": {
+    "missing_source_or_infrastructure_failure": "save missing scene roots; no population",
+    "complete_prefix_below_declared_sample_target": "save construction decision for next predefined prefix; no population",
+    "complete_prefix_meeting_declared_target": "seal every legal role pair in the prefix with original versions and assets"
+  },
+  "reads_new_query_results": false,
+  "automatically_submits_query_navigation": false,
+  "is_query_SR_summary": false,
+  "bash_and_embedded_python_syntax_checked": true,
+  "reused_sealer_unit_tests_passed": true,
+  "slurm_lint_test_only_identifier_not_actual_job": 17253692,
+  "verified_after_submission": "PENDING Dependency; exact A/constructor array IDs; cpu_short; no GPU allocation"
+}

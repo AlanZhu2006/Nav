@@ -1,0 +1,49 @@
+{
+  "schema": "hm3d_covisibility_repaired_submission_20260909_v1",
+  "submitted_beijing": "2026-09-09T03:39:50+08:00",
+  "construction_job": 17222616,
+  "seal_job": 17222953,
+  "construction_array": "0-27%4",
+  "construction_partition": "a100_tandon",
+  "construction_time_limit": "01:00:00",
+  "construction_cpus": 4,
+  "construction_memory": "16G",
+  "seal_partition": "cpu_short",
+  "seal_time_limit": "00:10:00",
+  "seal_dependency": "afterany:17222616",
+  "account": "torch_pr_769_tandon_advanced",
+  "ssh_alias": "alantorch",
+  "ssh_account": "yz11502",
+  "addon": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/covisibility_bfb8fc3d5a1bb081",
+  "addon_receipt_sha256": "bfb8fc3d5a1bb081e8058e6b283197874915ec2d6875ac16b0b43581fba933cb",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_covisibility_repaired_20260909/run_bfb8fc3d5a1bb081",
+  "seal_script": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/slurm_hm3d_covisibility_seal_20260909.sbatch",
+  "seal_script_sha256": "795a288ac1dd6dff85259926aa8dbbcf8b179383b6439e253e6f38522ae42624",
+  "runtime_source_receipt_sha256": "c8cf8c60e7efd55f1b360bb5a2d5fd92850dc87d6a310b05e77f0a9239cdfc08",
+  "protocol_sha256": "6993654f8e365ab24c200cd73fcbf186f7f589eaecc6b4dc02ac06b67aad8b8c",
+  "source_manifest_sha256": "f82dbcbc6255219aae94b6d77bffdfa454f36835cf803a70df5cf8616193ad01",
+  "histories": 28,
+  "scenes": 21,
+  "bin_edges": [
+    0.1,
+    0.3,
+    0.5,
+    0.7,
+    0.9,
+    1
+  ],
+  "navigation_evaluation_submitted": false,
+  "new_A_collection": false,
+  "preflight": {
+    "local_numpy_tests": 12,
+    "remote_numpy_tests": 12,
+    "local_real_habitat_camera_projection_checked": true,
+    "bash_syntax_passed": true,
+    "safe_sbatch_lint_and_test_only_passed": true
+  },
+  "at_submission": {
+    "construction_state": "PENDING",
+    "construction_reason": "QOSGrpGRES",
+    "query_SR": null
+  }
+}

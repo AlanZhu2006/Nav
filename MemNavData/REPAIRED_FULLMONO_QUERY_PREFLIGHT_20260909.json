@@ -1,0 +1,46 @@
+{
+  "stage": "prepared_remote_preflight_passed_not_gpu_submitted",
+  "checked_date_beijing": "2026-09-09",
+  "ssh_alias": "alantorch",
+  "remote_user": "yz11502",
+  "query_addon": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/repaired_role_queries_cb812054dc470e53",
+  "query_addon_receipt_sha256": "cb812054dc470e536ba9e23aa8189e5a98a9fbcd37ded89bc6ec5fce8a900bc2",
+  "archive_sha256": "70f0973b87157b30a4a2fd4df09280a7cd2090d63c8543689c71c1ec4b5cc791",
+  "archive_bytes": 94573,
+  "base_runtime_receipt_sha256": "c8cf8c60e7efd55f1b360bb5a2d5fd92850dc87d6a310b05e77f0a9239cdfc08",
+  "instrumentation_source": "covis_eval_f284c23d7a98b0c2/run_habitat_minimal_repair_local.py",
+  "instrumentation_sha256": "0f1c56cc15ad0be9d2667d9024af14db2f25c5ca9a2865a2103e651efeddda0e",
+  "source_plan_sha256": "ba1a12273bf9eeef5024166c4bfa28037ee6076c695d2543959a7e169adafba7",
+  "remote_preflight_log": "/scratch/yz11502/Research/Nav-axis-uturn-results/fullmono_query_preflight_20260909_HvATei/preflight.log",
+  "remote_preflight_log_sha256": "a53d279246bab351dad1e2915bc767fb9822fd7493b08a465104714d92b74a9d",
+  "remote_preflight_exit_code": 0,
+  "container": "/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif",
+  "habitat_python": "/scratch/lg154/conda-envs/habitat/bin/python",
+  "remote_cpu_unit_tests_passed": 10,
+  "remote_actual_role_arm_cli_dry_runs_passed": 6,
+  "local_design_runtime_test_suite_passed": 55,
+  "first_attempt_retained": {
+    "receipt_sha256": "59d517911e4ada614ef74dcfb874b8d2786c3dbf6c4034410b0c7d0786b8dfbc",
+    "preflight_log": "/scratch/yz11502/Research/Nav-axis-uturn-results/fullmono_query_preflight_20260909_YgBZ41/preflight.log",
+    "exit_code": 1,
+    "reason": "Imported base instrumenter without query_main callback; corrected by reusing the frozen covisibility instrumenter",
+    "gpu_or_query_rollouts": 0
+  },
+  "slurm_lint_test_only": {
+    "construction": "passed; printed 17252851 is a test-only identifier, not a submitted job",
+    "query_evaluation": "passed; printed 17252852 is a test-only identifier, not a submitted job",
+    "partition": "a100_tandon",
+    "time_limit": "01:00:00",
+    "array_for_lint_only": "0"
+  },
+  "actual_construction_or_query_job_submitted": false,
+  "full_mono_population_sealed": false,
+  "new_actual_A_or_query_results": false,
+  "remaining_prerequisites": [
+    "complete the two-history visual construction probe",
+    "execute and verify the first four-source actual-A scene",
+    "execute and verify its query construction",
+    "complete the predefined result-blind source prefix",
+    "seal all retained query assets and validate a fixed paired task"
+  ]
+}

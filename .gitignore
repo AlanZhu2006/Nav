@@ -126,3 +126,8 @@ NavDP/checkpoints/
 /goal.jpg
 /image.jpg
 /input_image.jpg
+
+# Unified workspace: independent repositories and retained local data.
+/projects/
+/.workspace-assets/
+/.workspace-maintenance/

@@ -11,6 +11,7 @@ LINGBOT_WEIGHTS="${LINGBOT_WEIGHTS:-$LINGBOT_REPO/weights/lingbot-map-long.pt}"
 LIGHTGLUE_REPO="${LIGHTGLUE_REPO:-$ROOT/.diagnostics/dependencies/LightGlue}"
 DEPENDENCY_ROOT="${DEPENDENCY_ROOT:-$ROOT/.diagnostics/dependencies/python}"
 BUFFER_ROOT="${CEC_BUFFER_ROOT:-$ROOT/.diagnostics/realworld_cec_stack/buffer}"
+REFERENCE_DEPTH_SOURCE="${CEC_REFERENCE_DEPTH_SOURCE:-online_history}"
 
 for path in "$MEMNAV_PY" "$MEMNAV_CKPT" "$INTERNNAV_ROOT" \
   "$LINGBOT_WEIGHTS" "$LIGHTGLUE_REPO" "$DEPENDENCY_ROOT"; do
@@ -38,6 +39,7 @@ exec env PYTHONUNBUFFERED=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     --graph_subgoal_spacing_m 0.0 --graph_subgoal_arrival_m 0.60 \
     --flow_gate auto --buffer_root "$BUFFER_ROOT" \
     --certified_relocalization \
+    --certified_reference_depth_source "$REFERENCE_DEPTH_SOURCE" \
     --lightglue_repo "$LIGHTGLUE_REPO" \
     --lightglue_dependency_root "$DEPENDENCY_ROOT" \
     --lightglue_max_keypoints 2048 \

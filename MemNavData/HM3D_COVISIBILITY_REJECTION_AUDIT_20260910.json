@@ -1,0 +1,3099 @@
+{
+  "schema": "posthoc_covis_rejection_audit_v1",
+  "date_bjt": "2026-09-10",
+  "source_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/hm3d_covisibility_repaired_20260909/run_bfb8fc3d5a1bb081/evaluation_f284c23d7a98b0c2",
+  "source_summary_sha256": "0d242ef3dabc35017e4f4bb0b4d7d66c80c1a7b3e8dc23d049d2e433f673bfca",
+  "selection": "All 24 supported raw-success/GEM-failure queries plus all 28 original Natural Novel controls. Not all 159 queries.",
+  "verification": "Every inspected query_plans.json byte count and SHA-256 matched its archived artifact_index.json. Frozen runtime source files match SOURCE_BUNDLE.sha256 and the inspected local files. No navigation/model inference was run.",
+  "source_hashes": {
+    "MemNavData/lingbot_pnp_localization.py": "ddbdd1fc983d6d535ce154a43de37b37a9033e1814f9d031c0556d0021d6aebc",
+    "MemNavData/certified_relocalization_runtime.py": "14055c6a069ef9aa69475c4b60c800d76e468c6eedd308c61969f176607c3a4a",
+    "MemNavData/certified_relocalization_contract.py": "be795f0c5035f455dbd18f54122c9fa6aa9528d277948c3ffb351c80346a8e60",
+    "NavDP/baselines/memnav/policy_agent.py": "ff01cc12f5484ce4b31bfdf76f859abe426b4870c7566d287087ae657d8e652f"
+  },
+  "metrics": {
+    "completed": true,
+    "row_count": 52,
+    "losses": 24,
+    "controls": 28,
+    "runtime_seconds": 120.36165690422058,
+    "primary_reason_counts": {
+      "raw_win_gem_loss": {
+        "precheck_fundamental_inliers": 4,
+        "status_ok": 3,
+        "minimum_query_coverage": 7,
+        "precheck_fundamental_reference_hull_coverage": 4,
+        "minimum_inliers": 4,
+        "minimum_reference_coverage": 1,
+        "certificate_accepted": 1
+      },
+      "natural_novel": {
+        "status_ok": 5,
+        "minimum_inliers": 5,
+        "precheck_fundamental_reference_hull_coverage": 2,
+        "precheck_fundamental_inliers": 13,
+        "minimum_query_coverage": 2,
+        "precheck_fundamental_query_hull_coverage": 1
+      }
+    },
+    "first_reason_stable_all_queries": true,
+    "reported_arm_names": [
+      "certified"
+    ],
+    "category_counts": {
+      "precheck_inliers": 4,
+      "pnp_quality_status": 3,
+      "pnp_coverage_only": 8,
+      "precheck_coverage": 4,
+      "pnp_inliers_and_coverage": 4,
+      "accepted_but_failed": 1
+    },
+    "post_pnp_rejected": 15,
+    "post_pnp_rejected_with_coverage_failure": 15,
+    "counterfactuals": [
+      {
+        "inliers": 8,
+        "coverage": 0.05,
+        "loss_existing_witness_accepts": [],
+        "novel_existing_witness_accepts": [],
+        "loss_new_precheck_passes": [
+          5,
+          128,
+          146
+        ],
+        "novel_new_precheck_passes": [
+          10,
+          49,
+          53,
+          79,
+          93,
+          117,
+          124,
+          151,
+          152
+        ]
+      },
+      {
+        "inliers": 16,
+        "coverage": 0.02,
+        "loss_existing_witness_accepts": [
+          57,
+          78,
+          101,
+          153
+        ],
+        "novel_existing_witness_accepts": [],
+        "loss_new_precheck_passes": [
+          48,
+          71,
+          129,
+          142
+        ],
+        "novel_new_precheck_passes": [
+          7,
+          24
+        ]
+      },
+      {
+        "inliers": 16,
+        "coverage": 0.01,
+        "loss_existing_witness_accepts": [
+          52,
+          57,
+          78,
+          101,
+          120,
+          122,
+          153
+        ],
+        "novel_existing_witness_accepts": [
+          64
+        ],
+        "loss_new_precheck_passes": [
+          48,
+          71,
+          129,
+          142
+        ],
+        "novel_new_precheck_passes": [
+          7,
+          24,
+          69
+        ]
+      }
+    ],
+    "alternative_shortlist_passes": [
+      {
+        "task": 48,
+        "passing_candidates": 1
+      },
+      {
+        "task": 71,
+        "passing_candidates": 2
+      },
+      {
+        "task": 129,
+        "passing_candidates": 1
+      }
+    ],
+    "zero_match_case": {
+      "any_shortlist_precheck": {
+        "8": 0,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c90_100",
+      "history": 16,
+      "member_sha256": "cff15d302628dbfb7358801df5c3c62ba87149ffb3a88e07c88c1e6191a52507",
+      "plans": 57,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 57
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 87,
+        "dino_rank": 6,
+        "error": null,
+        "fundamental_inliers": 0,
+        "fundamental_query_hull_coverage": 0,
+        "fundamental_reference_hull_coverage": 0,
+        "lightglue_matches": 1
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 150,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    }
+  },
+  "rows": [
+    {
+      "any_shortlist_precheck": {
+        "8": 4,
+        "12": 1,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c30_50",
+      "history": 16,
+      "member_sha256": "5478d63ea7529304cc7a9428352db5f2a409f1925d119d334fa3de05b85ee381",
+      "plans": 58,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 58
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 263,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 13,
+        "fundamental_query_hull_coverage": 0.18822052342368892,
+        "fundamental_reference_hull_coverage": 0.17370095507724695,
+        "lightglue_matches": 15
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 5,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 8,
+        "12": 6,
+        "16": 2
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c10_30",
+      "history": 20,
+      "member_sha256": "3b0170eccf00caec7bbab3a5f6269d094a79594e2b73e05878ae08c9b63dd3f9",
+      "plans": 29,
+      "pnp": {
+        "inliers": 7,
+        "query_inlier_coverage": 0.005623966009445703,
+        "reference_inlier_coverage": 0.0010868792467695506,
+        "reprojection_rmse_px": 0.8749173162498411,
+        "status": "insufficient_inliers"
+      },
+      "pose_available": true,
+      "reason": "status_ok",
+      "reason_counts": {
+        "status_ok": 29
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 68,
+        "dino_rank": 6,
+        "error": null,
+        "fundamental_inliers": 27,
+        "fundamental_query_hull_coverage": 0.2780303560956222,
+        "fundamental_reference_hull_coverage": 0.07640582667491311,
+        "lightglue_matches": 56
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 19,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 8,
+        "12": 4,
+        "16": 3
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c10_30",
+      "history": 4,
+      "member_sha256": "108182e61c7288c9f010d94d6809000d7652cc4a65cae3d4857393a0311fecca",
+      "plans": 44,
+      "pnp": {
+        "inliers": 21,
+        "query_inlier_coverage": 0.008846109981324936,
+        "reference_inlier_coverage": 0.017768715491404557,
+        "reprojection_rmse_px": 1.083679300305883,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_query_coverage",
+      "reason_counts": {
+        "minimum_query_coverage": 44
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 8,
+        "dino_rank": 7,
+        "error": null,
+        "fundamental_inliers": 42,
+        "fundamental_query_hull_coverage": 0.17312110166444958,
+        "fundamental_reference_hull_coverage": 0.22350477042987665,
+        "lightglue_matches": 58
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 43,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 3,
+        "16": 1
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c50_70",
+      "history": 23,
+      "member_sha256": "680d7dffd65b48f0381b7f70da57979b4867f110011c539a1b08fbda539b4d83",
+      "plans": 28,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_reference_hull_coverage"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_reference_hull_coverage",
+      "reason_counts": {
+        "precheck_fundamental_reference_hull_coverage": 28
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 126,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 34,
+        "fundamental_query_hull_coverage": 0.4105326297865408,
+        "fundamental_reference_hull_coverage": 0.03249953389167741,
+        "lightglue_matches": 42
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 48,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 6,
+        "12": 3,
+        "16": 2
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c70_90",
+      "history": 23,
+      "member_sha256": "a49d84b89dd972b432ec37c2b82dcd3300bf4d85277bb2f45a1d9fa8a262e229",
+      "plans": 36,
+      "pnp": {
+        "inliers": 21,
+        "query_inlier_coverage": 0.013098836102699036,
+        "reference_inlier_coverage": 0.024598884881693425,
+        "reprojection_rmse_px": 1.1384061509486094,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_query_coverage",
+      "reason_counts": {
+        "minimum_query_coverage": 36
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 126,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 151,
+        "fundamental_query_hull_coverage": 0.3218552807488293,
+        "fundamental_reference_hull_coverage": 0.2656571836538483,
+        "lightglue_matches": 165
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 52,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 6,
+        "12": 5,
+        "16": 2
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c10_30",
+      "history": 18,
+      "member_sha256": "2dd5d841cd308cfc599b25a2cb61ccdfda92b11279ac2900128a4aa74a8e19b4",
+      "plans": 35,
+      "pnp": {
+        "inliers": 43,
+        "query_inlier_coverage": 0.03690530188583039,
+        "reference_inlier_coverage": 0.024087922645716353,
+        "reprojection_rmse_px": 1.2037393221111443,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_query_coverage",
+      "reason_counts": {
+        "minimum_query_coverage": 35
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 8,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 120,
+        "fundamental_query_hull_coverage": 0.15998244718821006,
+        "fundamental_reference_hull_coverage": 0.1328497772014503,
+        "lightglue_matches": 126
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 57,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 4,
+        "16": 3
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c50_70",
+      "history": 16,
+      "member_sha256": "f467ba7bc8311cae985bd91423369b9676d888a3f9b56a2dc16f8f1d4bd1971e",
+      "plans": 75,
+      "pnp": {
+        "inliers": 11,
+        "query_inlier_coverage": 0.007383946210141297,
+        "reference_inlier_coverage": 0.004406205732906881,
+        "reprojection_rmse_px": 1.6693591123258762,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_inliers",
+      "reason_counts": {
+        "minimum_inliers": 75
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 297,
+        "dino_rank": 3,
+        "error": null,
+        "fundamental_inliers": 28,
+        "fundamental_query_hull_coverage": 0.17783949168536867,
+        "fundamental_reference_hull_coverage": 0.07295987064501933,
+        "lightglue_matches": 43
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 59,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 5,
+        "16": 3
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c10_30",
+      "history": 17,
+      "member_sha256": "37f965502b9b94a8fdec3fa52e819cf8000bae6b1e0c62f6057d714461ac4bd2",
+      "plans": 55,
+      "pnp": {
+        "inliers": 9,
+        "query_inlier_coverage": 0.012579704689171814,
+        "reference_inlier_coverage": 0.004003023139464181,
+        "reprojection_rmse_px": 1.258416282276104,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_inliers",
+      "reason_counts": {
+        "minimum_inliers": 55
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 180,
+        "dino_rank": 4,
+        "error": null,
+        "fundamental_inliers": 27,
+        "fundamental_query_hull_coverage": 0.21471657886480336,
+        "fundamental_reference_hull_coverage": 0.07160185625328276,
+        "lightglue_matches": 34
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 67,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 4,
+        "12": 3,
+        "16": 2
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c10_30",
+      "history": 12,
+      "member_sha256": "d8d3fc11ab23b0eba5b7c8989dec103ca8e0fdd558c01d8d4a086297f9c2b458",
+      "plans": 61,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_reference_hull_coverage"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_reference_hull_coverage",
+      "reason_counts": {
+        "precheck_fundamental_reference_hull_coverage": 61
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 100,
+        "dino_rank": 2,
+        "error": null,
+        "fundamental_inliers": 63,
+        "fundamental_query_hull_coverage": 0.11581164723589958,
+        "fundamental_reference_hull_coverage": 0.03902773990951203,
+        "lightglue_matches": 75
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 71,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 6,
+        "16": 5
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c10_30",
+      "history": 15,
+      "member_sha256": "c1082a10e891c92d375c0db284ecc2f444757d5bcdcae3c9203b645e2eb4ed1b",
+      "plans": 52,
+      "pnp": {
+        "inliers": 26,
+        "query_inlier_coverage": 0.08027942259576308,
+        "reference_inlier_coverage": 0.035653391335627414,
+        "reprojection_rmse_px": 1.4017067481761918,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_reference_coverage",
+      "reason_counts": {
+        "minimum_reference_coverage": 52
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 8,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 125,
+        "fundamental_query_hull_coverage": 0.3307876120687963,
+        "fundamental_reference_hull_coverage": 0.14055292604801597,
+        "lightglue_matches": 139
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 78,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 3,
+        "16": 1
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c10_30",
+      "history": 21,
+      "member_sha256": "d3b210a989d1541e2c2b12c291e79085aa7bfb0ce63f56721dcd6183962f1c2c",
+      "plans": 38,
+      "pnp": {
+        "inliers": 7,
+        "query_inlier_coverage": 0.025769960926306294,
+        "reference_inlier_coverage": 0.07895630540884771,
+        "reprojection_rmse_px": 0.9853535097438986,
+        "status": "insufficient_inliers"
+      },
+      "pose_available": true,
+      "reason": "status_ok",
+      "reason_counts": {
+        "status_ok": 38
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 114,
+        "dino_rank": 6,
+        "error": null,
+        "fundamental_inliers": 25,
+        "fundamental_query_hull_coverage": 0.14520262398291392,
+        "fundamental_reference_hull_coverage": 0.31702420388227676,
+        "lightglue_matches": 42
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 83,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 6,
+        "12": 5,
+        "16": 4
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c50_70",
+      "history": 18,
+      "member_sha256": "03c052889112e83b90d4eecae53cdfb71e9ebd784c97c6e13ab3c3e245f67326",
+      "plans": 30,
+      "pnp": {
+        "inliers": 7,
+        "query_inlier_coverage": 0.002535566773884085,
+        "reference_inlier_coverage": 0.005882331043185898,
+        "reprojection_rmse_px": 0.8421265114656707,
+        "status": "insufficient_inliers"
+      },
+      "pose_available": true,
+      "reason": "status_ok",
+      "reason_counts": {
+        "status_ok": 30
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 60,
+        "dino_rank": 4,
+        "error": null,
+        "fundamental_inliers": 24,
+        "fundamental_query_hull_coverage": 0.05296241872840458,
+        "fundamental_reference_hull_coverage": 0.15507588571075667,
+        "lightglue_matches": 35
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 86,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 3,
+        "12": 1,
+        "16": 1
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c10_30",
+      "history": 5,
+      "member_sha256": "0567cad06a588ec2059513748ea8e7e3181298529821195e3d1f1fbe07a8f3a1",
+      "plans": 75,
+      "pnp": {
+        "inliers": 8,
+        "query_inlier_coverage": 0.0027900899339711803,
+        "reference_inlier_coverage": 0.004097806779020895,
+        "reprojection_rmse_px": 0.9156504743944335,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_inliers",
+      "reason_counts": {
+        "minimum_inliers": 75
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 140,
+        "dino_rank": 2,
+        "error": null,
+        "fundamental_inliers": 18,
+        "fundamental_query_hull_coverage": 0.378029670243808,
+        "fundamental_reference_hull_coverage": 0.13100602162777641,
+        "lightglue_matches": 26
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 90,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 6,
+        "12": 5,
+        "16": 3
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c30_50",
+      "history": 2,
+      "member_sha256": "5396ed092084ff052590e291cf99308c60e6f133b11ded3a98f64ed203e9d386",
+      "plans": 75,
+      "pnp": {
+        "inliers": 14,
+        "query_inlier_coverage": 0.00998832199104044,
+        "reference_inlier_coverage": 0.005775039114285819,
+        "reprojection_rmse_px": 1.1811681818210984,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_inliers",
+      "reason_counts": {
+        "minimum_inliers": 75
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 40,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 29,
+        "fundamental_query_hull_coverage": 0.20803576723017098,
+        "fundamental_reference_hull_coverage": 0.18550954886056858,
+        "lightglue_matches": 38
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 97,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 7,
+        "16": 7
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c30_50",
+      "history": 18,
+      "member_sha256": "bde992ec5445cf7d83de69d399d95ceb409b9c320bf8bde2b672f8413fe6867c",
+      "plans": 29,
+      "pnp": {
+        "inliers": 48,
+        "query_inlier_coverage": 0.04388943405310087,
+        "reference_inlier_coverage": 0.030314266351112656,
+        "reprojection_rmse_px": 1.2573144844537687,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_query_coverage",
+      "reason_counts": {
+        "minimum_query_coverage": 29
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 8,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 146,
+        "fundamental_query_hull_coverage": 0.2232191020208935,
+        "fundamental_reference_hull_coverage": 0.16891223336699399,
+        "lightglue_matches": 151
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 101,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 6,
+        "12": 4,
+        "16": 3
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c30_50",
+      "history": 23,
+      "member_sha256": "c6b51371860bdfcbf6fffee1cc66db51a19dcd32c5d33a6605298144a212541c",
+      "plans": 37,
+      "pnp": {
+        "inliers": 22,
+        "query_inlier_coverage": 0.01586872508972308,
+        "reference_inlier_coverage": 0.013856627593629609,
+        "reprojection_rmse_px": 0.960150122878363,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_query_coverage",
+      "reason_counts": {
+        "minimum_query_coverage": 37
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 263,
+        "dino_rank": 5,
+        "error": null,
+        "fundamental_inliers": 49,
+        "fundamental_query_hull_coverage": 0.08379448039319229,
+        "fundamental_reference_hull_coverage": 0.07229867906620105,
+        "lightglue_matches": 64
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 120,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 4,
+        "16": 3
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c30_50",
+      "history": 20,
+      "member_sha256": "3ed6b421e227aadc556f890bc072ed73af5b4825bf11c6340cff5760b1f6049a",
+      "plans": 28,
+      "pnp": {
+        "inliers": 33,
+        "query_inlier_coverage": 0.019628283580135904,
+        "reference_inlier_coverage": 0.0284691157009362,
+        "reprojection_rmse_px": 1.1216823961119855,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_query_coverage",
+      "reason_counts": {
+        "minimum_query_coverage": 28
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 64,
+        "dino_rank": 2,
+        "error": null,
+        "fundamental_inliers": 88,
+        "fundamental_query_hull_coverage": 0.17717824337305668,
+        "fundamental_reference_hull_coverage": 0.2178361336674762,
+        "lightglue_matches": 123
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 122,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 4,
+        "12": 1,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c10_30",
+      "history": 22,
+      "member_sha256": "5756a75bdfcd615d7e386658cd04dd19f25b6c86abe29a1914998dcf7db371f0",
+      "plans": 36,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 36
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 93,
+        "dino_rank": 3,
+        "error": null,
+        "fundamental_inliers": 15,
+        "fundamental_query_hull_coverage": 0.37987936371592684,
+        "fundamental_reference_hull_coverage": 0.3629768783692283,
+        "lightglue_matches": 23
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 128,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 6,
+        "12": 5,
+        "16": 1
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c30_50",
+      "history": 17,
+      "member_sha256": "840de1e76f27065c34d575caeedb85341f906279356ef36cd806358b2f91a407",
+      "plans": 48,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_reference_hull_coverage"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_reference_hull_coverage",
+      "reason_counts": {
+        "precheck_fundamental_reference_hull_coverage": 48
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 65,
+        "dino_rank": 2,
+        "error": null,
+        "fundamental_inliers": 22,
+        "fundamental_query_hull_coverage": 0.18794333192485385,
+        "fundamental_reference_hull_coverage": 0.0474488846267824,
+        "lightglue_matches": 32
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 129,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 2,
+        "12": 1,
+        "16": 1
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": false,
+      "group": "c90_100",
+      "history": 1,
+      "member_sha256": "93c86a3da7ff8264301fdf4cb2e2574aefa280396fd762bc269edc7e2fad5bf4",
+      "plans": 49,
+      "pnp": {
+        "inliers": 21,
+        "query_inlier_coverage": 0.11743444299111666,
+        "reference_inlier_coverage": 0.08396345471095322,
+        "reprojection_rmse_px": 1.3133347933869468,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "certificate_accepted",
+      "reason_counts": {
+        "certificate_accepted": 49
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 80,
+        "dino_rank": 2,
+        "error": null,
+        "fundamental_inliers": 40,
+        "fundamental_query_hull_coverage": 0.2982143313800765,
+        "fundamental_reference_hull_coverage": 0.24060393037679995,
+        "lightglue_matches": 75
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 49,
+      "task": 139,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 0,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c70_90",
+      "history": 2,
+      "member_sha256": "f5c79ca88fe5f318ac8d821adad2a0901699a43b2760a48ba536a9c29acd4855",
+      "plans": 71,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_reference_hull_coverage"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_reference_hull_coverage",
+      "reason_counts": {
+        "precheck_fundamental_reference_hull_coverage": 71
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 12,
+        "dino_rank": 7,
+        "error": null,
+        "fundamental_inliers": 26,
+        "fundamental_query_hull_coverage": 0.3475968651995249,
+        "fundamental_reference_hull_coverage": 0.04788885516700899,
+        "lightglue_matches": 42
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 142,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 1,
+        "12": 1,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c70_90",
+      "history": 16,
+      "member_sha256": "41507cd2f4ca5f154f3b50015c9c61c92289326e24b836f3db2cec5f05ad3739",
+      "plans": 75,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 75
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 325,
+        "dino_rank": 8,
+        "error": null,
+        "fundamental_inliers": 14,
+        "fundamental_query_hull_coverage": 0.17773010474457374,
+        "fundamental_reference_hull_coverage": 0.09874977054833431,
+        "lightglue_matches": 17
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 146,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 0,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c90_100",
+      "history": 16,
+      "member_sha256": "cff15d302628dbfb7358801df5c3c62ba87149ffb3a88e07c88c1e6191a52507",
+      "plans": 57,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 57
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 87,
+        "dino_rank": 6,
+        "error": null,
+        "fundamental_inliers": 0,
+        "fundamental_query_hull_coverage": 0,
+        "fundamental_reference_hull_coverage": 0,
+        "lightglue_matches": 1
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 150,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 5,
+        "16": 4
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "raw_win_gem_loss",
+      "exact_native": true,
+      "group": "c10_30",
+      "history": 0,
+      "member_sha256": "cbdcac7814031b3ffe5241ed0a801fa16ae90ff36a2bcdf3b19c4525d6f67b88",
+      "plans": 75,
+      "pnp": {
+        "inliers": 37,
+        "query_inlier_coverage": 0.03791952511966446,
+        "reference_inlier_coverage": 0.025978293974657316,
+        "reprojection_rmse_px": 1.1824656457090503,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_query_coverage",
+      "reason_counts": {
+        "minimum_query_coverage": 75
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 25,
+        "dino_rank": 8,
+        "error": null,
+        "fundamental_inliers": 108,
+        "fundamental_query_hull_coverage": 0.45903092282738334,
+        "fundamental_reference_hull_coverage": 0.1703897959500965,
+        "lightglue_matches": 126
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 153,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 5,
+        "12": 2,
+        "16": 1
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 20,
+      "member_sha256": "9e4453058ee5c9c8be6c2f01e20c69ca58db3c1c9f4f6bce85454f01322637bb",
+      "plans": 33,
+      "pnp": {
+        "inliers": 6,
+        "query_inlier_coverage": 0.0038986192246661684,
+        "reference_inlier_coverage": 0.003648430984206309,
+        "reprojection_rmse_px": 0.9193690283306263,
+        "status": "insufficient_inliers"
+      },
+      "pose_available": true,
+      "reason": "status_ok",
+      "reason_counts": {
+        "status_ok": 33
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 74,
+        "dino_rank": 3,
+        "error": null,
+        "fundamental_inliers": 17,
+        "fundamental_query_hull_coverage": 0.15584222631598044,
+        "fundamental_reference_hull_coverage": 0.1830825443056223,
+        "lightglue_matches": 22
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 2,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 4,
+        "12": 2,
+        "16": 2
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 14,
+      "member_sha256": "423515e6b31105b438b957a3789146d11511229eb48d9bfad64e4593a784b05e",
+      "plans": 33,
+      "pnp": {
+        "inliers": 12,
+        "query_inlier_coverage": 0.007747202094835625,
+        "reference_inlier_coverage": 0.015132596396222664,
+        "reprojection_rmse_px": 0.9831360232017611,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_inliers",
+      "reason_counts": {
+        "minimum_inliers": 33
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 8,
+        "dino_rank": 2,
+        "error": null,
+        "fundamental_inliers": 34,
+        "fundamental_query_hull_coverage": 0.24650231431824837,
+        "fundamental_reference_hull_coverage": 0.3416247406181104,
+        "lightglue_matches": 51
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 6,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 2,
+        "12": 1,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 24,
+      "member_sha256": "54fc40d5b0b5a4991836913c21460f37836fd96da572c4e53fab812fd65848d4",
+      "plans": 38,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_reference_hull_coverage"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_reference_hull_coverage",
+      "reason_counts": {
+        "precheck_fundamental_reference_hull_coverage": 38
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 51,
+        "dino_rank": 5,
+        "error": null,
+        "fundamental_inliers": 23,
+        "fundamental_query_hull_coverage": 0.10885449369196494,
+        "fundamental_reference_hull_coverage": 0.03661091840929455,
+        "lightglue_matches": 28
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 7,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 3,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 12,
+      "member_sha256": "2dd22e9dfc149037ec38923bd1cb7c179236e00d720598a143097e544503f17e",
+      "plans": 23,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 23
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 153,
+        "dino_rank": 6,
+        "error": null,
+        "fundamental_inliers": 11,
+        "fundamental_query_hull_coverage": 0.6362270145250186,
+        "fundamental_reference_hull_coverage": 0.1317291051149367,
+        "lightglue_matches": 25
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 10,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 2,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 11,
+      "member_sha256": "9e0307a6dcca660dade150e293ffe063d77e4059869501668a4af859e8a989fb",
+      "plans": 35,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_reference_hull_coverage"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_reference_hull_coverage",
+      "reason_counts": {
+        "precheck_fundamental_reference_hull_coverage": 35
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 8,
+        "dino_rank": 8,
+        "error": null,
+        "fundamental_inliers": 17,
+        "fundamental_query_hull_coverage": 0.09918637002507845,
+        "fundamental_reference_hull_coverage": 0.03040736833785664,
+        "lightglue_matches": 23
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 24,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 1,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 19,
+      "member_sha256": "e24117b05e2ec86e3cf48b41dca04f552b5605e931f577ebcc43cbb965472302",
+      "plans": 75,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 75
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 32,
+        "dino_rank": 3,
+        "error": null,
+        "fundamental_inliers": 13,
+        "fundamental_query_hull_coverage": 0.02027299514523259,
+        "fundamental_reference_hull_coverage": 0.013822766600383653,
+        "lightglue_matches": 16
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 30,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 7,
+        "16": 7
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 8,
+      "member_sha256": "0c8ed9fb661f4ff3ad7d2097fc24c602f7673b87ae26d0ca12822459e69f9bb7",
+      "plans": 75,
+      "pnp": {
+        "inliers": 9,
+        "query_inlier_coverage": 0.008246619441075112,
+        "reference_inlier_coverage": 0.007249706434719003,
+        "reprojection_rmse_px": 1.5509300214629955,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_inliers",
+      "reason_counts": {
+        "minimum_inliers": 75
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 44,
+        "dino_rank": 7,
+        "error": null,
+        "fundamental_inliers": 23,
+        "fundamental_query_hull_coverage": 0.10573321916852904,
+        "fundamental_reference_hull_coverage": 0.16965142763219876,
+        "lightglue_matches": 43
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 35,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 4,
+        "12": 1,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 26,
+      "member_sha256": "07794dd65d23754d13f1050ba819e67e667c755881682a4347914c1bbd5142d8",
+      "plans": 19,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 19
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 184,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 12,
+        "fundamental_query_hull_coverage": 0.16873844107613076,
+        "fundamental_reference_hull_coverage": 0.2466260923555605,
+        "lightglue_matches": 17
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 49,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 4,
+        "12": 2,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 9,
+      "member_sha256": "1e1f2b0ad2875abf95d3e14cff4af79b4b77c3616790f4530bb3970d175bfe92",
+      "plans": 16,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 16
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 109,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 13,
+        "fundamental_query_hull_coverage": 0.3643577847897132,
+        "fundamental_reference_hull_coverage": 0.16034356884106576,
+        "lightglue_matches": 24
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 53,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 6,
+        "12": 5,
+        "16": 2
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 17,
+      "member_sha256": "864d412eb8a453421d8120964624ab47c2158518291ebb65f9b21d2bef2f30c9",
+      "plans": 50,
+      "pnp": {
+        "inliers": 6,
+        "query_inlier_coverage": 0.018596746456767947,
+        "reference_inlier_coverage": 0.006257616966349025,
+        "reprojection_rmse_px": 1.1647192283287813,
+        "status": "insufficient_inliers"
+      },
+      "pose_available": true,
+      "reason": "status_ok",
+      "reason_counts": {
+        "status_ok": 50
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 93,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 27,
+        "fundamental_query_hull_coverage": 0.258816170171593,
+        "fundamental_reference_hull_coverage": 0.06842718433709515,
+        "lightglue_matches": 40
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 58,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 3,
+        "16": 1
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 3,
+      "member_sha256": "537ec263230e1cf9485e1e9b965aca409ab0aa9841528d2ea7aeb4072551214f",
+      "plans": 25,
+      "pnp": {
+        "inliers": 6,
+        "query_inlier_coverage": 0.07145833905972036,
+        "reference_inlier_coverage": 0.005287163283525786,
+        "reprojection_rmse_px": 1.915249121870766,
+        "status": "insufficient_inliers"
+      },
+      "pose_available": true,
+      "reason": "status_ok",
+      "reason_counts": {
+        "status_ok": 25
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 24,
+        "dino_rank": 7,
+        "error": null,
+        "fundamental_inliers": 17,
+        "fundamental_query_hull_coverage": 0.27438858645381886,
+        "fundamental_reference_hull_coverage": 0.07126191742718321,
+        "lightglue_matches": 28
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 62,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 3,
+        "12": 3,
+        "16": 3
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 25,
+      "member_sha256": "7ee1d62e72faf23499798594245a594006eaac2032506cee50649e1f54afa37d",
+      "plans": 71,
+      "pnp": {
+        "inliers": 26,
+        "query_inlier_coverage": 0.012970861464623779,
+        "reference_inlier_coverage": 0.020009353724380213,
+        "reprojection_rmse_px": 0.9944466069521325,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_query_coverage",
+      "reason_counts": {
+        "minimum_query_coverage": 71
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 30,
+        "dino_rank": 7,
+        "error": null,
+        "fundamental_inliers": 35,
+        "fundamental_query_hull_coverage": 0.05064900253933889,
+        "fundamental_reference_hull_coverage": 0.0909177914623999,
+        "lightglue_matches": 42
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 64,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 5,
+        "12": 3,
+        "16": 2
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 18,
+      "member_sha256": "44f005eaf1e78e5124a1a06e35fc7aeb237651ce1b16666fbcb6e25d56e57626",
+      "plans": 31,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_query_hull_coverage"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_query_hull_coverage",
+      "reason_counts": {
+        "precheck_fundamental_query_hull_coverage": 31
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 37,
+        "dino_rank": 6,
+        "error": null,
+        "fundamental_inliers": 20,
+        "fundamental_query_hull_coverage": 0.014031304253472222,
+        "fundamental_reference_hull_coverage": 0.16442785042864097,
+        "lightglue_matches": 26
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 69,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 3,
+        "12": 1,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 21,
+      "member_sha256": "bab2a13e52a31eda0028cde7152af11e20495860830575eb98d0a54e63816771",
+      "plans": 29,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 29
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 98,
+        "dino_rank": 8,
+        "error": null,
+        "fundamental_inliers": 12,
+        "fundamental_query_hull_coverage": 0.13730196503025535,
+        "fundamental_reference_hull_coverage": 0.13402216156461813,
+        "lightglue_matches": 22
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 79,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 5,
+        "12": 4,
+        "16": 2
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 4,
+      "member_sha256": "eed2b64b454d8bd0afba0d6205f464a9cb6b9d18d66b1725328903eac712704e",
+      "plans": 43,
+      "pnp": {
+        "inliers": 15,
+        "query_inlier_coverage": 0.005050934721719344,
+        "reference_inlier_coverage": 0.005140904848165821,
+        "reprojection_rmse_px": 0.9670224267814407,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_inliers",
+      "reason_counts": {
+        "minimum_inliers": 43
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 145,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 27,
+        "fundamental_query_hull_coverage": 0.06299166822185119,
+        "fundamental_reference_hull_coverage": 0.17380351076652947,
+        "lightglue_matches": 34
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 88,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 2,
+        "12": 2,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 23,
+      "member_sha256": "879ed00736ece0def4e0dfd428c33ec31f4fd6cb0e542307354893b9b19067fb",
+      "plans": 34,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 34
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 336,
+        "dino_rank": 4,
+        "error": null,
+        "fundamental_inliers": 14,
+        "fundamental_query_hull_coverage": 0.17185210186677666,
+        "fundamental_reference_hull_coverage": 0.17287526561154395,
+        "lightglue_matches": 17
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 93,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 8,
+        "12": 6,
+        "16": 4
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 13,
+      "member_sha256": "ed161612773f68751fb99724cd0ad6527f240268265aa46b39b5cefc29dc2a57",
+      "plans": 21,
+      "pnp": {
+        "inliers": 5,
+        "query_inlier_coverage": 0.025234933004269905,
+        "reference_inlier_coverage": 0.062495799037595515,
+        "reprojection_rmse_px": 1.6481422793165887,
+        "status": "insufficient_inliers"
+      },
+      "pose_available": true,
+      "reason": "status_ok",
+      "reason_counts": {
+        "status_ok": 21
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 8,
+        "dino_rank": 1,
+        "error": null,
+        "fundamental_inliers": 17,
+        "fundamental_query_hull_coverage": 0.15649156796194197,
+        "fundamental_reference_hull_coverage": 0.20587493470283738,
+        "lightglue_matches": 28
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 96,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 2,
+        "12": 1,
+        "16": 1
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 10,
+      "member_sha256": "b11240ecc47f660bb10742a306c209c0a64702178fd0db57b4a9ed3f5d2d65fc",
+      "plans": 75,
+      "pnp": {
+        "inliers": 7,
+        "query_inlier_coverage": 0.026429116208120662,
+        "reference_inlier_coverage": 0.046129098347678546,
+        "reprojection_rmse_px": 12.310808922659183,
+        "status": "insufficient_inliers"
+      },
+      "pose_available": true,
+      "reason": "status_ok",
+      "reason_counts": {
+        "status_ok": 75
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 208,
+        "dino_rank": 7,
+        "error": null,
+        "fundamental_inliers": 19,
+        "fundamental_query_hull_coverage": 0.0908703217903773,
+        "fundamental_reference_hull_coverage": 0.14542218174923327,
+        "lightglue_matches": 28
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 100,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 8,
+        "12": 7,
+        "16": 7
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 7,
+      "member_sha256": "627f2ac5de8dc48111d05e644cf9f0c6bb9953cc348b1cd814d99371c3f3a2d4",
+      "plans": 75,
+      "pnp": {
+        "inliers": 15,
+        "query_inlier_coverage": 0.00759468436222447,
+        "reference_inlier_coverage": 0.004155064109554622,
+        "reprojection_rmse_px": 0.8713696545324497,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_inliers",
+      "reason_counts": {
+        "minimum_inliers": 75
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 63,
+        "dino_rank": 5,
+        "error": null,
+        "fundamental_inliers": 40,
+        "fundamental_query_hull_coverage": 0.2950523678661797,
+        "fundamental_reference_hull_coverage": 0.0954055562132509,
+        "lightglue_matches": 54
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 112,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 4,
+        "12": 4,
+        "16": 4
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 22,
+      "member_sha256": "b95534ed943b9f7a3b2a51e28cbcbc0d08e2b3901041202ac1ad53cead174717",
+      "plans": 65,
+      "pnp": {
+        "inliers": 19,
+        "query_inlier_coverage": 0.028898766204907254,
+        "reference_inlier_coverage": 0.00946388396154374,
+        "reprojection_rmse_px": 1.224098113835499,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_query_coverage",
+      "reason_counts": {
+        "minimum_query_coverage": 65
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 66,
+        "dino_rank": 3,
+        "error": null,
+        "fundamental_inliers": 49,
+        "fundamental_query_hull_coverage": 0.13904230709843096,
+        "fundamental_reference_hull_coverage": 0.051002498578573544,
+        "lightglue_matches": 71
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 113,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 1,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 16,
+      "member_sha256": "50c99bce0eecf718e76d55f165c541e8067bb1141ef64238747d1d3ea920518b",
+      "plans": 57,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 57
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 310,
+        "dino_rank": 8,
+        "error": null,
+        "fundamental_inliers": 11,
+        "fundamental_query_hull_coverage": 0.2728711862565483,
+        "fundamental_reference_hull_coverage": 0.07672966415821368,
+        "lightglue_matches": 14
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 117,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 3,
+        "12": 2,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 6,
+      "member_sha256": "61013269ec50da97970961954ad2e6eaa83e742fa52f13d264246518700b8ec6",
+      "plans": 56,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 56
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 224,
+        "dino_rank": 4,
+        "error": null,
+        "fundamental_inliers": 14,
+        "fundamental_query_hull_coverage": 0.08705222582556704,
+        "fundamental_reference_hull_coverage": 0.24412109063317525,
+        "lightglue_matches": 20
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 124,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 1,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 15,
+      "member_sha256": "2de7501cb511f1c5973719316c1765d63f8ee86d367ff950b7d571fce7c2d9c9",
+      "plans": 51,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 51
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 100,
+        "dino_rank": 7,
+        "error": null,
+        "fundamental_inliers": 9,
+        "fundamental_query_hull_coverage": 0.018308848935972847,
+        "fundamental_reference_hull_coverage": 0.340402325860193,
+        "lightglue_matches": 10
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 135,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 7,
+        "12": 5,
+        "16": 3
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 27,
+      "member_sha256": "15cd81b0b2611250dadcae5a9801453ef699724bc08ad49ef1756a09b9428c7e",
+      "plans": 56,
+      "pnp": {
+        "inliers": 9,
+        "query_inlier_coverage": 0.006241253789327319,
+        "reference_inlier_coverage": 0.003392470337167412,
+        "reprojection_rmse_px": 1.1000876972158176,
+        "status": "ok"
+      },
+      "pose_available": true,
+      "reason": "minimum_inliers",
+      "reason_counts": {
+        "minimum_inliers": 56
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 365,
+        "dino_rank": 3,
+        "error": null,
+        "fundamental_inliers": 20,
+        "fundamental_query_hull_coverage": 0.3202200650293561,
+        "fundamental_reference_hull_coverage": 0.09506393073609694,
+        "lightglue_matches": 29
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": true
+      },
+      "selected_precheck_coverage_002": true,
+      "takeover": 0,
+      "task": 147,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 3,
+        "12": 1,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 5,
+      "member_sha256": "e21ab18614343d54e4ec33c28b50c80845b12da5ba1267e811e249959cb988f0",
+      "plans": 75,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 75
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 132,
+        "dino_rank": 8,
+        "error": null,
+        "fundamental_inliers": 12,
+        "fundamental_query_hull_coverage": 0.08474645479409827,
+        "fundamental_reference_hull_coverage": 0.06772611513733999,
+        "lightglue_matches": 13
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": true,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 151,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 4,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 0,
+      "member_sha256": "1cfb8489610ea2800bb853f0caf84cbeed305f032c954f73fa7db9a6468bfa10",
+      "plans": 43,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 43
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 16,
+        "dino_rank": 5,
+        "error": null,
+        "fundamental_inliers": 11,
+        "fundamental_query_hull_coverage": 0.41142605387528375,
+        "fundamental_reference_hull_coverage": 0.1798366742553541,
+        "lightglue_matches": 21
+      },
+      "selected_precheck": {
+        "8": true,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 152,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 2,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 2,
+      "member_sha256": "a89a6934c2f5087ea2b7933e9248cff5be9efa58c790679c3fea4984d0cd80f8",
+      "plans": 50,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 50
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 98,
+        "dino_rank": 3,
+        "error": null,
+        "fundamental_inliers": 10,
+        "fundamental_query_hull_coverage": 0.0473709037199757,
+        "fundamental_reference_hull_coverage": 0.09377883910718902,
+        "lightglue_matches": 12
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 154,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    },
+    {
+      "any_shortlist_precheck": {
+        "8": 0,
+        "12": 0,
+        "16": 0
+      },
+      "candidate_count": 8,
+      "certificate_failed_checks": [
+        "status_ok",
+        "minimum_inliers",
+        "minimum_query_coverage",
+        "minimum_reference_coverage",
+        "maximum_reprojection_rmse"
+      ],
+      "cohort": "natural_novel",
+      "exact_native": true,
+      "group": "natural_novel",
+      "history": 1,
+      "member_sha256": "03190211510e3f5952b901842ae1270bc7613191b7c0e1890302de3e96ac299c",
+      "plans": 70,
+      "pnp": {
+        "inliers": null,
+        "query_inlier_coverage": null,
+        "reference_inlier_coverage": null,
+        "reprojection_rmse_px": null,
+        "status": "precheck_fundamental_inliers"
+      },
+      "pose_available": false,
+      "reason": "precheck_fundamental_inliers",
+      "reason_counts": {
+        "precheck_fundamental_inliers": 70
+      },
+      "reported_arm": "certified",
+      "selected": {
+        "anchor": 77,
+        "dino_rank": 6,
+        "error": null,
+        "fundamental_inliers": 10,
+        "fundamental_query_hull_coverage": 0.011815389732105865,
+        "fundamental_reference_hull_coverage": 0.2193247096820028,
+        "lightglue_matches": 12
+      },
+      "selected_precheck": {
+        "8": false,
+        "12": false,
+        "16": false
+      },
+      "selected_precheck_coverage_002": false,
+      "takeover": 0,
+      "task": 155,
+      "thresholds": {
+        "max_reprojection_rmse_px": 2,
+        "min_pnp_inliers": 16,
+        "min_query_inlier_coverage": 0.05,
+        "min_reference_inlier_coverage": 0.05
+      }
+    }
+  ],
+  "interpretation": "Post-hoc fixed-witness threshold arithmetic is not a new SR result. Precheck-rejected queries lack PnP witnesses; changed early thresholds require new inference. No threshold chosen for deployment."
+}

@@ -1,0 +1,41 @@
+{
+  "schema": "repaired_hm3d_two_source_gate_submission_v1_20260908",
+  "job_id": "17188986",
+  "job_name": "cec_repaired_gate",
+  "submitted_at_utc": "2026-09-08T14:16:38Z",
+  "scope": "two-source runtime integration gate; not paper confirmation",
+  "ssh_alias": "alantorch",
+  "ssh_user": "yz11502",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/repaired_fullmono_ee865620b4540675",
+  "source_receipt_sha256": "ee865620b4540675e1c9f875361692207f5be33f7ecd373d955041f379c2d9e1",
+  "archive_sha256": "29f8f610bae6b5400f64cf30ac0b74c252f17a9426956d95c0d039913197f79b",
+  "cv2_dependency": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/repaired_hab_cv2_20260908",
+  "cv2_dependency_receipt_sha256": "43c80ec16d3363f516843f2897233f80a28ea18647f386ff7964e0a5a954567d",
+  "parent_manifest_sha256": "a96a0b96fab7b7b47709b36cb8eeb9410b42b09f095f87ef01304a68de716dd5",
+  "source_tasks": [
+    {"scene": "rJhMRvNn4DS", "episode": "episode_0000", "seed": 2026082200},
+    {"scene": "6D36GQHuP8H", "episode": "episode_0000", "seed": 2026082300}
+  ],
+  "resources": {
+    "partitions": ["a100_tandon", "h100_tandon"],
+    "account": "torch_pr_769_tandon_advanced",
+    "qos": "gpu48",
+    "gpus": 1,
+    "cpus": 10,
+    "memory_gb": 96,
+    "time_limit": "01:00:00"
+  },
+  "preflight_verified": ["habitat_imports", "all_seven_actual_cli_combinations", "memnav_import_provenance", "navdp_import_provenance", "ffmpeg", "two_source_data_hashes", "base_dependency_hashes", "isolated_opencv_abi3", "safe_sbatch_test_only"],
+  "remote_preflight": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_hm3d_gate_20260908/preflight_ee865620b4540675",
+  "remote_submission": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_hm3d_gate_20260908/submission_ee865620b4540675/submission.jobs",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_hm3d_gate_20260908/gate_ee865620b4540675",
+  "stdout": "/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs/cec_repaired_gate_17188986.out",
+  "stderr": "/scratch/yz11502/Research/Nav-axis-uturn-results/slurm_logs/cec_repaired_gate_17188986.err",
+  "state_at_submission_check": "PENDING",
+  "reason_at_submission_check": "QOSGrpGRES",
+  "expected_start_at_submission_check": null,
+  "automatic_downstream_jobs": [],
+  "new_navigation_results_available_at_submission_check": false,
+  "local_regression": {"passed": 165, "warnings": 12},
+  "relocated_integration_tests": {"passed": 18, "deselected_local_source_asset_test": 1}
+}

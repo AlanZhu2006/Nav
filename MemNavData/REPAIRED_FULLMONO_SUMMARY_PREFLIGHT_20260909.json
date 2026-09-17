@@ -1,0 +1,28 @@
+{
+  "stage": "analysis_only_prepared_and_preflighted_not_submitted",
+  "date_beijing": "2026-09-09",
+  "bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/repaired_role_summary_0790a21e7f856d83",
+  "receipt_sha256": "0790a21e7f856d832a00eda48c5013751d246113516166029acada18c18d6fc2",
+  "archive_sha256": "90b98a0731d2e7fe6ffa17ea7f0054e3750fb2ea494c425e2418e00001f9d3cf",
+  "archive_bytes": 30419,
+  "reuses_query_code_from": "repaired_role_queries_cb812054dc470e53",
+  "changes_to_active_A_construction_or_covisibility_jobs": false,
+  "local_eight_module_tests_passed": 37,
+  "local_standalone_summary_and_seal_tests_passed": 10,
+  "remote_original_container_summary_and_seal_tests_passed": 10,
+  "remote_preflight_exit_code": 0,
+  "remote_preflight_log": "/scratch/yz11502/Research/Nav-axis-uturn-results/fullmono_summary_preflight_20260909_F5qMwz/preflight.log",
+  "remote_preflight_log_sha256": "14a16b0358ce3995ac4e10572321c9be36b778b081077e018af43ebc77d92d79",
+  "runtime_or_dependency_installation": false,
+  "synthetic_tests_are_navigation_results": false,
+  "slurm_lint_test_only": {
+    "passed": true,
+    "partition_explicit": "cpu_short",
+    "qos_explicit": "cpu48",
+    "resources": "2 CPUs, 8 GiB, 00:30:00",
+    "test_only_identifier_not_actual_job": 17253609
+  },
+  "query_population_sealed": false,
+  "new_query_SR_computed": false,
+  "summary_job_submitted": false
+}

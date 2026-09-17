@@ -1,14 +1,14 @@
-# MemNavData：CEC 研究与评测入口
+# MemNavData：GEM 研究与评测入口
 
-这里既保留早期多目标数据生成/训练代码，也包含当前 **Certified Episodic Compass**
+这里既保留早期多目标数据生成/训练代码，也包含当前 **GEM**（沿用 CEC 方向接口命名）
 的评测、消融、HPC 提交和审计记录。不要把目录内所有实现都当作论文主方法。
 
 ## 建议阅读顺序
 
-1. [最新项目总账](STATUS_20260907_MAIN_SYNC.md)：目前架构、结果、未决项及本轮补跑。
+1. [最新项目总账](STATUS_20260917_GIT_SYNC.md)：目前架构、结果、工作区与存储。
 2. [仓库与代码地图](../docs/REPOSITORY_GUIDE.md)：主线入口、数据/权重边界、运行环境。
 3. [实验索引](../docs/EXPERIMENT_INDEX.md)：论文表格与正式结果、探索性结果分开。
-4. [架构定义](CEC_CANONICAL_ARCHITECTURE_20260901.md)：RGB history、LingBot state、NavDP FIFO 的区别。
+4. [记忆模块](../NavDP/baselines/memnav/gem/README.md)：RGB history、LingBot state、NavDP FIFO 的区别。
 5. [共享 SSH/HPC 手册](HPC_SHARED_SSH_OPERATIONS_20260816.md)：提交前先读，复用已认证通道。
 
 ## 常用文件类别
@@ -33,6 +33,4 @@
 当前主评测使用 actual-online history；长度诊断使用 controlled causal survey；
 学习 probe 复用 train40/PT1 expert 数据。三种历史来源不能互换。
 
-最新专项：[保留 SPL 与补跑原因](PAPER_SPL_RETAINED_20260907.md)、
-[精确 SPL 冻结协议](FINAL14_TABLE3_EXACT_SPL_REPLAY_PROTOCOL_20260907.md)、
-[提交收据](FINAL14_TABLE3_EXACT_SPL_REPLAY_SUBMISSION_20260907.json)。
+当前 bearing 截止口径见 [53 条状态](GEM_BEARING_CONTINUATION_STATUS_20260917.md)。

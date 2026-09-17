@@ -1,0 +1,44 @@
+{
+  "schema": "repaired_fullmono_a_collection_preflight_20260909_v1",
+  "status": "cpu_remote_preflight_passed_not_submitted",
+  "source_count": 196,
+  "source_scene_count": 49,
+  "source_plan_sha256": "ba1a12273bf9eeef5024166c4bfa28037ee6076c695d2543959a7e169adafba7",
+  "runtime_bundle_receipt_sha256": "c8cf8c60e7efd55f1b360bb5a2d5fd92850dc87d6a310b05e77f0a9239cdfc08",
+  "collector_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/repaired_actual_a_3e90959723d4b66b",
+  "collector_bundle_receipt_sha256": "3e90959723d4b66b1e18f5340ca0e7b978aaa8fb5445e3a348441c260da835ec",
+  "collector_archive_sha256": "2ce5f8877016c66357d1e41fe0d23b9090db029588ee66470d2ccc9a4bdc5962",
+  "source_plan_path": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/repaired_actual_a_3e90959723d4b66b/core_source_plan.json",
+  "prospective_run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_fullmono_actual_a_20260909/core_3e90959723d4b66b",
+  "local_design_tests_passed": 33,
+  "isolated_collector_bundle_tests_passed": 14,
+  "remote_collector_bundle_tests_passed": 14,
+  "remote_preflight_exit_code": 0,
+  "remote_login": "yz11502@torch-login-a-0 via existing alantorch control socket",
+  "container": "/share/apps/images/cuda12.8.1-cudnn9.8.0-ubuntu24.04.2.sif",
+  "habitat_python": "/scratch/lg154/conda-envs/habitat/bin/python",
+  "temporary_directory": "task-specific scratch mktemp bound as SLURM_TMPDIR; no full login /tmp",
+  "physical_sources_checked": [
+    {"scene": "rJhMRvNn4DS", "episode": "episode_0000", "seed": 2026082200},
+    {"scene": "rJhMRvNn4DS", "episode": "episode_0001", "seed": 2026082201},
+    {"scene": "rJhMRvNn4DS", "episode": "episode_0002", "seed": 2026082202},
+    {"scene": "rJhMRvNn4DS", "episode": "episode_0003", "seed": 2026082203}
+  ],
+  "all_four_goal_a_cli_contract_dry_runs_passed": true,
+  "scheduler_test_only": {
+    "accepted": true,
+    "displayed_test_id_not_a_submitted_job": 17251620,
+    "partition": "a100_tandon",
+    "array": "0",
+    "time_limit": "01:00:00",
+    "cpus": 10,
+    "memory_gb": 96
+  },
+  "navigation_rollouts": 0,
+  "formal_job_submitted": false,
+  "waiting_for": [
+    "17251134 actual visual construction diagnostic",
+    "first-scene full four-A execution and archive verification after construction gate"
+  ],
+  "abstract_introduction_or_paper_numbers_changed": false
+}

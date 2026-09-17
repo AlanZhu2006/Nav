@@ -138,6 +138,14 @@ parser.add_argument(
           "to remove selected-anchor replay latency; default keeps lazy replay"),
 )
 parser.add_argument(
+    "--certified_reference_depth_source",
+    choices=["canonical", "online_history"],
+    default="canonical",
+    help=("historical CEC depth: canonical preserves archived replay runs; "
+          "online_history saves each eligible causal depth once and reuses it "
+          "for PnP, without a second geometry stream"),
+)
+parser.add_argument(
     "--certified_route_depth_cache_stride",
     type=int,
     default=0,
@@ -230,6 +238,19 @@ parser.add_argument(
           "endpoint while omitting write-only MemNav planning-cache copies; "
           "all planning calls fail closed"),
 )
+parser.add_argument(
+    "--memory_mechanism", default="legacy",
+    choices=("legacy", "connected_reciprocal", "native_interval7"),
+    help="select the GEM writer; episodic writers retain the original SP/LightGlue/PnP readout",
+)
+parser.add_argument(
+    "--memory_geometry_storage", default="dense", choices=("dense", "detector_support"),
+    help="historical geometry representation within the episodic memory writer",
+)
+parser.add_argument(
+    "--memory_kv_storage", default="native", choices=("native", "reader_precision", "paged_bf16", "int8_storage", "lossless_bf16"),
+    help="working KV representation for the native interval7 W64 memory writer",
+)
 args = parser.parse_args()
 
 # The server changes directory below because LingBot historically resolves a
@@ -284,6 +305,12 @@ if args.certified_counterfactual_audit and not args.certified_relocalization:
 if args.certified_eager_depth_cache and not args.certified_relocalization:
     parser.error(
         "--certified_eager_depth_cache requires --certified_relocalization")
+if args.certified_reference_depth_source == "online_history":
+    if not args.certified_relocalization or args.certified_eager_depth_cache:
+        parser.error("online_history requires CEC with eager replay disabled")
+    if args.certified_route_depth_cache_stride not in (0, 1):
+        parser.error("online_history requires all eligible historical frames")
+    args.certified_route_depth_cache_stride = 1
 if args.certified_route_depth_cache_stride < 0:
     parser.error("--certified_route_depth_cache_stride must be non-negative")
 if (args.certified_route_depth_cache_stride > 0
@@ -401,11 +428,15 @@ agent = MemNavAgent(
     certified_eager_depth_cache=args.certified_eager_depth_cache,
     certified_route_depth_cache_stride=(
         args.certified_route_depth_cache_stride),
+    certified_reference_depth_source=args.certified_reference_depth_source,
     certified_route_motion_model=args.certified_route_motion_model,
     certified_route_motion_unfiltered_shadow=(
         args.certified_route_motion_unfiltered_shadow),
     cdec_pairwise_ranker=cdec_pairwise_ranker,
     depth_observation_only=args.depth_observation_only,
+    memory_mechanism=args.memory_mechanism,
+    memory_geometry_storage=args.memory_geometry_storage,
+    memory_kv_storage=args.memory_kv_storage,
 )
 
 if args.pi3x_learned_relocalizer:
@@ -610,6 +641,19 @@ def memory_step():
             "metric_depth_sensor_consumed": False,
         }), 400
     return jsonify(response)
+
+
+@app.route("/memory_status", methods=["GET"])
+def memory_status():
+    """Read memory/resource accounting without advancing a model or goal."""
+    return jsonify({
+        "memory": agent.memory.status(),
+        "write_timings": getattr(agent.memory, "write_timings", []),
+        "gpu_allocated_bytes": torch.cuda.memory_allocated(),
+        "gpu_reserved_bytes": torch.cuda.memory_reserved(),
+        "gpu_peak_allocated_bytes": torch.cuda.max_memory_allocated(),
+        "gpu_peak_reserved_bytes": torch.cuda.max_memory_reserved(),
+    })
 
 
 @app.route("/causal_pose_trace_query", methods=["POST"])
@@ -963,7 +1007,8 @@ def certified_relocalize():
     authority_policy = request.form.get(
         "authority_policy", "strict_certificate")
     if authority_policy not in (
-            "strict_certificate", "pnp_pose_available"):
+            "strict_certificate", "pnp_pose_available",
+            "certificate_without_coverage"):
         return jsonify({
             "ok": False, "accepted": False,
             "reason": "invalid_authority_policy",

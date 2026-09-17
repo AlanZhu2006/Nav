@@ -5,6 +5,7 @@ from certified_relocalization_runtime import (
     CERTIFICATE_MIN_INLIERS,
     CERTIFICATE_MIN_QUERY_COVERAGE,
     CERTIFICATE_MIN_REFERENCE_COVERAGE,
+    COVERAGE_ABLATION_AUTHORITY_POLICY,
     STRICT_AUTHORITY_POLICY,
     UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
     candidate_rank_key,
@@ -96,6 +97,47 @@ def test_authority_policy_is_closed_to_unregistered_values():
         operational_authority_decision(valid_pnp(), policy="accept_everything")
 
 
+def test_coverage_ablation_ignores_only_image_area_checks():
+    pnp = valid_pnp(query_inlier_coverage=0.003, reference_inlier_coverage=0.001)
+    strict = operational_authority_decision(pnp)
+    ablated = operational_authority_decision(
+        pnp, policy=COVERAGE_ABLATION_AUTHORITY_POLICY)
+    assert not strict["accepted"]
+    assert ablated["accepted"]
+    assert ablated["strict_certificate"] == strict["strict_certificate"]
+    assert ablated["coverage_thresholds_enforced"] is False
+    assert ablated["enforced_certificate_checks"] == [
+        "status_ok", "minimum_inliers", "maximum_reprojection_rmse"]
+    assert ablated["reason"] == "certificate_without_coverage_accepted"
+
+
+def test_coverage_ablation_retains_status_inliers_rmse_and_finite_pose():
+    for updates in (
+        {"status": "insufficient_inliers"},
+        {"inliers": 15},
+        {"reprojection_rmse_px": 2.001},
+        {"reprojection_rmse_px": float("nan")},
+        {"pose9": None},
+        {"pose9": [0.0] * 8 + [float("nan")]},
+    ):
+        pnp = valid_pnp(query_inlier_coverage=0.001,
+                        reference_inlier_coverage=0.001, **updates)
+        assert not operational_authority_decision(
+            pnp, policy=COVERAGE_ABLATION_AUTHORITY_POLICY)["accepted"]
+
+
+def test_coverage_ablation_precheck_removes_both_areas_but_not_inliers():
+    evidence = {"fundamental_inliers": 16,
+                "fundamental_query_hull_coverage": 0.003,
+                "fundamental_reference_hull_coverage": 0.001}
+    assert not fundamental_can_reach_certificate(evidence)[0]
+    assert fundamental_can_reach_certificate(evidence, require_coverage=False) == (
+        True, "precheck_passed")
+    evidence["fundamental_inliers"] = 15
+    assert fundamental_can_reach_certificate(evidence, require_coverage=False) == (
+        False, "precheck_fundamental_inliers")
+
+
 def test_rank_is_frozen_lexicographic_and_prefers_earlier_tie():
     base = {
         "fundamental_inliers": 20,
@@ -156,7 +198,8 @@ def test_runtime_contract_exposes_fallback_and_not_binary_semantics():
     assert contract["output"] == "scale_free_relative_bearing"
     assert contract["default_authority_policy"] == STRICT_AUTHORITY_POLICY
     assert contract["diagnostic_authority_policies"] == [
-        UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY]
+        UNTHRESHOLDED_WITNESS_AUTHORITY_POLICY,
+        COVERAGE_ABLATION_AUTHORITY_POLICY]
     assert "unknown" in contract["semantic_claim"]
 
 

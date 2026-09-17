@@ -36,6 +36,7 @@ class _FakeNavigator:
         self.frame_count[0] = 0
 
     def process_image(self, images):
+        self.last_rgb = np.array(images, copy=True)
         return np.asarray(images, dtype=np.float32) / 255.0
 
     def _update_and_sample_history(self, processed, num_samples):
@@ -45,6 +46,7 @@ class _FakeNavigator:
 
     def step_pointgoal_with_guidance(
             self, goal, image, depth, robot_pos, robot_quat):
+        self.last_rgb = np.array(image, copy=True)
         self.frame_count[0] += 1
         candidates = np.zeros((1, 8, 24, 3), dtype=np.float32)
         candidates[0, :, :, 0] = np.arange(8)[:, None] / 10.0
@@ -83,6 +85,25 @@ class XNavDPRevisitServerTest(unittest.TestCase):
         }
         server.app.config.update(TESTING=True)
         self.client = server.app.test_client()
+
+    def test_standard_rgb_jpeg_reaches_both_actor_entry_points_as_rgb(self):
+        # Gray fixtures cannot catch R/B swaps; use a chromatic JPEG.
+        raw = np.full((32, 32, 3), [220, 60, 20], dtype=np.uint8)
+        wire = io.BytesIO()
+        Image.fromarray(raw).save(wire, format="JPEG", quality=95)
+        encoded = wire.getvalue()
+        expected = np.asarray(Image.open(io.BytesIO(encoded)).convert("RGB"))[None]
+        fake = _FakeNavigator(np.eye(3))
+        server._navigator = fake
+        for endpoint in ("/memory_replay_step", "/pointgoal_step"):
+            data = {"image": (io.BytesIO(encoded), "current.jpg")}
+            if endpoint == "/pointgoal_step":
+                data.update(depth=(io.BytesIO(_depth_bytes()), "depth.png"),
+                            goal_data=json.dumps({"goal_x": [-2.5], "goal_y": [0.]}),
+                            diffusion_seed="23")
+            result = self.client.post(endpoint, data=data)
+            self.assertEqual(result.status_code, 200, result.get_data(as_text=True))
+            np.testing.assert_array_equal(fake.last_rgb, expected)
 
     def test_reset_replay_and_pointgoal_each_append_exactly_once(self):
         fake = _FakeNavigator(np.eye(3))

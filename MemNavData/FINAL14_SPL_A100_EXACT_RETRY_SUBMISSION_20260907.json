@@ -1,0 +1,86 @@
+{
+  "schema_version": "final14_spl_a100_exact_retry_submission_v1_20260907",
+  "submitted_at_local": "2026-09-07T11:16:42+08:00",
+  "last_verified_at_local": "2026-09-07T11:23:07+08:00",
+  "account": "yz11502",
+  "ssh_alias": "alantorch",
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_table3_exact_spl_20260907",
+  "replay_root": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/final14_spl_replay_50eb1204020a4d7c",
+  "source_receipt_sha256": "50eb1204020a4d7c38e34269cfb024989a1fee0fac6e9848792619c2472e36d5",
+  "manifest_sha256": "7468703a9efbb10e801ffdd226911f696a30fa9432ef9ab486d3134f6e40fe6a",
+  "runtime_code_changed": false,
+  "change": "Limit failed-history retries and migrated unstarted tasks to the already allowed A100 partition; retain the exact replay runtime.",
+  "root_cause_claim": "not_established; operational_workaround_only",
+  "retry_indices": [6, 7, 8, 11, 12, 14, 16],
+  "unstarted_migrated_indices": [18, 19, 20],
+  "retained_verified_indices": [0, 1, 2, 3, 4, 5, 9, 10, 13, 15, 17],
+  "original_running_index_at_submission": 16,
+  "original_final_status": {"completed": 11, "failed": 7, "cancelled_before_start": 3},
+  "jobs": {
+    "array": {
+      "id": "17089916",
+      "indices": "6,7,8,11,12,14,18,19,20%2",
+      "partition": "a100_tandon",
+      "time_limit": "01:00:00",
+      "gpus_per_history": 1,
+      "cpus_per_history": 10,
+      "memory_per_history": "72G",
+      "state_at_verification": "PENDING",
+      "reason_at_verification": "QOSGrpGRES"
+    },
+    "initial_summary_superseded": {
+      "id": "17089917",
+      "partition": "cpu_short",
+      "dependency": "afterany:17057431:17057432,afterok:17089916",
+      "requires_histories": 21,
+      "requires_rollouts": 210
+    },
+    "last_failed_history_retry": {
+      "id": "17089989",
+      "indices": "16",
+      "submitted_at_local": "2026-09-07T11:22:13+08:00",
+      "partition": "a100_tandon",
+      "time_limit": "01:00:00",
+      "state_at_verification": "PENDING",
+      "reason_at_verification": "QOSGrpGRES"
+    },
+    "summary": {
+      "id": "17089991",
+      "submitted_at_local": "2026-09-07T11:22:16+08:00",
+      "partition": "cpu_short",
+      "dependency": "afterany:17057432,afterok:17089916:17089989",
+      "requires_histories": 21,
+      "requires_rollouts": 210
+    }
+  },
+  "superseded_pending_summaries": ["17057433", "17089917"],
+  "preservation": {
+    "root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_table3_exact_spl_20260907/repairs/a100_exact_retry1_20260907/failed_attempts",
+    "operation": "move intact, no deletion",
+    "files": 54,
+    "bytes": 90938217,
+    "receipt_sha256": "2ffae36da2273b4f92c59918f2b0fdb4ec87d0316bffb0e4205e058d4917bfa2",
+    "sha256_recheck_passed": true
+  },
+  "additional_preservation": {
+    "history": 16,
+    "original_state": "FAILED",
+    "original_elapsed": "00:17:53",
+    "original_node": "gh013",
+    "error": "evaluator failed (-6)",
+    "root": "/scratch/yz11502/Research/Nav-axis-uturn-results/final14_table3_exact_spl_20260907/repairs/a100_exact_retry_task16_20260907/failed_attempts",
+    "files": 9,
+    "bytes": 14819147,
+    "receipt_sha256": "1aa946fb934dc3b040f56cc860ad938db25348131d476cde3aaa875aef1d77be",
+    "sha256_recheck_passed": true,
+    "operation": "move intact after terminal failure; no deletion, no partial-arm reuse"
+  },
+  "submission_script_sha256": "32166a7480b51d929cec11d11c4f7e1488e4911a6171f7ee024f124a0ae13c07",
+  "local_tests": {"passed": 8, "shell_syntax": "passed", "diff_check": "passed"},
+  "pre_submission_notes": [
+    "An incomplete source upload caused a shell parse error during test-only preparation, before any archive move or GPU submission. Transfer completion and exact SHA were checked before executing the final script.",
+    "sacct did not yet contain a cancelled never-started array element; cancellation was verified through scontrol. Index 18 had CANCELLED state and zero runtime before the controller record expired. No output existed.",
+    "Partition updates for unstarted elements were rejected by Slurm; only never-started elements were cancelled and resubmitted. The running element was not interrupted."
+  ],
+  "result_status": "No complete new SR/SPL yet; retain paper bounds until complete independent verification."
+}

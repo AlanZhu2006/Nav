@@ -220,6 +220,13 @@ parser.add_argument(
           "feasible local tangent from the certified historical route"),
 )
 parser.add_argument(
+    "--certified_authority_policy",
+    choices=["strict_certificate", "certificate_without_coverage"],
+    default="strict_certificate",
+    help=("explicit coverage-only diagnostic for certified_relocalization; "
+          "the default certificate, candidate ranking and controller are unchanged"),
+)
+parser.add_argument(
     "--certified_cdec_rescue",
     choices=["off", "on"],
     default="off",
@@ -697,6 +704,13 @@ parser.add_argument(
 )
 parser.add_argument("--save_video", action="store_true")
 args = parser.parse_args()
+if (args.certified_authority_policy == "certificate_without_coverage"
+        and (args.hybrid_route != "certified_relocalization"
+             or args.certified_cdec_rescue != "off"
+             or args.certified_guidance_mode != "endpoint_bearing"
+             or args.revisit_adapter != "verified_bearing_v1")):
+    parser.error("coverage-only diagnostic requires geometry-first CEC, "
+                 "no learned rescue and the unchanged fixed bearing adapter")
 if args.scene_identity and not re.fullmatch(
         r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.scene_identity):
     parser.error("--scene_identity must be a safe non-empty label")
@@ -921,8 +935,9 @@ def srv_reset(camera_height=CAM_H, seed=None, episode_len=None,
                     or contract.get("fallback") != "native_imagegoal"
                     or contract.get("default_authority_policy") != (
                         "strict_certificate")
-                    or contract.get("diagnostic_authority_policies") != [
-                        "pnp_pose_available"]):
+                    or contract.get("diagnostic_authority_policies") not in (
+                        ["pnp_pose_available"],
+                        ["pnp_pose_available", "certificate_without_coverage"])):
                 raise RuntimeError(
                     "certified relocalization runtime contract changed")
             if args.certified_guidance_mode in (
@@ -1416,7 +1431,7 @@ def srv_plan_certified_relocalization(
     expected_authority_policy = (
         "pnp_pose_available"
         if args.hybrid_route == "certified_unthresholded_witness"
-        else "strict_certificate"
+        else args.certified_authority_policy
     )
     probe = requests.post(
         f"{BASE}/retrieval_probe_step",
@@ -1563,6 +1578,8 @@ def srv_plan_certified_relocalization(
         "router_prefilter_mode": (
             "unthresholded_pnp_witness_bearing_v1"
             if expected_authority_policy == "pnp_pose_available"
+            else "certificate_without_coverage_bearing_v1"
+            if expected_authority_policy == "certificate_without_coverage"
             else "certified_relocalization_bearing_v3"),
         "router_threshold": None,
         "router_visual_floor": None,
@@ -4511,7 +4528,6 @@ def spl(reached, geo, plen):
 
 
 def main():
-    os.makedirs(args.out, exist_ok=True)
     if (args.oracle_global_subgoal_m > 0
             or args.oracle_observed_frontier != "off"):
         raise ValueError(
@@ -4685,6 +4701,7 @@ def main():
               f"depth={args.navdp_depth_source} "
               f"selector={args.trajectory_selector}")
         return
+    os.makedirs(args.out, exist_ok=True)
     try:
         import imageio
     except ImportError:

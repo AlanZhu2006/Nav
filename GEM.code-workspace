@@ -1,0 +1,31 @@
+{
+  "folders": [
+    {
+      "name": "Navigation",
+      "path": "."
+    },
+    {
+      "name": "Paper",
+      "path": "projects/paper"
+    },
+    {
+      "name": "RealWorld",
+      "path": "projects/realworld"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      ".workspace-assets": true,
+      ".workspace-maintenance": true,
+      ".diagnostics": true,
+      "projects": true,
+      "paper": true
+    },
+    "search.exclude": {
+      "**/.workspace-assets/**": true,
+      "**/.workspace-maintenance/**": true,
+      "**/.diagnostics/**": true,
+      "**/runtime/**": true
+    }
+  }
+}

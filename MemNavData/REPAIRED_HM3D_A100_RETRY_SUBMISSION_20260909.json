@@ -1,0 +1,30 @@
+{
+  "schema": "repaired_hm3d_a100_exact_shard_retry_v1",
+  "job_id": "17201733",
+  "array": "1",
+  "job_name": "cec_repaired_a100_retry",
+  "submitted_at_utc": "2026-09-08T16:35:24Z",
+  "original_failed_task": "17196996_1",
+  "completed_task_not_rerun": "17196996_0",
+  "source_bundle": "/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/repaired_fullmono_c8cf8c60e7efd55f",
+  "source_receipt_sha256": "c8cf8c60e7efd55f1b360bb5a2d5fd92850dc87d6a310b05e77f0a9239cdfc08",
+  "retry_protocol_sha256": "2f76c4fcac9df1cb9449f026712ebee5dba277013e6c6850e8bdf298a984fc33",
+  "submit_script_sha256": "b4ea364aea2420878df476440e1056c22523f21b8e06c57fe04af97814339338",
+  "source_tasks": [
+    {"scene": "BFRyYbPCCPE", "episode": "episode_0000", "source_scene_rank": 4, "seed": 2026082600},
+    {"scene": "X7gTkoDHViv", "episode": "episode_0000", "source_scene_rank": 5, "seed": 2026082700}
+  ],
+  "resources": {"partition": "a100_tandon", "gpus": 1, "cpus": 10, "memory_gb": 96, "time_limit": "01:00:00", "account": "torch_pr_769_tandon_advanced", "qos": "gpu48"},
+  "diagnostic_environment_added": {"PYTHONFAULTHANDLER": "1"},
+  "scientific_changes": [],
+  "cuda_synchronization_changed": false,
+  "run_root": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_hm3d_extension_20260908/a100_retry1_20260909/shard_1/integration",
+  "remote_submission": "/scratch/yz11502/Research/Nav-axis-uturn-results/repaired_hm3d_extension_20260908/submission_a100_retry1_20260909/submission.jobs",
+  "failed_output_preserved_in_place": true,
+  "failed_output_file_count": 23,
+  "failed_output_bytes": 3324063,
+  "downloaded_evidence_archive_sha256": "f3eeac141922d4821b5930fa89da2d87c058d98c268e76f62bf1dd44c802dd1c",
+  "state_at_first_submission_check": "PENDING",
+  "reason_at_first_submission_check": "QOSGrpGRES",
+  "automatic_downstream_jobs": []
+}

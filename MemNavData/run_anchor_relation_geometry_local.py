@@ -13,6 +13,8 @@ import time
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--root',type=Path,required=True)
+    p.add_argument('--resume-after-overfit',action='store_true',
+                   help='reuse completed geometry and overfit outputs; verify before the fixed full training')
     args=p.parse_args();root=args.root.resolve()
     inputs=root/'inputs/unpacked';smoke=root/'geometry_smoke'
     audit=json.loads((root/'input_verification.json').read_text())
@@ -21,7 +23,8 @@ def main():
         raise ValueError('complete input audit and genuine geometry smoke required')
     histories=json.loads((inputs/'history_inputs.json').read_text())['histories']
     remaining=sorted(set(histories)-{r['history'] for r in done['histories']})
-    work=root/'workflow_v1'
+    work=root/('workflow_resume_'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime())
+               if args.resume_after_overfit else 'workflow_v1')
     work.mkdir(exist_ok=False)
     source_names=['anchor_relation_decoder.py','anchor_relation_geometry.py',
         'extract_anchor_relation_geometry.py','train_anchor_relation_geometry_probe.py',
@@ -32,6 +35,8 @@ def main():
              for name in source_names}
     receipt={'pid':os.getpid(),'python':sys.executable,'cwd':str(Path.cwd()),
              'started_unix':time.time(),'remaining_histories':remaining,'sources':sources,
+             'resume_after_overfit':args.resume_after_overfit,
+             'reused_workflow':str(root/'workflow_v1') if args.resume_after_overfit else None,
              'navigation_SR':None,'hpc_gpu_job_submitted':False,
              'production_CEC_changed':False}
     (work/'launch_receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
@@ -56,11 +61,13 @@ def main():
     command=[sys.executable,'-u','-m','MemNavData.extract_anchor_relation_geometry',
              '--input-dir',str(inputs),'--out-dir',str(rest)]
     for key in remaining:command+=['--history',key]
-    run('extract_remaining',command)
+    if not args.resume_after_overfit:
+        run('extract_remaining',command)
     training=[sys.executable,'-u','-m','MemNavData.train_anchor_relation_geometry_probe',
               '--input-dir',str(inputs),'--geometry-dir',str(smoke),'--geometry-dir',str(rest)]
-    run('overfit8',training+['--out-dir',str(root/'overfit8_geometry_v1'),
-                            '--overfit-pairs','8','--steps','600','--seed','11'])
+    if not args.resume_after_overfit:
+        run('overfit8',training+['--out-dir',str(root/'overfit8_geometry_v1'),
+                                '--overfit-pairs','8','--steps','600','--seed','11'])
     run('verify_overfit8',[sys.executable,'-m','MemNavData.verify_anchor_relation_geometry_probe',
                           str(root/'overfit8_geometry_v1')])
     run('scene32_8',training+['--out-dir',str(root/'scene32_8_geometry_v1')])

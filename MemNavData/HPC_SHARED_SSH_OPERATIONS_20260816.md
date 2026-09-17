@@ -615,3 +615,205 @@ Torch 上先运行站点命令 `myquota`。`quota -s` 可能因 NFS 权限返回
 准备新的长任务时，优先评估节点临时空间录制、结束后按query/arm归档持久化的可行性，
 并保留内部文件SHA与可恢复索引；这是待验证的存储方案，不可未经verifier兼容检查
 直接改变冻结产物布局。不要自动删除旧失败/成功记录来换空间；先确定恢复与保留范围。
+
+## 12. 2026-09-08：`MemoryError` 也可能来自满的临时文件系统
+
+在 `torch-login-a-0`，Habitat Python 3.9 导入 `quaternion → numba → llvmlite`，
+在创建 `_ObjectCacheNotifyFunc` 时出现 `MemoryError`，host 和标准 container 都复现。
+独立的 `ctypes.CFUNCTYPE(None)(lambda: None)` 已能复现，模型和 GPU 尚未加载。
+
+同一时刻：`free -h` 显示约 83 GiB 可用，`ulimit -v` 为 unlimited，
+但 `df -h /tmp` 为 2.0G/2.0G、100%。为本任务创建独立临时目录，并仅对子进程设置
+`TMPDIR` 和 `LIBFFI_TMPDIR` 后，同一个解释器的 callback、quaternion、Habitat 导入都通过。
+不能把这个异常称为模型显存不足，也不需要重装共享 conda。
+
+诊断顺序：
+
+1. 检查 `free -h`、`ulimit -v`、`df -h /tmp /dev/shm`。
+2. 用实际解释器执行无模型的最小 callback 测试，再导入 Habitat。
+3. 登录节点的少量预检可以在本任务精确 scratch 目录下 `mktemp -d`，
+   将上述两个变量传给子进程；不要清理他人 `/tmp` 文件。
+4. GPU 作业在任何 Python/FFmpeg 预检之前创建自己的 node-local 临时目录，
+   设置 `TMPDIR`/`LIBFFI_TMPDIR`；逐帧 buffer 仍放节点临时盘，不迁回高文件数的 scratch。
+
+这条只说明已验证的基础设施案例，不表示所有 `MemoryError` 都由 `/tmp` 占满造成。
+
+## 13. 2026-09-08：新图像审计不能假设 Habitat 已安装 OpenCV
+
+旧 evaluator 主要用 PIL/ImageIO；本轮深度栅格审计和视频入口用到 `cv2`。
+实际 Habitat Python 3.9 没有 OpenCV，MemNav Python 3.10 有已运行的 headless 4.9.0。
+因此旧任务完成不代表新增图像入口的依赖已经齐全。
+
+本轮只把现有 `cv2` 及 `opencv_python_headless.libs` 复制到任务专属只读依赖目录，
+绑定 SHA，并在原 Habitat Python 3.9 / NumPy 1.26.4 下验证 abi3 导入和 resize。
+没有安装、升级或修改任何共享 conda 环境，也没有把另一解释器的整个 site-packages
+混入 Habitat。新依赖由 `REPAIRED_HAB_EXTRA` 显式传递给所有 Habitat 子进程。
+
+依赖路径：`/scratch/yz11502/Research/Nav-axis-uturn-source-bundles/repaired_hab_cv2_20260908`。
+该目录不通用于任意 Python/NumPy 版本；其他组合仍需实际解释器验证。
+
+## 14. 2026-09-09：连续运行故障不能用 import / 短渲染预检排除
+
+修复版 HM3D `17196996_1` 通过全部导入、CLI、双场景渲染与模型启动后，
+仍在 H100 gh008 出现约 19 秒 memory HTTP 完成间隔，56 步后 evaluator SIGABRT。
+同一 bundle 的 shard 0 在 H100 gh003 正常完成，不能据此把所有 H100 归为故障节点。
+
+本项目已有相似故障转 A100 补齐的实际记账：`17089916` 九项和 `17089989_16`
+全部 COMPLETED。本次 exact shard retry `17201733_1` 因此显式使用
+`safe_sbatch --partition=a100_tandon --array=1`，原代码/参数不变，仅增加
+`PYTHONFAULTHANDLER=1`。不要只复用通用分区默认值而遗漏已有事故的运行规避记录。
+也不要把该规避直接称为根因修复；状态以新终局和 verifier 为准。
+
+若需进一步定位，记录连续 render、memory HTTP、planning HTTP 分项时间及 abort 堆栈；
+HTTP 日志间隔不等于模型 forward 延迟。短渲染成功或依赖预检通过不等于 GPU/渲染
+持续交接已稳定。仅补失败项，保留原失败输出，不靠加大时限或改导航参数掩盖异常。
+
+本次 A100 重试最终 ga015 / 4:59 / COMPLETED，两条 A 均成功，verifier=true，
+不再有持续 19 秒间隔。记录为本次运行规避成功；H100 根因仍未经过同卡受控验证。
+
+## 15. 2026-09-09：大量 runtime buffer 的可恢复清理
+
+scratch 达到 4,909,485/5,000,000 文件，而字节仅约 1.38/5 TB。只处理已解析的旧
+runtime buffer，不删除数据集、模型、在线历史、冻结 bundle 或 metrics/trace/verifier。
+对每个确切 buffer：归档全部文件及 SHA → 完整回读 → 核对原文件未变化 → 删除散文件。
+原位置留下 `buffer.ARCHIVED_20260909.json` 恢复指针。
+
+`/archive/yz11502` 在本次登录节点可写，但 CPU 试任务 `17243007_4` 的访问检查失败，
+尚不能假设所有计算节点都挂载/允许访问它。该失败在删除前发生，没有数据损失。
+已验证的两步流程是：计算节点先写 scratch `verified_archives/`；登录节点再转存
+`/archive/yz11502/nav_runtime_buffers_20260909/`，核对完整包 SHA 后移除 scratch 重复包。
+前一步主要释放文件数，后一步释放 scratch 字节；不要把“已压缩”写成“已转存”。
+
+具体清单、恢复办法与作业状态见 `HPC_STORAGE_CLEANUP_20260909.md`。归档不是永久
+备份承诺，仍受站点保留政策约束。新 eval 应在 node-local 写逐帧证据并按完整任务归档，
+避免再次积累数百万散文件。
+
+## 16. 2026-09-09：safe_sbatch 默认值也可能覆盖脚本分区
+
+本次脚本明写 `#SBATCH --partition=a100_tandon`，但未传 CLI 分区时，
+`safe_sbatch` 实际提交为 `a100_tandon,h100_tandon`。test-only 输出某个 A100
+预计节点，并不证明允许分区只有 A100。必须提交后读取 `scontrol show job` 的
+`Partition=`、`TimeLimit=`、`ReqTRES=` 和依赖。
+
+`17253413/17253414` 在 PENDING、0 秒且无节点分配时发现此问题；原地修改分区
+返回 `Unspecified error`。仅撤回这两个未启动数组，显式传入
+`--partition=a100_tandon --account=torch_pr_769_tandon_advanced --qos=gpu48`
+及原 GPU/CPU/memory/time 参数后，重交为 `17253441/17253442`。
+实际回读仅 A100，源码、目标、seed 不变；撤回作业没有导航输出。
+
+之后不可仅依赖 SBATCH 文件默认值或 test-only 的预计节点判断运行分区。
+
+### 数组并发更新：错误输出之后也要核对实际状态
+
+同日对17240715调整`ArrayTaskThrottle`时，`scontrol`对已展开元素返回
+`Unspecified error`，但父数组和待启动范围已实际变为`%2`、随后`%1`；已有运行元素不中断。
+因此既不能仅凭错误文本认定“完全没改”，也不能假设“全部成功”：
+读取父数组`ArrayTaskThrottle=`、`ArrayTaskId=`以及运行/等待元素再判断。
+这与上面的分区修改不同：分区当时实际没有改变。降低并发只是让其他任务有调度机会，
+不是GPU预留；临时调整须记录恢复点，不修改冻结目标、种子或方法参数。
+
+## 17. 2026-09-11：已认证 PTY 正常，SCP 新通道仍超时
+
+本次默认 `yz11502` master 正常；显式 PTY 在 `Last login` 后暂时没有提示符。
+只向**自己新开的 PTY**发送一次 Ctrl-C 后，正常得到 `id -un=yz11502` 和
+`torch-login-a-0`，`squeue`、`myquota` 都可用。不关闭 master，不切到其他账户 socket。
+随后两次有时限的 SCP 均超时，远端目标文件不存在。不能由此宣布 HPC/MFA 失效。
+
+对本次 3.65 MB 源码包和小型 plan，使用相同 master 的 localhost-only **反向转发**：
+
+1. 工作站只读 HTTP server 绑定 `127.0.0.1:46150`，根目录限定为本次打包目录，
+   不使用 Research、用户目录或含凭据的目录。
+2. 在共享 master 添加 `-O forward -R 127.0.0.1:46151:127.0.0.1:46150`。
+3. 已核实身份的 HPC PTY 用 `curl --fail --max-time 45 http://127.0.0.1:46151/精确文件名`
+   下载到事先核实不存在的新目标。两端的包/plan SHA-256 完全一致后才解包预检。
+4. 结束后通过相同 master `-O cancel -R 127.0.0.1:46151:127.0.0.1:46150` 撤销转发，
+   并停止自己启动、记录了精确 PID 的本地 HTTP server。不得停止其他服务或共享 master。
+
+这与第 1.4 节的只读下载方向相反，但仍只有 localhost 可访问，流量经过已有 SSH。
+只用于小源码/收据的传输恢复，不替代大型数据集和模型的 Globus 路径。
+
+## 18. 2026-09-11：JPEG SHA 不一致也可能来自 multipart 分块解析
+
+Table I 两个任务换 A100 节点后仍在相同位置失败。通过原归档复现发现：
+请求体长度均为 65,539 bytes，Werkzeug 3.1.8 的 multipart 解析会在 64 KiB
+分块附近把分隔符 CR 加到 JPEG 尾部。158 的异常 SHA 精确等于“原目标 JPEG + CR”，
+110 的历史 JPEG 则直接保存了额外 CR。两个案例解码 RGB 不变，但字节检查正确拒绝。
+
+处理方式：本机 CPU 构造边界复现 → HPC 原输入复现错误 SHA → 进程内保留完整 CRLF
+解析边界 → 精确字节复验 → 只补原失败配对单元。不是关闭 SHA 校验、strip 文件，
+或已经推进模型状态后重复 POST。无需安装 conda 依赖或改共享包。
+
+修复入口：`multipart_crlf_repair.py`；实际归档复现：`audit_table1_multipart_repair.py`；
+状态：`TABLE1_MULTIPART_REPAIR_STATUS_20260911.md`。新的预检除 import 和 CLI 外，
+应包含跨 64 KiB 的单图/双图上传；普通小图 smoke 不覆盖这一故障。
+
+## 19. 2026-09-11：动态后处理依赖与已结束作业
+
+本次只读查询 `scontrol show config` 得到 **`MinJobAge = 64 sec`**。
+构造、汇总这类短 CPU 作业可能已经正常完成，但后续 CPU 调度器尚未获得资源；
+等它启动时，上游编号可能已不在 `squeue/scontrol` 的活跃记录中。
+
+动态衔接 B/C 和最终复算时：
+
+- 先用 `sacct -X -nP -j JOB_ID --format=State,ExitCode` 核实真实状态；
+- 上游仍 pending/running 时，继续使用 `afterok` 依赖；
+- 上游已 `COMPLETED / 0:0` 时，无需再等待已完成事件，可在核对所属 plan/阶段后提交后处理；
+- 失败、取消或查不到可靠状态时，不推断为成功，也不放行最终报告。
+
+该处理仅作用于后处理调度，不重跑导航，不改 frozen manifest 或补造缺失结果。
+实现：`table2_final_postprocess.py`；后处理只申请 CPU，并从原始归档独立复算 SR/SPL。
+
+## 20. 2026-09-11：NavMesh 重载造成离线碰撞复算不一致
+
+Table II 的 `17357681_21` 已完成导航，但 verifier 复放一帧碰撞时相差约 2.4 cm。
+本机与 HPC CPU 复核确认：同一份逐字节一致的 NavMesh，现场重建时有 2 个连通区域，
+保存后重新加载有 3 个。以原始 GLB/设置重建后，164 个执行落点全部精确复现。
+
+遇到这种日志时，先核对控制请求与碰撞环境，不要直接重跑 GPU、改成功标签或放宽容差。
+允许的补充复核必须证明重建网格与原归档逐字节一致，并通过完整轨迹/深度/目标审计；
+原失败归档移至明确的 `failed_attempts` 目录保留。它不改变导航 controller 或 physics 合约。
+
+本次 CPU 作业 `17365241` 用时 22 秒、`COMPLETED / 0:0`；另一次独立原始归档复算通过。
+修复说明：`TABLE2_COLLISION_REVERIFICATION_20260911.md`。
+代码：`reverify_table2_collision_task.py`、`slurm_table2_collision_reverify.sbatch`。
+
+## 21. 2026-09-11：调整现有数组并发，不重提样本
+
+Table II A 数组的资源等待除了分区 `QOSGrpGRES`，也出现自身的 `JobArrayTaskLimit`。
+本次先实查 `gpu48` 单用户上限为 16 GPU、`a100_tandon` 分区 QOS 总上限为 60 GPU，
+再对已确认属于本任务的数组 `17357681` 使用：
+
+```bash
+scontrol update JobId=17357681 ArrayTaskThrottle=4
+scontrol show job 17357681
+squeue -u yz11502
+```
+
+原并发 2 改为 4，随后确实看到四个元素同时运行。这个操作不新增数组，不重跑样本；
+每项 A100 / 1 GPU / 1 h、样本、seed 和同机配对规则均保持不变。
+原协议若写明并发数量，必须单独记录资源调度补充，不能悄悄改写旧协议或提交收据。
+
+此次更新对已结束成员输出错误提示，但根数组读取到 `ArrayTaskThrottle=4`，
+随后 `%4` 及四项 running 证实修改已生效。以实际状态核验，不能仅凭提示重复提交。
+并发上限提高不保证 QOS 配额立即可用，也不能通过加入未经验证的分区绕过排队。
+详见 `TABLE2_RESOURCE_SCHEDULE_ADDENDUM_20260911.md`。
+
+## 22. 2026-09-11：连续双臂的显存不能沿用单臂估计
+
+逐段共同发题要求两臂都保留活跃状态，不能再把“同一张卡依次 reset 跑两臂”的显存
+视为本任务需求。本机 Table II 首例 native A 完成后，其 LingBot live allocation 为
+14.34 GB；保留它并执行 GEM A 时，约 48 GiB 卡在另一臂深度头申请 66 MiB 时 OOM。
+其他工作区当时仍占显存，未停止它们。
+
+私有 `private_cuda_trim` 只在该服务空闲时释放未使用的 allocator 块；原日志中 reserved
+从 24.21 GB 降至 14.75 GB，allocated 不变。这不能释放仍有引用的 KV、尺度或历史状态。
+因此不能将此 OOM 误判为 conda 依赖错误、靠 reset 活跃 memory 规避，或用单臂成功当作
+双臂持续运行的通过证据。已经结束的失败 episode 则可在完整写入收据后释放其私有服务。
+
+对应首例按既有稳定运行记录选 A100 80 GB、1 h，在一个作业/节点/GPU 上完成两臂；
+正式规模仍待实测。四个端口使用 `claim_slurm_tcp_port_block ... 4`，不硬占别的端口。
+
+本次 SSH 仍是默认 master 和原已认证 PTY；SCP 新通道再次超时，3.73 MB 源码包通过
+仅 localhost 的反向转发完成传输并核对 SHA。临时 HTTP server 和转发已立即关闭。
+若新 PTY 需 Ctrl-C 恢复提示符，应先单独发送 Ctrl-C、等提示符，再发送 `id -un`；
+不要把控制字符和身份命令连在一次输入里，以免命令首字符被吞掉。

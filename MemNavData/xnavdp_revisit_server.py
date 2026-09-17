@@ -4,7 +4,8 @@
 This server imports the *unmodified* official X-NavDP evaluation agent from a
 commit-pinned checkout.  It adds only the contracts required by the Habitat
 revisit benchmark: source/checkpoint receipts, deterministic request seeds,
-an observation-only history replay endpoint, and fail-closed JSON validation.
+an observation-only history replay endpoint, a standard RGB JPEG transport,
+and fail-closed JSON validation.
 
 It intentionally exposes no ImageGoal endpoint.  Goal images remain the
 memory router's responsibility; this process is only a PointGoal controller.
@@ -24,7 +25,6 @@ import threading
 import time
 from typing import Any, Iterator
 
-import cv2
 from flask import Flask, jsonify, request
 import numpy as np
 from PIL import Image
@@ -158,6 +158,8 @@ def _receipt() -> dict[str, Any]:
         "actor_mode": _actor_mode,
         "embodiment": _embodiment_name,
         "checkpoint_load_audit": dict(_checkpoint_load_audit),
+        "rgb_wire_contract": "standard_rgb_jpeg_v1",
+        "actor_rgb_channel_order": "RGB",
     }
 
 
@@ -280,11 +282,14 @@ def deterministic_rng(seed: int | None) -> Iterator[int | None]:
 
 
 def _decode_rgb(batch_size: int) -> np.ndarray:
+    # Habitat sends a normal PIL RGB JPEG. The published Isaac client instead
+    # feeds raw RGB to cv2.imencode; its server's RGB->BGR conversion cancels
+    # that client's swap. Copying only that server conversion is incorrect here.
     image = Image.open(request.files["image"].stream).convert("RGB")
-    bgr = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
-    if bgr.shape[0] % batch_size:
+    rgb = np.array(image)
+    if rgb.shape[0] % batch_size:
         raise ValueError("RGB wire height is not divisible by batch size")
-    return bgr.reshape((batch_size, -1, bgr.shape[1], 3))
+    return rgb.reshape((batch_size, -1, rgb.shape[1], 3))
 
 
 def _decode_depth(batch_size: int) -> np.ndarray:

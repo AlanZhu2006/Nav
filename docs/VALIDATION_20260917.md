@@ -9,6 +9,11 @@ image-controller checks produced **323 passed, 6 skipped**. The six skipped
 checks require CUDA; this run used CPU only. No scene replay or navigation
 experiment was launched.
 
+Merging the published mainline retained its earlier training/diagnostic updates.
+The imported decision-gate schedule checks passed all seven cases with
+`InternNav` on `PYTHONPATH`. The final GEM agent/server still match the real-world
+source-integrity receipt after resolving the module-extraction conflicts.
+
 The matching environment on this machine is `lingbot-map`, with `LINGBOT_REPO`
 and `PYTHONPATH` pointing to the retained dependency at
 `/home/asus/Research/Nav/NavDP/baselines/memnav/lingbot-map`. Its attention source

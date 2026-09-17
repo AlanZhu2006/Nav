@@ -143,6 +143,7 @@ The complete changed-file release gate was run from the repository root:
 - Shell/Slurm: 40 changed/new scripts passed `bash -n`;
 - MemNav interpreter: 195 tests passed;
 - Habitat interpreter: 8 renderer/construction tests passed;
+- post-merge InternNav gate/fusion/lazy-import suite: 19 tests passed;
 - `git diff --check`: passed.
 
 The split test environments are intentional: renderer-facing construction modules require
@@ -159,8 +160,10 @@ preserved and ignored; no generated result is deleted.
 Publication sequence:
 
 1. commit and push the feature branch as a recovery point;
-2. merge it into the checked-out `main` worktree, resolving overlapping legacy training
-   and current runtime files by preserving both valid contracts;
+2. merge it into the checked-out `main` worktree; where the legacy decoder-gate training
+   branch conflicts with the later audited CEC runtime, retain the current feature version
+   rather than synthesize an untested hybrid, while preserving the legacy commits and
+   non-conflicting diagnostic tools in history;
 3. rerun merge-sensitive tests;
 4. push `main` to `fork` (`AlanZhu2006/Nav`) and set local `main` to track `fork/main`;
 5. verify the remote commit and a clean tracked worktree.

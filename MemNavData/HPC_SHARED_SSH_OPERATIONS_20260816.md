@@ -1,7 +1,8 @@
 # HPC 共享 SSH、Slurm、数据传输与故障排查手册
 
-最后更新：2026-08-21（Asia/Shanghai）  
-适用范围：NYU Torch HPC 上的 MemNav / Certified Episodic Compass / Pi3X
+最后更新：2026-09-18（Asia/Shanghai）
+
+适用范围：NYU Torch HPC 上的 GEM / MemNav / Certified Episodic Compass / Pi3X
 开发、数据传输、冻结评测与结果审计。
 
 本文只整理**基础设施与可复现性问题**。方法效果、SR、统计显著性和论文结论以最新
@@ -22,9 +23,33 @@ infrastructure failure 都不能被解释为方法成功或失败。
 6. 失败输出不删除、不覆盖。先保留日志和 partial output，再只重跑 exact failed
    index；summary 和 independent verifier 必须重新绑定到完整成功的依赖链。
 
+### 0.1 默认执行顺序：先验证完整任务，再批量提交
+
+新实验、新依赖或更换运行栈时，按下表推进。这里的 **gate** 指一项完整验证任务：
+使用正式配置，走完配对运行、结果落盘和独立校验，而不只是成功 import 或启动服务。
+已验证且未改变的部分复用原收据；改动影响到哪里，就重做对应检查。
+
+| 顺序 | 做什么 | 进入下一步的条件 |
+|---|---|---|
+| 1. 连接与路径 | 用 `ssh alantorch` 确认账户；检查数据、配额、临时目录和输出位置 | 目标计算节点能读输入、写结果；见 §1、§6、§11–12 |
+| 2. 依赖准备 | 固定解释器、源码、权重、容器与扩展库，完整打包并核验 | 实际运行环境加载的是预期文件；见 §5.4 |
+| 3. 低成本预检 | 先检查全部输入、参数、CPU 逻辑、请求解析和输出字段 | 缺文件、错误参数与序列化问题在占用长时间 GPU 前暴露 |
+| 4. GPU 完整验证 | 在拟用 GPU 上跑完整配对，覆盖长历史、目标切换和实际常驻状态 | 所有分支与独立校验通过，记录耗时、内存、显存和落盘量 |
+| 5. 小批量运行 | 先低并发运行少量固定索引，确认服务隔离、端口和 I/O | 未出现新的运行故障，再逐步增加并发 |
+| 6. 正式提交 | 显式传资源参数，读回 Slurm 状态，连接汇总与校验任务 | 索引、运行栈、时限和依赖都与计划相符；见 §2–3 |
+| 7. 收尾与补跑 | 校验完整结果，保留失败记录，只补失败配对 | 结果可从持久存储复核；见 §9 |
+
+优先测试容易拖到后期才出错的环节：第二臂模型加载、长历史显存峰值、最后一个目标、
+真实图像请求、结果汇总和归档。验证样本按覆盖范围和资源需求选择，不按成功结果挑选。
+正式配置下已完成并校验的 gate 样本只计一次；后续数组排除这些索引。
+缩短步数或改过配置的工程测试单独保存，不并入正式结果。
+
+连接配置、配额和可用分区会变化。下面保留的 socket、作业号与资源数值是项目记录；
+实际使用时从 `ssh -G` 和集群状态读回，不直接照抄历史值。
+
 ## 1. 已确认的共享 SSH 配置
 
-`ssh -G alantorch` 当前解析为：
+最近记录的 `ssh -G alantorch` 配置为：
 
 - 用户：`yz11502`；
 - 主机：`login.torch.hpc.nyu.edu`；
@@ -224,13 +249,15 @@ grep -RInE 'ABORT|Traceback|SIGABRT|CUDA error|RuntimeError|core dumped' \
 CLI 参数会覆盖 SBATCH 文件中的同名默认值。提交前必须显式核对 partition、account、
 QOS、GPU、CPU、memory、time 和 array concurrency。`FROZEN_INDEX_SPEC` 必须由冻结
 manifest 导出；不能假设索引连续，也不能把下面的占位符原样提交。例如 Final14 的
-正式索引是 `0-20,42-62`，不是 `0-41`。
+正式索引是 `0-20,42-62`，不是 `0-41`。分区只填写已通过完整 gate 的集合；其余资源
+数值也须按本次实测替换。
 
 ```bash
 FROZEN_INDEX_SPEC='REPLACE_WITH_EXACT_FROZEN_INDICES'
+VALIDATED_PARTITIONS='REPLACE_WITH_PARTITIONS_THAT_PASSED_FULL_GATE'
 
 eval_id=$(sbatch --parsable \
-  --partition=h100_tandon,h200_public,a100_tandon \
+  --partition="${VALIDATED_PARTITIONS}" \
   --account=torch_pr_769_tandon_advanced \
   --qos=gpu48 \
   --gres=gpu:1 \
@@ -251,6 +278,16 @@ verify_id=$(sbatch --parsable \
 ```
 
 `--array=...%4` 只表示最多四个元素并发，不是预留四张 GPU。实际可能只有一张或零张。
+
+`sbatch --test-only` 检查提交参数并估计调度时间，不执行依赖、渲染或导航测试。
+正式提交后用 `scontrol show job -dd JOB_ID` 核对 `Partition`、`TimeLimit`、`ReqTRES`、
+`Dependency` 和数组并发上限，保存实际提交命令。尤其留意 `safe_sbatch` 等封装器注入
+的 CLI 默认值。参数优先级与 `--test-only` 的含义见 [Slurm sbatch 文档](https://slurm.schedmd.com/sbatch.html)。
+
+`afterok` 只依据上游退出码；包装脚本必须把运行、归档和校验失败正确传回。
+依赖整个数组时，须所有成员成功才会放行，见 [Slurm 数组依赖说明](https://slurm.schedmd.com/job_array.html)。
+下游任务应紧接上游提交，避免短任务完成并从控制器清除后才绑定依赖；已有旧结果的
+处理流程见 §19。提交命令超时先查作业是否已创建，不直接再执行一遍。
 
 ### 2.5 取消、保留和 exact retry
 
@@ -276,15 +313,20 @@ scancel SUMMARY_JOB_ID VERIFY_JOB_ID
 4. summary 依赖同时绑定 retained running task、replacement array 和 exact retry；
 5. verifier 仍只依赖新 summary。
 
+重跑单位是该索引的完整配对，不是只补最后失败的一臂。已有若干动作或一个成功分支，
+不等于可以恢复其余运行；除非已验证的 checkpoint 同时保存模拟器、模型/几何状态、
+随机数状态和目标进度，否则从该配对起点重跑。HTTP 请求可能已推进流式状态，响应
+丢失时也不能盲目重发同一观测。
+
 ## 3. 分区、并发与申请时长
 
 ### 3.1 分区选择
 
-- 对硬件无关、episode 内严格配对的评测，可列出已经通过依赖与渲染验证的
-  `h100_tandon,h200_public,a100_tandon`，让 Slurm 选择最早合法资源。
+- 对允许跨合格硬件运行、episode 内严格配对的评测，只列入本次运行栈通过完整配对
+  gate 的分区；有多个合格分区时，让 Slurm 选择最早合法资源。
 - 若结论与 GPU 型号、数值稳定性或性能有关，必须固定一个分区，并在 receipt 中记录
   GPU name、UUID、driver 和显存。
-- 不得为了缩短排队临时加入未通过 exact container/overlay/model smoke 的分区。
+- 不得为了缩短排队临时加入仅通过 import、短渲染或 server-ready 检查的分区。
 - 同一个 episode 的五个 arm 不可拆到不同 GPU；跨机器 CUDA 非确定性曾让同一 Goal-A
   路径出现 `7.81 m` 与 `2.70 m` 的差异。
 
@@ -304,9 +346,10 @@ scancel SUMMARY_JOB_ID VERIFY_JOB_ID
 `#SBATCH --time` 作用于每个 array element。过大的上限会让本可 backfill 的短任务看起来
 像长任务。
 
-1. 先完整跑一个 end-to-end gate，包括 server 启动和所有 paired arms。
-2. 用最慢合格 GPU、最大冻结 step budget 和实测上界设置生产时限；通常至少保留
-   2--3 倍实测余量。
+1. gate 的计时包括输入准备、server 启动、全部 paired arms、结果校验与归档。
+2. 根据合格 GPU 上的连续运行、最大冻结 step budget、长历史和多臂常驻状态估算
+   上界；不能只用快速成功样本。已有任务曾采用约 2–3 倍实测余量，具体仍须覆盖
+   本任务的准备和收尾开销，并以小批量实际耗时复核。
 3. 同时记录 requested time 与 observed time；总 wall-clock 还受排队和实际并发影响。
 4. 提交后核查真正生效的时限：
 
@@ -433,6 +476,8 @@ HPC relocation 后失败；后续 receipt 必须只含相对路径，并运行 p
 ### 5.2 打包闭包
 
 - `required=(...)` 不能只列入口脚本；必须递归检查 repository-local imports。
+- 提交脚本、子进程 launcher、环境脚本和配置也必须进入 bundle 身份；只改入口脚本
+  却不更新 receipt，会让实际执行与记录的版本脱节。
 - Final14 Attempt 1 漏掉冻结的 `strict_graph_blind_20260806.json`。
 - Attempt 3 虽包含 `materialize_paper_online_a_scene.py`，却漏掉其本地依赖
   `materialize_online_a_traces.py`。
@@ -451,6 +496,34 @@ python -m py_compile PATH/TO/MODULE.py
 
 或对严格只读 preflight 使用 AST syntax audit，不产生 bytecode。禁止为了让
 `py_compile` 通过而临时把冻结 bundle 改回可写。
+
+### 5.4 依赖先构建，再冻结，再到目标环境验证
+
+**先确认每个进程实际使用什么。** Habitat、模型服务和汇总工具可能使用不同 Python。
+记录各自的绝对解释器路径、`sys.executable`、关键包版本与 `module.__file__`，并核对
+容器、CUDA/PyTorch、NumPy 和本地扩展。包名相同、import 成功，不代表加载了正确副本。
+9 月 17 日的[整合验证](../docs/VALIDATION_20260917.md)就发现另一份 LingBot checkout
+的 attention 实现与冻结版本不同；应匹配原依赖，不能放宽哈希检查。
+
+**在正式数组前完成安装与构建。** 缺少的依赖放入任务专用环境、overlay 或依赖目录，
+不临时升级多人共用的 conda 环境。权重、配置、tokenizer 等资源提前准备并核验；
+会延迟编译的 CUDA 扩展，要在匹配目标 GPU/CUDA 的构建或验证作业中执行一次真实调用。
+记录构建命令与产物版本，避免每个数组成员临时下载或同时写同一可变缓存。
+登录节点只做站点允许的轻量准备，GPU 编译和测试使用调度资源。
+
+**打包包含运行全程需要的内容。** 不仅检查服务启动，还检查目标切换、图像审计、
+结果序列化、压缩与汇总涉及的依赖。
+[Replica 缺包记录](REPLICA_ATTEMPT2_DEPENDENCY_INCIDENT_20260814.json)中，漏打包
+`depth_anything` 导致历史生成后才发现模型无法启动；§13 的 OpenCV 事故则来自
+Habitat Python 与模型 Python 的环境差异。不要用另一个环境的整份 `site-packages`
+补洞。完成构建后生成 checksum，传输到独立目录，在最终路径重新核验，再冻结供作业读取。
+
+**用目标运行栈检查真实输入与输出。** 所有计划输入先检查路径、读取和协议条件，
+再在正式 container/overlay/解释器中做实际模型前向、渲染与请求往返。
+CPU 预检应覆盖真实图像解析和输出字段；GPU gate 再把全部分支跑到独立 verifier。
+[multipart 事故](TABLE1_MULTIPART_REPAIR_STATUS_20260911.md)只在特定 JPEG 分块边界
+触发，而[收据事故](HPC_HARDENING_20260821.md)是在运行完成后才发现关键字段没有写入。
+因此 ready、退出码为零与结果可复核是三个分别需要检查的条件。
 
 ## 6. Singularity、EGL 与数据 overlay
 
@@ -552,10 +625,12 @@ Flask response 返回时 CUDA work 仍在队列中，随后 Habitat EGL/CUDA 被
 
 - [ ] `ssh -G`、`ssh -O check`、`id -un`、`hostname` 已核验；
 - [ ] source bundle 与所有 nested receipts 在目标路径通过 SHA-256；
-- [ ] bundle import closure、shell syntax、CPU tests 已通过；
+- [ ] 完整依赖与构建产物已准备，实际解释器和包路径正确；shell syntax、CPU 预检已通过；
 - [ ] exact container、`--nv`、overlay、bind mounts 和 parquet 可读性已通过；
 - [ ] partition/account/QOS/GPU/CPU/memory/time/array cap 已逐项确认；
-- [ ] one-episode all-arm gate 已完成，observed time 已记录；
+- [ ] 完整配对 gate 连同归档、独立校验已通过；耗时及 RAM/VRAM 峰值已记录；
+- [ ] 长历史、目标切换与多臂常驻需求已覆盖；新运行栈的小批量运行无新增故障；
+- [ ] 用户字节/文件数配额、临时空间和计算节点输出可写性已检查；时限包含收尾余量；
 - [ ] run root 不存在，输出路径不会覆盖旧 attempt；
 - [ ] summary 和 independent verifier 使用 `afterok` 串联；
 - [ ] 大文件已决定走 Globus，小 bundle 才走 SSH copy。
@@ -566,6 +641,7 @@ Flask response 返回时 CUDA work 仍在队列中，随后 Habitat EGL/CUDA 被
 - [ ] pending 报 exact Slurm reason；
 - [ ] 记录节点与 GPU identity；
 - [ ] 查看当前 arm，但不根据 partial outcomes 调方法或筛 population；
+- [ ] 查看动作/请求进度、最新落盘时间和资源增长，不能只凭 GPU 利用率判断健康；
 - [ ] 超过 60 秒的命令继续 poll 原 session，不重复提交；
 - [ ] 发现 partial failure 时先保全现场。
 
@@ -576,8 +652,41 @@ Flask response 返回时 CUDA work 仍在队列中，随后 Habitat EGL/CUDA 被
 - [ ] array 所有 scientific elements exit `0:0`；
 - [ ] summary 成功且分母、paired fields、cluster 统计正确；
 - [ ] independent verifier 返回 `verified=true`；
+- [ ] 从持久存储重新读取并校验归档后，才清理本作业的临时数据；
 - [ ] runtime incidents 单独记录，不混入方法结果；
 - [ ] 最后才报告 aggregate SR、paired gain/loss、McNemar 和 cluster CI。
+
+### 9.4 给收尾留时间，中断后保留可补跑的记录
+
+申请的 walltime 应覆盖 **准备 + 运行 + 校验/归档 + 余量**。应用层截止时间要早于
+Slurm 硬上限，并预留实测的收尾时间。例如现有
+[Table I wrapper](run_table1_repaired_hpc.sh)在一小时作业内为 evaluator 设置
+48 分钟超时，随后归档并保留原退出码；前面的准备也占总时限，不能据此假定总有
+12 分钟可收尾。更长历史、更大输出和更慢 GPU 都要重新估算。
+
+每项任务使用独立的临时目录、端口和输出目录。启动 Python 前设置可写且有空间的
+`TMPDIR`、`LIBFFI_TMPDIR` 与 bytecode/cache 路径。检查用户配额和文件数，也检查
+节点临时盘；§12 的 `MemoryError` 实际来自满的 `/tmp`，扩大 RAM 申请没有帮助。
+归档目的地要从实际计算节点验证；§15 中 `/archive` 只能由登录节点写入，计算作业
+须先落到可写的持久 scratch，再完成归档。
+
+新 runner 的落盘策略应先经过小规模验证：完整配对完成后及时保存输出与哈希，
+确认必需文件齐全后才发布完成标记。失败路径也保存日志、配置、进度和非零退出码；
+节点临时盘不是备份。大数组尤其要避免“算完全部任务才第一次复制结果”。
+已有 runner 的实现不完全相同：
+[bearing wrapper](run_gem_reviewer_paper_controls_hpc.sh)直接调用 evaluator，
+没有 Table I wrapper 的外层超时与归档步骤，使用前应核对整条调用链的收尾行为。
+
+为新的收尾逻辑安排一个隔离工程测试，验证子进程失败或提前退出时能否保存现场、
+释放本任务服务并正确失败；不要用正式运行测试取消。强制终止不一定会执行清理，
+因此定期落盘与提前截止都需要，不能只依赖退出时的 `trap`。
+
+出现故障先看 Slurm 状态、最后进度和日志，再决定补跑范围。`SIGABRT`、OOM、
+超时、输入错误和校验失败分别处理；完整配对未结束就不发布结果。
+[连续运行故障记录](REPAIRED_HM3D_CONSTRUCTION_RUNTIME_AUDIT_20260909.md)说明，
+import、短渲染与模型 ready 全部通过，也不能排除几十个动作后的故障。
+先在原配置下定位或验证兼容运行栈，再按 §2.5 补跑；增加时限不能修复崩溃，
+换 GPU 也不能修复请求解析错误。
 
 ## 10. 本项目的标准路径
 

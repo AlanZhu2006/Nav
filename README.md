@@ -23,6 +23,7 @@ Goal image --> retrieval --> geometric verification --> current goal bearing
 - [Current project status](MemNavData/STATUS_20260917_GIT_SYNC.md)
 - [Repository and implementation guide](docs/REPOSITORY_GUIDE.md)
 - [Experiment and evidence index](docs/EXPERIMENT_INDEX.md)
+- [HPC connection, dependency preparation and job submission](MemNavData/HPC_SHARED_SSH_OPERATIONS_20260816.md)
 - [Memory implementation](NavDP/baselines/memnav/gem/README.md)
 - [One local workspace](WORKSPACE.md) and [data recovery](docs/LOCAL_STORAGE.md)
 - [Consolidation checks](docs/VALIDATION_20260917.md)
